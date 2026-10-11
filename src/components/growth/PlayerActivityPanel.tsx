@@ -37,8 +37,9 @@ import { metricValue, isAdditive, sumAcrossBuckets, type GridMetric } from "@/li
 import { downloadCsv } from "./format";
 import { exportBody, exportHeader } from "@/lib/behaviorExport";
 import MonthRangeBar, { orderRange, type MonthRange } from "./MonthRangeBar";
-import { chicagoToday, isBucketComplete, type Granularity } from "@/lib/weekBuckets";
+import { addDays, chicagoToday, isBucketComplete, monthEnd, type Granularity } from "@/lib/weekBuckets";
 import styles from "./playerActivity.module.css";
+import pb from "../finance/periodBar.module.css";
 
 /* ── METRICS ──────────────────────────────────────────────────────────────────────────────────
  * The KEYS are the mock's, because they are what the `data-testid`s are built from. They map onto
@@ -84,6 +85,13 @@ const ACTIVE_CITIES = ["Atlanta", "Austin", "Dallas", "Houston", "OKC", "San Ant
 const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const mLabel = (k: string) => `${MON[Number(k.slice(5, 7)) - 1]} ${k.slice(0, 4)}`;
 const dLabel = (k: string) => `${MON[Number(k.slice(5, 7)) - 1]} ${Number(k.slice(8, 10))}`;
+const WD = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+/** "Sat Oct 10". Noon local so the weekday cannot slip across midnight. */
+const wdLabel = (k: string) => `${WD[new Date(`${k}T12:00:00`).getDay()]} ${dLabel(k)}`;
+const stepMonth = (m: string, d: number) => {
+  const t = Number(m.slice(0, 4)) * 12 + Number(m.slice(5, 7)) - 1 + d;
+  return `${Math.floor(t / 12)}-${String((t % 12) + 1).padStart(2, "0")}`;
+};
 const fmtN = (v: number) => Math.round(v).toLocaleString("en-US");
 const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 
@@ -250,6 +258,10 @@ export default function PlayerActivityPanel({ data, months }: { data: GrowthData
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [grain, setGrain] = useState<Granularity>("monthly");
+  /* DAILY HAS ITS OWN MONTH (Ryan, 2026-10-11), stepped like the Finance pages. It does not touch
+   * from/to, so switching back to Weekly or Monthly finds the range exactly as it was left. "" is
+   * the current month. */
+  const [dayMonth, setDayMonth] = useState("");
   const [group, setGroup] = useState<Group>("overall");
   const [metrics, setMetrics] = useState<PaKey[]>(["spots"]);
   const [cityFilter, setCityFilter] = useState("all");
@@ -266,9 +278,24 @@ export default function PlayerActivityPanel({ data, months }: { data: GrowthData
     return { start: r.start, end: r.end > last ? last : r.end };
   }, [from, to, defaultStart, last]);
 
-  /* DAILY IS ONE MONTH: the To month. 180 day columns is not a table anyone reads, and the route
-   * caps it anyway — collapsing it HERE is what makes the cap visible rather than mysterious. */
-  const effRange: MonthRange = grain === "daily" ? { start: range.end, end: range.end } : range;
+  /* DAILY IS ONE MONTH, its own: 180 day columns is not a table anyone reads, and the route caps
+   * the day axis at 31 anyway. Clamped to [first, last] like the range. */
+  const dMonth = dayMonth && dayMonth >= first && dayMonth <= last ? dayMonth : last;
+  const effRange: MonthRange = grain === "daily" ? { start: dMonth, end: dMonth } : range;
+
+  /* ── DAILY'S CHANGE: THE LATEST COMPLETE DAY AGAINST THE SAME WEEKDAY A WEEK EARLIER ─────────
+   * Not the day before: a Saturday against a Friday is mostly the schedule, not a trend. The
+   * latest complete day of the shown month — its last day for a past month, yesterday for this one
+   * (today is in progress). On the 1st of the month there is none, and the column says so. The
+   * week-earlier day falls in the PREVIOUS month on the 1st–7th, outside the 31-day axis, so both
+   * days are also asked for as one-day windows and read from there when they are not on the axis. */
+  const dayCmp = useMemo(() => {
+    if (grain !== "daily") return null;
+    const end = monthEnd(dMonth);
+    const lastDay = end < today ? end : addDays(today, -1);
+    if (lastDay < monthStart(dMonth)) return null;
+    return { last: lastDay, prev: addDays(lastDay, -7) };
+  }, [grain, dMonth, today]);
   const rangeMonths = useMemo(
     () => axisMonths.filter((m) => m >= effRange.start && m <= effRange.end),
     [axisMonths, effRange.start, effRange.end],
@@ -291,11 +318,15 @@ export default function PlayerActivityPanel({ data, months }: { data: GrowthData
     if (!rangeMonths.length) return "";
     const f = monthStart(rangeMonths[0]);
     const t = monthLastElapsed(rangeMonths[rangeMonths.length - 1], today);
-    return f <= t ? `${f}:${t}` : "";
-  }, [rangeMonths, today]);
+    if (f > t) return "";
+    // windows[1] and [2] are Daily's two compared days. A complete day implies an elapsed one, so
+    // when these exist windows[0] always does and the indices hold.
+    return `${f}:${t}` + (dayCmp ? `,${dayCmp.last}:${dayCmp.last},${dayCmp.prev}:${dayCmp.prev}` : "");
+  }, [rangeMonths, today, dayCmp]);
 
   const [winAgg, setWinAgg] = useState<WindowAgg | null>(null);
   const [winErr, setWinErr] = useState<string | null>(null);
+  const [winDays, setWinDays] = useState<WindowAgg[] | null>(null);
 
   /* ── ONE FETCH, SERVING BOTH THE AXIS AND THE AGGREGATE ──────────────────────────────────────
    * ── AND THE FIX FOR THE STALL ────────────────────────────────────────────────────────────────
@@ -322,12 +353,13 @@ export default function PlayerActivityPanel({ data, months }: { data: GrowthData
     if (cached) {
       setWeekly(needAxis ? cached : null); setWeeklyErr(null);
       setWinAgg(cached.windows?.[0] ?? null); setWinErr(null);
+      setWinDays(cached.windows?.slice(1) ?? null);
       return;
     }
     let dead = false;
     /* CLEARED FIRST. Without this the previous window's table stays on screen under the new
      * window's heading while the new read is in flight, and nothing says so. */
-    setWeekly(null); setWeeklyErr(null); setWinAgg(null); setWinErr(null);
+    setWeekly(null); setWeeklyErr(null); setWinAgg(null); setWinErr(null); setWinDays(null);
     (async () => {
       try {
         const { data: sess } = await supabase.auth.getSession();
@@ -350,6 +382,7 @@ export default function PlayerActivityPanel({ data, months }: { data: GrowthData
         cache.current.set(key, payload);
         setWeekly(needAxis ? payload : null);
         setWinAgg(payload.windows?.[0] ?? null);
+        setWinDays(payload.windows?.slice(1) ?? null);
       } catch (e) {
         // A FAILED READ IS AN ERROR, never an empty table — the two look identical otherwise.
         const msg = e instanceof Error ? e.message : String(e);
@@ -473,14 +506,39 @@ export default function PlayerActivityPanel({ data, months }: { data: GrowthData
     return { prev: done[done.length - 2], last: done[done.length - 1] };
   }, [buckets]);
 
-  const changeHead = cmpPair
-    ? `${cmpPair.last.b.label} vs ${cmpPair.prev.b.label}`
-    : `needs two complete ${grain === "monthly" ? "month" : grain === "weekly" ? "week" : "day"}s`;
+  const changeHead = grain === "daily"
+    ? (dayCmp ? `${wdLabel(dayCmp.last)} vs ${wdLabel(dayCmp.prev)}` : "needs a complete day")
+    : cmpPair
+      ? `${cmpPair.last.b.label} vs ${cmpPair.prev.b.label}`
+      : `needs two complete ${grain === "monthly" ? "month" : "week"}s`;
+
+  /** One of Daily's compared days for one scope: the rendered cell when the day is on the axis,
+   *  else its one-day window (the 1st–7th reach into the previous month). Same metricValue either
+   *  way, so a window and a cell cannot compute the rate differently. */
+  const dayValue = (e: Entity, k: PaKey, cells: (number | null)[], day: string, wi: 0 | 1): number | null => {
+    const i = buckets.findIndex((b) => b.id === day);
+    if (i >= 0) return cells[i];
+    if (k === "registrations" && e.type === "field") return null;
+    const w = winDays?.[wi];
+    if (!w || w.from !== day) return null;
+    const sc = e.type === "overall" ? w
+      : (e.type === "city" ? w.byCity : w.byField)?.[e.id]
+        ?? { registrations: 0, newPlayers: 0, spots: 0, totalPlayers: 0, recurring: 0 };
+    return metricValue({ m: day, registrations: sc.registrations, newPlayers: sc.newPlayers,
+      totalPlayers: sc.totalPlayers, spots: sc.spots }, GRID_OF[k]);
+  };
 
   /** Percent for a count, POINTS for a rate. Reporting a rate's relative move overstates it. */
-  const changeOf = (k: PaKey, cells: (number | null)[]): Change => {
-    if (!cmpPair) return { v: 0, pts: false, nA: true, isNew: false };
-    const a = cells[cmpPair.last.i], b = cells[cmpPair.prev.i];
+  const changeOf = (e: Entity, k: PaKey, cells: (number | null)[]): Change => {
+    let a: number | null, b: number | null;
+    if (grain === "daily") {
+      if (!dayCmp) return { v: 0, pts: false, nA: true, isNew: false };
+      a = dayValue(e, k, cells, dayCmp.last, 0);
+      b = dayValue(e, k, cells, dayCmp.prev, 1);
+    } else {
+      if (!cmpPair) return { v: 0, pts: false, nA: true, isNew: false };
+      a = cells[cmpPair.last.i]; b = cells[cmpPair.prev.i];
+    }
     if (a == null || b == null) return { v: 0, pts: false, nA: true, isNew: false };
     if (M[k].kind === "rate") return { v: a - b, pts: true, nA: false, isNew: false };
     // ZERO TO ZERO IS "n/a", not 0% and not "new". Nothing happened either time.
@@ -547,7 +605,7 @@ export default function PlayerActivityPanel({ data, months }: { data: GrowthData
     const push = (e: Entity, k: PaKey, name: string) => {
       const idx = mapOf(e);
       const cells = buckets.map((b) => cellVal(idx, e, k, b.id));
-      const c = changeOf(k, cells);
+      const c = changeOf(e, k, cells);
       rows.push({
         name, cells: cells.map((v) => v ?? 0), total: totalOf(e, k, cells) ?? 0,
         mom: c.nA ? 0 : c.v, points: M[k].kind === "rate",
@@ -615,7 +673,7 @@ export default function PlayerActivityPanel({ data, months }: { data: GrowthData
                         : fmtVal(m.key, t)}
                       {t != null && unitTag(m.key)}
                     </td>
-                    <td className={styles.chg}><ChangeCell c={changeOf(m.key, cells)} /></td>
+                    <td className={styles.chg}><ChangeCell c={changeOf(e, m.key, cells)} /></td>
                   </tr>
                 );
               })}
@@ -634,7 +692,7 @@ export default function PlayerActivityPanel({ data, months }: { data: GrowthData
     const rows = ents.map((e) => {
       const idx = mapOf(e);
       const cells = buckets.map((b) => cellVal(idx, e, k, b.id));
-      return { e, cells, total: totalOf(e, k, cells), ch: changeOf(k, cells) };
+      return { e, cells, total: totalOf(e, k, cells), ch: changeOf(e, k, cells) };
     });
     const sv = (r: typeof rows[number]): number | string => {
       if (st.col === "name") return r.e.name;
@@ -737,7 +795,7 @@ export default function PlayerActivityPanel({ data, months }: { data: GrowthData
                               : fmtVal(dm.key, dt)}
                             {dt != null && unitTag(dm.key)}
                           </td>
-                          <td className={styles.chg}><ChangeCell c={changeOf(dm.key, dcells)} /></td>
+                          <td className={styles.chg}><ChangeCell c={changeOf(r.e, dm.key, dcells)} /></td>
                         </tr>
                       );
                     })}
@@ -845,7 +903,7 @@ export default function PlayerActivityPanel({ data, months }: { data: GrowthData
                           </td>
                         ))}
                         <td className={styles.tot}>{fmtVal(m.key, t)}{t != null && unitTag(m.key)}</td>
-                        <td className={styles.chg}><ChangeCell c={changeOf(m.key, cells)} /></td>
+                        <td className={styles.chg}><ChangeCell c={changeOf(e, m.key, cells)} /></td>
                       </tr>
                     ))}
                     <tr className={styles.gap} data-testid={`pa-cmp-${m.key}-gap`}>
@@ -881,16 +939,27 @@ export default function PlayerActivityPanel({ data, months }: { data: GrowthData
 
   return (
     <>
-      <MonthRangeBar
-        range={range} min={first} max={last}
-        onStart={setFrom} onEnd={setTo}
-        testId="pa-range" startTestId="pa-range-from" endTestId="pa-range-to" echoTestId="pa-range-label"
-        startDisabled={grain === "daily"}
-        echoOverride={grain === "daily" ? `${mLabel(effRange.end)}, by day` : undefined}
-        note={grain === "daily"
-          ? <span className={styles.clamp} data-testid="pa-daily-note">Daily shows one month: the To month.</span>
-          : undefined}
-      />
+      {grain === "daily" ? (
+        /* DAILY: ONE MONTH, STEPPED — the Finance pages' arrows, label and "This month". */
+        <div className={styles.dayBar} data-testid="pa-day-month-bar">
+          <span className={styles.cl}>Month</span>
+          <div className={pb.stepper}>
+            <button type="button" className={pb.nav} aria-label="Previous month" data-testid="pa-day-prev"
+              disabled={dMonth <= first} onClick={() => setDayMonth(stepMonth(dMonth, -1))}>‹</button>
+            <span className={pb.cur} data-testid="pa-day-month" data-month={dMonth}>{mLabel(dMonth)}</span>
+            <button type="button" className={pb.nav} aria-label="Next month" data-testid="pa-day-next"
+              disabled={dMonth >= last} onClick={() => setDayMonth(stepMonth(dMonth, 1))}>›</button>
+          </div>
+          <button type="button" className={pb.jump} data-testid="pa-day-this-month"
+            disabled={dMonth === last} onClick={() => setDayMonth("")}>This month</button>
+        </div>
+      ) : (
+        <MonthRangeBar
+          range={range} min={first} max={last}
+          onStart={setFrom} onEnd={setTo}
+          testId="pa-range" startTestId="pa-range-from" endTestId="pa-range-to" echoTestId="pa-range-label"
+        />
+      )}
 
       <div className={styles.card} data-testid="pa-card">
         <div className={styles.toolbar}>

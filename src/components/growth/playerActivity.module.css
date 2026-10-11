@@ -233,3 +233,7 @@
 .clamp { font-size: 11.5px; font-weight: 700; color: #b8790f; }
 .loading, .err { padding: 22px 18px; font-size: 13px; color: var(--mut, #5b6b63); }
 .err { color: #c93b40; font-weight: 600; }
+
+/* Daily's month control (2026-10-11): label, the Finance stepper, This month. Same slot and spacing
+ * as the range bar it replaces while Daily is on. */
+.dayBar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 0 0 14px; }

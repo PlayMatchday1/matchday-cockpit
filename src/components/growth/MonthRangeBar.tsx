@@ -15,7 +15,7 @@
  *
  * ── WHAT IS DELIBERATELY *NOT* IN HERE ───────────────────────────────────────────────────────
  * The DEFAULT. Funnel opens on the last six months; Activity opens on the last six months ending in
- * the current business month, and Activity's Daily grain collapses the range to one month. Those are
+ * the current business month, and Activity's Daily grain swaps this bar for its own month stepper. Those are
  * page decisions about what the range MEANS, and a shared control that tried to own them would grow
  * a mode flag per caller. The control owns the two inputs, the clamp and the echo; the caller owns
  * the value and what it does with it.
@@ -36,7 +36,7 @@ export default function MonthRangeBar({
   label = "Range",
   testId, startTestId, endTestId, echoTestId,
   startDisabled = false,
-  /** Rendered after the echo. Activity puts its "Daily shows one month" note here. */
+  /** Rendered after the echo. (Activity's Daily note used to live here; Daily has its own month control since 2026-10-11.) */
   note,
   /** Replaces the "<start> to <end>" echo when the range collapses to one month (Daily). */
   echoOverride,
