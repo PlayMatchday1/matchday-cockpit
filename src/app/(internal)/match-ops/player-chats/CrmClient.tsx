@@ -1691,6 +1691,7 @@ function ConversationHeader({
   const name = fullNameOf(detail.thread);
   const cityCode = cityCodeForThread(detail.thread);
   const channel = detail.thread.channel ?? "sms";
+  const email = detail.thread.player?.email?.trim() || null;
   return (
     <div data-testid="crm-conv-header" data-thread-id={detail.thread.id} data-amb={detail.thread.match_ambiguous ? 1 : 0} /* NO pt-[var(--sat)]: the shell's app bar is above this and pays the inset once. */
       className="flex min-h-14 shrink-0 items-center gap-2 border-b border-cream-line bg-white px-1 sm:px-3">
@@ -1718,11 +1719,21 @@ function ConversationHeader({
             row (city, "via WhatsApp", historical) lives behind
             `hidden lg:flex` and stays accessible on mobile via the
             info-icon sheet. */}
-        <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-deep-green/55">
+        <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-deep-green/55 lg:hidden">
           {/* MOBILE ONLY. The number IS the button here — a 32px control beside 10px text would
               dominate it. See CopyPhoneInline: the box is held still so the header cannot shift. */}
-          <CopyPhoneInline value={detail.thread.phone_number} className="min-w-0 lg:hidden" />
-          <div className="hidden items-center gap-1.5 lg:flex">
+          <CopyPhoneInline value={detail.thread.phone_number} className="min-w-0" />
+        </div>
+        {/* THE EMAIL, on its own line under the phone (2026-10-11): the same control, a step
+            smaller and fainter so the phone stays the primary identifier. Mobile only, like the
+            phone. Only a linked player with an address renders it — an unlinked chat or an empty
+            email renders NOTHING, not an empty line. Truncates; the full address is the title. */}
+        {email && (
+          <div className="-mt-0.5 flex min-w-0 items-center text-[9.5px] text-deep-green/45 lg:hidden">
+            <CopyPhoneInline value={email} noun="email" testId="copy-email-inline" dense className="min-w-0" />
+          </div>
+        )}
+        <div className="mt-0.5 hidden items-center gap-1.5 text-[10px] text-deep-green/55 lg:flex">
             <CityChip code={cityCode} />
             <span aria-hidden>·</span>
             <span className="inline-flex items-center gap-0.5">
@@ -1742,7 +1753,6 @@ function ConversationHeader({
                 </span>
               </>
             )}
-          </div>
         </div>
       </div>
       {/* Phase 19 Step 3a — pin this conversation to the dock so it follows the operator to other

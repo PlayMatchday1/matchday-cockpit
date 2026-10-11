@@ -59,6 +59,8 @@ export type ThreadListRow = {
     last_name: string | null;
     preferable_city_normalized: string | null;
     is_member?: boolean | null;
+    /** Only the conversation route reads it (the list route does not), so it is absent on list rows. */
+    email?: string | null;
   } | null;
   assignee: Assignee | null;
 };

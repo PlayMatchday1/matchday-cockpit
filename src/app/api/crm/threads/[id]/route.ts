@@ -53,7 +53,29 @@ export async function GET(req: Request, ctx: RouteCtx) {
   if (!threadRes.data) {
     return Response.json({ error: "Thread not found" }, { status: 404 });
   }
-  const thread = threadRes.data;
+  const threadRow = threadRes.data;
+
+  /* THE LINKED PLAYER, for the conversation header (2026-10-11). This route never returned one, so
+   * the header fell back to the phone number and an "Unknown" city on EVERY freshly opened chat,
+   * linked or not — only the inbox list route read mdapi_users. The same columns the list reads,
+   * plus `email`, which the header shows under the phone. Email is read HERE, for the one open
+   * conversation, and deliberately NOT in the list route: that would ship every listed player's
+   * address to the browser to show one. A failed read leaves `player: null` (phone + "Unknown"),
+   * logged, rather than failing the whole conversation. */
+  let player: {
+    id: number; first_name: string | null; last_name: string | null;
+    preferable_city_normalized: string | null; is_member: boolean | null; email: string | null;
+  } | null = null;
+  if (typeof threadRow.player_id === "number") {
+    const playerRes = await supabase
+      .from("mdapi_users")
+      .select("id, first_name, last_name, preferable_city_normalized, is_member, email")
+      .eq("id", threadRow.player_id)
+      .maybeSingle();
+    if (playerRes.error) console.error("[crm:threads.detail] player lookup error", playerRes.error);
+    else player = playerRes.data ?? null;
+  }
+  const thread = { ...threadRow, player };
 
   // Current assignee (Phase 1).
   let assignee: { id: string; email: string; full_name: string | null } | null =

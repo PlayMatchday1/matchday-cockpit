@@ -77,7 +77,8 @@ type Profile = {
 };
 type ContextResponse = {
   player: { first_name: string | null; last_name: string | null; preferable_city_normalized: string | null;
-    preferable_city_name: string | null; is_member: boolean | null; created_at: string | null; } | null;
+    preferable_city_name: string | null; is_member: boolean | null; created_at: string | null;
+    email?: string | null; } | null;
   recent_matches: RecentMatch[];
   profile: Profile | null;
   payments: { ok: true; result: { rows: PaymentRow[]; customerMatched: boolean } } | { ok: false; error: string } | null;
@@ -170,6 +171,8 @@ export default function ContextPane({ threadId, phone }: { threadId: string; pho
   const name = (prof?.player.name ?? (mirror ? `${mirror.first_name ?? ""} ${mirror.last_name ?? ""}`.trim() : "")) || "Player";
   const badge = cityCode ? colorForCity(cityCode) : MUTED;
   const credits = liveCredits ?? prof?.player.credits ?? null;
+  // The mirror's address — the same mdapi_users row the conversation header reads it from.
+  const email = mirror?.email?.trim() || null;
 
   return (
     <aside
@@ -217,6 +220,15 @@ export default function ContextPane({ threadId, phone }: { threadId: string; pho
               <div className="mt-[5px] inline-flex items-center justify-center gap-0.5">
                 <span className="font-mono text-[11.5px]" data-testid="ctx-phone" style={{ color: MUTED }}>{phone}</span>
                 <CopyPhone value={phone} />
+              </div>
+            )}
+            {/* THE EMAIL, between the phone and the pill (2026-10-11): the same control, a step
+                smaller than the phone. Nothing at all when there is no address. Truncates inside
+                the pane's width; the full address is the title. */}
+            {email && (
+              <div className="-mt-[3px] flex max-w-full items-center justify-center gap-0.5">
+                <span className="min-w-0 truncate text-[11px]" data-testid="ctx-email" title={email} style={{ color: FAINT }}>{email}</span>
+                <CopyPhone value={email} noun="email" testId="copy-email" />
               </div>
             )}
             <div className="mt-[9px] flex flex-wrap justify-center gap-[5px]">

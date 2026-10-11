@@ -28,6 +28,12 @@
 // NOTHING IS LOGGED. Copying is not a write: no telemetry, no recordWrite, and the number never
 // reaches change_log — which has different access rules and a longer life than a screen.
 
+// ── ALSO THE EMAIL (2026-10-11) ──────────────────────────────────────────────────────────────
+// Player Chats shows the linked player's email under the phone, with this SAME control: same hook,
+// same glyphs, same "Copied", same failure rule. `noun` names what is copied in the aria-label
+// ("Copy email a@b.co"); the default keeps the phone's label byte-identical. The E.164 note above
+// is about phones; an email is copied exactly as stored.
+
 import { useEffect, useRef, useState } from "react";
 
 type State = "idle" | "copied" | "failed";
@@ -55,19 +61,24 @@ function useCopy(value: string) {
   return { state, copy, copied: state === "copied", failed: state === "failed" };
 }
 
-export default function CopyPhone({ value, className = "" }: { value: string; className?: string }) {
+export default function CopyPhone({ value, className = "", noun = "phone number", testId = "copy-phone" }: {
+  value: string; className?: string;
+  /** What the aria-label says is being copied. */
+  noun?: string;
+  testId?: string;
+}) {
   const { state, copy, copied, failed } = useCopy(value);
 
   return (
     <button
       type="button"
       onClick={copy}
-      data-testid="copy-phone"
+      data-testid={testId}
       data-value={value}
       data-state={state}
       // The aria-label NAMES the number, so it is unambiguous out of visual context. On failure it
       // announces the failure rather than continuing to offer a copy that just did not work.
-      aria-label={failed ? `Could not copy ${value}` : `Copy phone number ${value}`}
+      aria-label={failed ? `Could not copy ${value}` : `Copy ${noun} ${value}`}
       title={failed ? "Could not copy — clipboard unavailable" : `Copy ${value}`}
       className={
         // 32px hit area around a 14px glyph. `grid` so both icons share one cell.
@@ -107,7 +118,7 @@ export default function CopyPhone({ value, className = "" }: { value: string; cl
       {/* Out of flow — it says the word without costing the layout a pixel. */}
       <span
         aria-hidden
-        data-testid="copy-phone-say"
+        data-testid={`${testId}-say`}
         className={
           "pointer-events-none absolute -bottom-[19px] left-1/2 -translate-x-1/2 whitespace-nowrap " +
           "text-[10.5px] font-bold tracking-wide transition-opacity " +
@@ -141,27 +152,36 @@ export default function CopyPhone({ value, className = "" }: { value: string; cl
 // dotted underline plus a small trailing glyph say "this does something" without shouting.
 //
 // min-h-8 gives a ≥32px target around 10px text.
-export function CopyPhoneInline({ value, className = "" }: { value: string; className?: string }) {
+export function CopyPhoneInline({ value, className = "", noun = "phone number", testId = "copy-phone-inline", dense = false }: {
+  value: string; className?: string;
+  noun?: string;
+  testId?: string;
+  /** A 24px target instead of 32px, for a SECOND line under the number (the email) so the header
+   *  grows by a text line and not by a full touch target. */
+  dense?: boolean;
+}) {
   const { state, copy, copied, failed } = useCopy(value);
   const showing = copied || failed;
   return (
     <button
       type="button"
       onClick={copy}
-      data-testid="copy-phone-inline"
+      data-testid={testId}
       data-value={value}
       data-state={state}
-      aria-label={failed ? `Could not copy ${value}` : `Copy phone number ${value}`}
+      aria-label={failed ? `Could not copy ${value}` : `Copy ${noun} ${value}`}
+      // THE FULL VALUE ON HOVER: a long email truncates with an ellipsis below.
+      title={value}
       className={
-        "relative inline-flex min-h-8 max-w-full items-center gap-1 rounded-md border-0 bg-transparent " +
-        "px-1 py-1 text-left align-middle " +
+        "relative inline-flex max-w-full items-center gap-1 rounded-md border-0 bg-transparent " +
+        (dense ? "min-h-6 px-1 py-0.5 " : "min-h-8 px-1 py-1 ") + "text-left align-middle " +
         "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-deep-green " +
         className
       }
     >
       {/* Stays in the layout in EVERY state so the width never changes — invisible, not removed. */}
       <span
-        data-testid="copy-phone-inline-num"
+        data-testid={`${testId}-num`}
         className={
           "truncate font-mono underline decoration-dotted decoration-deep-green/30 underline-offset-2 " +
           (showing ? "invisible" : "")
@@ -187,7 +207,7 @@ export function CopyPhoneInline({ value, className = "" }: { value: string; clas
       {showing && (
         <span
           aria-hidden
-          data-testid="copy-phone-inline-say"
+          data-testid={`${testId}-say`}
           className={
             "pointer-events-none absolute inset-0 flex items-center gap-1 px-1 whitespace-nowrap " +
             "text-[10px] font-bold " + (failed ? "text-coral" : "text-green-700")
