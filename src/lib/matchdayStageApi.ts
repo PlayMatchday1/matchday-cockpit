@@ -40,6 +40,11 @@ import "server-only";
 // (did not land).
 
 export type MatchdayEnv = "staging" | "production";
+// LOCAL MODE (src/lib/localMode.ts) adds a third target, reachable ONLY while the dev-only flag is
+// on, and while it is on staging and production are refused. A separate type so MatchdayEnv, which
+// fourteen files and every [env] route narrow on, is unchanged.
+export type ClientEnv = MatchdayEnv | "local";
+import { localModeOn, LOCAL_MDAPI_HOST, LOCAL_MDAPI_BASE_URL } from "./localMode";
 
 // THE ALLOWLIST. Two hosts, each bound to a named environment. Compared on the
 // parsed URL host, exact-equality only.
@@ -118,7 +123,7 @@ export class NotAuthorizedError extends Error {
 // Who is performing a write, and whether they may. Derived server-side from the
 // authenticated user's app_users row (can_edit_matches AND can_access_matchops) — never
 // from client state. Reads (apiGet) need no actor; only writes do.
-export type WriteActor = { canEditMatches: boolean; canManagePlayers?: boolean; canManagePromos?: boolean; canEditCredits?: boolean; canEditMemberships?: boolean; email?: string; userId?: string;
+export type WriteActor = { canEditMatches: boolean; isAdmin?: boolean; canManagePlayers?: boolean; canManagePromos?: boolean; canEditCredits?: boolean; canEditMemberships?: boolean; email?: string; userId?: string;
   // Phase 25 — a CITY MANAGER's scope. A FOURTH authority, not a variant of EDIT MATCHES: it
   // permits exactly one field (managerId) on matches the route has already proven are in this
   // city. Set only by the city-manager route, from the DB row, never from client state.
@@ -183,6 +188,16 @@ export function assertCanEditCredits(actor: WriteActor | undefined): void {
     );
   }
 }
+// THE ADMIN check, for the Match Manager admin pages (local mode only, for now). An is_admin
+// Clubhouse user: those endpoints are ADMIN-only on the backend too. Independent of every other grant.
+export function assertIsAdmin(actor: WriteActor | undefined): void {
+  if (!actor || actor.isAdmin !== true) {
+    throw new NotAuthorizedError(
+      `Refusing write: the caller is not a Clubhouse admin. No request was sent to MatchDay. ` +
+      `(actor: ${actor?.email ? JSON.stringify(actor.email) : "none"})`,
+    );
+  }
+}
 // The EDIT MEMBERSHIPS check (0195). A SIXTH authority and the SECOND that moves money, so it is
 // shaped on EDIT CREDITS and not on EDIT MATCHES: pricing or ending a live subscription is not a
 // Match Ops power and holding Match Ops must never imply it. Independent of every other grant.
@@ -216,6 +231,7 @@ let creditsGuard: (a: WriteActor | undefined) => void = assertCanEditCredits;
 export function __setCreditsGuardForTest(fn: (a: WriteActor | undefined) => void): () => void {
   const prev = creditsGuard; creditsGuard = fn; return () => { creditsGuard = prev; };
 }
+let adminGuard: (a: WriteActor | undefined) => void = assertIsAdmin;
 let membershipsGuard: (a: WriteActor | undefined) => void = assertCanEditMemberships;
 export function __setMembershipsGuardForTest(fn: (a: WriteActor | undefined) => void): () => void {
   const prev = membershipsGuard; membershipsGuard = fn; return () => { membershipsGuard = prev; };
@@ -311,7 +327,18 @@ export function assertNoDeniedFields(body: unknown): void {
 }
 
 type Creds = { email: string; password: string; baseUrl: string };
-function getCreds(env: MatchdayEnv): Creds {
+function getCreds(env: ClientEnv): Creds {
+  // Local mode: the ONLY target is the local backend, and its base is a constant, not an env var.
+  // Checked before any credential is read, so staging/production produce zero network calls.
+  if (localModeOn()) {
+    if (env !== "local") throw new StageHostGuardError(localRefusal(env));
+    const email = process.env.MATCHDAY_LOCAL_API_EMAIL;
+    const password = process.env.MATCHDAY_LOCAL_API_PASSWORD;
+    if (!email) throw new StageConfigError("Missing MATCHDAY_LOCAL_API_EMAIL");
+    if (!password) throw new StageConfigError("Missing MATCHDAY_LOCAL_API_PASSWORD");
+    return { email, password, baseUrl: LOCAL_MDAPI_BASE_URL };
+  }
+  if (env === "local") throw new StageConfigError(`Unknown environment "local": local mode is off`);
   const vars = CRED_VARS[env];
   if (!vars) throw new StageConfigError(`Unknown environment ${JSON.stringify(env)}`);
   const baseUrl = process.env[vars.base]; // NO default — an unset base must throw, not fall back
@@ -327,8 +354,19 @@ function getCreds(env: MatchdayEnv): Creds {
 // anything that is not the allowlisted host for the NAMED environment. Exact
 // parsed-host equality — a spoof host that merely CONTAINS the real one is
 // rejected. An unknown/unlabelled environment is refused.
-export function assertAllowedHost(env: MatchdayEnv, url: string): void {
-  const expected = HOSTS[env];
+function localRefusal(env: string): string {
+  return `Refusing environment ${JSON.stringify(env)}: local mode is on (MATCHDAY_LOCAL_API=1 under next dev), ` +
+    `so only the local backend at ${LOCAL_MDAPI_HOST} is reachable. Staging and production are refused.`;
+}
+// The host for a named environment, or undefined when it may not be reached at all. Local mode
+// swaps the whole allowlist for one entry; off, it is the two-host allowlist exactly as before.
+function expectedHost(env: ClientEnv): string | undefined {
+  if (localModeOn()) return env === "local" ? LOCAL_MDAPI_HOST : undefined;
+  return env === "local" ? undefined : HOSTS[env];
+}
+export function assertAllowedHost(env: ClientEnv, url: string): void {
+  if (localModeOn() && env !== "local") throw new StageHostGuardError(localRefusal(env));
+  const expected = expectedHost(env);
   if (!expected) throw new StageHostGuardError(`Refusing: unknown environment ${JSON.stringify(env)} — no host is allowlisted for it.`);
   let host: string;
   try { host = new URL(url).host; } catch { throw new StageHostGuardError(`Refusing: un-parseable URL ${JSON.stringify(url)}`); }
@@ -347,7 +385,7 @@ export function assertStagingHost(url: string): void { assertAllowedHost("stagin
 // The exact write preflight apiWrite runs, exported so it can be asserted offline.
 // Order: host allowlist -> field deny-list (both envs) -> endpoint deny-list (both
 // envs) -> production bolt. All before any network call.
-export function preflightWrite(env: MatchdayEnv, method: string, url: string, body: unknown, unlock?: WriteUnlock): void {
+export function preflightWrite(env: ClientEnv, method: string, url: string, body: unknown, unlock?: WriteUnlock): void {
   assertAllowedHost(env, url);
   assertNoDeniedFields(body);
   assertAllowedEndpoint(method, url, unlock);
@@ -376,9 +414,9 @@ function jwtExpMs(token: string): number | null {
 }
 
 // One token cache per environment — staging and production never share a token.
-const cached: Partial<Record<MatchdayEnv, { token: string; expMs: number }>> = {};
+const cached: Partial<Record<ClientEnv, { token: string; expMs: number }>> = {};
 
-async function signIn(env: MatchdayEnv): Promise<{ token: string; expMs: number }> {
+async function signIn(env: ClientEnv): Promise<{ token: string; expMs: number }> {
   const { email, password, baseUrl } = getCreds(env);
   const url = buildUrl(baseUrl, "/auth/signin");
   assertAllowedHost(env, url); // a misconfigured base can't even authenticate off-host
@@ -404,7 +442,7 @@ async function signIn(env: MatchdayEnv): Promise<{ token: string; expMs: number 
   return { token, expMs };
 }
 
-async function freshToken(env: MatchdayEnv): Promise<string> {
+async function freshToken(env: ClientEnv): Promise<string> {
   const c = cached[env];
   if (c && c.expMs - Date.now() > REFRESH_SKEW_MS) return c.token;
   const t = await signIn(env);
@@ -422,7 +460,7 @@ export async function stageSignInProbe(env: MatchdayEnv = "staging"): Promise<{ 
 }
 
 // READS — env-explicit GET. Reads are safe; production reads are allowed.
-export async function apiGet<T = unknown>(env: MatchdayEnv, path: string, query?: Record<string, string | number | boolean>): Promise<T> {
+export async function apiGet<T = unknown>(env: ClientEnv, path: string, query?: Record<string, string | number | boolean>): Promise<T> {
   const { baseUrl } = getCreds(env);
   const url = buildUrl(baseUrl, path, query);
   assertAllowedHost(env, url);
@@ -434,7 +472,7 @@ export async function apiGet<T = unknown>(env: MatchdayEnv, path: string, query?
 }
 
 // WRITES — env-explicit, single-shot, host-allowlisted, deny-listed, prod-bolted.
-export async function apiWrite<T = unknown>(env: MatchdayEnv, method: "POST" | "PUT" | "PATCH" | "DELETE", path: string, body?: unknown, actor?: WriteActor, requires: "edit" | "manage" | "promos" | "city" | "credits" | "memberships" = "edit", unlock?: WriteUnlock): Promise<T> {
+export async function apiWrite<T = unknown>(env: ClientEnv, method: "POST" | "PUT" | "PATCH" | "DELETE", path: string, body?: unknown, actor?: WriteActor, requires: "edit" | "manage" | "promos" | "city" | "credits" | "memberships" | "admin" = "edit", unlock?: WriteUnlock): Promise<T> {
   // STEP 2 in the write pipeline (authenticated is step 1, in the route): does the caller
   // hold the required authority — EDIT MATCHES for match/roster writes, MANAGE PLAYERS for
   // ban writes, MANAGE PROMOS for promo writes? These are INDEPENDENT grants; each path names
@@ -442,7 +480,8 @@ export async function apiWrite<T = unknown>(env: MatchdayEnv, method: "POST" | "
   // before creds load — a caller without it produces ZERO network calls. Low-level,
   // unbypassable chokepoint; a route that forgets its own early check is still stopped here.
   (requires === "promos" ? promoGuard : requires === "manage" ? manageGuard : requires === "city" ? cityGuard
-    : requires === "credits" ? creditsGuard : requires === "memberships" ? membershipsGuard : editGuard)(actor);
+    : requires === "credits" ? creditsGuard : requires === "memberships" ? membershipsGuard
+    : requires === "admin" ? adminGuard : editGuard)(actor);
   // The bolt fires next, before creds are even loaded — production is refused
   // regardless of whether prod credentials happen to be configured. Nothing about
   // a production write can proceed while the bolt is engaged.
