@@ -7179,3 +7179,9 @@ Evidence: read-only prod probes 2026-10-12 ~18:30–19:30 UTC — `GET /admin/pl
 - **What breaks:** Player Lookup's email search (live `?email=`), name search (mirror), Player
   Finder, and everything else built on `mdapi_users` (new-player counts, city sets, location
   coverage). The roster still carries the account (`mdapi_match_players.user_id`/`user_email`).
+- **The hidden accounts are served by `GET /admin/players/unverified`** (same `email`/`id`/`limit`/
+  `page`/`sortColumn`/`sortDirection` params). All 16 accounts ops flagged were found there by
+  `?email=` on 2026-10-12, and the endpoint's `totalItems` was 287. Retool shows the two endpoints as
+  separate tables: `getUsers` (the users table) and `getUnverifiedUsers` (the unverified-users table),
+  per the prod export `MatchdayDashboardProd.json`. So a player missing from Retool's users table is in
+  its unverified table. Clubhouse syncs only the first endpoint, so `mdapi_users` holds none of the 287.
