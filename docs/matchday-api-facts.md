@@ -6983,3 +6983,28 @@ Evidence: read-only prod probes 2026-10-12 ~18:30–19:30 UTC — `GET /admin/pl
 - **What breaks:** Player Lookup's email search (live `?email=`), name search (mirror), Player
   Finder, and everything else built on `mdapi_users` (new-player counts, city sets, location
   coverage). The roster still carries the account (`mdapi_match_players.user_id`/`user_email`).
+
+### UPDATE 2026-10-12 evening — the upstream "fix" changed the LIST FILTER, not the data
+
+Evidence: read-only prod probes 2026-10-12 ~22:00–22:45 UTC — `GET /admin/players/{id}` on every id
+94040–94620 (559 accounts), `GET /admin/players?id=` for each, `GET /admin/players/unverified`
+(all pages), plus `fin_sync_log` and `mdapi_users`.
+
+- **`/admin/players` now lists an account when `emailVerifiedAt` OR `phoneNumberVerifiedAt` is set.**
+  559 of 559 fit that rule; nothing else separates listed from unlisted. 7 listed accounts have
+  neither `emailVerifiedAt` nor `completedSignUpAt`, only a phone stamp. The 54 unlisted
+  non-deleted accounts have neither stamp.
+- **`emailVerifiedAt` is STILL null at the same rate.** All 16 accounts Miguel flagged are listed
+  and all 16 still read `emailVerifiedAt: null`. Signups created on 10-12 18:00–24:00 UTC: 29
+  completed, 14 with the stamp. No stamps were backfilled: no account in the range has an
+  `emailVerifiedAt` later than 10-10 16:31 UTC. Anything keyed on `emailVerifiedAt` is still wrong.
+- **`/admin/players/unverified` is 135**, down from 287 earlier on 10-12. None of the 135 has ever
+  had a roster row, WAITING included.
+- **It went live between 20:05 and 21:05 UTC on 10-12.** The hourly `mdapi-users` incremental imported
+  123 rows at 20:05 and 209 at 21:05. That walk only re-reads the newest ~2 days, so older newly
+  listed accounts (94121, 94209) stayed missing until a full walk. A manual `users-full` ran
+  22:37:47 → 22:39:55 UTC and imported 35,463 rows, equal to the list's `totalItems` 35,463. After
+  it, 0 roster user ids from any date are missing from `mdapi_users`.
+- **Meta's `complete_registration` was not affected.** Registrations per install: Oct 1–7 0.46
+  (231/505), Oct 9–11 0.50 (101/200), from `fin_meta_adset_daily`. Where in the app flow the event
+  fires is UNKNOWN; the app code is not in this repo.
