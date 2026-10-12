@@ -7148,3 +7148,34 @@ Evidence: production `GET /admin/matches?fromDate=2026-10-09&toDate=2026-10-09`,
   - Checked Jul–Oct 2026: field cost and revenue are equal on both pages for every city and field.
   - "As billed" on Cities keeps its own invoice path, with overrides, still cut by match date.
 - **"Full month" is removed from Cities.** It counted every match scheduled in the month, played or not (`groupPerMatchCostFor`), so a month in progress carried its projected cost. The helper stays; Field Ranking and other callers use it.
+## `GET /admin/players` HIDES ACCOUNTS WITH `emailVerifiedAt` NULL — and since 2026-10-08 that includes paying players (probed 2026-10-12)
+
+Evidence: read-only prod probes 2026-10-12 ~18:30–19:30 UTC — `GET /admin/players/{id}` (detail) and
+`GET /admin/players?id=` / `?email=` (list) on ids 93850–94575, plus `mdapi_users` and
+`mdapi_match_players`.
+
+- **The list endpoint returns only accounts whose `emailVerifiedAt` is set.** 48 sampled ids from
+  94050–94575: all 20 listed had `emailVerifiedAt` set and all 28 unlisted had it null. Nothing else
+  splits them (signup completion, phone, location and city each appear on both sides). The detail
+  endpoint returns unlisted accounts normally. `?id=` and `?email=` both answer `totalItems: 0` for
+  them. **`emailVerifiedAt` is on the detail payload only, not the list payload**, so `mdapi_users.raw`
+  can never show it.
+- **Before the change, only abandoned signups were unverified.** Older listed accounts (2025-03,
+  2026-05/07/09) have `emailVerifiedAt` equal to `createdAt`. Every unlisted id from 2026-10-06 to
+  2026-10-08 morning had `completedSignUpAt` null.
+- **The change came on 2026-10-08, between 16:27 and 16:43 UTC.** 94065 (created 16:43) is the first
+  completed signup returned with `emailVerifiedAt` null. From then on about 45% of new accounts are
+  unlisted, including accounts with a completed signup and a verified phone that went on to pay for
+  spots. This lines up with the upstream deploy that changed the location model the same afternoon
+  (16:53–18:40 UTC, section above). Which signups now skip the stamp is UNKNOWN. Domains on both sides
+  include gmail, yahoo and icloud; Apple private-relay accounts all had it in the 94060–94140 scan.
+- **Clubhouse sync is not the cause.** `mdapi_users` 35,278 rows = list `totalItems` 35,278. The
+  full sync completed daily (last run 2026-10-12 09:00 → 09:04 UTC), and no Clubhouse commit since
+  2026-10-02 touches `mdapiUsersSync` or Player Lookup.
+- **Impact, by booking created date (America/Chicago):** 0 roster rows a day had an account missing
+  from `mdapi_users` from 09-28 to 10-07. Then Oct 8: 2 · Oct 9: 18 · Oct 10: 12 · Oct 11: 21 ·
+  Oct 12 (partial): 3. That is 56 rows (45 paid and live) across 41 players. Earliest: 2026-10-08
+  20:45 UTC. Every one is an absent user id, with no changed or Stripe-only emails among them.
+- **What breaks:** Player Lookup's email search (live `?email=`), name search (mirror), Player
+  Finder, and everything else built on `mdapi_users` (new-player counts, city sets, location
+  coverage). The roster still carries the account (`mdapi_match_players.user_id`/`user_email`).
