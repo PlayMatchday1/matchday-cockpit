@@ -15,6 +15,7 @@ import "server-only"; // no-op under --conditions=react-server
 // (no auto-prune yet); a prune job over created_at is the intended next step.
 
 import { makeServerClient } from "@/lib/supabaseServer";
+import { localModeOn } from "@/lib/localMode";
 import {
   changesFromBody, appliedOnServer, outcomeForOk, outcomeForThrow, stripDenied, bodyHasDenied,
   type LogState, type LogRow, type Change,
@@ -38,10 +39,14 @@ export type LogStore = {
 };
 
 // Default store: the Supabase table, written with the service-role client.
+// LOCAL MODE writes nothing to change_log (src/lib/localMode.ts): it is a production table and
+// local writes go to seed data. Inserts and resolutions are dropped here as well as in recordWrite,
+// so a caller that uses the store directly is covered too. Reads still work.
 export function supabaseLogStore(): LogStore {
   const sb = makeServerClient();
   return {
     async insert(row) {
+      if (localModeOn()) return;
       await sb.from("change_log").insert({
         save_id: row.saveId, actor_name: row.actorName, actor_email: row.actorEmail ?? null,
         source: row.source, env: row.env, match_id: row.matchId, match_name: row.matchName,
@@ -64,6 +69,7 @@ export function supabaseLogStore(): LogStore {
     // Resolving records what a human found. It fires NO write to MatchDay and does NOT
     // touch `outcome` — only the resolution columns.
     async resolve(saveId, verdict, by, at) {
+      if (localModeOn()) return;
       await sb.from("change_log").update({ resolved: verdict, resolved_by: by, resolved_at: at }).eq("save_id", saveId);
     },
   };
@@ -88,7 +94,7 @@ export type WriteIO = {
 // THE shared hook. Reads before, writes, reads after, classifies, records — and
 // returns the outcome so the caller can respond. Logging never throws over the write:
 // a failed write is a real result to record, not an error to hide.
-export async function recordWrite(ctx: WriteCtx, io: WriteIO, store: LogStore): Promise<{ outcome: LogState; result?: unknown; error?: Error; logged: boolean }> {
+export async function recordWrite(ctx: WriteCtx, io: WriteIO, store: LogStore): Promise<{ outcome: LogState; result?: unknown; error?: Error; logged: boolean; skippedLocal?: boolean }> {
   const before = await io.readResource().catch(() => ({} as Record<string, unknown>));
   let outcome: LogState; let serverSaid: string | null = null; let result: unknown; let error: Error | undefined;
   let after = before;
@@ -107,6 +113,9 @@ export async function recordWrite(ctx: WriteCtx, io: WriteIO, store: LogStore): 
   const safeBody = bodyHasDenied(stripDenied(ctx.body)) ? {} : stripDenied(ctx.body);
   const changes = ctx.changes ?? changesFromBody(before, safeBody, ctx.label);
   let logged = false;
+  // LOCAL MODE: the write and its read-back still run (the outcome is real), nothing is stored.
+  // `skippedLocal` tells the caller why `logged` is false, so it is not reported as a logging hole.
+  if (localModeOn()) return { outcome, result, error, logged, skippedLocal: true };
   // Logging is best-effort: it must NEVER throw over the write. The write already
   // happened; a logging outage (or an unmigrated table) must not turn a landed edit
   // into an error the operator would retry into a double-write.

@@ -116,6 +116,10 @@ const NODE_SUITES = [
   "scripts/ads-overview-test.ts",
   "scripts/mutation-tests.ts",
   "scripts/prod-guard-test.ts",
+  // LOCAL MODE. The Clubhouse pointed at a MatchDay backend on this machine still talks to the ONE
+  // Supabase, which is production. Each guard behind MATCHDAY_LOCAL_API (write client, read/sync
+  // client, sync routes, change_log) is proven on with zero requests, and off as identical to main.
+  "scripts/local-mode-guard-test.ts",
   "scripts/stage-denylist-test.ts",
   "scripts/change-log-test.ts",
   // "[object Object]" REACHED A PERSON. A PostgrestError is a plain object, so String(e) prints

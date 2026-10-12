@@ -41,6 +41,20 @@
 
 const DEFAULT_BASE_URL = "https://playmatchday.herokuapp.com";
 
+// LOCAL MODE (src/lib/localMode.ts) refuses this whole client, before any fetch. It has no host
+// guard and every mdapi sync reads through it, so pointed at the local backend it would copy seed
+// data into production mdapi_* tables. Refusing here makes every sync a no-op wherever it is
+// triggered from. The local backend is reached only through matchdayStageApi's "local" target.
+import { localModeOn, LocalModeRefusedError } from "./localMode";
+function refuseInLocalMode(what: string): void {
+  if (localModeOn()) {
+    throw new LocalModeRefusedError(
+      `Refusing ${what}: local mode is on (MATCHDAY_LOCAL_API=1 under next dev). The read/sync client is ` +
+      `disabled so nothing is copied into production Supabase. No request was sent.`,
+    );
+  }
+}
+
 export class MatchdayApiAuthError extends Error {
   constructor(message: string) {
     super(message);
@@ -165,6 +179,7 @@ export async function fetchMatchDayJson<T = unknown>(
   init: RequestInit = {},
   opts: FetchOpts = {},
 ): Promise<T> {
+  refuseInLocalMode(`a MatchDay read (${url})`);
   let didRefreshAuth = false;
   const maxRetries = opts.maxRetries ?? MAX_RETRIES;
 
@@ -358,6 +373,7 @@ export interface MatchdayApiClient {
 }
 
 export function getMatchdayApiClient(): MatchdayApiClient {
+  refuseInLocalMode("the MatchDay read client");
   // Validate env up front so callers get the missing-env error
   // immediately instead of on the first request.
   const { baseUrl } = getCreds();
