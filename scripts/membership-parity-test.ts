@@ -21,6 +21,7 @@
 import { readFileSync } from "node:fs";
 import {
   memberLikeFromSubscription, countActiveMembers, computeMonthlySnapshot, isActiveAsOf,
+  PAID_MEMBER_MIN_PRICE_CENTS,
   type MemberLike,
 } from "../src/lib/membershipStats";
 
@@ -118,8 +119,13 @@ console.log("\nprice is DOLLARS in the table and CENTS in the predicate");
    * money. The mapper is the only place this conversion happens. */
   is("a 0.50 price survives as 50 cents, not 0",
     memberLikeFromSubscription({ status: "ACTIVE", price: 0.5, member_email: "a@gmail.com", activation_date: "2026-01-01", canceled_at: null, city_identifier: "ATX" })!.price_cents, 50);
-  is("…and is therefore counted, not dropped as unpaid",
-    isActiveAsOf(memberLikeFromSubscription({ status: "ACTIVE", price: 0.5, member_email: "a@gmail.com", activation_date: "2026-01-01", canceled_at: null, city_identifier: "ATX" })!, ASOF), true);
+  /* RULING CHANGED 2026-10-14: a plan under PAID_MEMBER_MIN_PRICE_CENTS is not a paying member, so
+   * this used to assert that $0.50 IS counted and now asserts it is not. What the pair still guards
+   * is the conversion: a floor-priced plan in DOLLARS must survive the x100 and be counted. */
+  is("…and, being under the paying floor, is not a member",
+    isActiveAsOf(memberLikeFromSubscription({ status: "ACTIVE", price: 0.5, member_email: "a@gmail.com", activation_date: "2026-01-01", canceled_at: null, city_identifier: "ATX" })!, ASOF), false);
+  is("a plan AT the floor, in dollars, survives the x100 and is counted",
+    isActiveAsOf(memberLikeFromSubscription({ status: "ACTIVE", price: PAID_MEMBER_MIN_PRICE_CENTS / 100, member_email: "a@gmail.com", activation_date: "2026-01-01", canceled_at: null, city_identifier: "ATX" })!, ASOF), true);
 }
 
 console.log("\nthe server-side narrowing is free");

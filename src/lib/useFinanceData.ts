@@ -22,7 +22,9 @@ import {
 } from "./partnerStats";
 import {
   fetchLegacyMatchRegistrations,
+  hasMembershipAtMatchTime,
   loadMembershipWindowsByUserId,
+  type MembershipWindowsByUserId,
 } from "./mdapiMatchesRead";
 import { useFinanceQuarter } from "./financeQuarter";
 import {
@@ -560,6 +562,8 @@ async function load(quarter: QuarterInfo): Promise<void> {
   let mdapiRegRows: Awaited<
     ReturnType<typeof fetchLegacyMatchRegistrations>
   >;
+  // The pre-2026-10-14 windows, for partner payouts only — see heldPartnerRows below.
+  let partnerHeldWindows: MembershipWindowsByUserId = new Map();
   const smBounds = quarterFetchBounds(quarter);
   try {
     [
@@ -698,7 +702,11 @@ async function load(quarter: QuarterInfo): Promise<void> {
       // exclusively from the targeted pull — the quarter rows are
       // partitioned out by month key first, so the overlap can't
       // double-count.
-      loadMembershipWindowsByUserId(supabase).then(async (subs) => {
+      Promise.all([
+        loadMembershipWindowsByUserId(supabase),
+        loadMembershipWindowsByUserId(supabase, { legacyAllSubscriptions: true }),
+      ]).then(async ([subs, held]) => {
+        partnerHeldWindows = held;
         const needsBenchmarkFetch = !coversBenchmarkMonth(smBounds);
         const [quarterRows, benchmarkRows] = await Promise.all([
           fetchLegacyMatchRegistrations(supabase, smBounds, subs),
@@ -1036,7 +1044,7 @@ async function load(quarter: QuarterInfo): Promise<void> {
         partnerDashboards,
         venues,
         venueFields,
-        mdapiRegRows,
+        heldPartnerRows(mdapiRegRows, partnerHeldWindows),
         revenueRows.map((r) => ({
           date: cleanText(r.date),
           type: cleanText(r.type),
@@ -1221,5 +1229,29 @@ export async function refetchFinanceData(): Promise<void> {
       const q = getQuarterByKey(key);
       return q ? load(q) : Promise.resolve();
     }),
+  );
+}
+
+/* PARTNER PAYOUTS ARE HELD ON THE OLD MEMBER CLASSIFICATION (2026-10-14).
+ *
+ * mdapiRegRows are classified with the paying-member windows (loadMembershipWindowsByUserId's
+ * default), which is right for every other reader. Partner payouts value member spots, so the same
+ * rows would move money owed to partners, and that change waits for Ryan's sign-off.
+ *
+ * EXACT, NOT APPROXIMATE. The paying windows are a SUBSET of the old ones (the rule only removes
+ * subscriptions), so a row the old classifier called MEMBER is either MEMBER now or a FREE row the
+ * new one called FREE_NON_MEMBER that an old window still covers. Re-marking exactly those restores
+ * the old classification row for row — match_start_utc is the true instant, the one
+ * hasMembershipAtMatchTime requires.
+ *
+ * WHEN THE PARTNER CHANGE IS APPROVED: pass mdapiRegRows straight through and delete this, the
+ * second window load above, and `legacyAllSubscriptions` in partnerStats. */
+function heldPartnerRows<T extends { payment_type: string | null; user_id: string; match_start_utc: string }>(
+  rows: T[], held: MembershipWindowsByUserId,
+): T[] {
+  return rows.map((r) =>
+    r.payment_type === "FREE_NON_MEMBER" && hasMembershipAtMatchTime(r.user_id, r.match_start_utc, held)
+      ? { ...r, payment_type: "MEMBER" }
+      : r,
   );
 }

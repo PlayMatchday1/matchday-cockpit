@@ -17,6 +17,7 @@
 
 import { CITY_CODE_TO_DISPLAY } from "./scheduleReconcile";
 import { canonicalVenueName, venueCategory } from "./venueResolver";
+import { isPaidMemberSubscription } from "./membershipStats";
 
 // ── City attribution ────────────────────────────────────────────────────────
 // DECISION 3: a played player's city is their self-declared preferable_city_name
@@ -159,7 +160,30 @@ export type RawSubscription = {
   activation_date: string | null;
   canceled_at: string | null;
   price?: number | null; // monthly membership fee (for the ARPP field-level allocation)
+  status?: string | null;
+  member_email?: string | null;
 };
+
+/* THE MONTHS A SUBSCRIPTION MAKES SOMEONE A MEMBER, for the ARPP denominators — or null when it
+ * never does. Two rules, both 2026-10-14:
+ *
+ *   PAYING ONLY. membershipStats.isPaidMemberSubscription — the plan price floor
+ *   (PAID_MEMBER_MIN_PRICE_CENTS), staff emails, INCOMPLETE. ARPP counted every row, so $0 comps,
+ *   legacy $1 plans and staff sat in the "members" half of the denominator.
+ *
+ *   A CANCELED ROW WITH NO canceled_at ENDS IN ITS ACTIVATION MONTH. With `cancel` null the old loop
+ *   kept it active for every month to now — 597 paying-plan rows on 2026-10-14, each one a member
+ *   forever. When such a row really ended is UNKNOWN: there is no date and no reason on any of them,
+ *   and raw.membershipLength is days-since-activation recomputed live, not a length. Its status
+ *   being CANCELED rather than INCOMPLETE says it was charged at least once, so the activation
+ *   month is the one month there is evidence for. Narrower than the truth, never wider. */
+export function paidMemberMonths(s: RawSubscription): { from: string; to: string | null } | null {
+  if (!s.activation_date || !isPaidMemberSubscription(s)) return null;
+  const from = monthKey(s.activation_date);
+  if (s.canceled_at) return { from, to: monthKey(s.canceled_at) };
+  if (String(s.status ?? "").toUpperCase() === "CANCELED") return { from, to: from };
+  return { from, to: null };
+}
 export type RawRevenue = {
   month: string | null;
   city: string | null;

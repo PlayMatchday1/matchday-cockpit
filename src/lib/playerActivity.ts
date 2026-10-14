@@ -16,6 +16,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { selectAll } from "./supabasePagination";
 import { matchStartMs } from "./matchTime";
+import { isPaidMemberSubscription } from "./membershipStats";
 
 export const ACTIVE_DAYS = 30;
 const DAY_MS = 86_400_000;
@@ -30,9 +31,13 @@ export function isActiveByLastPlay(lastStartMs: number | null, now: Date): boole
   return lastStartMs != null && lastStartMs >= now.getTime() - ACTIVE_DAYS * DAY_MS;
 }
 
-export type SubLike = { status: string | null; price: number | string | null };
+/* A MEMBER, for the Users lens and Locations: status ACTIVE and the shared paying-member rule
+ * (membershipStats.isPaidMemberSubscription — plan price floor, staff emails, INCOMPLETE). This was
+ * `price > 0` with no email test, so $0 comps, legacy $1 plans and staff read as members here and
+ * not on the Membership page. member_email is REQUIRED so a caller cannot forget to select it. */
+export type SubLike = { status: string | null; price: number | string | null; member_email: string | null };
 export function isPaidActiveSub(s: SubLike): boolean {
-  return s.status === "ACTIVE" && s.price != null && Number(s.price) > 0;
+  return s.status === "ACTIVE" && isPaidMemberSubscription(s);
 }
 
 /**

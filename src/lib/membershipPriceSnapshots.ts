@@ -30,6 +30,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { cityFromAbbr } from "./cityMap";
+import { isPaidMemberSubscription } from "./membershipStats";
 
 export type MembershipPriceSnapshotResult = {
   // Cities considered (had ≥1 ACTIVE sub AND resolved via cityFromAbbr).
@@ -47,6 +48,8 @@ export type MembershipPriceSnapshotResult = {
 type ActiveSub = {
   city_identifier: string | null;
   price: number | null;
+  status: string | null;
+  member_email: string | null;
 };
 
 type LatestSnapshot = {
@@ -66,7 +69,7 @@ export async function refreshMembershipPriceSnapshots(
   //    no pagination needed and no batching cost worth optimizing.
   const { data: actives, error: activesErr } = await sb
     .from("mdapi_subscriptions")
-    .select("city_identifier, price")
+    .select("city_identifier, price, status, member_email")
     .eq("status", "ACTIVE");
   if (activesErr) {
     throw new Error(`mdapi_subscriptions read: ${activesErr.message}`);
@@ -75,6 +78,9 @@ export async function refreshMembershipPriceSnapshots(
   // 2. Group by city_identifier → max + count_at_max.
   const byAbbr = new Map<string, Stats>();
   for (const row of (actives ?? []) as ActiveSub[]) {
+    // PAYING MEMBERS ONLY — the shared rule, so "N active at this price" counts members, not the
+    // staff subscriptions that sit at the same $66. (The max is unaffected: comps sit at the bottom.)
+    if (!isPaidMemberSubscription(row)) continue;
     const abbr = row.city_identifier?.trim();
     if (!abbr || row.price == null) continue;
     const priceNum = Number(row.price);

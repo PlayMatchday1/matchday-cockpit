@@ -12,6 +12,7 @@ import {
 } from "./quarters";
 
 import { isFakePlayerEmail } from "./mdapiFakePlayer";
+import { isActiveMember } from "./membershipStats";
 import { partnerPaymentOwedForMonth } from "./partnerStats";
 import { unitCostOf } from "./venuePay";
 import {
@@ -2531,13 +2532,13 @@ export function buildMembershipHealthRows(
 ): MembershipHealthRow[] {
   if (!membershipHealthAvailable(data)) return [];
 
-  // ─── Member cohort: ACTIVE + price > 0 only. Excludes $0 promo
-  // accounts from BOTH the count and the matches-played denominator.
+  // ─── Member cohort: the shared rule (isActiveMember — ACTIVE, plan at or above
+  // PAID_MEMBER_MIN_PRICE_CENTS, not a staff email). This tested `price > 0` alone, so staff
+  // subscriptions and legacy $1 plans were members here and nowhere else.
   const memberCountByCity = new Map<string, number>();
   const memberPriceCentsTotalByCity = new Map<string, number>();
   for (const m of data.members) {
-    if (m.status !== "ACTIVE") continue;
-    if (m.price_cents <= 0) continue;
+    if (!isActiveMember(m)) continue;
     memberCountByCity.set(m.city, (memberCountByCity.get(m.city) ?? 0) + 1);
     memberPriceCentsTotalByCity.set(
       m.city,

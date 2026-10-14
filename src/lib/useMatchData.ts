@@ -17,9 +17,16 @@ import { supabase } from "./supabase";
 import { cityToAbbr } from "./cityMap";
 import {
   fetchJoinedMatchPlayers,
+  loadMembershipWindowsByUserId,
   type JoinedMatchPlayerRow,
   type ScheduledMatch,
 } from "./mdapiMatchesRead";
+
+/* EVERY ROW HERE IS CLASSIFIED AGAINST THE PAYING-MEMBER WINDOWS (2026-10-14). Without them
+ * fetchJoinedMatchPlayers falls back to FREE → MEMBER, so a first-match-free spot, a guest pass, a
+ * manager fill and a $0 comp all read as member spots — on the Membership Health table's "Played",
+ * Period Compare's member bookings and every other MEMBER count built on these rows. The windows
+ * are one ~3,000-row read, fetched beside the rows rather than after them. */
 
 // Re-export MatchRow + ScheduledMatch for consumers that import from here.
 export type { MatchRow, ScheduledMatch } from "./mdapiMatchesRead";
@@ -88,7 +95,8 @@ async function load(): Promise<void> {
   let lastSyncCompletedAt: string | null = null;
   try {
     const [rowsResult, lastSyncResult] = await Promise.all([
-      fetchJoinedMatchPlayers(supabase, { toDate: forwardBoundIso() }),
+      loadMembershipWindowsByUserId(supabase).then((windows) =>
+        fetchJoinedMatchPlayers(supabase, { toDate: forwardBoundIso() }, windows)),
       // Latest mdapi-matches sync completion — drives meta.uploadedAt.
       // Will be populated by the cron orchestrator in Phase 5c. Until
       // then, the manual backfill/incremental scripts also write to
@@ -222,11 +230,12 @@ async function loadRange(
   let lastSyncCompletedAt: string | null = null;
   try {
     const [rowsResult, lastSyncResult] = await Promise.all([
-      fetchJoinedMatchPlayers(supabase, {
-        fromDate,
-        toDate,
-        cityIdentifier: city ?? undefined,
-      }),
+      loadMembershipWindowsByUserId(supabase).then((windows) =>
+        fetchJoinedMatchPlayers(supabase, {
+          fromDate,
+          toDate,
+          cityIdentifier: city ?? undefined,
+        }, windows)),
       supabase
         .from("fin_sync_log")
         .select("completed_at")

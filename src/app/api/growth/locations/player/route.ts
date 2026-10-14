@@ -53,8 +53,8 @@ export async function GET(req: Request) {
       sb.from("mdapi_users").select("id,first_name,last_name,created_at,completed_sign_up_at").eq("id", id).maybeSingle(),
       selectAll<PlayRowLike & { api_id: number; match_api_id: number | null }>(() => sb.from("mdapi_match_players")
         .select("api_id,match_api_id,is_cancelled,user_is_fake_player,user_type").eq("user_id", id).is("deleted_at", null).order("api_id")),
-      selectAll<{ membership_id: number; status: string | null; price: number | string | null }>(() => sb.from("mdapi_subscriptions")
-        .select("membership_id,status,price").eq("user_id", id).order("membership_id")),
+      selectAll<{ membership_id: number; status: string | null; price: number | string | null; member_email: string | null }>(() => sb.from("mdapi_subscriptions")
+        .select("membership_id,status,price,member_email").eq("user_id", id).order("membership_id")),
       fetchFieldSnapshots(sb, now),
       fetchLatestCities(sb),
     ]);

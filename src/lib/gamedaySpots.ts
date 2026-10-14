@@ -23,6 +23,7 @@
  * `unclassified` so the board can say so rather than hide it. Measured 2026-10-09: none. */
 import { rosterRowCounts } from "./gamedayModel";
 import { isFakePlayerEmail } from "./mdapiFakePlayer";
+import { isPaidMemberSubscription } from "./membershipStats";
 
 export type RosterApiRow = {
   id: number; userId: number; paidStatus?: string | null; userType?: string | null;
@@ -117,12 +118,14 @@ export async function spotLookups(
     const chunk = userIds.slice(i, i + 200);
     const [u, s] = await Promise.all([
       sb.from("mdapi_users").select("id,email,is_fake_player").in("id", chunk),
-      sb.from("mdapi_subscriptions").select("user_id,activation_date,canceled_at").in("user_id", chunk),
+      sb.from("mdapi_subscriptions").select("user_id,activation_date,canceled_at,status,price,member_email").in("user_id", chunk),
     ]);
     if (u.error) throw new Error(`mdapi_users: ${u.error.message}`);
     if (s.error) throw new Error(`mdapi_subscriptions: ${s.error.message}`);
     for (const r of u.data ?? []) if (r.is_fake_player === true || isFakePlayerEmail(r.email)) fakeUsers.add(Number(r.id));
     for (const r of s.data ?? []) {
+      // Only a paying membership covers a spot — the shared rule, as loadMembershipWindowsByUserId.
+      if (!isPaidMemberSubscription(r)) continue;
       const a = Date.parse(String(r.activation_date ?? ""));
       if (!Number.isFinite(a)) continue;
       const c = r.canceled_at ? Date.parse(String(r.canceled_at)) : null;

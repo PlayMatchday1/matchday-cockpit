@@ -31,6 +31,7 @@ import {
   addMonthsToKey,
   monthDiff,
   monthRange,
+  paidMemberMonths,
   type RawSubscription,
   type RawRevenue,
 } from "./growthAnalytics";
@@ -424,13 +425,13 @@ export function computeGrowthFromViews(input: ViewInput): GrowthData {
   const membersByMonth = new Map<string, Set<number>>();
   const membersByCity = new Map<string, Map<string, Set<number>>>();
   for (const s of subscriptions) {
-    if (s.user_id == null || !s.activation_date) continue;
-    const act = monthKey(s.activation_date);
-    const cancel = s.canceled_at ? monthKey(s.canceled_at) : null;
+    if (s.user_id == null) continue;
+    const win = paidMemberMonths(s); // paying members only; see growthAnalytics.paidMemberMonths
+    if (!win) continue;
     const city = normalizeMatchCity(s.city_identifier);
     for (const m of arppMonths) {
-      if (m < act) continue;
-      if (cancel && m > cancel) continue;
+      if (m < win.from) continue;
+      if (win.to && m > win.to) continue;
       addSet(membersByMonth, m, s.user_id);
       addSet2(membersByCity, city, m, s.user_id);
     }
@@ -636,11 +637,13 @@ export function computeArppCard(
   }
 
   // ── members active by month (subs.price), + membership field allocation ──────
+  // Paying members only, and an undated cancellation ends in its activation month — the one rule,
+  // growthAnalytics.paidMemberMonths, shared with the Lifecycle ARPP series above.
   const memberActive = (s: RawSubscription, month: string): boolean => {
-    if (!s.activation_date) return false;
-    const act = monthKey(s.activation_date);
-    if (month < act) return false;
-    if (s.canceled_at && month > monthKey(s.canceled_at)) return false;
+    const win = paidMemberMonths(s);
+    if (!win) return false;
+    if (month < win.from) return false;
+    if (win.to && month > win.to) return false;
     return true;
   };
   const membersM = new Map<string, Set<number>>();
@@ -834,7 +837,7 @@ export async function readGrowthFromViews(
     ),
     selectAll<PlayDimRow>(sb, "growth_play_dims", "match_month, city_identifier, field_title, field_id, spots, amount", "match_month"),
     selectAll<RegistrationRow>(sb, "growth_registration", "user_id, completed, signup_month, declared_city_raw, lifetime_matches", "user_id"),
-    selectAll<RawSubscription>(sb, "mdapi_subscriptions", "user_id, city_identifier, activation_date, canceled_at, price", "membership_id"),
+    selectAll<RawSubscription>(sb, "mdapi_subscriptions", "user_id, city_identifier, activation_date, canceled_at, price, status, member_email", "membership_id"),
     selectAll<RawRevenue>(sb, "fin_revenue", "month, city, type, net, venue", "id"),
     selectAll<DownloadMonthRow>(sb, "growth_downloads_month", "month, count", "month"),
     readRowCounts(sb),

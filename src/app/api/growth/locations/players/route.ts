@@ -11,12 +11,13 @@ import { selectAll } from "@/lib/supabasePagination";
 import { locatePlayers } from "@/lib/locationsMap";
 import { loadLocationsInputs } from "@/lib/locationsInputs";
 import { isScrubbed, toE164, type AreaPlayer } from "@/lib/areaPlayers";
+import { isPaidActiveSub, type SubLike } from "@/lib/playerActivity";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-type UserRow = { id: number; email: string | null; first_name: string | null; last_name: string | null; phone_number: string | null; is_member: boolean | null };
+type UserRow = { id: number; email: string | null; first_name: string | null; last_name: string | null; phone_number: string | null };
 
 export async function GET(req: Request) {
   const auth = await authenticateCapability(req, "growth");
@@ -29,10 +30,19 @@ export async function GET(req: Request) {
     const places = locatePlayers(input);
     const ids = places.map((p) => p.playerId);
     const users = new Map<number, UserRow>();
+    /* MEMBER IS THE SHARED RULE (isPaidActiveSub), as on the single-player route beside this one —
+     * not mdapi_users.is_member, which is true for any ACTIVE subscription, $0 comps included. */
+    const paying = new Set<number>();
     for (let i = 0; i < ids.length; i += 200) {
       const chunk = ids.slice(i, i + 200);
-      for (const u of await selectAll<UserRow>(() => sb.from("mdapi_users")
-        .select("id,email,first_name,last_name,phone_number,is_member").in("id", chunk).order("id"))) users.set(Number(u.id), u);
+      const [us, subs] = await Promise.all([
+        selectAll<UserRow>(() => sb.from("mdapi_users")
+          .select("id,email,first_name,last_name,phone_number").in("id", chunk).order("id")),
+        selectAll<SubLike & { membership_id: number; user_id: number }>(() => sb.from("mdapi_subscriptions")
+          .select("membership_id,user_id,status,price,member_email").eq("status", "ACTIVE").in("user_id", chunk).order("membership_id")),
+      ]);
+      for (const u of us) users.set(Number(u.id), u);
+      for (const r of subs) if (isPaidActiveSub(r)) paying.add(Number(r.user_id));
     }
     const cityName = new Map(input.cities.map((c) => [c.id, c.name]));
     const rows: AreaPlayer[] = places.map((p) => {
@@ -47,7 +57,7 @@ export async function GET(req: Request) {
         city: p.cityId != null ? cityName.get(p.cityId) ?? null : (p.label ? p.label.split(",")[0].trim() : null),
         state: p.state, verdict: p.verdict, cityId: p.cityId,
         lastPlayed: p.lastDay, activity: p.activity, matches: p.matches, favouriteField: p.favouriteTitle,
-        member: u?.is_member === true, keys: p.keys, fieldReach: p.fieldReach, fromZip: p.fromZip,
+        member: paying.has(p.playerId), keys: p.keys, fieldReach: p.fieldReach, fromZip: p.fromZip,
       };
     });
     return Response.json({ players: rows, missingUsers: places.length - places.filter((p) => users.has(p.playerId)).length },

@@ -53,8 +53,40 @@ export function countActiveMembers(
   return n;
 }
 
+/* THE PAYING-MEMBER PRICE FLOOR: a subscription counts as a member only when its plan's monthly
+ * price is at least this. It matches the "Paid signup" definition in Jaimee's Stripe churn sheet.
+ *
+ * WHY $15 AND NOT $0. Stripe holds 64 active subscriptions at $0/month and 12 on legacy $1/month
+ * plans — comps, internal accounts and synthetic @matchday.com fill accounts. None of them pays.
+ * The cheapest real plan is $18 (OKC's older band sat at $15, which the floor keeps).
+ *
+ * THIS IS THE PLAN PRICE, NOT THE $1 SIGNUP PROMO. mdapi_subscriptions.price is the plan's monthly
+ * price: since 2026-09-01, 152 activations read $66 and one reads $1, against 78 sub-$2
+ * membership charges in fin_txn for September — a promo member's row carries the full plan
+ * price, so the floor does not drop them. Membership REVENUE does not use this; $1 invoices stay
+ * in revenue and simply do not make anyone a member.
+ *
+ * SQL HOLDS ONE MIRROR of this value (paid_member_subscription, migration 0223), because the
+ * database cannot import it. scripts/membership-floor-test.ts fails if the two differ. */
+export const PAID_MEMBER_MIN_PRICE_CENTS = 1500;
+/** The floor as page copy says it ("$15"), derived so copy cannot drift from the rule. */
+export const PAID_MEMBER_MIN_PRICE_LABEL = `$${PAID_MEMBER_MIN_PRICE_CENTS / 100}`;
+
+/** A raw mdapi_subscriptions row (price in DOLLARS) against the paying-member rule, with no city
+ *  mapping — for readers that must not drop an unmapped city, such as the membership windows. */
+export function isPaidMemberSubscription(r: {
+  status?: string | null; price?: number | string | null; member_email?: string | null;
+}): boolean {
+  return isPaidExternalMember({
+    status: r.status ?? "",
+    price_cents: Math.round(Number(r.price ?? 0) * 100),
+    email: r.member_email ?? null,
+    activation_date: null, canceled_at: null, city: "",
+  });
+}
+
 export function isPaidExternalMember(m: MemberLike): boolean {
-  if (m.price_cents <= 0) return false;
+  if (!(m.price_cents >= PAID_MEMBER_MIN_PRICE_CENTS)) return false;
   if (m.email && INTERNAL_EMAIL_RX.test(m.email)) return false;
   // Stripe INCOMPLETE / INCOMPLETE_EXPIRED never completed checkout —
   // they were never charged. ACTIVE / PAST_DUE / CANCELED / UNPAID all

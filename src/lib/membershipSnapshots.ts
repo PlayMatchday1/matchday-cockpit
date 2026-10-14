@@ -24,7 +24,7 @@ import {
 } from "./membershipStats";
 import { CITIES } from "./types";
 import { cityFromAbbr } from "./cityMap";
-import { fetchJoinedMatchPlayers } from "./mdapiMatchesRead";
+import { fetchJoinedMatchPlayers, loadMembershipWindowsByUserId } from "./mdapiMatchesRead";
 
 // Single source of truth for membership snapshot writes. Called from
 // the cron orchestrator (6th step), the manual /api/sync/snapshots
@@ -87,7 +87,11 @@ export async function refreshMembershipSnapshots(opts: {
     // The snapshots this run writes are the current month and (on the 1st-5th) the prior one, and
     // computeAvgMatchesPerMember only looks at rows inside them — so everything else was fetched
     // and discarded.
-    fetchJoinedMatchPlayers(sb, attendanceRange(now)),
+    //
+    // CLASSIFIED AGAINST THE PAYING-MEMBER WINDOWS, so a FREE spot is MEMBER only for someone who
+    // held a paying membership at kickoff — without them every FREE spot reads MEMBER.
+    loadMembershipWindowsByUserId(sb).then((windows) =>
+      fetchJoinedMatchPlayers(sb, attendanceRange(now), windows)),
   ]);
   const attendance: AttendanceRow[] = joinedMatches.rows.map((r) => ({
     match_start: r.matchStart,

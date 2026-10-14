@@ -4,7 +4,7 @@
  * It answers one question: WHO PAYS on the 1st of next month — and marks, beside it, who is on
  * that charge for the last time. Everything below exists to keep those numbers honest.
  *
- *     Total active        status ACTIVE today, price > $0, internal addresses excluded
+ *     Total active        status ACTIVE today, plan >= PAID_MEMBER_MIN_PRICE_CENTS, internal addresses excluded
  *     Cancelled before    of those, canceled_at earlier than the cutoff
  *     Paying members      Total active − Cancelled before
  *     Billing             Σ each paying member's own price
@@ -48,7 +48,7 @@
  */
 
 import { cityFromAbbr } from "./cityMap";
-import { INTERNAL_EMAIL_RX, memberLikeFromSubscription } from "./membershipStats";
+import { PAID_MEMBER_MIN_PRICE_LABEL, isPaidExternalMember, memberLikeFromSubscription } from "./membershipStats";
 import { BUSINESS_TZ } from "./businessHours";
 
 /* THE BILLING DAY. The 6th, as isChurning in membershipStats has always had it — but NOT imported
@@ -110,7 +110,7 @@ export type ByCityRow = {
   code: string;
   /** Friendly name from cityFromAbbr. Null only on the total row. */
   city: string | null;
-  /** status ACTIVE today, non-$0, external. */
+  /** status ACTIVE today, paying (isPaidExternalMember), external. */
   totalActive: number;
   /** SUBSET of totalActive: canceled_at earlier than the cutoff. */
   cancelledBefore: number;
@@ -133,7 +133,7 @@ export type MembersByCityTable = {
   total: ByCityRow;
   /** Stated on its own line, never folded into `total`. Zero members means the line is hidden. */
   unassigned: { members: number; cents: number };
-  /** People considered — active, non-$0, external, collapsed one per user_id, cities + unassigned. */
+  /** People considered — active, paying, external, collapsed one per user_id, cities + unassigned. */
   people: number;
   /** How many rows the page pulled, and whether the pull was complete. */
   rowsPulled: number;
@@ -195,16 +195,17 @@ export const isCancelledOnOrAfter = (canceledAt: string | null | undefined, cuto
 type Person = { userId: string; code: string; mapped: boolean; priceCents: number; canceledAt: string | null };
 
 /* THE BASE, AND EVERY EXCLUSION IT APPLIES, IN ONE PLACE:
- *   price > $0            a $0 membership bills nothing and is not a paying member
+ *   paying, external      isPaidExternalMember — the plan price floor (PAID_MEMBER_MIN_PRICE_CENTS:
+ *                         comps and legacy token-price plans are not paying members) and the
+ *                         @matchday. / @playmatchday. staff rule. The shared predicate, not a copy.
  *   status ACTIVE today   the report is about who is on the next charge, which is a live question.
  *                         THIS IS ALSO WHY THE 683 CANCELED-WITH-NO-canceled_at ROWS ARE ABSENT:
  *                         they are not ACTIVE, so they never enter. That data problem is left
  *                         alone deliberately — it is not this page's to fix.
- *   external email        @matchday. / @playmatchday. accounts are staff, not revenue. Two today.
  *
  * NOT isActiveAsOf. That helper is shared with the Membership page and the snapshot cron and takes
  * an `asOf` it cannot honour (it tests the CURRENT status), so calling it here would import a
- * promise this page would then appear to make. The predicate is three lines and it is written out.
+ * promise this page would then appear to make. Status is tested here; who pays is not restated.
  *
  * THE COLLAPSE: one row per user_id. Hundreds of people hold more than one non-$0 row and many
  * hold a live membership beside a dead one, so counting rows double-counts them. Measured
@@ -221,8 +222,7 @@ function collapseToPeople(rows: readonly SubscriptionRow[]): Person[] {
       memberLikeFromSubscription(r) ??
       memberLikeFromSubscription({ ...r, city_identifier: CITY_PROBE });
     if (!m) continue;
-    if (m.price_cents <= 0) continue;
-    if (m.email && INTERNAL_EMAIL_RX.test(m.email)) continue;
+    if (!isPaidExternalMember(m)) continue;
     const userId = String(r.user_id ?? `membership:${r.activation_date}:${m.price_cents}`);
     const prev = byUser.get(userId);
     if (prev && prev.priceCents >= m.price_cents) continue;
@@ -363,7 +363,7 @@ export function membersByCityCsv(
   return [
     `# Members by City — as of ${asOfLabel}. Cutoff ${dates.cutoffYmd}, bills ${dates.billingYmd}.`
       + ` The cutoff+ column pays ${dates.billingYmd} and not ${dates.runRateYmd}.`
-      + ` Excludes $0 members and internal accounts.`,
+      + ` Excludes plans under ${PAID_MEMBER_MIN_PRICE_LABEL}/month and internal accounts.`,
     head.map(cell).join(","),
     ...t.rows.map((r) => line(r, r.city ?? r.code)),
     line(t.total, "TOTAL"),

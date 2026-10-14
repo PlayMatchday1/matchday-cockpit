@@ -7185,3 +7185,40 @@ Evidence: read-only prod probes 2026-10-12 ~18:30–19:30 UTC — `GET /admin/pl
   separate tables: `getUsers` (the users table) and `getUnverifiedUsers` (the unverified-users table),
   per the prod export `MatchdayDashboardProd.json`. So a player missing from Retool's users table is in
   its unverified table. Clubhouse syncs only the first endpoint, so `mdapi_users` holds none of the 287.
+
+## A member is a PAYING member: plan price ≥ $15, external, completed checkout (2026-10-14)
+
+**The rule (Ryan, 2026-10-14):** `membershipStats.isPaidExternalMember` / `isPaidMemberSubscription`,
+floor `PAID_MEMBER_MIN_PRICE_CENTS = 1500` — the "Paid signup" definition in Jaimee's Stripe churn
+sheet. SQL mirror: `paid_member_subscription` (migration 0223, drafted for review, not applied as of
+this entry), pinned to the TS constant by `scripts/membership-floor-test.ts`.
+
+- **`mdapi_subscriptions.price` is the PLAN's monthly price, not the $1 signup promo charge.** Since
+  2026-09-01, 152 activations read $66 and ONE reads $1, while `fin_txn` holds **78** membership
+  charges under $2 for September 2026 (304 at ≥ $15, 17 between). The 12 ACTIVE $1 rows activated
+  2025-03 → 2026-09 and still read $1 — legacy $1 plans, not promo members mid-promo. Evidence:
+  `mdapi_subscriptions` (2,877 rows) and `fin_txn` type=Membership kind=charge, read-only, 2026-10-14.
+- **`fin_txn` cannot tie a charge to a member**: `subscription_id` and `invoice_id` are null on all
+  9,271 Membership rows. Same probe.
+- **ACTIVE by price, 2026-10-14:** $0 × 64 (36 internal), $1 × 12, $18 × 1, $25 × 1, $30 × 15,
+  $33 × 1, $49 × 26, $66 × 220 (1 internal), $100 × 1. Matches Stripe's 64 at $0 and 12 at $1.
+- **`mdapi_users.is_member` = "holds ANY ACTIVE subscription", whatever the price.** True for all 64
+  people whose only ACTIVE row is $0 (36 of them internal) and all 12 whose only ACTIVE row is $1;
+  true for all 265 holding an ACTIVE ≥ $15 row; false for all 1,741 with no ACTIVE row and for the one
+  PAST_DUE-only holder. The column equals `raw.isMember` on 2,083 of 2,083 subscription holders.
+  So **`is_member` is not a member count** — ChurnPanel, Locations and the Finder now use the rule.
+- **`raw.membershipLength` is days since activation, recomputed live**, not a length: an ACTIVE row
+  reads 956 at 957 days since activation, and on dated cancellations it is never within 2 days of
+  (canceled_at − activation_date) — 0 of 1,560. It cannot date the **597 paying-plan CANCELED rows
+  with no `canceled_at`**; their end stays UNKNOWN, and ARPP now counts each only in its activation
+  month (`growthAnalytics.paidMemberMonths`).
+- **`fin_member_spots_by_venue_month` (0222) IS LIVE, and its body matches the file.** September
+  2026 via the RPC: 2,214; the file's logic recomputed from the raw tables: 2,214. Under 0223: 2,058
+  (−156).
+- **Partner payouts do not move for Sep or Oct 2026.** Every enabled partner's period owed is
+  identical under both rules (Hattrick Sep $2,609.42 paid, Oct $1,368.00 pending; member spots 142 and
+  89 either way; PAC Global $0.00 every week either way). All-time, the rule reclassifies member rows
+  at Hattrick (10), PAC Global (12), Parmer (4), Hattrick Tomball (3), Crossbar Rowlett (1) — none in
+  those two months. Partner payouts are still HELD on the old classification pending sign-off.
+  Evidence: `partnerPaymentFor` on `fetchPartnerRows`, old rows vs rows re-split against the paying
+  windows, 2026-10-14.

@@ -84,6 +84,9 @@ const NODE_SUITES = [
   // negative, and that no site branches on the bare model literal.
   "scripts/partner-floor-payout-test.ts",
   "scripts/partner-member-spots-test.ts",
+  // Who counts as a member decides which spots a partner payout values; the rule also has a SQL
+  // mirror (0223) the gate cannot execute, so its floor is pinned here against the TS constant.
+  "scripts/membership-floor-test.ts",
   "scripts/meta-ad-spend-test.ts",
   // THE LEDGER FLOOR IS NOT A TUNABLE. Its own suite because the reason it exists is not the
   // obvious one: fin_expenses has NO rows of any kind before 2026-04-30, so ad spend in Dec-Mar

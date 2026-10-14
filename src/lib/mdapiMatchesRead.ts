@@ -31,6 +31,7 @@ import { selectAll, selectAllParallel } from "./supabasePagination";
 import { cityFromAbbr } from "./cityMap";
 import { canonicalVenueName } from "./venueResolver";
 import { isFakePlayerRow } from "./mdapiFakePlayer";
+import { isPaidMemberSubscription } from "./membershipStats";
 
 const MATCHES_COLS =
   "api_id, city_identifier, field_id, field_title, start_date, start_date_utc, end_date_utc, is_cancelled, max_player_count";
@@ -322,22 +323,37 @@ export type MembershipWindowsByUserId = Map<string, MembershipWindow[]>;
 //
 // Returns a multimap: one user can hold several historical
 // subscriptions (cancel + resubscribe).
+//
+// ONLY A PAYING MEMBERSHIP OPENS A WINDOW (2026-10-14). A subscription that fails the shared rule
+// — membershipStats.isPaidMemberSubscription: a plan under PAID_MEMBER_MIN_PRICE_CENTS, a staff
+// email, an INCOMPLETE checkout — creates no window, so a $0 comp's or a legacy $1 plan's FREE spot
+// reads FREE_NON_MEMBER, not MEMBER. Status is still NOT filtered, for reason 1 above: the rule
+// tests price, email and INCOMPLETE, never ACTIVE vs CANCELED.
+//
+// `legacyAllSubscriptions` RESTORES THE OLD, UNFILTERED WINDOWS. It exists for ONE reason: partner
+// payouts value member spots, so the rule moves money owed to partners, and that change is held
+// for Ryan's sign-off. Nothing else may pass it. Remove it when the partner change is approved.
 export async function loadMembershipWindowsByUserId(
   supabase: SupabaseClient,
+  opts: { legacyAllSubscriptions?: boolean } = {},
 ): Promise<MembershipWindowsByUserId> {
   const rows = await selectAll<{
     user_id: number | null;
     activation_date: string | null;
     canceled_at: string | null;
+    status: string | null;
+    price: number | string | null;
+    member_email: string | null;
   }>(() =>
     supabase
       .from("mdapi_subscriptions")
-      .select("user_id, activation_date, canceled_at")
+      .select("user_id, activation_date, canceled_at, status, price, member_email")
       .order("membership_id"),
   );
   const map: MembershipWindowsByUserId = new Map();
   for (const r of rows) {
     if (r.user_id == null || !r.activation_date) continue;
+    if (!opts.legacyAllSubscriptions && !isPaidMemberSubscription(r)) continue;
     const key = String(r.user_id);
     const list = map.get(key) ?? [];
     list.push({

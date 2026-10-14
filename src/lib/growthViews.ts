@@ -7,6 +7,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { CITY_CODE_TO_DISPLAY } from "./scheduleReconcile";
 import { canonicalVenueName } from "./venueResolver";
+import { isPaidMemberSubscription } from "./membershipStats";
 
 const UNKNOWN_CITY = "Unknown city";
 export function cityDisplay(abbr: string | null): string {
@@ -241,10 +242,25 @@ export async function fetchChurnList(
    * fetched for the rows that will be rendered and for nothing else. */
   const visible = opts.all ? working : working.slice(opts.page * opts.pageSize, opts.page * opts.pageSize + opts.pageSize);
   const ids = visible.map((r) => r.u);
+  /* "STILL PAYING" IS THE SHARED MEMBER RULE, not mdapi_users.is_member. is_member mirrors the
+   * API's isMember, which is true for ANY ACTIVE subscription: measured 2026-10-14 it read true for
+   * all 64 people whose only ACTIVE row is $0 and all 12 on a $1 plan. So a comp or a staff account
+   * showed as a member here. ACTIVE + isPaidMemberSubscription is the Membership page's definition. */
   for (let i = 0; i < ids.length; i += 500) {
-    const { data } = await sb.from("mdapi_users")
-      .select("id, first_name, last_name, email, phone_number, is_member")
-      .in("id", ids.slice(i, i + 500));
+    const chunk = ids.slice(i, i + 500);
+    const [{ data }, { data: subRows, error: subErr }] = await Promise.all([
+      sb.from("mdapi_users")
+        .select("id, first_name, last_name, email, phone_number")
+        .in("id", chunk),
+      sb.from("mdapi_subscriptions")
+        .select("user_id, status, price, member_email")
+        .eq("status", "ACTIVE")
+        .in("user_id", chunk),
+    ]);
+    if (subErr) throw new Error(`mdapi_subscriptions read failed: ${subErr.message}`);
+    const paying = new Set<number>();
+    for (const r of (subRows ?? []) as { user_id: number; status: string | null; price: number | null; member_email: string | null }[])
+      if (isPaidMemberSubscription(r)) paying.add(Number(r.user_id));
     const by = new Map<number, Record<string, unknown>>();
     for (const u of data ?? []) by.set(Number((u as { id: number }).id), u as Record<string, unknown>);
     for (const r of visible) {
@@ -254,7 +270,7 @@ export async function fetchChurnList(
       r.name = nm || null;
       r.email = (u.email as string) ?? null;
       r.phone = (u.phone_number as string) ?? null;
-      r.isMember = u.is_member === true;
+      r.isMember = paying.has(r.u);
     }
   }
 

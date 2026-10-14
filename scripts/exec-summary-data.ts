@@ -17,7 +17,8 @@
 //   - members_monthly_snapshots   → avg matches/member trailing
 //
 // Predicates (from Phase 5b investigation):
-//   paymentType "MEMBER"     ← paid_status='FREE'
+//   paymentType "MEMBER"     ← paid_status='FREE' AND a paying membership covered the kickoff
+//   paymentType "FREE_NON_MEMBER" ← paid_status='FREE' otherwise (first-match-free, comps, fills)
 //   paymentType "DAILY PAID" ← paid_status='PAID' AND promocode_id IS NULL
 //   paymentType "PROMOCODE"  ← paid_status='PAID' AND promocode_id IS NOT NULL
 //   WAITING                  ← row dropped (incomplete payment)
@@ -25,7 +26,8 @@
 import { readFileSync } from "node:fs";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { selectAll } from "../src/lib/supabasePagination";
-import { fetchJoinedMatchPlayers } from "../src/lib/mdapiMatchesRead";
+import { fetchJoinedMatchPlayers, loadMembershipWindowsByUserId } from "../src/lib/mdapiMatchesRead";
+import { isPaidMemberSubscription } from "../src/lib/membershipStats";
 
 // ===== Env loading =====
 
@@ -158,11 +160,14 @@ async function fetchAll(sb: SupabaseClient) {
         .gte("date", ymd(ninetyDaysAgo))
         .order("id"),
     ),
-    fetchJoinedMatchPlayers(sb, {
-      // Cover MTD plus enough lookback for gone-dark detection (44d back)
-      fromDate: ymd(fortyFourDaysAgo),
-      toDate: ymd(monthEnd),
-    }),
+    // Classified against the paying-member windows, so MEMBER is a real member's spot and a free
+    // spot by anyone else reads FREE_NON_MEMBER (counted as FREE below), not MEMBER.
+    loadMembershipWindowsByUserId(sb).then((windows) =>
+      fetchJoinedMatchPlayers(sb, {
+        // Cover MTD plus enough lookback for gone-dark detection (44d back)
+        fromDate: ymd(fortyFourDaysAgo),
+        toDate: ymd(monthEnd),
+      }, windows)),
     selectAll<SubRow>(() =>
       sb
         .from("mdapi_subscriptions")
@@ -428,7 +433,8 @@ function sectionSpotMix(joined: Joined[]) {
   let total = 0,
     member = 0,
     dpp = 0,
-    promo = 0;
+    promo = 0,
+    free = 0;
   const byCity = new Map<
     string,
     { total: number; member: number; dpp: number; promo: number }
@@ -446,11 +452,13 @@ function sectionSpotMix(joined: Joined[]) {
     } else if (r.paymentType === "DAILY PAID") {
       dpp++;
       cur.dpp++;
+    } else if (r.paymentType === "FREE_NON_MEMBER") {
+      free++;
     }
     byCity.set(r.city, cur);
   }
   out.push(
-    `Network MTD: ${total.toLocaleString()} total spots (${member} MEMBER · ${dpp} DPP · ${promo} PROMO)`,
+    `Network MTD: ${total.toLocaleString()} total spots (${member} MEMBER · ${dpp} DPP · ${promo} PROMO · ${free} FREE)`,
   );
   if (total > 0) {
     out.push(
@@ -592,13 +600,9 @@ function sectionMembership(subs: SubRow[], snapshots: SnapRow[]) {
   const out: string[] = [];
   out.push(fmtSection("MEMBERSHIP"));
 
-  function isPaidExternal(s: SubRow): boolean {
-    if (!s.price || s.price <= 0) return false;
-    if (s.member_email && /@matchday\.|@playmatchday\./i.test(s.member_email))
-      return false;
-    if (s.status?.toUpperCase().startsWith("INCOMPLETE")) return false;
-    return true;
-  }
+  // THE SHARED RULE, imported — this was an inline copy of it (price > 0), which is how a copy
+  // drifts: membershipStats moved to the PAID_MEMBER_MIN_PRICE_CENTS floor and this would not have.
+  const isPaidExternal = (s: SubRow): boolean => isPaidMemberSubscription(s);
   function isActive(s: SubRow): boolean {
     return s.status === "ACTIVE" && isPaidExternal(s);
   }

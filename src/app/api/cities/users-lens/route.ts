@@ -222,6 +222,7 @@ export type SubRow = {
   user_id: number;
   status: string | null;
   price: number | null;
+  member_email: string | null;
 };
 
 // Phase 3 audit instrumentation — per-table timing logged to Vercel
@@ -277,7 +278,7 @@ export async function fetchAll(supabase: SupabaseClient) {
   const subs = await selectAll<SubRow>(() =>
     supabase
       .from("mdapi_subscriptions")
-      .select("user_id, status, price, membership_id")
+      .select("user_id, status, price, member_email, membership_id")
       .order("membership_id"),
   );
   console.log(
