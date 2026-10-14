@@ -36,7 +36,7 @@ export type PaymentsResult = {
   customerMatched: boolean;         // did email match a Stripe customer at all
 };
 
-function getStripe(): Stripe {
+export function getStripe(): Stripe {
   const apiKey = process.env.STRIPE_SECRET_KEY?.trim();
   if (!apiKey) throw new StripeConfigError("STRIPE_SECRET_KEY is not set");
   return new Stripe(apiKey);

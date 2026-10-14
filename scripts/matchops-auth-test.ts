@@ -252,6 +252,10 @@ is("authenticateAdmin guards the User access screen and the Fields mapping admin
     // The exclude toggle — one boolean on fin_venue_fields, decided by the same right as the
     // assignment it sits beside: both decide whether a field's money counts toward a venue.
     "admin/fields/exclude/route.ts",
+    // +1 admin/stripe-sub-ends (2026-10-14) — the READ-ONLY probes gating the Stripe end-date
+    // backfill. is_admin because they read production MatchDay player records and Stripe customers
+    // by email; no narrower flag means "may read Stripe customers". GET only; nothing is written.
+    "admin/stripe-sub-ends/route.ts",
     "admin/users/auth-status/route.ts", "admin/users/city-manager/route.ts", "admin/users/delete/route.ts",
     "admin/users/match-permissions/route.ts", "admin/users/permissions/route.ts",
     "admin/users/resend-invite/route.ts",
