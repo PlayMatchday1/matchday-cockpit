@@ -26,8 +26,8 @@
 --      $1 plan). Now: holds an ACTIVE paying subscription. The Finder's Members filter, its Members
 --      count and the per-row flag all read this one column. Columns and their order are unchanged.
 --
--- PARTNER PAYOUTS DO NOT READ ANY OF THIS. They classify in TypeScript and are held on the old
--- classification until Ryan approves that change separately.
+-- PARTNER PAYOUTS DO NOT READ ANY OF THIS. They classify in TypeScript, on the same rule
+-- (membershipStats.isPaidMemberSubscription), since 2026-10-14.
 
 BEGIN;
 

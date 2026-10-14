@@ -198,6 +198,16 @@ export default function ArppPanel({ data, scopeChip }: { data: GrowthData; scope
           </>
         )}
       </div>
+
+      {/* footnote 3 — INTERIM, and says so (Ryan, 2026-10-14). growthAnalytics.paidMemberMonths ends a
+          CANCELED subscription with no canceled_at in its activation month, because MatchDay holds no
+          end date for it. Stripe does; once those dates are backfilled this footnote and the interim
+          branch go together. Until then nobody should read the member headcount as final. */}
+      <div className={styles.footnote} id="arppFootInterim" data-testid="arpp-interim-members">
+        <b>Interim member count.</b> Cancelled memberships with no recorded cancellation date are counted as
+        members only in the month they started, until their real end dates are loaded from Stripe. Members are
+        paying plans only — comps, legacy token-price plans and staff accounts are not counted.
+      </div>
     </div>
   );
 }

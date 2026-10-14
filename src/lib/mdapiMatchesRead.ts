@@ -329,13 +329,9 @@ export type MembershipWindowsByUserId = Map<string, MembershipWindow[]>;
 // email, an INCOMPLETE checkout — creates no window, so a $0 comp's or a legacy $1 plan's FREE spot
 // reads FREE_NON_MEMBER, not MEMBER. Status is still NOT filtered, for reason 1 above: the rule
 // tests price, email and INCOMPLETE, never ACTIVE vs CANCELED.
-//
-// `legacyAllSubscriptions` RESTORES THE OLD, UNFILTERED WINDOWS. It exists for ONE reason: partner
-// payouts value member spots, so the rule moves money owed to partners, and that change is held
-// for Ryan's sign-off. Nothing else may pass it. Remove it when the partner change is approved.
+// Partner payouts read these windows too (approved 2026-10-14), so there is no unfiltered variant.
 export async function loadMembershipWindowsByUserId(
   supabase: SupabaseClient,
-  opts: { legacyAllSubscriptions?: boolean } = {},
 ): Promise<MembershipWindowsByUserId> {
   const rows = await selectAll<{
     user_id: number | null;
@@ -353,7 +349,7 @@ export async function loadMembershipWindowsByUserId(
   const map: MembershipWindowsByUserId = new Map();
   for (const r of rows) {
     if (r.user_id == null || !r.activation_date) continue;
-    if (!opts.legacyAllSubscriptions && !isPaidMemberSubscription(r)) continue;
+    if (!isPaidMemberSubscription(r)) continue;
     const key = String(r.user_id);
     const list = map.get(key) ?? [];
     list.push({

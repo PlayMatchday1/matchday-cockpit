@@ -49,6 +49,10 @@ type Payload = {
     playMode: string; playSuppressed: boolean; member: string; city: string | null };
   stats: Stats; scope: string | null; scopeName: string | null; confined: boolean;
   syncedAt: string | null; error?: string;
+  /* WHICH RULE "member" FOLLOWS: "paying" once migration 0223 is applied (the paying-member rule,
+   * plan >= PAID_MEMBER_MIN_PRICE_CENTS), "any_active" before it (any ACTIVE subscription, comps
+   * included). The labels below say "Paying members" ONLY on "paying" — never before it is true. */
+  memberRule?: "paying" | "any_active" | "unknown";
   /* THE AGE OF THE PRECOMPUTED SET, not of the mirror (migration 0147). `stale` means a sync
    * landed and the rebuild did not follow it — the one state a fast table can be in that a slow
    * view never could: confidently wrong. */
@@ -95,6 +99,7 @@ const PLAY_OPTS: [string, string][] = [...REG_OPTS.slice(0, 3), ["all", "Any tim
 // they are the general case; nothing here may carry a time word or a day count.
 const HIST_OPTS: [string, string][] = [["any", "Any"], ["never", "Never played"], ["once", "Played once"], ["multi", "Played 2+"]];
 const MEM_OPTS: [string, string][] = [["any", "Any"], ["yes", "Members"], ["no", "Non-members"]];
+const MEM_OPTS_PAYING: [string, string][] = [["any", "Any"], ["yes", "Paying members"], ["no", "Not paying members"]];
 
 // The city select offers IDENTIFIERS, because that is what the server's allowlist accepts. A name
 // typed here would be refused, which is the point — the filter is a convenience, the scope is the
@@ -147,6 +152,9 @@ export default function PlayerFinder({ onOpen }: { onOpen?: (id: number) => void
     return all.filter((x) => x.city === name);
   };
   const [data, setData] = useState<Payload | null>(null);
+  const paying = data?.memberRule === "paying";
+  const memOpts = paying ? MEM_OPTS_PAYING : MEM_OPTS;
+  const memName = paying ? "Paying members" : "Member";
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [page, setPage] = useState(1);
@@ -299,8 +307,8 @@ export default function PlayerFinder({ onOpen }: { onOpen?: (id: number) => void
     { id: "city", name: "Home city", set: !!f.city, off: cityLocked,
       why: "Your account is confined to one city — the server refuses any other",
       value: cityName(f.city), onClear: () => setF({ ...f, city: "" }) },
-    { id: "mem", name: "Member", set: f.member !== "any", off: false,
-      value: lab(MEM_OPTS, f.member), onClear: () => setF({ ...f, member: "any" }) },
+    { id: "mem", name: memName, set: f.member !== "any", off: false,
+      value: lab(memOpts, f.member), onClear: () => setF({ ...f, member: "any" }) },
     { id: "at", name: "Played at", set: atSet, off: false, value: atLabel,
       onClear: () => setF({ ...f, matchCity: "", fieldId: "", kickFrom: "", kickTo: "", matchFrom: "", matchTo: "" }) },
   ];
@@ -351,7 +359,7 @@ export default function PlayerFinder({ onOpen }: { onOpen?: (id: number) => void
     const POOL: Tile[] = [
       { k: "Players", v: N(total), s: dirty ? "matching your filters" : "all registered", dead: false },
       { k: "Never played", v: N(st.never), s: pc(st.never), dead: f.hist !== "any" },
-      { k: "Members", v: N(st.members), s: pc(st.members), dead: f.member !== "any" || f.hist === "never" },
+      { k: paying ? "Paying members" : "Members", v: N(st.members), s: pc(st.members), dead: f.member !== "any" || f.hist === "never" },
       { k: "New this week", v: N(st.week), s: "signed up in the last 7 days", dead: f.reg === "7" || range },
       { k: "Top city", v: st.topCity?.name ?? "—", s: st.topCity ? `${N(st.topCity.n)} players` : "—", dead: cityFixed },
       { k: "Played 2+", v: N(st.heavy), s: pc(st.heavy), dead: f.hist !== "any" },
@@ -508,9 +516,9 @@ export default function PlayerFinder({ onOpen }: { onOpen?: (id: number) => void
     ),
     mem: () => (
       <>
-        <h4 className="pf-poph">Member</h4>
-        <div className="pf-opts" role="group" aria-label="Member">
-          {MEM_OPTS.map(([v, t]) => (
+        <h4 className="pf-poph">{memName}</h4>
+        <div className="pf-opts" role="group" aria-label={memName}>
+          {memOpts.map(([v, t]) => (
             <button key={v} type="button" data-testid={`finder-member-${v}`}
               aria-pressed={f.member === v} className={f.member === v ? "on" : ""}
               onClick={() => setF({ ...f, member: v })}>
@@ -751,7 +759,7 @@ export default function PlayerFinder({ onOpen }: { onOpen?: (id: number) => void
                 <thead>
                   <tr>
                     <th>ID</th><th>Name</th><th>Email</th><th>Phone</th>
-                    <th>Home city</th><th>Registered</th><th>Last match</th><th>Member</th>
+                    <th>Home city</th><th>Registered</th><th>Last match</th><th>{paying ? "Paying member" : "Member"}</th>
                   </tr>
                 </thead>
                 <tbody>

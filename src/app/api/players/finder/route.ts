@@ -446,10 +446,11 @@ export async function GET(req: Request) {
       }
     }
 
-    const [pageRes, statsRes, fields] = await Promise.all([
+    const [pageRes, statsRes, fields, memberRule] = await Promise.all([
       supabase.rpc("player_finder_page", { ...compact(args), p_limit: size, p_offset: (page - 1) * size }),
       supabase.rpc("player_finder_stats", compact(args)),
       fieldOptions(supabase),
+      finderMemberRule(supabase),
     ]);
     if (pageRes.error) throw new Error(pageRes.error.message);
     if (statsRes.error) throw new Error(statsRes.error.message);
@@ -481,6 +482,8 @@ export async function GET(req: Request) {
         matchesSyncedAt: fresh.matchesSyncedAt, usersSyncedAt: fresh.usersSyncedAt,
         sourceSynced,
       },
+      // WHICH RULE is_member FOLLOWS, so the page names it truthfully. See finderMemberRule.
+      memberRule,
       // How many players carry NO home city. Printed beside the Home city control so "= Austin"
       // cannot silently drop them; counted over the whole estate, so it does not move with the
       // other filters.
@@ -582,4 +585,25 @@ function shape(r: PageRow) {
     member: r.is_member === true,
     plays: Number(r.plays ?? 0),
   };
+}
+
+/* WHICH RULE THE FINDER'S is_member FOLLOWS — read from the database, not assumed.
+ *
+ * player_finder_mv.is_member was mdapi_users.is_member: true for ANY ACTIVE subscription, $0 comps
+ * and legacy $1 plans included. Migration 0223 rebuilds it on paid_member_subscription (the paying-
+ * member rule), and creates that view in the same transaction. So the view existing is proof the
+ * column follows the paying rule, and its absence is proof it does not.
+ *
+ * The page labels the control "Paying members" ONLY on "paying". Ryan applies migrations by hand,
+ * so the code ships first; without this the label would claim a rule the column did not yet
+ * follow. Any error other than "relation does not exist" is "unknown", and the page says neither. */
+async function finderMemberRule(sb: { from: (t: string) => any }): Promise<"paying" | "any_active" | "unknown"> { // eslint-disable-line @typescript-eslint/no-explicit-any
+  /* A GET, NEVER head:true. Measured 2026-10-14 before 0223 was applied: a HEAD on the missing view
+   * came back with NO error object (a 404 has no body to parse), so this read "paying" and the page
+   * would have labelled a comp-inclusive count "Paying members". The status is checked as well. */
+  const { error, status } = await sb.from("paid_member_subscription").select("membership_id").limit(1);
+  if (!error && status >= 200 && status < 300) return "paying";
+  const missing = status === 404 || error?.code === "42P01" || error?.code === "PGRST205"
+    || /does not exist|schema cache|could not find/i.test(String(error?.message ?? ""));
+  return missing ? "any_active" : "unknown";
 }

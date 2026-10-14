@@ -668,10 +668,10 @@ export async function fetchPartnerRows(
   // manager-added fills). Without it, partner MEMBER counts would
   // diverge from /admin/finance Match P&L numbers post-2026-05-20.
   //
-  // HELD ON THE OLD WINDOWS (2026-10-14). The paying-member rule (PAID_MEMBER_MIN_PRICE_CENTS) moves
-  // what partners are owed, and that change waits for Ryan's sign-off — see
-  // loadMembershipWindowsByUserId. Drop the option when it is approved; nothing else changes here.
-  const membershipWindows = await loadMembershipWindowsByUserId(supabase, { legacyAllSubscriptions: true });
+  // PAYING MEMBERS ONLY (2026-10-14, approved by Ryan): the windows apply the shared rule, so a $0
+  // comp's or a legacy $1 plan's FREE spot is not a member spot and is not valued in a payout.
+  // Measured before approval: no partner's Sep or Oct 2026 payout moved.
+  const membershipWindows = await loadMembershipWindowsByUserId(supabase);
   const out: PartnerRegRow[] = await fetchLegacyMatchRegistrations(
     supabase,
     { fieldIds },

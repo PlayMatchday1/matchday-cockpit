@@ -7222,3 +7222,30 @@ this entry), pinned to the TS constant by `scripts/membership-floor-test.ts`.
   those two months. Partner payouts are still HELD on the old classification pending sign-off.
   Evidence: `partnerPaymentFor` on `fetchPartnerRows`, old rows vs rows re-split against the paying
   windows, 2026-10-14.
+
+### Follow-ups, 2026-10-14 (later the same day)
+
+- **Partner payouts now use the paying-member rule (approved by Ryan).** Re-checked on identical
+  data — the new rows against the same rows re-split with the old, unfiltered windows — every enabled
+  partner's Sep and Oct 2026 period is unchanged in owed amount and member spots (Hattrick Sep
+  $2,609.42 / 142 spots, Oct $1,412.00 / 89 at 19:00Z; PAC Global $0.00 every week). Two runs taken
+  hours apart DID differ for October (Parmer, Hattrick, Tomball) — that is the open month gaining
+  bookings, not the rule. Compare rules on one fetch, never across two.
+- **A supabase-js `head: true` select on a MISSING relation returns no error object.** The 404 has
+  no body to parse. Measured on `paid_member_subscription` before 0223 was applied: the head request
+  read as success while a GET returned `PGRST205` "Could not find the table". Existence checks use a
+  GET and check `status`.
+- **`stripeSubscriptionId` is NOT in the subscriptions mirror.** 0 of 2,877 `mdapi_subscriptions.raw`
+  payloads carry it; `/admin/subscriptions` does not return it. It is on `GET /admin/players/{id}` →
+  `userSubscriptions[]` (section "`canceledAt` is the moment they pressed cancel"). Whether
+  `userSubscriptions[].id` equals our `membership_id` is UNKNOWN until probed. No Clubhouse table
+  stores a Stripe subscription's `canceled_at` or `ended_at`; `stripePayments.readStripeSubscription`
+  reads `canceled_at` live for one subscription (Player Lookup) and stores nothing.
+- **The 597 undated paying-plan CANCELED rows belong to 458 people**, activated 2024 (90), 2025
+  (234), 2026 (273); none has a cancel reason.
+- **PAC Global owes $0.00 because nothing has been played there since 2026-08-13.** Venue 10 links
+  one field, 1189 "PAC GLOBAL". Since Aug 1 it had 18 matches: played Aug 4 and Aug 13; cancelled Aug 6,
+  11, 18, 20; cancelled AND deleted every Tue/Thu from Aug 25 to Oct 1; none scheduled after Oct 1.
+  Every Houston field with a match since Aug 15 is linked to a venue, so no PAC play is landing
+  elsewhere. Last paid week Aug 9–15, $40.50. Why play stopped is not in the data. Evidence:
+  `mdapi_matches` field_id 1189 and city HOU, `fin_venue_fields`, `partnerPaymentFor`, 2026-10-14.
