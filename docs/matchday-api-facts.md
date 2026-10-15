@@ -7249,3 +7249,20 @@ this entry), pinned to the TS constant by `scripts/membership-floor-test.ts`.
   Every Houston field with a match since Aug 15 is linked to a venue, so no PAC play is landing
   elsewhere. Last paid week Aug 9–15, $40.50. Why play stopped is not in the data. Evidence:
   `mdapi_matches` field_id 1189 and city HOU, `fin_venue_fields`, `partnerPaymentFor`, 2026-10-14.
+
+### Stripe end dates: what the probes proved (2026-10-14, production, read-only)
+
+Evidence: `GET /api/admin/stripe-sub-ends?probe=matchday|stripe&n=10` (lib/stripeSubEnds), deployed
+`df0a3e2`, a deterministic spread of 10 of the 597 undated paying-plan CANCELED rows.
+
+- **`GET /admin/players/{id}` → `userSubscriptions[].id` IS our `membership_id`** — 3 of 3 ACTIVE
+  paying controls (13, 37721, 40725), each carrying a `stripeSubscriptionId`.
+- **It does NOT return CANCELED subscriptions.** 0 of 10 undated cancellations came back; 9 players
+  returned an empty list and 1 returned only a newer ACTIVE row. Confirms on production what
+  `membershipAdminModel.ts` recorded from staging and `users.repository.ts` (include: ACTIVE and
+  `currentPeriodEnd >= now`). **MatchDay cannot supply the Stripe id for a cancelled membership.**
+- **Stripe by exact customer email, matched on start within 2 days of `activation_date` and the same
+  plan amount:** every sampled row had a Stripe customer (10/10); 4 matched exactly one subscription
+  (all `canceled`, `ended_at` = `canceled_at` on each), 2 matched two, 4 matched none. The four with
+  no match are the newest (activated 2025-12 → 2026-07); why they miss is UNKNOWN — the $1 signup
+  promo shaping the Stripe price or start date is a candidate, not a finding.
