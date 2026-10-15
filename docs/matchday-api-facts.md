@@ -7292,3 +7292,12 @@ was run against MatchDay's database.
 - **Membership 41196 (NYC, $100)** is a real player — phone-verified, prefers Austin, 18 roster rows all at
   Austin fields since 2026-09-13 — holding a membership under NYC at a price no one else pays, cancelled
   2026-10-01. Excluded from the headline by the unmapped-city rule, counted by the Finder; left as is.
+- **A subscription Stripe ends has NO end date in MatchDay.** `webhookInvoices` and
+  `webhookSubscriptionUpdate` write Stripe's status and never `canceled_at` (lines above), so every
+  Stripe-side ending — a failed renewal, a cancel in the Stripe dashboard — leaves `CANCELED` with
+  `canceled_at` NULL. This is a BACKEND fix, owned by Ryan separately; Clubhouse does not change the
+  backend repo. Until it lands, the date comes from Stripe (`mdapi_subscription_stripe_end`, 0224).
+- **A CANCELED row with no `stripe_subscription_id` was never billed** (Ryan, 2026-10-14). Admin comps
+  are written at the city plan price, not $0, so the price floor does not catch them. Such rows are to
+  be stored as `match_method = 'unmatched'`, `lookup_error = 'no stripe subscription'`, and excluded
+  from paying-member months outright — not given the interim activation-month rule.
