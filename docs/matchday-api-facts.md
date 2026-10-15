@@ -7266,3 +7266,29 @@ Evidence: `GET /api/admin/stripe-sub-ends?probe=matchday|stripe&n=10` (lib/strip
   (all `canceled`, `ended_at` = `canceled_at` on each), 2 matched two, 4 matched none. The four with
   no match are the newest (activated 2025-12 → 2026-07); why they miss is UNKNOWN — the $1 signup
   promo shaping the Stripe price or start date is a candidate, not a finding.
+
+### Where a cancelled membership's Stripe id lives — MatchDay's own table (2026-10-14)
+
+Evidence: the MatchDay backend checkout `~/Code/backend` at `7698a52` (2026-10-13). Read-only; nothing
+was run against MatchDay's database.
+
+- **`mdapi_subscriptions` rows are `user_subscriptions` rows.** `apps/api/prisma/schema.prisma:885–909`
+  (`model UserSubscription`, `@@map("user_subscriptions")`): `id`, `user_id`, `status`
+  (`UserSubscriptionStatus`, `:1164–1174`), `stripe_subscription_id` (`:891`), `stripe_price_id`,
+  `amount` (cents), `current_period_start`, `current_period_end`, `created_at`, `canceled_at`,
+  `cancel_reason`, `deleted_at`, `city_identifier`, `user_sub_id`.
+- **What `/admin/subscriptions` renames** (`apps/api/src/core/subscriptions/subscriptions.repository.ts:66–80`):
+  `membershipId` = `us.id`; **`activationDate` = `us.created_at`** (there is no activation column);
+  `price` = `(us.amount / 100)::INTEGER` — integer division, so cents are truncated;
+  `canceledAt` = `us.canceled_at`; `cityIdentifierAndMemberId` = `city_identifier || user_sub_id`.
+  The query has **no `deleted_at` filter**, and its ACTIVE filter also admits `ADDED_FROM_ADMIN` (`:56–58`).
+- **Why 597 cancellations have no date:** both Stripe webhooks write `status` from Stripe and never
+  `canceled_at` — `webhookInvoices` (`apps/api/src/core/stripe/stripe.service.ts:744`, write at `:785`) and
+  `webhookSubscriptionUpdate` (`:852`, write at `:883`). Only the admin/player cancel path writes
+  `canceledAt` (`subscriptions.service.ts:571–575`). **Nothing clears `stripe_subscription_id`.**
+- **Stripe subscriptions carry `metadata.userSubscriptionId` = our `membership_id`**, plus `userId`
+  (`apps/api/src/core/stripe/interfaces/subscription-metadata.interface.ts:3–8`; the webhook keys on it at
+  `stripe.service.ts:861,868`). An exact join key on the Stripe side, if MatchDay's table is ever unavailable.
+- **Membership 41196 (NYC, $100)** is a real player — phone-verified, prefers Austin, 18 roster rows all at
+  Austin fields since 2026-09-13 — holding a membership under NYC at a price no one else pays, cancelled
+  2026-10-01. Excluded from the headline by the unmapped-city rule, counted by the Finder; left as is.
