@@ -7348,3 +7348,37 @@ and a read-only query of `match_promotion_push where scope <> 'match' and push_a
   hold typed wall clock as UTC.** Not auto-corrected; the proposed SQL went to Ryan for review.
   Minutes on those rows match the save minute (push `17:42Z` saved `14:42Z`), i.e. the picker's
   default minute, so the hour is the only part Miguel chose.
+
+## Match Promotion cancel history: both Hattrick venues read 0/4 because of "The " (found 2026-10-16)
+
+Evidence: `scripts/_ht_cancel_patterns.mts` (untracked) running `fetchJoinedMatchPlayers` +
+`getCancelPatterns` on the live mirror with the Oct 12 anchor; `MatchPromotionView.tsx` `riskOf`;
+the live page's tile `data-r` on 2026-10-16 (89 tiles at 0, 45 at 1–3; every Hattrick tile 0).
+
+- **The builder and the tile canonicalise differently.** `scheduledMatches` runs
+  `canonicalVenueName(field_title)` first ("The Hattrick T." → "Hattrick T.", "The Hattrick L." →
+  "Hattrick") and `getCancelPatterns` then applies `normalizeMatchName`. The tile runs
+  `normalizeMatchName(m.fieldRaw)` alone, which keeps "The Hattrick T." as-is. Keys never meet, so
+  `riskOf` returns null for every match at either Hattrick, the only two fleet venues whose title
+  starts with "The". Every other venue matches ("North East Metropolitan Park" → "NEMP" both ways).
+- **The slots ARE in the result**: Hattrick T. Wed 9p has cancelCount 2 (Sep 30, Oct 7) with
+  bookedCount 0 (both rosters were 7 fake players, 0 real). So the Tomball Wednesday chip is lost
+  to the name, not to the zero players.
+
+## Zero-player cancelled matches: MatchDay DELETES them, the mirror tombstones them (probed 2026-10-16)
+
+Evidence: `mdapi_matches` Sep 1 – Oct 18 (957 rows), and read-only prod GETs — `/admin/matches/{id}`
+for 18596, 18680, 18679, 19700 and `/admin/matches?fromDate&toDate` windows around them.
+
+- **157 cancelled matches had `player_count` 0; 147 of them carry `deleted_at`.** The tombstone
+  is right: `GET /admin/matches/18596` (Hattrick T. Tue Sep 15, cancelled, 0 players) and 18680 are
+  **404**, and both are absent from the date-window list that the sync pages. 18679 (Onion Creek,
+  cancelled with 16 players) is 404 too — deletion upstream is not only a zero-player event. 19700
+  (Tomball Wed Oct 14, cancelled, 7 players) is 200 and listed.
+- **A cancelled match that still exists upstream shows as cancelled**: 19700 renders
+  `data-state="cancelled"`, "7 booked", on the live page. The sync sets `is_cancelled` from
+  `isCancelled` on every upsert; nothing special-cases zero players.
+- **So a zero-player cancellation disappears from the page only when MatchDay deleted the match.**
+  The mirror still holds those rows (`is_cancelled` true, `deleted_at` set, `raw` intact). Showing
+  them would mean reading tombstoned rows deliberately in `fetchVeoWeek`, which every reader
+  currently filters out. Not changed; Ryan to decide.
