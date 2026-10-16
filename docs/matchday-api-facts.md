@@ -7382,3 +7382,19 @@ for 18596, 18680, 18679, 19700 and `/admin/matches?fromDate&toDate` windows arou
   The mirror still holds those rows (`is_cancelled` true, `deleted_at` set, `raw` intact). Showing
   them would mean reading tombstoned rows deliberately in `fetchVeoWeek`, which every reader
   currently filters out. Not changed; Ryan to decide.
+
+### Follow-ups, 2026-10-16 (later the same day)
+
+- **The 13 pre-fix general pushes were corrected** (`scripts/_fix_general_push_times.mts`, one-off,
+  approved by Ryan): each `push_at` re-read as America/New_York, i.e. +4h — 277/279 Atlanta now
+  `2026-10-19 15:30Z` (11:30 AM EDT). Guarded on the reviewed `updated_at` and `pushed_at is null`;
+  all 13 LANDED and the after-select matched. **410 (St. Louis) and 324 (Dallas) were left as
+  stored** pending Miguel's answer on which clock he typed.
+- **Match Promotion now shows deleted cancellations.** `fetchVeoWeek` gained a seventh argument,
+  `includeDeletedCancelled` (default false; only `fetchPromoWeek` passes true), which admits rows
+  with `deleted_at` set AND `is_cancelled` true and renders them as cancelled with 0 booked. The
+  tile cancel history appends the same rows through the new, additive
+  `fetchDeletedCancelledScheduled` in `mdapiMatchesRead.ts`; `fetchJoinedMatchPlayers` and every
+  other reader still filter `deleted_at is null`.
+- **Tile lookup canonical fixed**: `riskOf` runs `canonicalVenueName` before `canonicalOf`, the
+  same order the builder uses, so both Hattrick venues carry their history again.

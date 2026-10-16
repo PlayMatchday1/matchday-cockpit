@@ -915,7 +915,9 @@ export async function fetchPromoWeek(
    * what cancelled last week by going to last week." They arrive flagged and are given their own
    * state below, so they never reach the no-plan count. /api/veo is untouched: it calls
    * fetchVeoWeek without this argument and still receives live matches only. */
-  const week = await fetchVeoWeek(sb, now, weekRef, null, true);
+  /* includeCancelled AND includeDeletedCancelled: a cancellation MatchDay deleted is still a
+   * cancellation on this page. See fetchVeoWeek's note on the seventh argument. */
+  const week = await fetchVeoWeek(sb, now, weekRef, null, true, 1, true);
   const ids = week.matches.map((m) => m.apiId);
   const { plans, ready } = await fetchPlans(sb, ids);
 
@@ -933,7 +935,7 @@ export async function fetchPromoWeek(
    * new" — and needs no window; see RETURNING_LOOKBACK. */
   const [priors, history] = await Promise.all([
     Promise.all(Array.from({ length: NEW_LOOKBACK_WEEKS }, (_, i) =>
-      fetchVeoWeek(sb, now, new Date(y, mo - 1, d - 7 * (i + 1)), null, true))),
+      fetchVeoWeek(sb, now, new Date(y, mo - 1, d - 7 * (i + 1)), null, true, 1, true))),
     fetchEverSeen(sb, week.weekStart),
   ]);
   /* OLDEST FIRST, so priorWeekStart below is the start of the window rather than of whichever call

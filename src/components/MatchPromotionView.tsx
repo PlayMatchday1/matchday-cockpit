@@ -20,6 +20,8 @@ import { supabase } from "@/lib/supabase";
 import PageComments from "@/components/PageComments";
 import MatchPromotionMobile from "@/components/MatchPromotionMobile";
 import { useMatchData } from "@/lib/useMatchData";
+import { fetchDeletedCancelledScheduled, type ScheduledMatch } from "@/lib/mdapiMatchesRead";
+import { canonicalVenueName } from "@/lib/venueResolver";
 import { useFinanceData } from "@/lib/useFinanceData";
 import { getCancelPatterns, rollUpSlotRisk, clustersForField, slotRiskKey, type SlotRisk } from "@/lib/cancelPatterns";
 import { normalizeMatchName } from "@/lib/venueNormalization";
@@ -390,7 +392,12 @@ export default function MatchPromotionView() {
   }, [cancels.ready, cancels.result]);
   const riskOf = useCallback((m: PromoMatch): SlotRisk | null => {
     if (!cancels.ready || !cancels.result) return null;
-    const canonical = cancels.canonicalOf(m.fieldRaw);
+    /* THE SAME CANONICAL THE BUILDER USED. scheduledMatches runs canonicalVenueName on field_title
+     * BEFORE getCancelPatterns normalises it ("The Hattrick T." → "Hattrick T."); this lookup ran
+     * normalizeMatchName on the raw title alone and kept the "The", so both Hattrick venues — the
+     * only fleet titles that start with "The" — read 0/4 with two cancellations in the window.
+     * Found 2026-10-16; see the facts entry. */
+    const canonical = cancels.canonicalOf(canonicalVenueName(m.fieldRaw) || m.fieldRaw);
     if (!canonical) return null;
     const clusters = clustersForField(cancels.result, canonical, m.dayIdx);
     return riskByKey.get(slotRiskKey(canonical, m.dayIdx, m.minutes, clusters)) ?? null;
@@ -1822,11 +1829,36 @@ function useTileCancelHistory(weekStart: string | null) {
     return new Date(y, m - 1, d);
   }, [weekStart]);
 
+  /* ── THE CANCELLATIONS MATCHDAY DELETED, ADDED TO THE SCHEDULE FOR THIS PAGE ONLY ─────────
+   * useMatchData is shared by every finance and ops page and filters tombstones at the source, so
+   * they are fetched here, separately, and appended. The window is the four history weeks plus the
+   * week on screen, with a week of slack either side; getCancelPatterns places each row in its
+   * own week and ignores the rest. Loaded per anchor; an error leaves the list empty and the page
+   * exactly as it was before this existed. */
+  const [deleted, setDeleted] = useState<{ anchorMs: number; rows: ScheduledMatch[] } | null>(null);
+  useEffect(() => {
+    if (!anchor) return;
+    const anchorMs = anchor.getTime();
+    const ymdOf = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    const from = ymdOf(new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate() - 7 * 6));
+    const to = ymdOf(new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate() + 13));
+    let alive = true;
+    fetchDeletedCancelledScheduled(supabase, from, to)
+      .then((rows) => { if (alive) setDeleted({ anchorMs, rows }); })
+      .catch(() => { if (alive) setDeleted({ anchorMs, rows: [] }); });
+    return () => { alive = false; };
+  }, [anchor]);
+  const scheduledWithDeleted = useMemo(
+    () => (deleted && anchor && deleted.anchorMs === anchor.getTime() ? [...scheduledMatches, ...deleted.rows] : scheduledMatches),
+    [scheduledMatches, deleted, anchor],
+  );
+
   const result = useMemo(
     /* THE SCHEDULE, NOT ONLY THE BOOKINGS: a match cancelled with nobody booked has no row and used
-     * to vanish from the tile's history (STAR Thu/Fri Oct 1–2, 8:30pm, cancelled at 0/20). */
-    () => (anchor ? getCancelPatterns(rows, aliases, "patterns", anchor, scheduledMatches) : null),
-    [rows, scheduledMatches, aliases, anchor],
+     * to vanish from the tile's history (STAR Thu/Fri Oct 1–2, 8:30pm, cancelled at 0/20). And
+     * since 2026-10-16 the schedule includes the cancellations MatchDay deleted, see above. */
+    () => (anchor ? getCancelPatterns(rows, aliases, "patterns", anchor, scheduledWithDeleted) : null),
+    [rows, scheduledWithDeleted, aliases, anchor],
   );
   const canonicalOf = useCallback(
     (fieldRaw: string) => normalizeMatchName(fieldRaw, aliases).canonical, [aliases]);
