@@ -166,14 +166,8 @@ export async function POST(req: Request) {
     }
     // push_at null is a REAL VALUE: the channel is chosen and the time is not settled. An empty
     // string must land as NULL and never as "".
-    let at: string | null = null;
-    if (typeof raw.at === "string" && raw.at.trim() !== "") {
-      const t = new Date(raw.at);
-      if (Number.isNaN(t.getTime())) {
-        return Response.json({ outcome: "FAILED", error: "A push time is not a date — nothing written." }, { status: 400 });
-      }
-      at = t.toISOString();
-    }
+    const at = parsePushInstant(raw.at);
+    if (at instanceof Response) return at;
     const rid = Number(raw.id);
     parsed.push({
       id: Number.isInteger(rid) && rid > 0 ? rid : null,
@@ -520,6 +514,35 @@ async function auditTag(
   }
 }
 
+/* ── A PUSH TIME, PARSED ONCE FOR BOTH SHAPES ────────────────────────────────────────────────
+ *
+ * AN INSTANT OR NOTHING. A string with no `Z` and no `±hh:mm` is refused, not guessed at. Until
+ * 2026-10-16 this was `new Date(raw)`, and `new Date("2026-10-18T11:30")` on Vercel is 11:30 UTC
+ * — Node reads a bare date-time as the process's own zone, which is UTC in production and whatever
+ * the laptop is set to in development. The general-push sheet posted exactly that bare string, so
+ * Miguel's 11:30 AM Atlanta push saved as 7:30 AM, and every re-save shifted it again. The
+ * per-match editor never hit this because it converts in the browser (fromInputValue), which is
+ * what the sheet does now too. Rejecting here is what stops the next bare string landing silently.
+ *
+ * Empty / null / undefined → null, a REAL value: the channel is chosen and the time is not settled.
+ * Returns the normalised ISO string, null, or the FAILED Response to send back. */
+const HAS_ZONE = /(Z|[+-]\d{2}:?\d{2})$/i;
+function parsePushInstant(raw: unknown): string | null | Response {
+  if (typeof raw !== "string" || raw.trim() === "") return null;
+  const s = raw.trim();
+  if (!HAS_ZONE.test(s)) {
+    return Response.json({
+      outcome: "FAILED",
+      error: "The push time arrived without a timezone, so it would have saved hours off. Nothing was written - reload the page and try again.",
+    }, { status: 400 });
+  }
+  const t = new Date(s);
+  if (Number.isNaN(t.getTime())) {
+    return Response.json({ outcome: "FAILED", error: "The push time is not a date - nothing written." }, { status: 400 });
+  }
+  return t.toISOString();
+}
+
 /* ── A GENERAL PUSH ──────────────────────────────────────────────────────────────────────────
  * Written into match_promotion_push with a scope, so the day queue reads ONE table and the tile's
  * coverage is a projection of the same rows. 0191's shape CHECK is the backstop: a malformed
@@ -548,14 +571,8 @@ async function saveGeneral(
   /* AN UNDATED GENERAL PUSH COVERS NOTHING, and the page says so rather than silently covering the
    * whole week. It is still a legal row - the channel is chosen and the time is not settled, which
    * is 0176's own state - so it is stored and simply carries no coverage until it has a date. */
-  let at: string | null = null;
-  if (typeof g.at === "string" && g.at.trim() !== "") {
-    const t = new Date(g.at);
-    if (Number.isNaN(t.getTime())) {
-      return Response.json({ outcome: "FAILED", error: "The push time is not a date - nothing written." }, { status: 400 });
-    }
-    at = t.toISOString();
-  }
+  const at = parsePushInstant(g.at);
+  if (at instanceof Response) return at;
   const row = {
     scope, channel, push_at: at, topic: nullable(g.topic),
     promo_code: normalizePromoCode(g.promoCode ?? null),

@@ -7326,3 +7326,25 @@ Evidence: read-only prod probes 2026-10-12 ~22:00–22:45 UTC — `GET /admin/pl
 - **Meta's `complete_registration` was not affected.** Registrations per install: Oct 1–7 0.46
   (231/505), Oct 9–11 0.50 (101/200), from `fin_meta_adset_daily`. Where in the app flow the event
   fires is UNKNOWN; the app code is not in this repo.
+
+## General pushes saved at the wrong hour: a bare `datetime-local` string parsed on a UTC server (fixed 2026-10-16)
+
+Evidence: `src/components/MatchPromotionView.tsx` GeneralPushSheet save (pre-fix sent `at` as the
+input's own value), `src/app/api/match-promotion/route.ts` saveGeneral (pre-fix `new Date(g.at)`),
+and a read-only query of `match_promotion_push where scope <> 'match' and push_at > now()` at
+2026-10-16 15:04 UTC (`scripts/_list_general_pushes.mts`, untracked).
+
+- **`new Date("2026-10-18T11:30")` is the PROCESS zone.** UTC on Vercel, the laptop's zone in dev,
+  so the bug never reproduces locally. Miguel typed 11:30 AM in an Eastern browser; the row holds
+  `11:30:00+00:00`, which the sheet shows back as 7:30 AM. **Every re-save of an existing general
+  push shifted it again** by the reader's offset, because the pre-fill ran the instant→local half
+  of the pair and the save skipped the local→instant half.
+- **The per-match editor never had this**: `PushPlanEditor` converts with `fromInputValue` in the
+  browser and posts an ISO instant. The sheet now does the same (`fromInputValue(at, "me", null)`,
+  paired with `toInputValue(..., "me", null)` for the pre-fill).
+- **The route refuses a push time with no `Z` or `±hh:mm`** (`parsePushInstant`, both the per-match
+  list and saveGeneral) with a FAILED 400, so a bare string can never land again.
+- **13 future general rows (all 15 non-match rows are Miguel's, saved 2026-10-16 14:28–14:58 UTC)
+  hold typed wall clock as UTC.** Not auto-corrected; the proposed SQL went to Ryan for review.
+  Minutes on those rows match the save minute (push `17:42Z` saved `14:42Z`), i.e. the picker's
+  default minute, so the hour is the only part Miguel chose.
