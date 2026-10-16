@@ -265,10 +265,14 @@ function WeekByDay(p: MobileProps & { panel: React.ReactNode; viewTag?: TagKey |
                   style={cover === "covered" ? { borderLeftStyle: "dotted" } : undefined}
                   /* NO bg-white IN THE BASE — see the Tile note in MatchPromotionView: it ties
                      with the wash class on specificity and wins on emission order. */
+                  /* THE RAIL SURVIVES THE WASH, same as the desktop tile (tileBorderFor): the wash is
+                     the slot's cancel history, the rail is this match's own plan, and a washed row
+                     used to lose the rail and read as unpromoted. */
                   className={`mb-2 rounded-[11px] border px-3 py-[11px] ${
                     m.state === "cancelled" ? "border-dashed border-cream-line bg-[#f7f8f7]"
-                    : M_WASH[p.riskOf?.(m)?.cancelCount ?? 0]
-                    ?? (cover === "needs-decision" ? "border-amber-300 bg-amber-50"
+                    : M_WASH[p.riskOf?.(m)?.cancelCount ?? 0] != null
+                    ? `${M_WASH[p.riskOf?.(m)?.cancelCount ?? 0]}${cover === "none" ? "" : " border-l-[3px] border-l-mint"}`
+                    : (cover === "needs-decision" ? "border-amber-300 bg-amber-50"
                     : cover === "none" ? "border-dashed border-cream-line bg-white" : "border-cream-line border-l-[3px] border-l-mint bg-white")} ${
                     m.apiId === openId ? "border-deep-green shadow-[0_0_0_2px_#e6efe9]" : ""}`}>
                   <div className="flex items-baseline gap-2">
@@ -601,7 +605,8 @@ export default function MatchPromotionMobile(p: MobileProps) {
       {tab !== "due" && tab !== "coverage" && (
         <div className="px-3.5 pb-6 pt-3 text-[11.5px] leading-[1.8] text-deep-green/65">
           A solid mint rail is this match&rsquo;s own push. A dotted one means a city or field slate
-          blast carried it. A dashed row has no plan at all. Amber needs a push date.
+          blast carried it. A dashed row has no plan at all. Amber needs a push date. A tinted row is
+          a slot that cancelled recently; its rail still says whether this match has a push.
         </div>
       )}
     </div>

@@ -583,7 +583,18 @@ Which matches get promoted, on which channels, and when the push goes out.
  */
 function tileBorderFor(cover: ReturnType<typeof coverageOf>, r: number): string {
   if (cover === "cancelled") return "border-dashed border-cream-line bg-[#f7f8f7]";
-  if (r > 0) return WASH[r as 1 | 2 | 3 | 4] ?? "border-cream-line bg-white";
+  /* THE RAIL SURVIVES THE WASH (Miguel, 2026-10-16). This used to return the wash alone for any
+   * r > 0, which erased the one mark that says "this match has its own push": a promoted match at a
+   * slot that cancelled 1/4 looked identical to an unpromoted one at the same slot. The wash is the
+   * slot's history; the rail is this match's plan. Two facts, two layers — the rail goes on top of
+   * the wash exactly as it goes on top of white. border-l-mint is a side colour and wins over the
+   * wash's all-sides border colour by Tailwind's emission order, which is what makes layering a
+   * class concatenation rather than a second element. The dotted edge for "covered" is the inline
+   * style on the caller (tileDotted), applied regardless of r, so a washed covered tile dots too.
+   * A washed tile that NEEDS A DECISION keeps the solid rail: its pushes exist, only the date is
+   * missing, and the amber-on-orange collision the old branch avoided stays avoided. */
+  const rail = cover === "none" ? "" : " border-l-[3px] border-l-mint";
+  if (r > 0) return (WASH[r as 1 | 2 | 3 | 4] ?? "border-cream-line bg-white") + rail;
   if (cover === "needs-decision") return "border-amber-300 bg-amber-50";
   if (cover === "covered") return "border-cream-line border-l-[3px] border-l-mint bg-white";
   if (cover === "none") return "border-dashed border-cream-line bg-white";
