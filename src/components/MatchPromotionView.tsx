@@ -20,7 +20,6 @@ import { supabase } from "@/lib/supabase";
 import PageComments from "@/components/PageComments";
 import MatchPromotionMobile from "@/components/MatchPromotionMobile";
 import { useMatchData } from "@/lib/useMatchData";
-import { fetchDeletedCancelledScheduled, type ScheduledMatch } from "@/lib/mdapiMatchesRead";
 import { canonicalVenueName } from "@/lib/venueResolver";
 import { useFinanceData } from "@/lib/useFinanceData";
 import { getCancelPatterns, rollUpSlotRisk, clustersForField, slotRiskKey, type SlotRisk } from "@/lib/cancelPatterns";
@@ -588,24 +587,25 @@ Which matches get promoted, on which channels, and when the push goes out.
  * inline style on the caller (tile and swatch alike) and the assertion reads the COMPUTED value
  * rather than the class list, which is what caught it.
  */
-function tileBorderFor(cover: ReturnType<typeof coverageOf>, r: number): string {
+/* THE TILE IS COLOURED BY ITS PLAN AND BY NOTHING ELSE (Miguel, 2026-10-16, twice). The cancel
+ * history used to wash the whole tile yellow-to-red, and a mint rail on top of that wash was the
+ * only mark of an own push. Miguel read a pushed 1/4 tile and an unpushed 1/4 tile as the same
+ * colour, because they were: one 3px edge against a tinted field is not a state. So the wash is
+ * GONE. Cancel history is the chip alone (1/4 to 4/4, RAMP_HEX), and the tile's fill and border say
+ * one thing, the plan:
+ *   own push        mint border, light mint fill   whatever the history
+ *   covered         dotted mint rail on white      a city or field push carried it
+ *   no plan         dashed, white                  nothing at all
+ *   needs decision  amber                          pushes exist, no date
+ *   cancelled       dashed grey, unchanged
+ * `r` is no longer read here. It stays in the signature so the key's swatches and the tiles keep
+ * calling one function with one shape, and so a future state that DOES want it has the value. */
+function tileBorderFor(cover: ReturnType<typeof coverageOf>, _r: number): string {
   if (cover === "cancelled") return "border-dashed border-cream-line bg-[#f7f8f7]";
-  /* THE RAIL SURVIVES THE WASH (Miguel, 2026-10-16). This used to return the wash alone for any
-   * r > 0, which erased the one mark that says "this match has its own push": a promoted match at a
-   * slot that cancelled 1/4 looked identical to an unpromoted one at the same slot. The wash is the
-   * slot's history; the rail is this match's plan. Two facts, two layers — the rail goes on top of
-   * the wash exactly as it goes on top of white. border-l-mint is a side colour and wins over the
-   * wash's all-sides border colour by Tailwind's emission order, which is what makes layering a
-   * class concatenation rather than a second element. The dotted edge for "covered" is the inline
-   * style on the caller (tileDotted), applied regardless of r, so a washed covered tile dots too.
-   * A washed tile that NEEDS A DECISION keeps the solid rail: its pushes exist, only the date is
-   * missing, and the amber-on-orange collision the old branch avoided stays avoided. */
-  const rail = cover === "none" ? "" : " border-l-[3px] border-l-mint";
-  if (r > 0) return (WASH[r as 1 | 2 | 3 | 4] ?? "border-cream-line bg-white") + rail;
   if (cover === "needs-decision") return "border-amber-300 bg-amber-50";
   if (cover === "covered") return "border-cream-line border-l-[3px] border-l-mint bg-white";
   if (cover === "none") return "border-dashed border-cream-line bg-white";
-  return "border-cream-line border-l-[3px] border-l-mint bg-white";
+  return "border-mint bg-mint-soft/50";
 }
 
 /** True when this state's left edge must be dotted. The ONLY way to dot one edge; see above. */
@@ -1257,7 +1257,7 @@ function Plan({ week, byCity, openId, onOpen, zone, editing, riskOf, coverage, c
             {TILE_STATE_KEY.map(([state, label, sentence]) => (
               <span key={state} data-testid="keystate" data-state={state}
                 className="inline-flex items-baseline gap-2 text-[11px] text-deep-green/65">
-                {/* THE SWATCH IS THE TILE. Same border expression, same wash-free base. */}
+                {/* THE SWATCH IS THE TILE. Same border expression, same fill. */}
                 <i data-testid="keyswatch" data-state={state}
                   style={tileDotted(state) ? { borderLeftStyle: "dotted" } : undefined}
                   className={`mt-[2px] inline-block h-[13px] w-[26px] flex-none rounded-[4px] border ${tileBorderFor(state, 0)} ${
@@ -1491,15 +1491,13 @@ function Tile({ m, open, onOpen, zone, priorLabel, priorWeeks, risk, cover, shif
    * of the row. THE PANEL READS THE RAW SET and still lights the hidden toggle, which is what stops
    * the next save clearing a tag nobody meant to clear. */
   const { shown: shownTags, more: moreTags } = splitTags(tags);
-  /* THE CANCEL WASH IS THE OUTERMOST STATE except for a cancellation itself. A washed tile keeps
-   * its own border colour, which is what stops orange-at-2 colliding with the amber that already
-   * means "needs a decision" on this page. */
   /* ── THREE COVERAGE STATES, AND THE MIDDLE ONE IS THE FEATURE ─────────────────────────────
-   *   own push   SOLID mint rail    this match got its own push
+   *   own push   mint tile          this match got its own push
    *   covered    DOTTED mint rail   a city or field push carried it
    *   no plan    dashed, no rail    nothing at all, not even a slate blast
    * A general push is real promotion, so a match it carried must not read as forgotten; it is not
-   * a push written for that match, so it must not read the same either. */
+   * a push written for that match, so it must not read the same either. THE CANCEL HISTORY DOES
+   * NOT TOUCH THE TILE'S COLOUR — it is the chip, and only the chip; see tileBorderFor. */
   const border = tileBorderFor(cover, r);
   return (
     <div data-testid="match-tile" data-state={m.state} data-api-id={m.apiId} data-open={open ? "1" : "0"}
@@ -1522,16 +1520,18 @@ function Tile({ m, open, onOpen, zone, priorLabel, priorWeeks, risk, cover, shif
       ].filter(Boolean).join(" ") || undefined}
       style={tileDotted(cover) ? { borderLeftStyle: "dotted" } : undefined}
       onClick={(e) => onOpen(m, e.currentTarget as HTMLElement)}
-      /* NO bg-white IN THE BASE. It and the wash class have equal specificity, so which one wins is
-         decided by Tailwind's own emission order rather than by this line — the wash lost, and
-         every shaded tile rendered white while its chip was coloured. The default background is
-         part of the state chain below instead, so exactly one background class is ever applied. */
+      /* NO bg-white IN THE BASE. Two background classes have equal specificity, so which one wins
+         is decided by Tailwind's own emission order rather than by this line — the old cancel wash
+         lost that way once, and every shaded tile rendered white while its chip was coloured. The
+         background is part of the state chain (tileBorderFor) instead, so exactly one background
+         class is ever applied. */
       className={`mb-1.5 cursor-pointer rounded-[9px] border p-[7px_8px] last:mb-0 ${border} ${open ? "border-deep-green shadow-[0_0_0_2px_#e6efe9]" : ""}`}>
       <div className="flex items-baseline justify-between gap-1.5">
         <span className={`text-[12.5px] font-extrabold ${cancelled ? "text-deep-green/40 line-through" : ""}`}>{m.time}</span>
-        {/* THE RATIO, ON EVERY SHADED TILE. #D9452F against #8F2A17 is a hard pair at tile size,
-            which is the only real objection to this ramp; printing the number answers it without
-            changing the colours. */}
+        {/* THE RATIO, ON EVERY TILE WITH A HISTORY. The chip is the ONLY mark of cancel history on
+            the tile since 2026-10-16 — the fill and border belong to the plan. #D9452F against
+            #8F2A17 is a hard pair at chip size, which is the only real objection to this ramp;
+            printing the number answers it without changing the colours. */}
         {r > 0 && (
           <i data-testid="risk-chip" data-r={r}
             className="shrink-0 rounded-[4px] px-[5px] py-px text-[9px] font-extrabold not-italic tracking-[0.03em]"
@@ -1785,22 +1785,10 @@ const RAMP_INK: Record<1 | 2 | 3 | 4, string> = { 1: "#3A2A00", 2: "#2E1B00", 3:
  * pairs, owned by the tiles that read them, so nothing about the scale moved; one of two encodings
  * of it did. */
 
-/* THE TILE WASH. Light at 1 and 2 so a board of ones does not read as a board on fire, and the
- * ratio is printed on every chip regardless — nobody reads 2/4 against 3/4 off a shade, and that
- * is exactly the distinction between moving a slot and watching it.
- *
- * TWO IS ORANGE AND "NEEDS A DECISION" IS AMBER on this page (border-amber-300 bg-amber-50), which
- * are neighbours. MEASURED on the live week: 0 tiles are both at once, because needs-decision
- * requires a plan with every push undated and the cancel wash requires a cancellation history, and
- * no match currently holds both. They are separated anyway — a washed tile keeps its cancel border
- * and the needs-decision amber only ever shows on an unwashed one — so the pair cannot collide if
- * the data changes. */
-const WASH: Record<1 | 2 | 3 | 4, string> = {
-  1: "bg-[#FEF8E7] border-[#F4C430]",
-  2: "bg-[#FDF0E3] border-[#E8862A]",
-  3: "bg-[#FBE9E6] border-[#D9452F]",
-  4: "bg-[#F6E4E0] border-[#8F2A17]",
-};
+/* THERE IS NO TILE WASH ANY MORE. The four RAMP_HEX colours used to tint the whole tile as well as
+ * the chip, and a pushed tile with a 1/4 history was indistinguishable from an unpushed one at the
+ * same slot (Miguel, 2026-10-16, after the rail-on-wash attempt did not read either). The ramp
+ * lives on the chip alone; the tile's fill and border are the plan's. See tileBorderFor. */
 
 /* ── THE TILE'S CANCEL HISTORY ────────────────────────────────────────────────────────────────
  *
@@ -1829,36 +1817,11 @@ function useTileCancelHistory(weekStart: string | null) {
     return new Date(y, m - 1, d);
   }, [weekStart]);
 
-  /* ── THE CANCELLATIONS MATCHDAY DELETED, ADDED TO THE SCHEDULE FOR THIS PAGE ONLY ─────────
-   * useMatchData is shared by every finance and ops page and filters tombstones at the source, so
-   * they are fetched here, separately, and appended. The window is the four history weeks plus the
-   * week on screen, with a week of slack either side; getCancelPatterns places each row in its
-   * own week and ignores the rest. Loaded per anchor; an error leaves the list empty and the page
-   * exactly as it was before this existed. */
-  const [deleted, setDeleted] = useState<{ anchorMs: number; rows: ScheduledMatch[] } | null>(null);
-  useEffect(() => {
-    if (!anchor) return;
-    const anchorMs = anchor.getTime();
-    const ymdOf = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-    const from = ymdOf(new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate() - 7 * 6));
-    const to = ymdOf(new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate() + 13));
-    let alive = true;
-    fetchDeletedCancelledScheduled(supabase, from, to)
-      .then((rows) => { if (alive) setDeleted({ anchorMs, rows }); })
-      .catch(() => { if (alive) setDeleted({ anchorMs, rows: [] }); });
-    return () => { alive = false; };
-  }, [anchor]);
-  const scheduledWithDeleted = useMemo(
-    () => (deleted && anchor && deleted.anchorMs === anchor.getTime() ? [...scheduledMatches, ...deleted.rows] : scheduledMatches),
-    [scheduledMatches, deleted, anchor],
-  );
-
   const result = useMemo(
     /* THE SCHEDULE, NOT ONLY THE BOOKINGS: a match cancelled with nobody booked has no row and used
-     * to vanish from the tile's history (STAR Thu/Fri Oct 1–2, 8:30pm, cancelled at 0/20). And
-     * since 2026-10-16 the schedule includes the cancellations MatchDay deleted, see above. */
-    () => (anchor ? getCancelPatterns(rows, aliases, "patterns", anchor, scheduledWithDeleted) : null),
-    [rows, scheduledWithDeleted, aliases, anchor],
+     * to vanish from the tile's history (STAR Thu/Fri Oct 1–2, 8:30pm, cancelled at 0/20). */
+    () => (anchor ? getCancelPatterns(rows, aliases, "patterns", anchor, scheduledMatches) : null),
+    [rows, scheduledMatches, aliases, anchor],
   );
   const canonicalOf = useCallback(
     (fieldRaw: string) => normalizeMatchName(fieldRaw, aliases).canonical, [aliases]);

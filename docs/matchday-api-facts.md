@@ -7390,11 +7390,15 @@ for 18596, 18680, 18679, 19700 and `/admin/matches?fromDate&toDate` windows arou
   `2026-10-19 15:30Z` (11:30 AM EDT). Guarded on the reviewed `updated_at` and `pushed_at is null`;
   all 13 LANDED and the after-select matched. **410 (St. Louis) and 324 (Dallas) were left as
   stored** pending Miguel's answer on which clock he typed.
-- **Match Promotion now shows deleted cancellations.** `fetchVeoWeek` gained a seventh argument,
-  `includeDeletedCancelled` (default false; only `fetchPromoWeek` passes true), which admits rows
-  with `deleted_at` set AND `is_cancelled` true and renders them as cancelled with 0 booked. The
-  tile cancel history appends the same rows through the new, additive
-  `fetchDeletedCancelledScheduled` in `mdapiMatchesRead.ts`; `fetchJoinedMatchPlayers` and every
-  other reader still filter `deleted_at is null`.
+- **Deleted cancellations were shown, then REVERTED the same day.** d6951ad gave `fetchVeoWeek` a
+  seventh argument, `includeDeletedCancelled`, admitting rows with `deleted_at` set AND
+  `is_cancelled` true, and appended the same rows to the tile history through a
+  `fetchDeletedCancelledScheduled` reader. Miguel reported matches on the page that are not on this
+  week's schedule at all — Crockett on Friday, old One Touch games. **A tombstoned `is_cancelled`
+  row is not only a real cancellation**: bulk sweeps of empty slates and removed slates leave the
+  same shape, so "deleted and cancelled" admits matches that were never on the week. Both the
+  argument and the reader are gone; `fetchVeoWeek` filters `deleted_at is null` for every caller
+  again, and the tile history reads `scheduledMatches` alone. The "Ryan to decide" line above
+  stands as: decided, and not by reading tombstones.
 - **Tile lookup canonical fixed**: `riskOf` runs `canonicalVenueName` before `canonicalOf`, the
   same order the builder uses, so both Hattrick venues carry their history again.

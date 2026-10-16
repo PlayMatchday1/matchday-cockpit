@@ -218,14 +218,7 @@ export type VeoWeek = {
  * every caller had before and still gets: Match Promotion, the Veo dashboard, the review count. The
  * Master Schedule passes weekStart.WEEK_START (Sunday) through ?ws= on /api/veo. `mon` keeps its
  * name but is the week's FIRST DAY, and dayIdx counts from it. */
-/* includeDeletedCancelled (Match Promotion only, 2026-10-16): ALSO return rows MatchDay has deleted
- * upstream (`deleted_at` set) when they were cancelled first. Probed 2026-10-16: a cancelled match
- * with nobody real booked is usually DELETED in MatchDay (GET /admin/matches/{id} → 404), so the
- * mirror tombstones it and every reader that filters `deleted_at is null` loses the cancellation
- * entirely — 147 of 157 zero-player cancellations since Sep 1. For a page whose job is "what
- * happened to this slot", that is a cancellation hidden, so it asks for them and renders them as
- * cancelled with 0 booked. Default false: every other caller is unchanged. */
-export async function fetchVeoWeek(sb: SupabaseClient, now: Date, weekRef: Date = now, scopeCity: string | null = null, includeCancelled = false, weekStart = 1, includeDeletedCancelled = false): Promise<VeoWeek> {
+export async function fetchVeoWeek(sb: SupabaseClient, now: Date, weekRef: Date = now, scopeCity: string | null = null, includeCancelled = false, weekStart = 1): Promise<VeoWeek> {
   const mon = weekStartOf(weekRef, weekStart);
   const sun = new Date(mon.getFullYear(), mon.getMonth(), mon.getDate() + 6);
   const todayIso = ymd(now);
@@ -249,14 +242,9 @@ export async function fetchVeoWeek(sb: SupabaseClient, now: Date, weekRef: Date 
      * cancellation with 16 booked cost sixteen players, one with 1 was never going to run. One
      * more column on a row already being read. Every existing consumer ignores it. */
     .select("api_id, name, city_identifier, field_id, field_title, start_date, start_date_utc, registration_price, player_count, is_cancelled, deleted_at, synced_at")
+    .is("deleted_at", null)
     .gte("start_date", ymd(mon))
     .lte("start_date", `${ymd(sun)}T23:59:59`);
-  /* TOMBSTONES STAY OUT unless the caller asked for the cancelled ones among them — see the
-   * includeDeletedCancelled note on the signature. A deleted row that was NOT cancelled is a
-   * phantom and is never returned. */
-  q = includeDeletedCancelled
-    ? q.or("deleted_at.is.null,and(deleted_at.not.is.null,is_cancelled.eq.true)")
-    : q.is("deleted_at", null);
   /* THE BOUNDARY, IN SQL, AND ONLY WHEN THERE IS ONE. A confined caller cannot receive another
    * city's matches even if the display map or a client filter later changes.
    *
@@ -304,9 +292,7 @@ export async function fetchVeoWeek(sb: SupabaseClient, now: Date, weekRef: Date 
       /* CARRIED, NEVER INFERRED. A consumer that did not ask for cancelled matches never sees one,
        * so `isCancelled` reads false for every row it receives — which is true of what it got. */
       isCancelled: r.is_cancelled === true,
-      /* A DELETED CANCELLATION READS 0 BOOKED (Ryan, 2026-10-16). Whatever player_count the row
-       * froze at when MatchDay deleted it, nobody is booked on a match that no longer exists. */
-      playerCount: r.deleted_at ? 0 : ((r as { player_count?: number | null }).player_count ?? null),
+      playerCount: (r as { player_count?: number | null }).player_count ?? null,
       fieldId: (r as { field_id?: number | null }).field_id ?? null,
     });
   }

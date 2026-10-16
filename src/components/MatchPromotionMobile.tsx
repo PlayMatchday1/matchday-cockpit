@@ -247,7 +247,7 @@ function WeekByDay(p: MobileProps & { panel: React.ReactNode; viewTag?: TagKey |
             </div>
             {dayMatches.map((m) => {
               /* ── THE SAME THREE COVERAGE STATES AS THE GRID, NO FOURTH ──────────────────────
-               *   own push   SOLID mint rail    this match got its own push
+               *   own push   mint row           this match got its own push, whatever the history
                *   covered    DOTTED mint rail   a city or field push carried it
                *   no plan    dashed, no rail    nothing at all, not even a slate blast
                * border-l-dotted IS NOT A TAILWIND CLASS — see the Tile note in
@@ -263,17 +263,15 @@ function WeekByDay(p: MobileProps & { panel: React.ReactNode; viewTag?: TagKey |
                   data-field-id={m.fieldId ?? ""}
                   data-booked={m.state === "cancelled" ? String(m.playerCount ?? 0) : undefined}
                   style={cover === "covered" ? { borderLeftStyle: "dotted" } : undefined}
-                  /* NO bg-white IN THE BASE — see the Tile note in MatchPromotionView: it ties
-                     with the wash class on specificity and wins on emission order. */
-                  /* THE RAIL SURVIVES THE WASH, same as the desktop tile (tileBorderFor): the wash is
-                     the slot's cancel history, the rail is this match's own plan, and a washed row
-                     used to lose the rail and read as unpromoted. */
+                  /* NO bg-white IN THE BASE — see the Tile note in MatchPromotionView: exactly one
+                     background class, chosen by the state chain. THE ROW IS COLOURED BY ITS PLAN,
+                     same rules as the desktop tileBorderFor; the cancel history is the chip alone. */
                   className={`mb-2 rounded-[11px] border px-3 py-[11px] ${
                     m.state === "cancelled" ? "border-dashed border-cream-line bg-[#f7f8f7]"
-                    : M_WASH[p.riskOf?.(m)?.cancelCount ?? 0] != null
-                    ? `${M_WASH[p.riskOf?.(m)?.cancelCount ?? 0]}${cover === "none" ? "" : " border-l-[3px] border-l-mint"}`
-                    : (cover === "needs-decision" ? "border-amber-300 bg-amber-50"
-                    : cover === "none" ? "border-dashed border-cream-line bg-white" : "border-cream-line border-l-[3px] border-l-mint bg-white")} ${
+                    : cover === "needs-decision" ? "border-amber-300 bg-amber-50"
+                    : cover === "none" ? "border-dashed border-cream-line bg-white"
+                    : cover === "covered" ? "border-cream-line border-l-[3px] border-l-mint bg-white"
+                    : "border-mint bg-mint-soft/50"} ${
                     m.apiId === openId ? "border-deep-green shadow-[0_0_0_2px_#e6efe9]" : ""}`}>
                   <div className="flex items-baseline gap-2">
                     <span className={`text-[15px] font-black tabular-nums ${m.state === "cancelled" ? "text-deep-green/40 line-through" : ""}`}>{m.time}</span>
@@ -538,16 +536,13 @@ function Coverage({ week }: { week: PromoWeek }) {
 
 /* ── THE PHONE SHELL ─────────────────────────────────────────────────────────────────────────── */
 
-/* THE RAMP AND THE WASH, THE DESKTOP'S OWN VALUES. Duplicated as constants rather than imported
- * because MatchPromotionView imports this file and the cycle is not worth a shared module for four
- * hex strings; the ramp assertion checks BOTH surfaces so they cannot drift apart silently. */
+/* THE RAMP, THE DESKTOP'S OWN VALUES. Duplicated as constants rather than imported because
+ * MatchPromotionView imports this file and the cycle is not worth a shared module for four hex
+ * strings; the ramp assertion checks BOTH surfaces so they cannot drift apart silently. The chip
+ * is the only place the ramp appears: the row wash it used to feed is gone (2026-10-16), same as
+ * the desktop tile. */
 const M_RAMP_HEX: Record<number, string> = { 1: "#F4C430", 2: "#E8862A", 3: "#D9452F", 4: "#8F2A17" };
 const M_RAMP_INK: Record<number, string> = { 1: "#3A2A00", 2: "#2E1B00", 3: "#ffffff", 4: "#ffffff" };
-const M_WASH: Record<number, string | undefined> = {
-  0: undefined,
-  1: "bg-[#FEF8E7] border-[#F4C430]", 2: "bg-[#FDF0E3] border-[#E8862A]",
-  3: "bg-[#FBE9E6] border-[#D9452F]", 4: "bg-[#F6E4E0] border-[#8F2A17]",
-};
 
 export default function MatchPromotionMobile(p: MobileProps) {
   const { tab, setTab, weekLabel, onNav, week } = p;
@@ -604,9 +599,10 @@ export default function MatchPromotionMobile(p: MobileProps) {
       )}
       {tab !== "due" && tab !== "coverage" && (
         <div className="px-3.5 pb-6 pt-3 text-[11.5px] leading-[1.8] text-deep-green/65">
-          A solid mint rail is this match&rsquo;s own push. A dotted one means a city or field slate
-          blast carried it. A dashed row has no plan at all. Amber needs a push date. A tinted row is
-          a slot that cancelled recently; its rail still says whether this match has a push.
+          A green row is this match&rsquo;s own push. A dotted mint rail on white means a city or
+          field slate blast carried it. A dashed row has no plan at all. Amber needs a push date.
+          The 1/4 to 4/4 chip is how often the slot cancelled in the last four weeks; it never
+          changes the row&rsquo;s colour.
         </div>
       )}
     </div>
