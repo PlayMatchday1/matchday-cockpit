@@ -28,8 +28,8 @@ import { weekQueueEntries, weekQueues, isPastWeek, defaultDayIdx, tabCounts, typ
 import {
   CHANNELS, NEW_FLAG_LABEL, channelsOn, coverageCaption, coverageStateOf, coverageSummary, matchCodes,
   coverageOf, coverLabel, generalsCovering, generalPushDayIdx, type GeneralPush,
-  datedPushes, draftFromPlan, draftToPushes, fmtPushIn, isPushOverdue, isPushSent, leadToKickoff,
-  sentStamp, venueOffsetMs,
+  datedPushes, draftFromPlan, draftToPushes, fmtPushIn, fromInputValue, isPushOverdue, isPushSent, leadToKickoff,
+  sentStamp, toInputValue, venueOffsetMs,
   type PromoMatch, type PromoPush, type PromoWeek, type PushDraft, type ZoneMode,
 } from "@/lib/matchPromotion";
 import MarkPushSent from "@/components/MarkPushSent";
@@ -940,15 +940,6 @@ function generalReach(g: GeneralPush, week: PromoWeek): number {
     m.state !== "cancelled" && generalsCovering(m, [g], week.days).length > 0).length;
 }
 
-/** An instant as `datetime-local` characters in the READER'S clock. "" when there is no time. */
-function toLocalInput(iso: string | null): string {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
-}
-
 /** The field's name, from the week rather than from a second lookup. */
 function fieldNameOf(g: GeneralPush, week: PromoWeek): string {
   return week.matches.find((m) => m.fieldId === g.fieldId)?.venue ?? "field";
@@ -1073,8 +1064,14 @@ function GeneralPushSheet({ city, push, week, saving, onClose, onSave, onRemove 
   const [scope, setScope] = useState<"city" | "field">(push?.scope ?? "city");
   const [channel, setChannel] = useState<string>(push?.channel ?? CHANNELS[0]?.key ?? "wa");
   /* THE INPUT WANTS LOCAL CHARACTERS, THE ROW HOLDS AN INSTANT. Same pair the push editor runs, in
-   * the reader's own clock — a general push has no venue to be shifted by. */
-  const [at, setAt] = useState(() => toLocalInput(push?.pushAt ?? null));
+   * the reader's own clock — a general push has no venue to be shifted by.
+   *
+   * BOTH HALVES OF THE PAIR, THIS TIME. Until 2026-10-16 only the first half ran: the instant was
+   * rendered into the input in the reader's clock, and the bare characters went back to the route
+   * as typed. Node on Vercel reads "2026-10-18T11:30" as UTC, so Miguel's 11:30 AM Atlanta push
+   * landed at 7:30 AM — and every re-save of an existing push shifted it again by the reader's
+   * offset. fromInputValue at save is what the per-match editor always did; see onSave below. */
+  const [at, setAt] = useState(() => toInputValue(push?.pushAt ?? null, "me", null));
   const [topic, setTopic] = useState(push?.topic ?? "");
   const [code, setCode] = useState(push?.promoCode ?? "");
   const [audience, setAudience] = useState(push?.audience ?? `all registered in ${city}`);
@@ -1153,7 +1150,10 @@ function GeneralPushSheet({ city, push, week, saving, onClose, onSave, onRemove 
         <div className="flex items-center gap-3">
           <button type="button" data-testid="gen-save" disabled={saving || (scope === "field" && fieldId === "")}
             onClick={() => void onSave({
-              scope, channel, at: at.trim() === "" ? null : at, topic: topic.trim() || null,
+              /* AN INSTANT LEAVES THE BROWSER, NEVER BARE CHARACTERS. The route refuses a time
+               * with no zone, so sending the input's own value would now fail loudly instead of
+               * landing hours off. "" → null, which is a real value: undated. */
+              scope, channel, at: fromInputValue(at, "me", null), topic: topic.trim() || null,
               promoCode: code.trim() || null, fieldId: scope === "field" ? Number(fieldId) : null,
               audience: audience.trim() || null,
             })}
