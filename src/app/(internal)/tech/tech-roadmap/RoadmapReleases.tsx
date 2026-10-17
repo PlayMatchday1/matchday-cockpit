@@ -7,7 +7,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { KanbanCard, RoadmapBoard } from "@/lib/kanban";
 import {
-  buildTimeline, doneYmd, fmtRange, readOpen, releaseOpenKey, releaseStatus, sortReleases, writeOpen,
+  buildTimeline, fmtRange, shownDoneYmd, readOpen, releaseOpenKey, releaseStatus, sortReleases, writeOpen,
   ymdToUtcMs, type Release,
 } from "@/lib/roadmapReleases";
 import type { ReleaseInput } from "@/lib/useRoadmapReleases";
@@ -33,8 +33,10 @@ export default function RoadmapReleases({ board, cards, releases, today, viewer,
   const year = today.slice(0, 4);
   const loose = cards.filter((c) => !c.release_id && c.stage !== "shipped").sort(byCreated);
   const looseShown = loose.filter(passes);
+  // Same date the board shows (shownDoneYmd). These cards have no release, so it is their own done_at.
+  const byId = new Map(releases.map((r) => [r.id, r]));
   const outYear = cards
-    .filter((c) => !c.release_id && c.stage === "shipped" && (doneYmd(c) ?? "").slice(0, 4) === year)
+    .filter((c) => !c.release_id && c.stage === "shipped" && (shownDoneYmd(c, byId, today) ?? "").slice(0, 4) === year)
     .sort((a, b) => (b.done_at ?? "").localeCompare(a.done_at ?? ""));
   const outShown = outYear.filter(passes);
   const [outOpen, setOutOpen] = useState(false);

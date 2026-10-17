@@ -21,7 +21,7 @@ import { useKanbanBoard, type CardPatch } from "@/lib/useKanbanBoard";
 import { firstName, ownerName, type KanbanCard, type RoadmapBoard } from "@/lib/kanban";
 import { ROADMAP_COLS, roadmapBoardOf as boardOf, columnCards, planMove, planReorder } from "@/lib/roadmap";
 import {
-  deriveStats, doneGroups, doneOpenKey, doneYmd, fmtDay, fmtDayWithWeekday, readOpen, sortReleases, todayYmd, writeOpen,
+  deriveStats, doneGroups, doneOpenKey, fmtDay, fmtDayWithWeekday, readOpen, shownDoneYmd, sortReleases, todayYmd, writeOpen,
   type Release,
 } from "@/lib/roadmapReleases";
 import { useRoadmapReleases } from "@/lib/useRoadmapReleases";
@@ -240,6 +240,7 @@ export default function RoadmapView({ board }: { board: RoadmapBoard }) {
               const groups = isDone ? doneGroups(vis, releases) : [];
               const cardProps = (c: KanbanCard) => ({
                 c, release: c.release_id ? releaseById.get(c.release_id) ?? null : null, selected: selId === c.id,
+                doneDay: c.stage === "shipped" ? shownDoneYmd(c, releaseById, today) : null,
                 onOpen: () => setSelId(c.id),
                 onDragStart: () => { dragId.current = c.id; },
                 onDragEnd: () => { dragId.current = null; setDragOver(null); },
@@ -358,8 +359,7 @@ function StatsRow({ stats }: { stats: ReturnType<typeof deriveStats> }) {
   const scrumSub = scrum.total === 0 ? "Nothing waiting"
     : scrum.releases === 0 ? "Not in a release yet"
     : `Across ${scrum.releases} ${scrum.releases === 1 ? "release" : "releases"}${scrum.noRelease ? `, ${scrum.noRelease} not in one` : ""}`;
-  const last = outThisYear.last;
-  const lastDay = last ? doneYmd(last) : null;
+  const { last, lastDay } = outThisYear;
   return (
     <div data-testid="stats" className="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
       <Stat label="NEXT RELEASE" big={next ? `${next.version} ${next.name}`.trim() : "None planned"} small={next ? `Target ${fmtDayWithWeekday(next.out_by)}` : "Add a release to see it here"} testid="stat-next" bigSize={18} />
@@ -379,13 +379,13 @@ function Stat({ label, big, small, testid, bigSize = 24 }: { label: string; big:
   );
 }
 
-function Card({ c, release, selected, draggable, inDoneGroup, onOpen, onDragStart, onDragEnd, onDropBefore, onDragOverCard }: {
+function Card({ c, release, selected, draggable, inDoneGroup, doneDay, onOpen, onDragStart, onDragEnd, onDropBefore, onDragOverCard }: {
   c: KanbanCard; release: Release | null; selected: boolean; draggable: boolean; inDoneGroup?: boolean;
+  doneDay: string | null; // shownDoneYmd, worked out by the board so every reader agrees
   onOpen: () => void; onDragStart: () => void; onDragEnd: () => void; onDropBefore: () => void; onDragOverCard: () => void;
 }) {
   const done = c.stage === "shipped";
   const pri = priorityOf(c);
-  const doneDay = done ? doneYmd(c) : null;
   return (
     <div data-testid="card" data-card-id={c.id} data-stage={c.stage} role="button" tabIndex={0} aria-label={`Open ${c.title}`}
       draggable={draggable} onDragStart={onDragStart} onDragEnd={onDragEnd}

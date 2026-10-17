@@ -51,8 +51,25 @@ export const fmtRange = (a: string, b: string): string => `${fmtDay(a)} to ${fmt
 /** Today, as the calendar day it is in America/Chicago. */
 export const todayYmd = (nowMs: number = Date.now()): string => chicagoYmd(new Date(nowMs).toISOString());
 
-/** The day a card was finished, in America/Chicago, or null. */
+/** The day a card was finished, in America/Chicago, or null. This is the STORED done_at; what the
+ *  page shows is shownDoneYmd below. */
 export const doneYmd = (c: Pick<KanbanCard, "done_at">): string | null => (c.done_at ? chicagoYmd(c.done_at) : null);
+
+/** THE date a Done card shows, and the only one the page reads (cards, "Out this year", its "Last
+ *  one" line, the Releases tab). A card in a release whose out-by date is already behind us shows
+ *  that release's date: done_at is when the card was MOVED to Done, which for work typed in after it
+ *  shipped is the day it was typed in, not the day it went out. Every other card (no release, or a
+ *  release still to come) shows its own done_at. Every release has an out-by (NOT NULL, 0225), so
+ *  "a release with no date" cannot occur. */
+export function shownDoneYmd(
+  c: Pick<KanbanCard, "done_at" | "release_id">,
+  releaseById: ReadonlyMap<string, Pick<Release, "out_by">>,
+  today: string,
+): string | null {
+  const r = c.release_id ? releaseById.get(c.release_id) : undefined;
+  if (r && r.out_by < today) return r.out_by;
+  return doneYmd(c);
+}
 
 // ── status ─────────────────────────────────────────────────────────────────
 /** Out once every card in it is Done; otherwise Building from its start date, Planned before it.
@@ -106,7 +123,7 @@ export type RoadmapStats = {
   next: Release | null;
   working: { total: number; ryan: number; scrumlaunch: number; none: number };
   scrum: { total: number; releases: number; noRelease: number };
-  outThisYear: { total: number; last: KanbanCard | null };
+  outThisYear: { total: number; last: KanbanCard | null; lastDay: string | null };
 };
 
 /**
@@ -114,8 +131,9 @@ export type RoadmapStats = {
  *  · Next release: the not-yet-Out release with the earliest out-by date.
  *  · Being worked on: cards in Working on it, split by who.
  *  · Waiting on ScrumLaunch: ScrumLaunch's open cards, Up next plus Working on it.
- *  · Out this year: Done cards finished this calendar year (Chicago) that are not sitting inside a
- *    release that is still being built. A release's done cards count once the whole release is Out.
+ *  · Out this year: Done cards whose SHOWN date (shownDoneYmd) falls in this calendar year and that
+ *    are not sitting inside a release that is still being built. A release's done cards count once
+ *    the whole release is Out. "Last one" is the latest shown date, so it agrees with the cards.
  */
 export function deriveStats(cards: KanbanCard[], releases: Release[], today: string): RoadmapStats {
   const status = new Map(releases.map((r) => [r.id, releaseStatus(r, cards, today)]));
@@ -138,14 +156,18 @@ export function deriveStats(cards: KanbanCard[], releases: Release[], today: str
   };
 
   const year = today.slice(0, 4);
+  const byId = new Map(releases.map((r) => [r.id, r]));
+  const shown = new Map(cards.map((c) => [c.id, c.stage === "shipped" ? shownDoneYmd(c, byId, today) : null]));
   const out = cards.filter((c) => {
     if (c.stage !== "shipped") return false;
-    const d = doneYmd(c);
+    const d = shown.get(c.id);
     if (!d || d.slice(0, 4) !== year) return false;
     return !c.release_id || status.get(c.release_id) === "out";
   });
-  const last = out.reduce<KanbanCard | null>((m, c) => (!m || (c.done_at ?? "") > (m.done_at ?? "") ? c : m), null);
-  return { next, working, scrum, outThisYear: { total: out.length, last } };
+  // Latest shown day wins; on a tie, the card moved to Done last.
+  const key = (c: KanbanCard) => `${shown.get(c.id) ?? ""}|${c.done_at ?? ""}`;
+  const last = out.reduce<KanbanCard | null>((m, c) => (!m || key(c) > key(m) ? c : m), null);
+  return { next, working, scrum, outThisYear: { total: out.length, last, lastDay: last ? shown.get(last.id) ?? null : null } };
 }
 
 // ── the Done column, one block per release ─────────────────────────────────
