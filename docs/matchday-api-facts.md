@@ -7402,3 +7402,23 @@ for 18596, 18680, 18679, 19700 and `/admin/matches?fromDate&toDate` windows arou
   stands as: decided, and not by reading tombstones.
 - **Tile lookup canonical fixed**: `riskOf` runs `canonicalVenueName` before `canonicalOf`, the
   same order the builder uses, so both Hattrick venues carry their history again.
+
+## Tech Roadmap 2.0 — releases, assignee, done_at (migration 0225, APPLIED 2026-10-17)
+
+- **Applied by Ryan in the SQL Editor on 2026-10-17; confirmed through the REST API the same day** (service-role read):
+  `kanban_releases` exists (0 rows before the seed); on all 45 `tech_roadmap` cards `assignee` was null and
+  `release_id` null; all 13 cards in `shipped` had `done_at` filled, and 0 cards outside `shipped` had one.
+  Evidence: `supabase/migrations/0225_tech_roadmap_releases.sql`.
+- **`kanban_cards.board` is lowercase `app` / `clubhouse` on every row** — 35 + 10 roadmap rows, 192 + 10 across the
+  table, read through REST on 2026-10-17. The 0090 CHECK already forces it, and the 0225 composite FK
+  `(release_id, board) → kanban_releases(id, board)` relies on it.
+- **Live `kanban_audit()` matched 0066** (Ryan ran `pg_get_functiondef` in the SQL Editor; the only difference was one
+  comment). 0225 replaced it with `assignee` and `release_id` added to the "did anything change" tuple.
+- **`done_at` is stamped by a trigger, not the client**: `trg_kanban_cards_done_at` sets `now()` on the move INTO
+  `shipped` (and on an INSERT straight into it), and nulls it on any move out. Proven in the browser on 2026-10-17: a
+  card moved to Done read back `done_at = 2026-10-17T18:35:55Z`; moved back, it read back `null`.
+- **`assignee` vs `owner_user_id` on the roadmap**: `assignee` ('ryan' | 'scrumlaunch' | null) is who DOES the work and is
+  the only thing the page's "Who" control writes. `owner_user_id` is who ADDED the card ("Created by") and is set only by
+  "+ Add". Proven 2026-10-17: Ryan → ScrumLaunch → cleared left `owner_user_id` unchanged.
+- **`app_users` has no row for ScrumLaunch** (2026-10-17, `select id, full_name, email` on admins), which is why
+  `assignee` is its own column rather than an `owner_user_id`.

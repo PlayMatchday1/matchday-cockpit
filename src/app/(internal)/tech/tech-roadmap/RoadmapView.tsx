@@ -1,117 +1,131 @@
 "use client";
 
-// Tech Roadmap — App Roadmap + Clubhouse Roadmap, one component, two boards
-// (mockup docs/mockups/roadmap-v1_3.html). Every number on the page is DERIVED
-// from the loaded cards (src/lib/roadmap.ts); there is no typed-in figure. The
-// board reads/writes kanban_cards through the shared useKanbanBoard hook (same
-// path Field Pipeline uses); a move writes the new stage and the DB trigger
-// stamps stage_entered_at = now(), which is the board's stale clock. Mutations
-// are gated on app_users.is_admin — a non-admin gets a read-only board.
+// Tech Roadmap 2.0 — App Roadmap + Clubhouse Roadmap, one component, two boards (Figma file
+// 9TgSk4sYqq4nNoTH73wRRs, page "Clubhouse · Tech Roadmap 2.0"). Two tabs, Board (the default) and
+// Releases, kept in the URL as ?tab=releases so a reload stays put.
+//
+// Cards read and write kanban_cards through the shared useKanbanBoard hook; releases go through
+// useRoadmapReleases. A move between columns writes stage + sort_order + stage_entered_at (planMove
+// in lib/roadmap.ts); a reorder inside a column writes sort_order only (planReorder). The database
+// stamps done_at on the move into Done and clears it on the way out; the client mirrors that value
+// only so the screen does not lag. Writes are gated on app_users.is_admin; anyone else gets a
+// read-only page.
+//
+// "Who" is kanban_cards.assignee (Ryan, ScrumLaunch, or no one). owner_user_id is who ADDED the
+// card: "+ Add" sets it to the signed-in user and nothing on this page ever changes it after.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/useAuth";
-import { useKanbanBoard } from "@/lib/useKanbanBoard";
+import { useKanbanBoard, type CardPatch } from "@/lib/useKanbanBoard";
+import { firstName, ownerName, type KanbanCard, type RoadmapBoard } from "@/lib/kanban";
+import { ROADMAP_COLS, roadmapBoardOf as boardOf, columnCards, planMove, planReorder } from "@/lib/roadmap";
 import {
-  cardEstimatedHours, cardOwnerLabel, cardPriority, firstName, ownerName,
-  type KanbanCard, type KanbanOwner, type RoadmapBoard,
-} from "@/lib/kanban";
-import {
-  ROADMAP_COLS, STALE_ACTIVE_DAYS, STALE_IDEA_DAYS, FRESH_WINDOW_DAYS,
-  daysInColumn, movedAtMs, createdAtMs, daysSince, dfull, staleLimitFor,
-  isStale, isFresh, wantsEstimate, columnMetaLine, deriveStateBar, plural,
-  roadmapBoardOf as boardOf, columnCards, planMove, planReorder, stepTarget,
-} from "@/lib/roadmap";
-
-const C = {
-  forest: "#0d3b2e", forestDeep: "#072a20", accent: "#35c77f", mint: "#e0f2e7",
-  amount: "#e2502b", ink: "#12241d", muted: "#6d7b74", muted2: "#9aa8a1",
-  warnBg: "#fdf1d0", warnInk: "#8a6300", warnLine: "#e3c369",
-  critBg: "#fdeae4", critInk: "#a8391a", critLine: "#f0bda9", ok: "#12704a",
-  railA: "#fafbfa", railB: "#f6f9f7", board: "#f8faf9",
-  chipBg: "#eef3f0", chipLine: "#e2eae5", line: "#e6ebe8", hair: "#eff3f1", surface: "#ffffff",
-};
-const PRI_STRIPE: Record<string, string> = { High: "#d9603c", Medium: C.warnLine, Low: "#b9c7c0" };
+  deriveStats, doneGroups, doneOpenKey, doneYmd, fmtDay, fmtDayWithWeekday, readOpen, sortReleases, todayYmd, writeOpen,
+  type Release,
+} from "@/lib/roadmapReleases";
+import { useRoadmapReleases } from "@/lib/useRoadmapReleases";
+import { C, PRIORITY_COLOR, VersionChip, WhoChip, priorityOf } from "./roadmapUi";
+import WorkPanel from "./WorkPanel";
+import RoadmapReleases, { ReleaseDialog } from "./RoadmapReleases";
 
 const BOARDS: Record<RoadmapBoard, { name: string; sub: string }> = {
-  app: { name: "App Roadmap", sub: "What is being built for the player app, from idea to shipped." },
-  clubhouse: { name: "Clubhouse Roadmap", sub: "What is being built for Clubhouse itself — the internal tools MatchDay Ops runs on." },
+  app: { name: "App Roadmap", sub: "Everything we are building for the player app, grouped by release." },
+  clubhouse: { name: "Clubhouse Roadmap", sub: "Everything we are building for Clubhouse, our internal tools, grouped by release." },
 };
 
-// `board` comes from the URL (/tech/tech-roadmap/app|clubhouse) — the section
-// sidebar is the single roadmap picker now; this component has no rail.
+const COL_DOT: Record<string, string> = {
+  ideas: "/roadmap/col-ideas.svg", in_plan: "/roadmap/col-upnext.svg", in_progress: "/roadmap/col-working.svg", shipped: "/roadmap/col-done.svg",
+};
+const COLUMN_PREVIEW = 6;
+
+type Who = "all" | "ryan" | "scrumlaunch";
+type AddTarget = { stage: string; releaseId: string | null };
+
 export default function RoadmapView({ board }: { board: RoadmapBoard }) {
   const { appUser } = useAuth();
   const isAdmin = !!appUser?.is_admin;
+  const viewer = appUser?.id ?? "anon";
   const api = useKanbanBoard("tech_roadmap");
   const { cards, owners, loading, error } = api;
+  const rel = useRoadmapReleases(board);
+  const releases = rel.releases;
 
+  // ── tab, in the URL ──
+  const router = useRouter();
+  const pathname = usePathname();
+  const params = useSearchParams();
+  const tab: "board" | "releases" = params.get("tab") === "releases" ? "releases" : "board";
+  const setTab = (t: "board" | "releases") => {
+    const next = new URLSearchParams(params.toString());
+    if (t === "releases") next.set("tab", "releases"); else next.delete("tab");
+    const qs = next.toString();
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+  };
+
+  // ── filters ──
   const [q, setQ] = useState("");
-  const [ownerF, setOwnerF] = useState(""); // "" | "__none" | ownerId
-  const [priF, setPriF] = useState("");
-  const [staleOnly, setStaleOnly] = useState(false);
+  const [who, setWho] = useState<Who>("all");
+  const [releaseF, setReleaseF] = useState("");
+
   const [selId, setSelId] = useState<string | null>(null);
-  const [creating, setCreating] = useState(false);
+  const [adding, setAdding] = useState<AddTarget | null>(null);
+  const [releaseDialog, setReleaseDialog] = useState<{ existing: Release | null } | null>(null);
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const dragId = useRef<string | null>(null);
   const [dragOver, setDragOver] = useState<string | null>(null);
-  // The card an insertion line is drawn above while dragging. Set only where a
-  // drop would actually change the order, so the cue never promises a move that
-  // resolves to a no-op.
-  const [dropCue, setDropCue] = useState<string | null>(null);
 
-  // A single clock for the whole render so every age is consistent.
-  const nowMs = useMemo(() => Date.now(), [cards]);
+  // One clock per render; today is a calendar day in America/Chicago.
+  const today = useMemo(() => todayYmd(), [cards, releases]); // eslint-disable-line react-hooks/exhaustive-deps
   const ownersById = useMemo(() => new Map(owners.map((o) => [o.id, o])), [owners]);
-
   const boardCards = useMemo(() => cards.filter((c) => boardOf(c) === board), [cards, board]);
+  const releaseById = useMemo(() => new Map(releases.map((r) => [r.id, r])), [releases]);
+  const stats = useMemo(() => deriveStats(boardCards, releases, today), [boardCards, releases, today]);
 
-  // The state bar is a fact about the BOARD, not the filter — derived from all
-  // board cards, never the filtered subset.
-  const bar = useMemo(() => deriveStateBar(boardCards, nowMs), [boardCards, nowMs]);
+  // A release filter naming a release that is gone falls back to all.
+  useEffect(() => { if (releaseF && !releaseById.has(releaseF)) setReleaseF(""); }, [releaseF, releaseById]);
 
-  const ownerLabelOf = useCallback((c: KanbanCard): string => {
-    if (c.owner_user_id) { const o = ownersById.get(c.owner_user_id); if (o) return firstName(ownerName(o)); }
-    const l = cardOwnerLabel(c); return l ? firstName(l) : "";
-  }, [ownersById]);
-
-  const passes = useCallback((c: KanbanCard): boolean => {
+  const matchesSearchWho = useCallback((c: KanbanCard) => {
     if (q && !c.title.toLowerCase().includes(q.toLowerCase())) return false;
-    if (ownerF === "__none") { if (c.owner_user_id) return false; }
-    else if (ownerF && c.owner_user_id !== ownerF) return false;
-    if (priF && cardPriority(c) !== priF) return false;
-    if (staleOnly && !isStale(c, nowMs)) return false;
+    if (who !== "all" && c.assignee !== who) return false;
     return true;
-  }, [q, ownerF, priF, staleOnly, nowMs]);
+  }, [q, who]);
+  const passes = useCallback((c: KanbanCard) => matchesSearchWho(c) && (!releaseF || c.release_id === releaseF), [matchesSearchWho, releaseF]);
 
-  const filtering = !!(q || ownerF || priF || staleOnly);
-  const sel = selId ? cards.find((c) => c.id === selId) ?? null : null;
+  // ── Done column blocks: open/closed per release per viewer ──
+  // Before mount the default is used so the server render and the first client render agree;
+  // localStorage is read only after.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
+  const [openTick, setOpenTick] = useState(0);
+  const doneAll = useMemo(() => columnCards(cards, board, "shipped"), [cards, board]);
+  const defaultOpenKey = useMemo(() => doneGroups(doneAll, releases).find((g) => g.release)?.key ?? null, [doneAll, releases]);
+  const isDoneOpen = (key: string) => {
+    void openTick;
+    const fallback = key === defaultOpenKey;
+    return mounted ? readOpen(doneOpenKey(viewer, board, key), fallback) : fallback;
+  };
+  const setDoneOpen = useCallback((key: string, open: boolean) => {
+    writeOpen(doneOpenKey(viewer, board, key), open);
+    setOpenTick((n) => n + 1);
+  }, [viewer, board]);
 
-  const ownerOptions = useMemo(() => {
-    const seen = new Map<string, string>();
-    for (const c of boardCards) if (c.owner_user_id) {
-      const o = ownersById.get(c.owner_user_id);
-      if (o) seen.set(o.id, ownerName(o));
-    }
-    return [...seen.entries()].sort((a, b) => a[1].localeCompare(b[1]));
-  }, [boardCards, ownersById]);
-  const anyNoOwner = useMemo(() => boardCards.some((c) => !c.owner_user_id), [boardCards]);
-
-  // ── move between columns: only write when the column actually changes ──
-  // The card lands at the end of the target column and its stale clock resets;
-  // stage_entered_at is authoritatively reset by the DB trigger, and the local
-  // value only stops the on-screen age lagging until the next reload.
+  // ── writes ──
   const moveCard = useCallback(async (id: string, toStage: string) => {
     if (!isAdmin) return;
-    const plan = planMove(cards, id, toStage, new Date().toISOString());
+    const nowIso = new Date().toISOString();
+    const plan = planMove(cards, id, toStage, nowIso);
     if (plan.kind === "noop") return;
-    await api.updateCard(id, plan.patch);
-  }, [isAdmin, cards, api]);
+    // The stage clock comes from planMove; done_at mirrors the trigger in migration 0225.
+    const ok = await api.updateCard(id, { ...plan.patch, done_at: toStage === "shipped" ? nowIso : null });
+    if (ok && toStage === "shipped") {
+      // Into Done: open the block it lands in, so the card does not disappear into a closed one.
+      const card = cards.find((c) => c.id === id);
+      setDoneOpen(card?.release_id && releaseById.has(card.release_id) ? card.release_id : "none", true);
+    }
+  }, [isAdmin, cards, api, releaseById, setDoneOpen]);
 
-  // ── reorder INSIDE a column: sort_order and nothing else ──
-  // Not a stage change, so the stale clock must not see it. planReorder returns
-  // a patch of exactly { sort_order }; there is no stage_entered_at in this
-  // path, deliberately (see lib/roadmap.ts). It writes ONE row — the card that
-  // moved gets the midpoint between its new neighbours, and the column is not
-  // renumbered.
+  // Inside a column: sort_order and nothing else (planReorder), so the stage clock does not move.
   const reorder = useCallback(async (id: string, beforeId: string | null) => {
     if (!isAdmin) return;
     const card = cards.find((c) => c.id === id);
@@ -121,14 +135,10 @@ export default function RoadmapView({ board }: { board: RoadmapBoard }) {
     await api.updateCard(id, plan.patch);
   }, [isAdmin, cards, api]);
 
-  // A drop resolves to one or the other: same column → reposition, different
-  // column → move (which appends, as it always has; beforeId is not honoured
-  // across a column boundary).
   const handleDrop = useCallback((colId: string, beforeId: string | null) => {
     const id = dragId.current;
     dragId.current = null;
     setDragOver(null);
-    setDropCue(null);
     if (!id || !isAdmin) return;
     const card = cards.find((c) => c.id === id);
     if (!card) return;
@@ -136,425 +146,297 @@ export default function RoadmapView({ board }: { board: RoadmapBoard }) {
     else void moveCard(id, colId);
   }, [cards, isAdmin, reorder, moveCard]);
 
-  // Where to draw the insertion line while a card is dragged over another card.
-  // null in two cases, both deliberate: the drop would not change the order
-  // (dropping on yourself, or on the card directly below you), and a
-  // CROSS-column drag, which appends to the end of the target column rather
-  // than landing where the pointer is — a line pointing at a position the card
-  // will not take is worse than no line.
-  const cueFor = useCallback((overId: string, colId: string): string | null => {
-    const id = dragId.current;
-    if (!id || !isAdmin) return null;
-    const card = cards.find((c) => c.id === id);
-    if (!card || card.stage !== colId) return null;
-    const plan = planReorder(columnCards(cards, boardOf(card), card.stage), id, overId);
-    return plan.kind === "write" ? overId : null;
-  }, [cards, isAdmin]);
+  const patchCard = useCallback(async (id: string, patch: CardPatch): Promise<boolean> => {
+    if (!isAdmin) return false;
+    return api.updateCard(id, patch);
+  }, [isAdmin, api]);
 
-  const clearFilters = () => { setQ(""); setOwnerF(""); setPriF(""); setStaleOnly(false); };
+  const createWork = async (title: string, target: AddTarget) => {
+    const id = await api.createCard({
+      title, stage: target.stage, board, release_id: target.releaseId,
+      owner_user_id: appUser?.id ?? null, // "Created by": whoever is signed in
+      data: { priority: "Medium", description: "", planned_date: null },
+    });
+    setAdding(null);
+    if (id) setSelId(id);
+  };
 
-  if (loading && cards.length === 0) return <div className="p-8 text-sm" style={{ color: C.muted }}>Loading roadmap…</div>;
+  if ((loading && cards.length === 0) || (rel.loading && releases.length === 0 && !rel.error)) {
+    return <div className="p-8 text-sm" style={{ color: C.muted }}>Loading roadmap…</div>;
+  }
 
   const b = BOARDS[board];
+  const sel = selId ? boardCards.find((c) => c.id === selId) ?? null : null;
+  const creator = sel?.owner_user_id ? ownersById.get(sel.owner_user_id) : undefined;
+  const sortedReleases = sortReleases(releases);
+  const writeError = error || rel.error;
 
   return (
     <div className="min-w-0" style={{ color: C.ink }}>
-      <style>{`
-        .rm-clist::-webkit-scrollbar{width:8px}
-        .rm-clist::-webkit-scrollbar-thumb{background:#d7e0db;border-radius:8px}
-      `}</style>
+      {writeError && (
+        <div className="mb-3 rounded-xl border px-3 py-2 text-sm" style={{ borderColor: "#f0bda9", background: "#fdeae4", color: "#a8391a" }}>
+          Something did not save or load: {writeError}
+        </div>
+      )}
 
-      {error && <div className="mb-3 rounded-xl border px-3 py-2 text-sm" style={{ borderColor: C.critLine, background: C.critBg, color: C.critInk }}>Write failed: {error}</div>}
-
-      {/* One rail only: the Tech section sidebar picks the board (see
-          tech/layout.tsx). The board takes the full width here. */}
-      <div className="mb-3.5 flex items-start gap-3.5">
-            <div>
-              <h1 className="m-0 mb-0.5 text-[23px] font-[800] tracking-[-0.015em]" style={{ color: C.forestDeep }}>{b.name}</h1>
-              <p className="m-0 text-[12.5px]" style={{ color: C.muted }}>{b.sub}</p>
-            </div>
-            {isAdmin && (
-              <div className="ml-auto flex items-center gap-2">
-                <button type="button" onClick={() => setCreating(true)} className="inline-flex min-h-[34px] items-center gap-1.5 rounded-[9px] border px-[13px] text-[12.5px] font-bold" style={{ background: C.forestDeep, borderColor: C.forestDeep, color: "#fff" }}>+ New card</button>
-              </div>
-            )}
+      {/* title row */}
+      <div className="mb-5 flex flex-wrap items-center gap-2.5">
+        <div className="min-w-0">
+          <h1 className="m-0 text-[26px] font-bold leading-tight" style={{ color: C.ink }}>{b.name}</h1>
+          <p className="m-0 mt-1 text-[13px]" style={{ color: C.muted }}>{b.sub}</p>
+        </div>
+        <span className="flex-1" />
+        {isAdmin && (
+          <div className="flex gap-2.5">
+            <button type="button" data-testid="new-release" onClick={() => setReleaseDialog({ existing: null })}
+              className="rounded-[8px] border bg-white px-3.5 py-[9px] text-[13px] font-semibold" style={{ borderColor: C.line, color: C.ink }}>+ New release</button>
+            <button type="button" data-testid="add-work" onClick={() => setAdding({ stage: "ideas", releaseId: null })}
+              className="rounded-[8px] px-3.5 py-[9px] text-[13px] font-semibold text-white" style={{ background: C.forest }}>+ Add work</button>
           </div>
+        )}
+      </div>
 
-          {/* state bar */}
-          <StateBar bar={bar} staleOnly={staleOnly} onShowStuck={() => setStaleOnly(true)} />
+      {/* tabs */}
+      <div className="mb-5 flex gap-7 border-b" style={{ borderColor: C.line }} role="tablist">
+        <TabButton active={tab === "board"} onClick={() => setTab("board")} label="Board" count={`${boardCards.length} ${boardCards.length === 1 ? "item" : "items"}`} testid="tab-board" />
+        <TabButton active={tab === "releases"} onClick={() => setTab("releases")} label="Releases" count={`${releases.length} ${releases.length === 1 ? "release" : "releases"}`} testid="tab-releases" />
+      </div>
 
-          {/* filters */}
-          <div className="mb-3 flex flex-wrap items-center gap-2">
-            <input data-testid="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search titles…"
-              className="min-h-[34px] min-w-[180px] flex-1 rounded-[9px] border px-[11px] text-[12.5px]" style={{ borderColor: C.chipLine, background: C.surface }} />
-            <select data-testid="owner-filter" value={ownerF} onChange={(e) => setOwnerF(e.target.value)} className="min-h-[34px] rounded-[9px] border px-[11px] text-[12.5px]" style={{ borderColor: C.chipLine, background: C.surface }}>
-              <option value="">All owners</option>
-              {ownerOptions.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
-              {anyNoOwner && <option value="__none">No owner</option>}
+      <StatsRow stats={stats} />
+
+      {/* filters */}
+      <div className="mb-5 flex flex-wrap items-center gap-2.5">
+        <input data-testid="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search work…"
+          className="min-h-[38px] min-w-[200px] flex-1 rounded-[10px] border bg-white px-3.5 text-[13px] outline-none" style={{ borderColor: C.line, color: C.ink }} />
+        <div className="flex gap-[2px] rounded-[10px] border bg-white p-[3px]" style={{ borderColor: C.line }} role="group" aria-label="Who">
+          {([["all", "Everyone"], ["ryan", "Ryan"], ["scrumlaunch", "ScrumLaunch"]] as const).map(([k, label]) => (
+            <button key={k} type="button" data-testid={`who-filter-${k}`} aria-pressed={who === k} onClick={() => setWho(k)}
+              className={`rounded-[8px] px-3 py-1.5 text-[13px] ${who === k ? "font-semibold" : "font-medium"}`}
+              style={who === k ? { background: C.forest, color: C.white } : { color: C.ink }}>{label}</button>
+          ))}
+        </div>
+        {tab === "board" && (
+          <label className="relative flex items-center rounded-[10px] border bg-white" style={{ borderColor: C.line }}>
+            <select data-testid="release-filter" value={releaseF} onChange={(e) => setReleaseF(e.target.value)}
+              className="appearance-none bg-transparent py-[9px] pl-3 pr-8 text-[13px] font-medium outline-none" style={{ color: C.ink }}>
+              <option value="">All releases</option>
+              {sortedReleases.map((r) => <option key={r.id} value={r.id}>{r.version} {r.name}</option>)}
             </select>
-            <select data-testid="priority-filter" value={priF} onChange={(e) => setPriF(e.target.value)} className="min-h-[34px] rounded-[9px] border px-[11px] text-[12.5px]" style={{ borderColor: C.chipLine, background: C.surface }}>
-              <option value="">All priorities</option><option>High</option><option>Medium</option><option>Low</option>
-            </select>
-            <button type="button" data-testid="stuck-toggle" onClick={() => setStaleOnly((v) => !v)}
-              className="inline-flex min-h-[34px] items-center gap-1.5 rounded-[9px] border px-3 text-[12.5px] font-bold"
-              style={staleOnly ? { background: C.warnBg, borderColor: C.warnLine, color: C.warnInk } : { background: C.surface, borderColor: C.chipLine, color: C.muted }}>
-              {staleOnly ? "Showing only what is stuck" : "Only what is stuck"}
-              <span className="rounded-[8px] px-1.5 text-[11px]" style={{ background: "rgba(0,0,0,.06)" }}>{bar.stale}</span>
-            </button>
-            {filtering && <button type="button" data-testid="clear-filters" onClick={clearFilters} className="ml-auto inline-flex min-h-[34px] items-center rounded-[9px] border px-3 text-[12.5px] font-bold" style={{ background: C.surface, borderColor: C.chipLine, color: C.forest }}>Clear filters</button>}
-          </div>
+            <img src="/roadmap/chevron-down.svg" alt="" width={14} height={14} className="pointer-events-none absolute right-3 block" />
+          </label>
+        )}
+      </div>
 
-          {/* board */}
-          <div className="grid grid-cols-1 items-start gap-3 sm:grid-cols-2 xl:grid-cols-4" data-testid="board">
+      {tab === "board" ? (
+        <>
+          <div className="grid grid-cols-1 items-start gap-3.5 sm:grid-cols-2 xl:grid-cols-4" data-testid="board">
             {ROADMAP_COLS.map((col) => {
-              // sort_order ASCENDING, with created_at then id breaking ties —
-              // one comparator, in lib/kanban.ts, so the rendered order and the
-              // drag maths cannot disagree. This used to be a bare filter that
-              // inherited whatever order the fetch returned, so a card kept its
-              // stale position after any optimistic write until a reload.
-              const total = columnCards(cards, board, col.id);
-              const vis = total.filter(passes);
-              const meta = columnMetaLine(col.id, total, nowMs);
-              // FIXED height (h-, not max-h): all four columns run to the same
-              // bottom edge and each scrolls independently, so a 2-card column
-              // shows empty space, not a short box — no ragged bottom.
+              const all = columnCards(cards, board, col.id);
+              const vis = all.filter(passes);
+              const isDone = col.id === "shipped";
+              const showAll = !!expanded[col.id];
+              const shown = isDone || showAll ? vis : vis.slice(0, COLUMN_PREVIEW);
+              const hidden = vis.length - shown.length;
+              const groups = isDone ? doneGroups(vis, releases) : [];
+              const cardProps = (c: KanbanCard) => ({
+                c, release: c.release_id ? releaseById.get(c.release_id) ?? null : null, selected: selId === c.id,
+                onOpen: () => setSelId(c.id),
+                onDragStart: () => { dragId.current = c.id; },
+                onDragEnd: () => { dragId.current = null; setDragOver(null); },
+                onDropBefore: () => handleDrop(col.id, c.id),
+                onDragOverCard: () => setDragOver(col.id),
+              });
               return (
-                <div key={col.id} data-col={col.id} onDragOver={(e) => { if (isAdmin && dragId.current) { e.preventDefault(); setDragOver(col.id); setDropCue(null); } }}
+                <div key={col.id} data-col={col.id} data-testid={`col-${col.id}`}
+                  onDragOver={(e) => { if (isAdmin && dragId.current) { e.preventDefault(); setDragOver(col.id); } }}
                   onDragLeave={() => setDragOver((d) => (d === col.id ? null : d))}
                   onDrop={(e) => { e.preventDefault(); handleDrop(col.id, null); }}
-                  className="flex h-[min(66vh,700px)] flex-col overflow-hidden rounded-[12px] border" style={{ background: C.board, borderColor: dragOver === col.id ? C.accent : C.line }}>
-                  <div className="flex flex-none items-center gap-2 border-b px-3 pb-2.5 pt-2.5" style={{ background: C.surface, borderColor: C.line }}>
-                    <span className="flex h-5 w-5 flex-none items-center justify-center rounded-full text-[11px] font-[800] text-white" style={{ background: C.forestDeep }}>{ROADMAP_COLS.indexOf(col) + 1}</span>
-                    <span className="min-w-0 truncate text-[13px] font-[800]" style={{ color: C.forestDeep }}>{col.title}</span>
-                    <span data-testid={`colcount-${col.id}`} className="ml-auto flex-none rounded-[9px] border px-[7px] py-px text-[11px] font-[800]" style={{ background: C.chipBg, borderColor: C.chipLine, color: C.muted }}>
-                      {vis.length}{vis.length !== total.length ? ` of ${total.length}` : ""}
-                    </span>
+                  className="flex min-w-0 flex-col gap-2.5 rounded-[14px] px-3 py-3.5"
+                  style={{ background: C.column, outline: dragOver === col.id ? `2px solid ${C.accent}` : "none" }}>
+                  <div className="flex items-center gap-2 px-1">
+                    <img src={COL_DOT[col.id]} alt="" width={10} height={10} className="block flex-none" />
+                    <span className="text-[15px] font-bold" style={{ color: C.ink }}>{col.title}</span>
+                    <span className="flex-1" />
+                    <span data-testid={`colcount-${col.id}`} className="rounded-full bg-white px-[9px] py-[3px] text-[11px] font-semibold" style={{ color: C.muted }}>{vis.length}</span>
                   </div>
-                  {meta && <div className="flex-none border-b px-3 pb-2.5 text-[10.5px] font-semibold leading-[1.4]" style={{ background: C.surface, borderColor: C.line, color: C.muted }} data-testid={`colmeta-${col.id}`}>{meta}</div>}
-                  <div className="rm-clist flex flex-1 flex-col gap-2 overflow-y-auto p-[9px]">
-                    {vis.length === 0
-                      ? <div className="px-3 py-4 text-center text-[12px]" style={{ color: C.muted }}>{total.length ? "No card here matches the filters." : `Nothing in ${col.title.toLowerCase()}.`}</div>
-                      : vis.map((c) => <Card key={c.id} c={c} nowMs={nowMs} owner={ownerLabelOf(c)} selected={selId === c.id} draggable={isAdmin}
-                          cue={dropCue === c.id}
-                          onOpen={() => setSelId(c.id)}
-                          onDragStart={() => { dragId.current = c.id; }} onDragEnd={() => { dragId.current = null; setDragOver(null); setDropCue(null); }}
-                          onDragOverCard={() => { setDragOver(col.id); setDropCue(cueFor(c.id, col.id)); }}
-                          onDropBefore={() => handleDrop(col.id, c.id)} />)}
+
+                  {vis.length === 0 && (
+                    <div className="px-1 py-3 text-[12px]" style={{ color: C.muted }}>{all.length ? "Nothing here matches the filters." : "Nothing here yet."}</div>
+                  )}
+
+                  {isDone
+                    ? groups.map((g) => {
+                        const open = isDoneOpen(g.key);
+                        return (
+                          <div key={g.key} data-testid="done-group" data-group={g.release ? g.release.version : "none"} data-open={open ? "1" : "0"} className="flex flex-col rounded-[12px] bg-white">
+                            <button type="button" data-testid="done-group-header" aria-expanded={open} onClick={() => setDoneOpen(g.key, !open)}
+                              className="flex w-full items-center gap-2 py-2.5 pl-2.5 pr-3 text-left">
+                              <img src={open ? "/roadmap/group-open.svg" : "/roadmap/group-closed.svg"} alt="" width={14} height={14} className="block flex-none" />
+                              {g.release && <VersionChip v={g.release.version} />}
+                              <span className="min-w-0 flex-1 truncate text-[13px] font-semibold" style={{ color: C.ink }}>{g.release ? g.release.name : "No release"}</span>
+                              <span data-testid="done-group-count" className="flex-none rounded-full px-[9px] py-[3px] text-[11px] font-semibold" style={{ background: C.mint, color: C.forest }}>{g.cards.length}</span>
+                            </button>
+                            {open && (
+                              <div className="flex flex-col gap-2 px-2 pb-2">
+                                {g.cards.map((c) => <Card key={c.id} {...cardProps(c)} draggable={isAdmin} inDoneGroup />)}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })
+                    : shown.map((c) => <Card key={c.id} {...cardProps(c)} draggable={isAdmin} />)}
+
+                  <div className="flex items-center px-1 pt-1">
+                    {!isDone && vis.length > COLUMN_PREVIEW && (
+                      <button type="button" data-testid={`more-${col.id}`} onClick={() => setExpanded((e) => ({ ...e, [col.id]: !showAll }))}
+                        className="text-[13px] font-semibold" style={{ color: C.link }}>{showAll ? "Show less" : `Show ${hidden} more`}</button>
+                    )}
+                    <span className="flex-1" />
+                    {isAdmin && (
+                      <button type="button" data-testid={`add-${col.id}`} onClick={() => setAdding({ stage: col.id, releaseId: releaseF || null })}
+                        className="text-[13px] font-semibold" style={{ color: C.link }}>+ Add</button>
+                    )}
                   </div>
                 </div>
               );
             })}
           </div>
 
-      <Footer cards={boardCards} nowMs={nowMs} boardName={b.name} />
+          <div data-testid="legend" className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-2 text-[12px] font-medium" style={{ color: C.muted }}>
+            <span>Left edge shows priority:</span>
+            {(["High", "Medium", "Low"] as const).map((p) => (
+              <span key={p} className="flex items-center gap-1.5"><span className="h-3.5 w-[3px]" style={{ background: PRIORITY_COLOR[p] }} />{p}</span>
+            ))}
+            {isAdmin && <span className="font-normal">Drag a card to another column to change its status.</span>}
+          </div>
+        </>
+      ) : (
+        <RoadmapReleases board={board} cards={boardCards} releases={releases} today={today} viewer={viewer} isAdmin={isAdmin}
+          passes={matchesSearchWho} onOpenCard={setSelId}
+          onAddWork={(releaseId) => setAdding({ stage: releaseId ? "in_plan" : "ideas", releaseId })}
+          onEditRelease={(r) => setReleaseDialog({ existing: r })} />
+      )}
 
-      {sel && <Drawer card={sel} nowMs={nowMs} boardName={BOARDS[boardOf(sel)].name} owner={sel.owner_user_id ? ownerName(ownersById.get(sel.owner_user_id)) : cardOwnerLabel(sel)}
-        isAdmin={isAdmin} owners={owners}
-        column={columnCards(cards, boardOf(sel), sel.stage)}
-        onStep={(delta) => {
-          const t = stepTarget(columnCards(cards, boardOf(sel), sel.stage), sel.id, delta);
-          if (t) void reorder(sel.id, t.beforeId);
-        }}
-        onClose={() => setSelId(null)}
-        onMove={(to) => moveCard(sel.id, to)}
-        onPatch={(patch) => isAdmin && api.updateCard(sel.id, patch)}
-        onDelete={async () => { if (isAdmin) { await api.deleteCard(sel.id); setSelId(null); } }} />}
+      {sel && (
+        <WorkPanel card={sel} releases={releases} isAdmin={isAdmin}
+          createdBy={creator ? firstName(ownerName(creator)) : null}
+          onClose={() => setSelId(null)}
+          onPatch={(patch) => patchCard(sel.id, patch)}
+          onMove={(stage) => void moveCard(sel.id, stage)}
+          onDelete={async () => { if (isAdmin) { await api.deleteCard(sel.id); setSelId(null); } }} />
+      )}
 
-      {creating && isAdmin && <CreateModal board={board} owners={owners} onClose={() => setCreating(false)}
-        onCreate={async (input) => { await api.createCard({ ...input, board }); setCreating(false); }} />}
+      {adding && isAdmin && (
+        <AddWorkDialog target={adding} release={adding.releaseId ? releaseById.get(adding.releaseId) ?? null : null}
+          onClose={() => setAdding(null)} onCreate={(title) => createWork(title, adding)} />
+      )}
+
+      {releaseDialog && isAdmin && (
+        <ReleaseDialog existing={releaseDialog.existing} releases={releases} today={today}
+          onClose={() => setReleaseDialog(null)}
+          onSave={(input) => releaseDialog.existing
+            ? rel.updateRelease(releaseDialog.existing.id, input)
+            : rel.createRelease(input as Required<typeof input>)} />
+      )}
     </div>
   );
 }
 
-// ── state bar ──────────────────────────────────────────────────────────────
-function StateBar({ bar, staleOnly, onShowStuck }: { bar: ReturnType<typeof deriveStateBar>; staleOnly: boolean; onShowStuck: () => void }) {
+function TabButton({ active, onClick, label, count, testid }: { active: boolean; onClick: () => void; label: string; count: string; testid: string }) {
   return (
-    <div data-testid="statebar" className="mb-3 flex max-h-[130px] flex-col gap-[9px] rounded-[12px] border p-[11px_15px]" style={{ background: C.surface, borderColor: C.line }}>
-      <div className="flex flex-wrap items-center gap-0">
-        <Stat><b data-stat="total">{bar.total}</b><u>{plural(bar.total, "card")} on this board</u></Stat>
-        <Stat><b data-stat="inprogress">{bar.inProgress}</b><u>in progress</u></Stat>
-        <Stat><b data-stat="fresh">{bar.fresh}</b><u>changed in {FRESH_WINDOW_DAYS} days</u></Stat>
-        <Stat>
-          <b data-stat="stale" style={{ color: bar.stale ? C.warnInk : C.forestDeep }}>{bar.stale}</b>
-          {bar.stale && !staleOnly
-            ? <button data-testid="stuck-affordance" data-kind="button" onClick={onShowStuck} className="border-0 bg-transparent p-0 text-left text-[11px] font-[800] underline underline-offset-2" style={{ color: C.forest }}>sitting too long — show only these</button>
-            : <u data-testid="stuck-affordance" data-kind="text">sitting too long{staleOnly && bar.stale ? " — showing these" : ""}</u>}
-        </Stat>
-      </div>
-      {/* fix 5: the estimate sentence is its own full-width, LEFT-aligned row —
-          not right-aligned beside the stats, where it wrapped with "show" alone
-          on the last line. text-wrap:pretty forbids that orphaned last line. */}
-      <div data-testid="estrow" className="w-full border-t pt-[9px] text-left text-[11px] font-semibold leading-[1.4] no-underline" style={{ borderColor: C.hair, color: C.muted, textWrap: "pretty" }}>
-        {bar.withEstimate > 0 ? (
-          <><b data-stat="esthours" style={{ color: C.forestDeep }}>{bar.estimatedHours}h</b> estimated across the {plural(bar.withEstimate, "card")} that carr{bar.withEstimate === 1 ? "ies" : "y"} an estimate · {bar.noEstimate} carr{bar.noEstimate === 1 ? "ies" : "y"} none, so this is not the board&rsquo;s total</>
-        ) : (
-          <span data-stat="esthours" data-none="1">no card carries an estimate yet, so there is no board total to show</span>
-        )}
-      </div>
+    <button type="button" role="tab" aria-selected={active} data-testid={testid} onClick={onClick}
+      className="-mb-px flex items-center gap-2 border-b-[3px] pb-3 pt-1" style={{ borderColor: active ? C.forest : "transparent" }}>
+      <span className={`text-[15px] ${active ? "font-bold" : "font-medium"}`} style={{ color: active ? C.ink : C.muted }}>{label}</span>
+      <span className="rounded-full px-[9px] py-[3px] text-[11px] font-semibold" style={active ? { background: C.mint, color: C.forest } : { background: C.grey, color: C.muted }}>{count}</span>
+    </button>
+  );
+}
+
+function StatsRow({ stats }: { stats: ReturnType<typeof deriveStats> }) {
+  const { next, working, scrum, outThisYear } = stats;
+  const workingSub = [`${working.ryan} Ryan`, `${working.scrumlaunch} ScrumLaunch`, ...(working.none ? [`${working.none} no one yet`] : [])].join(" · ");
+  const scrumSub = scrum.total === 0 ? "Nothing waiting"
+    : scrum.releases === 0 ? "Not in a release yet"
+    : `Across ${scrum.releases} ${scrum.releases === 1 ? "release" : "releases"}${scrum.noRelease ? `, ${scrum.noRelease} not in one` : ""}`;
+  const last = outThisYear.last;
+  const lastDay = last ? doneYmd(last) : null;
+  return (
+    <div data-testid="stats" className="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <Stat label="NEXT RELEASE" big={next ? `${next.version} ${next.name}`.trim() : "None planned"} small={next ? `Target ${fmtDayWithWeekday(next.out_by)}` : "Add a release to see it here"} testid="stat-next" bigSize={18} />
+      <Stat label="BEING WORKED ON" big={String(working.total)} small={workingSub} testid="stat-working" />
+      <Stat label="WAITING ON SCRUMLAUNCH" big={String(scrum.total)} small={scrumSub} testid="stat-scrum" />
+      <Stat label="OUT THIS YEAR" big={String(outThisYear.total)} small={last && lastDay ? `Last one: ${last.title}, ${fmtDay(lastDay)}` : "Nothing out yet this year"} testid="stat-out" />
     </div>
   );
 }
-function Stat({ children }: { children: React.ReactNode }) {
-  return <div className="flex flex-col gap-px border-l px-[17px] first:border-l-0 first:pl-0 [&>b]:text-[16px] [&>b]:font-[800] [&>b]:leading-[1.15] [&>u]:text-[10.5px] [&>u]:font-[800] [&>u]:not-italic [&>u]:uppercase [&>u]:tracking-[0.06em] [&>u]:no-underline" style={{ borderColor: C.hair, color: C.muted }}>{children}</div>;
+function Stat({ label, big, small, testid, bigSize = 24 }: { label: string; big: string; small: string; testid: string; bigSize?: number }) {
+  return (
+    <div data-testid={testid} className="flex min-w-0 flex-col gap-1 rounded-[12px] bg-white px-4 py-3.5">
+      <span className="text-[10px] font-semibold tracking-[0.6px]" style={{ color: C.faint }}>{label}</span>
+      <span data-testid={`${testid}-value`} className="truncate font-bold" style={{ color: C.ink, fontSize: bigSize }}>{big}</span>
+      <span data-testid={`${testid}-sub`} className="truncate text-[12px]" style={{ color: C.muted }}>{small}</span>
+    </div>
+  );
 }
 
-// ── card ───────────────────────────────────────────────────────────────────
-function Card({ c, nowMs, owner, selected, draggable, cue, onOpen, onDragStart, onDragEnd, onDragOverCard, onDropBefore }: {
-  c: KanbanCard; nowMs: number; owner: string; selected: boolean; draggable: boolean; cue: boolean;
-  onOpen: () => void; onDragStart: () => void; onDragEnd: () => void;
-  onDragOverCard: () => void; onDropBefore: () => void;
+function Card({ c, release, selected, draggable, inDoneGroup, onOpen, onDragStart, onDragEnd, onDropBefore, onDragOverCard }: {
+  c: KanbanCard; release: Release | null; selected: boolean; draggable: boolean; inDoneGroup?: boolean;
+  onOpen: () => void; onDragStart: () => void; onDragEnd: () => void; onDropBefore: () => void; onDragOverCard: () => void;
 }) {
-  const pri = cardPriority(c);
-  const est = cardEstimatedHours(c);
-  const stale = isStale(c, nowMs);
-  const isIdea = c.stage === "ideas";
-  const days = daysInColumn(c, nowMs);
-  // meta bits: priority always; an age/date on every card EXCEPT ideas; est if present.
-  const bits: string[] = [];
-  if (pri) bits.push(pri);
-  if (c.stage === "shipped") bits.push(`shipped ${dfull(movedAtMs(c))}`);
-  else if (!isIdea) bits.push(days === 0 ? "moved today" : `moved ${days}d ago`);
-  if (est !== null) bits.push(`${est}h`);
-
+  const done = c.stage === "shipped";
+  const pri = priorityOf(c);
+  const doneDay = done ? doneYmd(c) : null;
   return (
-    // Discovery is on the card, not in a tooltip: a hover title tells you
-    // nothing until you've already guessed the card is clickable (and it drew on
-    // top of the neighbour's meta row, hiding it). A muted "Details ›" marker
-    // sits in the corner of EVERY card, visible whether or not the pointer is
-    // near — aria-hidden because the whole card is already a labelled button.
-    // A card is BOTH a drag source and a drop target: dropping onto it inserts
-    // the dragged card ahead of it, which is what reordering inside a column
-    // is. stopPropagation keeps the column's own "drop at the end" handler from
-    // also firing on the same event.
-    <div data-testid="card" data-card-id={c.id} data-stage={c.stage} data-idea={isIdea ? "1" : "0"} data-cue={cue ? "1" : "0"}
+    <div data-testid="card" data-card-id={c.id} data-stage={c.stage} role="button" tabIndex={0} aria-label={`Open ${c.title}`}
       draggable={draggable} onDragStart={onDragStart} onDragEnd={onDragEnd}
       onDragOver={(e) => { if (!draggable) return; e.preventDefault(); e.stopPropagation(); onDragOverCard(); }}
       onDrop={(e) => { e.preventDefault(); e.stopPropagation(); onDropBefore(); }}
-      onClick={onOpen} role="button" tabIndex={0} aria-label={`Open ${c.title}`}
-      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen(); } }}
-      className="relative flex-none cursor-pointer overflow-hidden rounded-[10px] border pl-[11px] pr-[10px] pt-[9px] pb-2"
-      style={{ background: C.surface, borderColor: selected ? C.accent : C.line, boxShadow: selected ? `0 0 0 2px rgba(53,199,127,.22)` : "0 1px 1px rgba(13,59,46,.03)" }}>
-      {cue && <span aria-hidden data-testid="drop-cue" className="absolute inset-x-0 top-0 h-[3px]" style={{ background: C.accent }} />}
-      <span aria-hidden className="absolute inset-y-0 left-0 w-[3px]" style={{ background: pri ? PRI_STRIPE[pri] : C.chipLine }} />
-      <div className="flex items-start gap-2 text-[12.5px] font-[800] leading-[1.3]" style={{ color: C.forestDeep }}>
-        <span className="min-w-0 flex-1">{c.title}</span>
-        <em data-testid="card-owner" className="max-w-[86px] flex-none truncate rounded-[7px] border px-[6px] py-px text-[10.5px] font-[800] not-italic"
-          style={owner ? { background: C.chipBg, borderColor: C.chipLine, color: C.muted } : { background: C.critBg, borderColor: C.critLine, color: C.critInk }}>{owner || "No owner"}</em>
-        <span data-testid="card-details" aria-hidden className="flex-none whitespace-nowrap pt-px text-[10px] font-[800] not-italic" style={{ color: C.muted2 }}>Details ›</span>
-      </div>
-      <div data-testid="card-meta" className="mt-[5px] flex flex-wrap items-center gap-x-[7px] gap-y-1 text-[10.5px] font-semibold" style={{ color: C.muted }}>
-        {bits.map((bt, i) => <span key={i} className="flex items-center gap-[7px]">{i > 0 && <i className="not-italic opacity-50">·</i>}<i className="not-italic">{bt}</i></span>)}
-        {/* stuck chip carries NO number — the meta line already says how long. Never on an idea. */}
-        {stale && !isIdea && <em data-testid="chip-stuck" className="rounded-[7px] border px-[6px] py-px text-[10px] font-[800] not-italic" style={{ background: C.warnBg, borderColor: C.warnLine, color: C.warnInk }}>stuck</em>}
-        {wantsEstimate(c) && <em data-testid="chip-noest" className="rounded-[7px] border px-[6px] py-px text-[10px] font-[800] not-italic" style={{ background: C.chipBg, borderColor: C.chipLine, color: C.muted }}>no estimate</em>}
-      </div>
+      onClick={onOpen} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen(); } }}
+      className="flex cursor-pointer flex-col gap-2.5 rounded-[12px] p-3"
+      style={{
+        background: inDoneGroup ? C.softer : C.white,
+        borderLeft: done ? undefined : `3px solid ${pri ? PRIORITY_COLOR[pri] : C.line}`,
+        boxShadow: selected ? `0 0 0 2px ${C.accent}` : undefined,
+      }}>
+      <span className={`text-[14px] ${done ? "font-medium" : "font-semibold"}`} style={{ color: done ? C.muted : C.ink }}>{c.title}</span>
+      <span className="flex items-center gap-1.5">
+        {release && !inDoneGroup && <VersionChip v={release.version} />}
+        <WhoChip who={c.assignee} />
+        <span className="flex-1" />
+        {doneDay && <span data-testid="card-done-date" className="text-[11px] font-semibold" style={{ color: C.faint }}>{fmtDay(doneDay)}</span>}
+      </span>
     </div>
   );
 }
 
-// ── drawer ─────────────────────────────────────────────────────────────────
-function Drawer({ card, nowMs, boardName, owner, isAdmin, owners, column, onStep, onClose, onMove, onPatch, onDelete }: {
-  card: KanbanCard; nowMs: number; boardName: string; owner: string; isAdmin: boolean; owners: KanbanOwner[];
-  column: KanbanCard[]; onStep: (delta: -1 | 1) => void;
-  onClose: () => void; onMove: (to: string) => void; onPatch: (patch: { owner_user_id?: string | null; data?: Record<string, unknown> }) => void; onDelete: () => void;
+function AddWorkDialog({ target, release, onClose, onCreate }: {
+  target: AddTarget; release: Release | null; onClose: () => void; onCreate: (title: string) => Promise<void>;
 }) {
-  const stale = isStale(card, nowMs);
-  const limit = staleLimitFor(card.stage);
-  const est = cardEstimatedHours(card);
-  const colTitle = ROADMAP_COLS.find((x) => x.id === card.stage)?.title ?? card.stage;
-  const desc = typeof card.data?.description === "string" ? card.data.description.trim() : "";
-  const movedDays = daysInColumn(card, nowMs);
-  const createdDays = daysSince(createdAtMs(card), nowMs);
-  // "a card in the In plan column" — NOT "a card in ${lower}", which produced
-  // the awkward "a card in in plan" doubling the eye pass caught.
-  const note = card.stage === "shipped"
-    ? "Shipped cards are never flagged — there is nothing left to chase."
-    : stale
-      ? `Flagged: nothing has happened to this card in ${plural(movedDays, "day")}, and a card in the ${colTitle} column is flagged past ${limit}.`
-      : `Not flagged: a card in the ${colTitle} column is flagged once it goes ${limit} days without moving, and this one is at ${movedDays}.`;
-
-  return (
-    <>
-      <div data-testid="scrim" onClick={onClose} className="fixed inset-0 z-[40]" style={{ background: "rgba(7,42,32,.28)" }} />
-      <aside data-testid="drawer" className="fixed inset-y-0 right-0 z-[41] flex w-[392px] max-w-[94vw] flex-col border-l" style={{ background: C.surface, borderColor: C.line, boxShadow: "-6px 0 22px rgba(7,42,32,.13)" }}>
-        <div className="flex items-start gap-2.5 border-b px-[17px] pb-3 pt-[15px]" style={{ borderColor: C.line }}>
-          <div className="min-w-0">
-            <h3 className="m-0 mb-1 text-[15.5px] leading-[1.3]" style={{ color: C.forestDeep }} data-testid="drawer-title">{card.title}</h3>
-            <div className="text-[11.5px] font-bold" style={{ color: C.muted }}>{boardName} · {colTitle}</div>
-          </div>
-          <button type="button" onClick={onClose} aria-label="Close" className="ml-auto flex h-[30px] w-[30px] flex-none items-center justify-center rounded-[8px] border text-[15px]" style={{ borderColor: C.chipLine, color: C.muted }}>✕</button>
-        </div>
-        <div className="flex-1 overflow-y-auto px-[17px] py-3.5">
-          <Sec title="WHAT THIS IS">
-            <div className="text-[12px] leading-[1.5]" style={{ color: desc ? C.ink : C.muted }}>
-              {desc || "No description written. This card cannot be picked up without asking somebody — every card here that nobody wrote a line for has to be explained out loud in standup instead."}
-            </div>
-          </Sec>
-          <Sec title="THE CARD">
-            <Row label="Owner">{owner ? owner : <span style={{ color: C.critInk }}>Nobody — this card cannot be worked</span>}</Row>
-            <Row label="Priority">{cardPriority(card) ?? "—"}</Row>
-            <Row label="Estimate">{est !== null ? plural(est, "hour") : <span style={{ color: C.muted }}>None typed in{wantsEstimate(card) ? ` — a card in the ${colTitle} column should carry one` : ""}</span>}</Row>
-            <Row label="Created">{dfull(createdAtMs(card))} · {plural(createdDays, "day")} ago</Row>
-            <Row label={card.stage === "shipped" ? "Shipped" : "Last moved"}>{dfull(movedAtMs(card))} · {movedDays === 0 ? "today" : `${plural(movedDays, "day")} ago`}</Row>
-          </Sec>
-          <Sec title={`WHY IT IS ${stale ? "FLAGGED" : "NOT FLAGGED"}`}>
-            <div data-testid="drawer-flag" className="text-[12px] leading-[1.5]" style={{ color: stale ? C.warnInk : C.muted }}>{note}</div>
-          </Sec>
-          {isAdmin && (
-            <Sec title="MOVE IT">
-              <div className="flex flex-wrap gap-1.5">
-                {ROADMAP_COLS.map((x) => (
-                  <button key={x.id} type="button" data-testid={`move-${x.id}`} disabled={x.id === card.stage} onClick={() => onMove(x.id)}
-                    className="min-h-[30px] rounded-[8px] border px-2.5 text-[11.5px] font-bold disabled:cursor-default"
-                    style={x.id === card.stage ? { background: C.mint, borderColor: "#bfe0cd", color: C.forestDeep } : { background: C.surface, borderColor: C.chipLine, color: C.forest }}>
-                    {x.id === card.stage ? "Here now" : x.title}
-                  </button>
-                ))}
-              </div>
-              <div className="mt-[7px] text-[12px]" style={{ color: C.muted }}>Moving a card to another column resets its stale clock. Dragging it between columns does the same thing. Changing its order inside a column does not — that is not a move.</div>
-            </Sec>
-          )}
-          {isAdmin && <OrderInColumn card={card} column={column} colTitle={colTitle} onStep={onStep} />}
-          {isAdmin && <DrawerEdit card={card} owners={owners} onPatch={onPatch} onDelete={onDelete} />}
-        </div>
-      </aside>
-    </>
-  );
-}
-// Up / down inside the column. Drag is unusable on a phone, and this board is
-// read on one — these buttons are the same write path as the drag (they hand a
-// drop target to the same planReorder), not a second implementation. An end
-// button is disabled rather than hidden so the position readout beside it
-// stays meaningful.
-function OrderInColumn({ card, column, colTitle, onStep }: {
-  card: KanbanCard; column: KanbanCard[]; colTitle: string; onStep: (delta: -1 | 1) => void;
-}) {
-  const pos = column.findIndex((c) => c.id === card.id);
-  // pos === -1 would mean the drawer is open on a card that is not in the
-  // column it claims to be in — render nothing rather than a lying "0 of N".
-  if (pos === -1) return null;
-  const btn = (enabled: boolean) => ({
-    background: C.surface, borderColor: C.chipLine,
-    color: enabled ? C.forest : C.muted2, opacity: enabled ? 1 : 0.45,
-  });
-  return (
-    <Sec title="ORDER IN THIS COLUMN">
-      <div className="flex items-center gap-1.5">
-        <button type="button" data-testid="order-up" disabled={pos === 0} onClick={() => onStep(-1)}
-          className="min-h-[30px] rounded-[8px] border px-2.5 text-[11.5px] font-bold disabled:cursor-default" style={btn(pos > 0)}>↑ Move up</button>
-        <button type="button" data-testid="order-down" disabled={pos === column.length - 1} onClick={() => onStep(1)}
-          className="min-h-[30px] rounded-[8px] border px-2.5 text-[11.5px] font-bold disabled:cursor-default" style={btn(pos < column.length - 1)}>↓ Move down</button>
-        <span data-testid="order-pos" className="text-[11.5px] font-bold" style={{ color: C.muted }}>{pos + 1} of {plural(column.length, "card")} in {colTitle}</span>
-      </div>
-      <div className="mt-[7px] text-[12px]" style={{ color: C.muted }}>Order is the one thing on this board nobody derives — it is whatever you put it in, and it survives a reload. Changing it does not touch the stale clock.</div>
-    </Sec>
-  );
-}
-
-function Sec({ title, children }: { title: string; children: React.ReactNode }) {
-  return <div className="mb-4"><h4 className="m-0 mb-1.5 text-[10.5px] font-[800] tracking-[0.08em]" style={{ color: C.muted }}>{title}</h4>{children}</div>;
-}
-function Row({ label, children }: { label: string; children: React.ReactNode }) {
-  return <div className="flex gap-2.5 border-b py-[5px] text-[12.5px] last:border-b-0" style={{ borderColor: C.hair }}><b className="flex-none pt-px text-[11.5px] font-bold" style={{ width: 108, color: C.muted }}>{label}</b><span className="min-w-0 flex-1 font-semibold" style={{ color: C.ink }}>{children}</span></div>;
-}
-
-// Compact admin edit (owner / priority / estimate) + delete. The mockup drawer
-// is read + move; owner and priority are the fields it calls out as problems
-// ("No owner — cannot be worked"), so admins get a way to fix them here.
-function DrawerEdit({ card, owners, onPatch, onDelete }: { card: KanbanCard; owners: KanbanOwner[]; onPatch: (patch: { owner_user_id?: string | null; data?: Record<string, unknown> }) => void; onDelete: () => void }) {
-  const est = cardEstimatedHours(card);
-  const [confirm, setConfirm] = useState(false);
-  return (
-    <Sec title="EDIT">
-      <div className="flex flex-col gap-2">
-        <label className="flex items-center gap-2 text-[11.5px]" style={{ color: C.muted }}>
-          <span className="w-[70px]">Owner</span>
-          <select value={card.owner_user_id ?? ""} onChange={(e) => onPatch({ owner_user_id: e.target.value || null })} className="min-h-[30px] flex-1 rounded-[8px] border px-2 text-[12px]" style={{ borderColor: C.chipLine }}>
-            <option value="">No owner</option>
-            {owners.map((o) => <option key={o.id} value={o.id}>{ownerName(o)}</option>)}
-          </select>
-        </label>
-        <label className="flex items-center gap-2 text-[11.5px]" style={{ color: C.muted }}>
-          <span className="w-[70px]">Priority</span>
-          <select value={cardPriority(card) ?? ""} onChange={(e) => onPatch({ data: { ...card.data, priority: e.target.value || null } })} className="min-h-[30px] flex-1 rounded-[8px] border px-2 text-[12px]" style={{ borderColor: C.chipLine }}>
-            <option value="">—</option><option>High</option><option>Medium</option><option>Low</option>
-          </select>
-        </label>
-        <label className="flex items-center gap-2 text-[11.5px]" style={{ color: C.muted }}>
-          <span className="w-[70px]">Estimate</span>
-          <input defaultValue={est ?? ""} inputMode="numeric" placeholder="hours" onBlur={(e) => { const v = e.target.value.trim(); const n = v === "" ? null : Number(v); if (v === "" || (Number.isFinite(n) && (n as number) >= 0)) onPatch({ data: { ...card.data, estimated_hours: n } }); }} className="min-h-[30px] flex-1 rounded-[8px] border px-2 text-[12px]" style={{ borderColor: C.chipLine }} />
-        </label>
-        {confirm
-          ? <div className="flex items-center gap-2 text-[11.5px]" style={{ color: C.critInk }}>Delete this card?<button type="button" onClick={onDelete} className="rounded-[7px] px-2 py-1 font-bold text-white" style={{ background: C.critInk }}>Delete</button><button type="button" onClick={() => setConfirm(false)} className="rounded-[7px] border px-2 py-1 font-bold" style={{ borderColor: C.chipLine, color: C.muted }}>Cancel</button></div>
-          : <button type="button" onClick={() => setConfirm(true)} className="self-start text-[11.5px] font-bold underline" style={{ color: C.critInk }}>Delete card</button>}
-      </div>
-    </Sec>
-  );
-}
-
-// ── create ─────────────────────────────────────────────────────────────────
-function CreateModal({ board, owners, onClose, onCreate }: { board: RoadmapBoard; owners: KanbanOwner[]; onClose: () => void; onCreate: (input: { title: string; stage: string; owner_user_id: string | null; data: Record<string, unknown> }) => void }) {
   const [title, setTitle] = useState("");
-  const [stage, setStage] = useState("ideas");
-  const [ownerId, setOwnerId] = useState("");
-  const [pri, setPri] = useState("Medium");
-  const [desc, setDesc] = useState("");
-  const [est, setEst] = useState("");
-  const save = () => {
-    if (!title.trim()) return;
-    const n = est.trim() === "" ? null : Number(est);
-    onCreate({ title: title.trim(), stage, owner_user_id: ownerId || null, data: { priority: pri, description: desc.trim(), planned_date: null, ...(n !== null && Number.isFinite(n) ? { estimated_hours: n } : {}) } });
+  const [busy, setBusy] = useState(false);
+  const where = release ? `to ${release.version} ${release.name}`.trim() : `in ${ROADMAP_COLS.find((x) => x.id === target.stage)?.title ?? "Ideas"}`;
+  const submit = async () => {
+    const t = title.trim();
+    if (!t || busy) return;
+    setBusy(true);
+    await onCreate(t);
   };
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" role="dialog" aria-modal="true">
-      <button type="button" aria-label="Close" onClick={onClose} className="absolute inset-0" style={{ background: "rgba(7,42,32,.4)" }} />
-      <div className="relative w-full max-w-[440px] rounded-[16px] border p-5" style={{ background: C.surface, borderColor: C.line }}>
-        <h2 className="m-0 mb-3 text-[16px] font-[800]" style={{ color: C.forestDeep }}>New card · {BOARDS[board].name}</h2>
-        <div className="flex flex-col gap-2.5">
-          <input autoFocus value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Title" className="min-h-[36px] rounded-[8px] border px-2.5 text-[13px]" style={{ borderColor: C.chipLine }} />
-          <div className="flex gap-2">
-            <select value={stage} onChange={(e) => setStage(e.target.value)} className="min-h-[36px] flex-1 rounded-[8px] border px-2 text-[12.5px]" style={{ borderColor: C.chipLine }}>{ROADMAP_COLS.map((x) => <option key={x.id} value={x.id}>{x.title}</option>)}</select>
-            <select value={pri} onChange={(e) => setPri(e.target.value)} className="min-h-[36px] flex-1 rounded-[8px] border px-2 text-[12.5px]" style={{ borderColor: C.chipLine }}><option>High</option><option>Medium</option><option>Low</option></select>
-          </div>
-          <div className="flex gap-2">
-            <select value={ownerId} onChange={(e) => setOwnerId(e.target.value)} className="min-h-[36px] flex-1 rounded-[8px] border px-2 text-[12.5px]" style={{ borderColor: C.chipLine }}><option value="">No owner</option>{owners.map((o) => <option key={o.id} value={o.id}>{ownerName(o)}</option>)}</select>
-            <input value={est} onChange={(e) => setEst(e.target.value)} inputMode="numeric" placeholder="Estimate (h)" className="min-h-[36px] w-[130px] rounded-[8px] border px-2 text-[12.5px]" style={{ borderColor: C.chipLine }} />
-          </div>
-          <textarea value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="Description (optional)" rows={3} className="rounded-[8px] border px-2.5 py-2 text-[12.5px]" style={{ borderColor: C.chipLine }} />
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="Add work">
+      <button type="button" aria-label="Close" onClick={onClose} className="absolute inset-0" style={{ background: "rgba(7,42,32,.28)" }} />
+      <form data-testid="add-dialog" onSubmit={(e) => { e.preventDefault(); void submit(); }}
+        className="relative flex w-full max-w-[456px] flex-col gap-4 rounded-[16px] bg-white p-[22px]" style={{ boxShadow: "0 8px 28px rgba(0,0,0,.12)" }}>
+        <div>
+          <h2 className="m-0 text-[19px] font-bold" style={{ color: C.ink }}>Add work</h2>
+          <p className="m-0 mt-1 text-[13px]" style={{ color: C.muted }}>Adding {where}. You can set the rest once it is added.</p>
         </div>
-        <div className="mt-4 flex justify-end gap-2">
-          <button type="button" onClick={onClose} className="rounded-[8px] border px-3 py-1.5 text-[12.5px] font-bold" style={{ borderColor: C.chipLine, color: C.muted }}>Cancel</button>
-          <button type="button" onClick={save} disabled={!title.trim()} className="rounded-[8px] px-3 py-1.5 text-[12.5px] font-bold text-white disabled:opacity-40" style={{ background: C.forestDeep }}>Create</button>
+        <input data-testid="add-title" autoFocus value={title} onChange={(e) => setTitle(e.target.value)} placeholder="What is the work?"
+          className="w-full rounded-[10px] border bg-white px-3 py-2.5 text-[14px] outline-none focus:border-[#2cdb87]" style={{ borderColor: C.line, color: C.ink }} />
+        <div className="flex justify-end gap-2.5">
+          <button type="button" onClick={onClose} className="rounded-[8px] border bg-white px-3.5 py-[9px] text-[13px] font-semibold" style={{ borderColor: C.line, color: C.ink }}>Cancel</button>
+          <button type="submit" data-testid="add-save" disabled={!title.trim() || busy} className="rounded-[8px] px-3.5 py-[9px] text-[13px] font-semibold text-white disabled:opacity-40" style={{ background: C.forest }}>Add</button>
         </div>
-      </div>
+      </form>
     </div>
   );
-}
-
-// ── disclosure footer ──────────────────────────────────────────────────────
-function Footer({ cards, nowMs, boardName }: { cards: KanbanCard[]; nowMs: number; boardName: string }) {
-  const withEst = cards.filter((c) => cardEstimatedHours(c) !== null);
-  const noEst = cards.length - withEst.length;
-  const hrs = withEst.reduce((s, c) => s + (cardEstimatedHours(c) ?? 0), 0);
-  const stale = cards.filter((c) => isStale(c, nowMs));
-  const staleIdeas = stale.filter((c) => c.stage === "ideas").length;
-  const byP: Record<string, number> = {};
-  for (const c of cards) { const p = cardPriority(c) ?? "None"; byP[p] = (byP[p] ?? 0) + 1; }
-  const topP = Object.keys(byP).sort((a, b) => byP[b] - byP[a])[0] ?? "None";
-  const noOwn = cards.filter((c) => !c.owner_user_id).length;
-  const noDesc = cards.filter((c) => !(typeof c.data?.description === "string" && (c.data.description as string).trim())).length;
-
-  const text = cards.length === 0
-    ? `This board has no cards yet. Ages are counted in whole days from today, ${dfull(nowMs)}. Nothing on this page writes anywhere except moving a card between columns, which resets that card's clock, and changing a card's order inside a column, which does not — reordering is not a move.`
-    : `This board holds ${plural(cards.length, "card")}; each column header counts the cards in it, and shows "N of M" when a filter is hiding some. ` +
-      `A card is flagged when it has not moved for longer than its column allows: ${STALE_ACTIVE_DAYS} days for In plan and In progress, ${STALE_IDEA_DAYS} days for Ideas, and never for Shipped — ` +
-      `${stale.length} card${stale.length === 1 ? " is" : "s are"} flagged right now, of which ${staleIdeas} ${staleIdeas === 1 ? "is an idea" : "are ideas"}. ` +
-      `An idea card prints no age and no flag: a column of ages nobody acts on is noise. The age of the oldest idea is on the column line above, any single idea's age is in its drawer, and "only what is stuck" still finds them. ` +
-      `Changed in ${FRESH_WINDOW_DAYS} days means the card was created or moved to another column inside that window; ideas do not change column, so for an idea it means it was written down that recently. ` +
-      `Estimates are typed by hand and most cards do not carry one: ${withEst.length} of ${cards.length} do, totalling ${plural(hrs, "hour")}, and the other ${noEst} have none — which is why this page prints no board total, because a total across ${withEst.length} of ${plural(cards.length, "card")} is not the board's total. ` +
-      `Priority is typed by hand too, and ${byP[topP]} of the ${plural(cards.length, "card")} ${cards.length === 1 ? "is" : "are"} marked ${topP}${byP[topP] > cards.length / 2 ? ", so priority is not currently separating one card from another" : ""}. ` +
-      `${noOwn} card${noOwn === 1 ? " has" : "s have"} no owner and ${noDesc} ${noDesc === 1 ? "has" : "have"} no description written, so those cannot be picked up without asking somebody. ` +
-      `Ages are counted in whole days from today, ${dfull(nowMs)}. Nothing on this page writes anywhere except moving a card between columns, which resets that card's clock, and changing a card's order inside a column, which does not — reordering is not a move.`;
-
-  return <div data-testid="footer" className="mt-3.5 rounded-[12px] border p-[14px_16px] text-[12px] leading-[1.65]" style={{ background: C.surface, borderColor: C.line, color: C.muted }}>{text}</div>;
 }

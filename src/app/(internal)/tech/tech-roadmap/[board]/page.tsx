@@ -2,6 +2,7 @@
 // An unknown board redirects to App rather than 404ing a typo'd link. Viewing
 // keeps the clubhouse gate; mutations inside RoadmapView are gated on is_admin.
 
+import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import PagePermissionGuard from "@/components/PagePermissionGuard";
 import RoadmapView from "../RoadmapView";
@@ -17,7 +18,10 @@ export default async function TechRoadmapBoardPage({
 
   return (
     <PagePermissionGuard page="tech">
-      <RoadmapView board={board as RoadmapBoard} />
+      {/* RoadmapView reads ?tab= with useSearchParams, which needs a Suspense boundary. */}
+      <Suspense fallback={null}>
+        <RoadmapView board={board as RoadmapBoard} />
+      </Suspense>
     </PagePermissionGuard>
   );
 }

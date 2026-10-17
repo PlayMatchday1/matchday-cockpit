@@ -41,7 +41,17 @@ export type KanbanCard = {
   // updated_at lower bound. useKanbanBoard selects "*", so it appears
   // automatically once the migration lands — no client change needed.
   stage_entered_at?: string | null;
+  /* TECH ROADMAP ONLY, migration 0225. Optional so the type holds for the other boards, which never
+   * carry them. release_id: the one release this card is in, or none. assignee: who is DOING the
+   * work, 'ryan' | 'scrumlaunch' | null ("No one yet"), and nothing to do with owner_user_id, which
+   * on the roadmap now means who ADDED the card. done_at: stamped and cleared by a database trigger
+   * on the move into and out of Done; the client only mirrors it so the screen does not lag. */
+  release_id?: string | null;
+  assignee?: RoadmapAssignee | null;
+  done_at?: string | null;
 };
+
+export type RoadmapAssignee = "ryan" | "scrumlaunch";
 
 export type ChecklistItem = {
   id: string;
@@ -272,11 +282,12 @@ export const vcIsWarm = (raw: unknown): boolean => {
   return vals.some((v) => /^(yes|warm)/i.test(String(v ?? "").trim()));
 };
 
+// Stored values are unchanged; only the labels are the plain-English ones.
 export const TECH_ROADMAP_STAGES: StageDef[] = [
   { id: "ideas", title: "Ideas" },
-  { id: "in_plan", title: "In Plan" },
-  { id: "in_progress", title: "In Progress" },
-  { id: "shipped", title: "Shipped" },
+  { id: "in_plan", title: "Up next" },
+  { id: "in_progress", title: "Working on it" },
+  { id: "shipped", title: "Done" },
 ];
 
 // ---------------- stage age (Field Pipeline) ----------------

@@ -264,12 +264,9 @@ console.log("\nI. THE VIEW'S TWO WRITE PATHS STAY SEPARATE");
   is("  the move callback is admin-gated", /const moveCard = useCallback\(async[\s\S]{0,120}if \(!isAdmin\) return;/.test(view), true);
   is("  the drop router is admin-gated", /const handleDrop = useCallback[\s\S]{0,260}if \(!id \|\| !isAdmin\) return;/.test(view), true);
   is("  cards are only draggable for an admin", /draggable=\{isAdmin\}/.test(view), true);
-  is("  the up/down controls are behind isAdmin", /\{isAdmin && <OrderInColumn/.test(view), true);
-  // The disclosure footer must not still claim a column move is the only write.
-  is("  the footer no longer says moving between columns is the only write",
-    /except moving a card between columns, which resets that card's clock\.`/.test(view), false);
-  is("  CONTROL: the footer sentence is present in its corrected form",
-    /and changing a card's order inside a column, which does not/.test(view), true);
+  /* Removed 2026-10-17 with Roadmap 2.0, which deleted the features they covered at Ryan's request:
+   * the drawer's up/down buttons (OrderInColumn) and the explainer footer. Their assertion bodies
+   * are gone, not edited; nothing else in this section changed. */
 }
 
 console.log(`\n${fails.length ? "FAIL" : "PASS"} — ${pass} assertions, ${fails.length} failed`);

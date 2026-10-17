@@ -19,7 +19,8 @@ import {
 export type CardPatch = Partial<
   /* venue_id is here so the Field Pipeline can write the stage and the binding in ONE update — the
    * move to Confirmed and the field it is about are one action, and two updates could half-land. */
-  Pick<KanbanCard, "title" | "stage" | "owner_user_id" | "sort_order" | "data" | "stage_entered_at" | "venue_id">
+  Pick<KanbanCard, "title" | "stage" | "owner_user_id" | "sort_order" | "data" | "stage_entered_at" | "venue_id"
+    | "release_id" | "assignee" | "done_at">
 >;
 
 export type NewCardInput = {
@@ -30,6 +31,8 @@ export type NewCardInput = {
   // Tech Roadmap only: which board the new card belongs to. Field Pipeline omits
   // it and the DB default ('app') applies harmlessly (it never reads `board`).
   board?: "app" | "clubhouse";
+  // Tech Roadmap only (migration 0225). Omitted, the columns default to null.
+  release_id?: string | null;
 };
 
 export type KanbanApi = {
@@ -136,6 +139,7 @@ export function useKanbanBoard(boardType: BoardType): KanbanApi {
         .insert({
           board_type: boardType,
           ...(input.board ? { board: input.board } : {}),
+          ...(input.release_id ? { release_id: input.release_id } : {}),
           title: input.title,
           stage: input.stage,
           owner_user_id: input.owner_user_id,
