@@ -36,7 +36,7 @@ const BOARDS: Record<RoadmapBoard, { name: string; sub: string }> = {
 };
 
 const COL_DOT: Record<string, string> = {
-  ideas: "/roadmap/col-ideas.svg", in_plan: "/roadmap/col-upnext.svg", in_progress: "/roadmap/col-working.svg", shipped: "/roadmap/col-done.svg",
+  ideas: "/roadmap/col-ideas.svg", in_plan: "/roadmap/col-upnext.svg", in_progress: "/roadmap/col-working.svg", ready: "/roadmap/col-ready.svg", shipped: "/roadmap/col-done.svg",
 };
 const COLUMN_PREVIEW = 6;
 
@@ -230,7 +230,10 @@ export default function RoadmapView({ board }: { board: RoadmapBoard }) {
 
       {tab === "board" ? (
         <>
-          <div className="grid grid-cols-1 items-start gap-3.5 sm:grid-cols-2 xl:grid-cols-4" data-testid="board">
+          {/* Five columns need room: from tablet width up they sit in one row, each at least 200px, sharing
+              the width when it fits and scrolling sideways inside the board when it does not. A phone
+              stacks them. */}
+          <div className="flex flex-col gap-3.5 sm:flex-row sm:items-start sm:overflow-x-auto sm:pb-2 [&>[data-col]]:sm:min-w-[200px] [&>[data-col]]:sm:flex-1 [&>[data-col]]:sm:basis-0" data-testid="board">
             {ROADMAP_COLS.map((col) => {
               const all = columnCards(cards, board, col.id);
               const vis = all.filter(passes);
@@ -272,11 +275,16 @@ export default function RoadmapView({ board }: { board: RoadmapBoard }) {
                         return (
                           <div key={g.key} data-testid="done-group" data-group={g.release ? g.release.version : "none"} data-open={open ? "1" : "0"} className="flex flex-col rounded-[12px] bg-white">
                             <button type="button" data-testid="done-group-header" aria-expanded={open} onClick={() => setDoneOpen(g.key, !open)}
-                              className="flex w-full items-start gap-2 py-2.5 pl-2.5 pr-3 text-left [&>img]:mt-[3px]">
-                              <img src={open ? "/roadmap/group-open.svg" : "/roadmap/group-closed.svg"} alt="" width={14} height={14} className="block flex-none" />
-                              {g.release && <VersionChip v={g.release.version} />}
-                              <span className="min-w-0 flex-1 break-words text-[13px] font-semibold leading-tight" style={{ color: C.ink }}>{g.release ? g.release.name : "No release"}</span>
-                              <span data-testid="done-group-count" className="flex-none rounded-full px-[9px] py-[3px] text-[11px] font-semibold" style={{ background: C.mint, color: C.forest }}>{g.cards.length}</span>
+                              className="flex w-full flex-col gap-1.5 py-2.5 pl-2.5 pr-3 text-left">
+                              {/* The name gets its own line under the chip: beside the chevron, chip and count a
+                                  five-column board leaves it too narrow, and words broke mid-word. */}
+                              <span className="flex w-full items-center gap-2">
+                                <img src={open ? "/roadmap/group-open.svg" : "/roadmap/group-closed.svg"} alt="" width={14} height={14} className="block flex-none" />
+                                {g.release ? <VersionChip v={g.release.version} /> : <span className="text-[13px] font-semibold" style={{ color: C.ink }}>No release</span>}
+                                <span className="flex-1" />
+                                <span data-testid="done-group-count" className="flex-none rounded-full px-[9px] py-[3px] text-[11px] font-semibold" style={{ background: C.mint, color: C.forest }}>{g.cards.length}</span>
+                              </span>
+                              {g.release && <span data-testid="done-group-name" className="break-words pl-[22px] text-[13px] font-semibold leading-tight" style={{ color: C.ink }}>{g.release.name}</span>}
                             </button>
                             {open && (
                               <div className="flex flex-col gap-2 px-2 pb-2">
@@ -355,16 +363,20 @@ function TabButton({ active, onClick, label, count, testid }: { active: boolean;
 }
 
 function StatsRow({ stats }: { stats: ReturnType<typeof deriveStats> }) {
-  const { next, working, scrum, outThisYear } = stats;
+  const { next, working, ready, scrum, outThisYear } = stats;
   const workingSub = [`${working.ryan} Ryan`, `${working.scrumlaunch} ScrumLaunch`, ...(working.none ? [`${working.none} no one yet`] : [])].join(" · ");
   const scrumSub = scrum.total === 0 ? "Nothing waiting"
     : scrum.releases === 0 ? "Not in a release yet"
     : `Across ${scrum.releases} ${scrum.releases === 1 ? "release" : "releases"}${scrum.noRelease ? `, ${scrum.noRelease} not in one` : ""}`;
   const { last, lastDay } = outThisYear;
+  const readySub = ready.total === 0 ? "Nothing waiting to go out"
+    : ready.releases === 0 ? "Not in a release yet"
+    : `Across ${ready.releases} ${ready.releases === 1 ? "release" : "releases"}${ready.noRelease ? `, ${ready.noRelease} not in one` : ""}`;
   return (
-    <div data-testid="stats" className="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+    <div data-testid="stats" className="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
       <Stat label="NEXT RELEASE" big={next ? `${next.version} ${next.name}`.trim() : "None planned"} small={next ? `Target ${fmtDayWithWeekday(next.out_by)}` : "Add a release to see it here"} testid="stat-next" bigSize={18} />
       <Stat label="BEING WORKED ON" big={String(working.total)} small={workingSub} testid="stat-working" />
+      <Stat label="READY FOR RELEASE" big={String(ready.total)} small={readySub} testid="stat-ready" />
       <Stat label="WAITING ON SCRUMLAUNCH" big={String(scrum.total)} small={scrumSub} testid="stat-scrum" />
       <Stat label="OUT THIS YEAR" big={String(outThisYear.total)} small={last && lastDay ? `Last one: ${last.title}, ${fmtDay(lastDay)}` : "Nothing out yet this year"} testid="stat-out" />
     </div>

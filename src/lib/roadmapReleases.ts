@@ -174,6 +174,7 @@ export function parseHours(input: string): number | null | undefined {
 export type RoadmapStats = {
   next: Release | null;
   working: { total: number; ryan: number; scrumlaunch: number; none: number };
+  ready: { total: number; releases: number; noRelease: number };
   scrum: { total: number; releases: number; noRelease: number };
   outThisYear: { total: number; last: KanbanCard | null; lastDay: string | null };
 };
@@ -181,7 +182,8 @@ export type RoadmapStats = {
 /**
  * All four are facts about the BOARD, never the filtered view.
  *  · Next release: the not-yet-Out release with the earliest out-by date.
- *  · Being worked on: cards in Working on it, split by who.
+ *  · Being worked on: cards in Working on it, split by who. Ready for release is NOT counted here.
+ *  · Ready for release: cards built and tested but not out, and how many releases they are in.
  *  · Waiting on ScrumLaunch: ScrumLaunch's open cards, Up next plus Working on it.
  *  · Out this year: Done cards whose SHOWN date (shownDoneYmd) falls in this calendar year and that
  *    are not sitting inside a release that is still being built. A release's done cards count once
@@ -198,6 +200,13 @@ export function deriveStats(cards: KanbanCard[], releases: Release[], today: str
     ryan: inProg.filter((c) => c.assignee === "ryan").length,
     scrumlaunch: inProg.filter((c) => c.assignee === "scrumlaunch").length,
     none: inProg.filter((c) => !c.assignee).length,
+  };
+
+  const readyCards = cards.filter((c) => c.stage === "ready");
+  const ready = {
+    total: readyCards.length,
+    releases: new Set(readyCards.map((c) => c.release_id).filter(Boolean)).size,
+    noRelease: readyCards.filter((c) => !c.release_id).length,
   };
 
   const scrumOpen = cards.filter((c) => c.assignee === "scrumlaunch" && (c.stage === "in_plan" || c.stage === "in_progress"));
@@ -219,7 +228,7 @@ export function deriveStats(cards: KanbanCard[], releases: Release[], today: str
   // Latest shown day wins; on a tie, the card moved to Done last.
   const key = (c: KanbanCard) => `${shown.get(c.id) ?? ""}|${c.done_at ?? ""}`;
   const last = out.reduce<KanbanCard | null>((m, c) => (!m || key(c) > key(m) ? c : m), null);
-  return { next, working, scrum, outThisYear: { total: out.length, last, lastDay: last ? shown.get(last.id) ?? null : null } };
+  return { next, working, ready, scrum, outThisYear: { total: out.length, last, lastDay: last ? shown.get(last.id) ?? null : null } };
 }
 
 // ── the Done column, one block per release ─────────────────────────────────

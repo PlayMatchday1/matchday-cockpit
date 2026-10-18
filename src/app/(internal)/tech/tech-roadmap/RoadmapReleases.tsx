@@ -263,7 +263,11 @@ function ReleaseCard({ r, cards, allCards, today, viewer, isAdmin, passes, onOpe
   const openWork = cards.filter((c) => c.stage !== "shipped").sort(byCreated);
   const ryan = cards.filter((c) => c.assignee === "ryan").length;
   const scrum = cards.filter((c) => c.assignee === "scrumlaunch").length;
+  // Ready for release is further along than Working on it but not done: it gets its own count and
+  // its own (violet) segment of the bar, after the green done segment.
+  const readyN = cards.filter((c) => c.stage === "ready").length;
   const frac = cards.length ? done.length / cards.length : 0;
+  const readyFrac = cards.length ? readyN / cards.length : 0;
   const hours = totalEstimate(cards);
 
   return (
@@ -284,10 +288,12 @@ function ReleaseCard({ r, cards, allCards, today, viewer, isAdmin, passes, onOpe
           <span className="flex min-w-[130px] flex-col gap-[5px]">
             <span className="flex items-baseline gap-1.5 whitespace-nowrap text-[12px] font-medium" style={{ color: C.muted }}>
               <span data-testid="release-progress">{done.length} of {cards.length} done</span>
+              {readyN > 0 && <span data-testid="release-ready" style={{ color: C.readyInk }}>· {readyN} ready</span>}
               {hours !== null && <span data-testid="release-hours" title="Total of the estimates set on this release's work">· {fmtHours(hours)}</span>}
             </span>
             <span className="relative h-1.5 w-[130px] overflow-hidden rounded-[3px]" style={{ background: "#e9ece8" }}>
               <span className="absolute inset-y-0 left-0 rounded-[3px]" style={{ width: `${frac * 100}%`, background: C.accent }} />
+              {readyN > 0 && <span data-testid="release-ready-bar" className="absolute inset-y-0 rounded-[3px]" style={{ left: `${frac * 100}%`, width: `${readyFrac * 100}%`, background: C.ready }} />}
             </span>
           </span>
           <ReleaseStatusChip status={status} />

@@ -287,6 +287,7 @@ export const TECH_ROADMAP_STAGES: StageDef[] = [
   { id: "ideas", title: "Ideas" },
   { id: "in_plan", title: "Up next" },
   { id: "in_progress", title: "Working on it" },
+  { id: "ready", title: "Ready for release" },
   { id: "shipped", title: "Done" },
 ];
 

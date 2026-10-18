@@ -15,6 +15,8 @@ export const ROADMAP_COLS = [
   { id: "ideas", title: "Ideas" },
   { id: "in_plan", title: "Up next" },
   { id: "in_progress", title: "Working on it" },
+  // Built and tested, players do not have it yet (migration 0226). Not done: no done_at.
+  { id: "ready", title: "Ready for release" },
   { id: "shipped", title: "Done" },
 ] as const;
 export type RoadmapStage = (typeof ROADMAP_COLS)[number]["id"];

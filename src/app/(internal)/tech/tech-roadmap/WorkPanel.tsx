@@ -126,7 +126,7 @@ export default function WorkPanel({ card, releases, isAdmin, createdBy, onClose,
             return (
               <button key={col.id} type="button" data-testid={`status-${col.id}`} aria-pressed={on} disabled={!isAdmin}
                 onClick={() => { if (!on) onMove(col.id); }}
-                className={`min-w-0 flex-1 rounded-[8px] px-1 py-2 text-[13px] ${on ? "font-semibold" : "font-medium"} disabled:cursor-default`}
+                className={`min-w-0 flex-1 rounded-[8px] px-1 py-2 text-[13px] leading-tight ${on ? "font-semibold" : "font-medium"} disabled:cursor-default`}
                 style={on ? { background: C.forest, color: C.white } : { color: C.ink }}>{col.title}</button>
             );
           })}
