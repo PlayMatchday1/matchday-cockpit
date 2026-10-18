@@ -9,6 +9,7 @@
 // (YYYY-MM-DD, bounding the WALL-CLOCK date — exactly the operator's "day"),
 // sortColumn/sortDirection, page/limit. We over-fetch nothing and page to the end.
 
+import { pathEnv, LOCAL_CONFINED_REFUSAL, type PathEnv } from "@/lib/localMode";
 import { authenticateMatchOpsRead } from "@/lib/matchOpsAuth";
 import { cityNameFor } from "@/lib/cityScope";
 import { apiGet, StageHostGuardError, StageConfigError, type MatchdayEnv } from "@/lib/matchdayStageApi";
@@ -20,7 +21,8 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
 
-const isEnv = (x: string): x is MatchdayEnv => x === "staging" || x === "production";
+// "local" only while local mode is on (src/lib/localMode.ts pathEnv); staging/production unchanged.
+const isEnv = (x: string): x is PathEnv => pathEnv(x) !== null;
 const PAGE_LIMIT = 100;
 
 export async function GET(req: Request, ctx: { params: Promise<{ env: string }> }) {
@@ -68,6 +70,13 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string }> 
     }
     /* THE FIELD'S OWN CAPACITY, ATTACHED LAST. After the confinement filter above, deliberately:
      * this read decorates the matches that survived the scope and can never add one back. */
+    /* LOCAL MODE: both decorations read production Supabase keyed by field and match ids, and the seed's ids
+     * collide with real ones. Skipped, and the spot tiles say why (spotsError), rather than showing real numbers
+     * against fake matches. Confined accounts never use local mode. */
+    if (env === "local") {
+      if (auth.confinedCity) return Response.json({ error: LOCAL_CONFINED_REFUSAL }, { status: 403 });
+      return Response.json({ date, env, matches, spotsError: "Spot breakdown and field capacity read production Supabase; off in local mode." });
+    }
     const decorated = withVenueMaxPlayers(matches, await fetchVenueMaxPlayers(auth.supabase));
     /* WHO HOLDS EACH SPOT (paid / member / promo), from the rosters these same list rows carry —
      * counts only; the roster is not sent. Also after the scope. See src/lib/gamedaySpots.ts. */

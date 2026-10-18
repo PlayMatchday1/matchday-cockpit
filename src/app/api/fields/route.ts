@@ -18,6 +18,7 @@
  * stored row.
  */
 
+import { localModeOn, localModeRefusal } from "@/lib/localMode";
 import { authenticateMatchOpsRead } from "@/lib/matchOpsAuth";
 import { makeServerClient } from "@/lib/supabaseServer";
 import { randomUUID } from "node:crypto";
@@ -47,26 +48,52 @@ type ApiField = {
   city?: { id?: number; name?: string | null } | null;
 };
 
-const listFields = (env: "production" | "staging") => apiGet<ApiField[]>(env, "/admin/fields");
+const listFields = (env: "production" | "staging" | "local") => apiGet<ApiField[]>(env, "/admin/fields");
 
 /** READ-BACK. No single-field GET exists, so this is the only honest way to see a stored row. */
-async function readBack(env: "production" | "staging", id: number): Promise<ApiField | null> {
+async function readBack(env: "production" | "staging" | "local", id: number): Promise<ApiField | null> {
   const rows = await listFields(env).catch(() => [] as ApiField[]);
   return rows.find((f) => Number(f.id) === Number(id)) ?? null;
 }
 
-const ENV = "production" as const;
+// LOCAL MODE (src/lib/localMode.ts): the local backend instead of production. Read per request, never cached.
+const envNow = (): "production" | "local" => (localModeOn() ? "local" : "production");
 
 export async function GET(req: Request) {
   const auth = await authenticateMatchOpsRead(req);
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
 
+  /* LOCAL MODE: fields and cities from the local backend. The venue links and match counts are PRODUCTION Supabase
+   * rows keyed by field id, and the seed's ids collide with real fields, so they are not read; Delete is off (its
+   * guard is that count). */
+  if (envNow() === "local") {
+    try {
+      const [fields, cities] = await Promise.all([
+        listFields("local"),
+        apiGet<{ id: number; name: string }[]>("local", "/cities").catch(() => [] as { id: number; name: string }[]),
+      ]);
+      return Response.json({
+        fields: fields.map((f) => ({
+          id: Number(f.id), title: f.title ?? "", abbr: f.abbr ?? "", address: f.address ?? "",
+          zipcode: f.zipcode ?? null, description: f.description ?? "", parkingNote: f.parkingNote ?? "",
+          lat: f.lat ?? null, lng: f.lng ?? null, cityId: f.cityId ?? null, cityName: f.city?.name ?? null,
+          recommendedPlayerCount: f.recommendedPlayerCount ?? null, orderPosition: f.orderPosition ?? null,
+          cover: f.cover ?? null, images: (f.images ?? []).map((i) => ({ id: i.id, url: i.url })), matchCount: 0,
+        })),
+        links: [], activeFieldIds: [], cities: cities.map((c) => ({ id: Number(c.id), name: c.name })),
+        deleteEnabled: false, localMode: true,
+      });
+    } catch (e) {
+      return Response.json({ error: e instanceof Error ? e.message.slice(0, 200) : "read failed" }, { status: 500 });
+    }
+  }
+
   try {
     const sb = makeServerClient();
     const [fields, linkRes, cities] = await Promise.all([
-      listFields(ENV),
+      listFields(envNow()),
       sb.from("fin_venue_fields").select("mdapi_field_id,fin_venue_id"),
-      apiGet<{ id: number; name: string }[]>(ENV, "/cities").catch(() => [] as { id: number; name: string }[]),
+      apiGet<{ id: number; name: string }[]>(envNow(), "/cities").catch(() => [] as { id: number; name: string }[]),
     ]);
     if (linkRes.error) throw new Error(`fin_venue_fields read failed: ${linkRes.error.message}`);
     const links = (linkRes.data ?? []) as Link[];
@@ -161,7 +188,7 @@ export async function POST(req: Request) {
    * surface reads. `applied` asks whether the row is there with the title we sent. */
   const { outcome, error, logged } = await recordWrite(
     {
-      env: ENV, source: "Fields · create",
+      env: envNow(), source: "Fields · create",
       actorName: auth.email, actorEmail: auth.email, saveId,
       matchId: null, matchName: null,
       method: "POST", path: "/admin/fields",
@@ -169,9 +196,9 @@ export async function POST(req: Request) {
       applied: (_before, after) => after.found === true,
     },
     {
-      readResource: async () => (newId == null ? { found: false } : { found: (await readBack(ENV, newId)) != null }),
+      readResource: async () => (newId == null ? { found: false } : { found: (await readBack(envNow(), newId)) != null }),
       write: async () => {
-        const r = await apiWrite<{ id: number }>(ENV, "POST", "/admin/fields", body, {
+        const r = await apiWrite<{ id: number }>(envNow(), "POST", "/admin/fields", body, {
           canEditMatches: true, email: auth.email,
         });
         newId = Number(r?.id) || null;
@@ -182,7 +209,7 @@ export async function POST(req: Request) {
     supabaseLogStore(),
   );
 
-  const row = newId == null ? null : await readBack(ENV, newId);
+  const row = newId == null ? null : await readBack(envNow(), newId);
   const verdict = row != null ? "LANDED" : outcome === "unknown" ? "UNKNOWN" : "FAILED";
   return Response.json({
     verdict, id: newId, row, logged,
@@ -212,7 +239,7 @@ export async function PUT(req: Request) {
   const saveId = randomUUID();
   const { outcome, error, logged } = await recordWrite(
     {
-      env: ENV, source: "Fields · update",
+      env: envNow(), source: "Fields · update",
       actorName: auth.email, actorEmail: auth.email, saveId,
       matchId: null, matchName: null,
       method: "PUT", path: `/admin/fields/${id}`,
@@ -221,14 +248,14 @@ export async function PUT(req: Request) {
       applied: (_before, after) => keys.every((k) => String((after as Record<string, unknown>)[k] ?? "") === String(body[k] ?? "")),
     },
     {
-      readResource: async () => (await readBack(ENV, id)) as unknown as Record<string, unknown> ?? {},
-      write: () => apiWrite(ENV, "PUT", `/admin/fields/${id}`, body, { canEditMatches: true, email: auth.email }),
+      readResource: async () => (await readBack(envNow(), id)) as unknown as Record<string, unknown> ?? {},
+      write: () => apiWrite(envNow(), "PUT", `/admin/fields/${id}`, body, { canEditMatches: true, email: auth.email }),
       now: () => new Date().toISOString(),
     },
     supabaseLogStore(),
   );
 
-  const row = await readBack(ENV, id);
+  const row = await readBack(envNow(), id);
   const landed = row != null && keys.every((k) => String((row as unknown as Record<string, unknown>)[k] ?? "") === String(body[k] ?? ""));
   const verdict = landed ? "LANDED" : row == null ? "UNKNOWN" : outcome === "unknown" ? "UNKNOWN" : "FAILED";
   return Response.json({ verdict, id, sent: body, row, logged, error: error ? error.message.slice(0, 200) : null },
@@ -244,6 +271,7 @@ export async function PUT(req: Request) {
  *   3. TYPED NAME — the client requires the exact field name before it will call this, and the
  *      route requires it too, because a client-side confirmation is a courtesy. */
 export async function DELETE(req: Request) {
+  { const local = localModeRefusal("Deleting a field (its guard counts production matches)"); if (local) return local; }
   const auth = await authenticateMatchOpsRead(req);
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
 
@@ -261,7 +289,7 @@ export async function DELETE(req: Request) {
 
   try {
     const sb = makeServerClient();
-    const rows = await listFields(ENV);
+    const rows = await listFields(envNow());
     const field = rows.find((f) => Number(f.id) === id);
     if (!field) return Response.json({ error: `field ${id} is not in /admin/fields` }, { status: 404 });
     if (confirm !== String(field.title ?? "").trim()) {
@@ -277,7 +305,7 @@ export async function DELETE(req: Request) {
     const saveId = randomUUID();
     const { outcome, error } = await recordWrite(
       {
-        env: ENV, source: "Fields · delete",
+        env: envNow(), source: "Fields · delete",
         actorName: auth.email, actorEmail: auth.email, saveId,
         matchId: null, matchName: null,
         method: "DELETE", path: `/admin/fields/${id}`,
@@ -287,13 +315,13 @@ export async function DELETE(req: Request) {
         applied: (_before, after) => after.present === false,
       },
       {
-        readResource: async () => ({ present: (await readBack(ENV, id)) != null }),
-        write: () => apiWrite(ENV, "DELETE", `/admin/fields/${id}`, undefined, { canEditMatches: true, email: auth.email }),
+        readResource: async () => ({ present: (await readBack(envNow(), id)) != null }),
+        write: () => apiWrite(envNow(), "DELETE", `/admin/fields/${id}`, undefined, { canEditMatches: true, email: auth.email }),
         now: () => new Date().toISOString(),
       },
       supabaseLogStore(),
     );
-    const gone = (await readBack(ENV, id)) == null;
+    const gone = (await readBack(envNow(), id)) == null;
     return Response.json({
       verdict: gone ? "LANDED" : outcome === "unknown" ? "UNKNOWN" : "FAILED",
       id, error: error ? error.message.slice(0, 200) : null,

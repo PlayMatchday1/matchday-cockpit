@@ -19,6 +19,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useAuth, canAccess } from "@/lib/useAuth";
 import FieldCoversSection from "@/components/covers/FieldCoversSection";
+import { useCoversStatus } from "@/components/covers/coversClient";
+import { LOCAL_PAGES } from "@/lib/matchEnv";
 import {
   FORMATS, PITCH_OPTIONS, formatShort, recommendationReadout, missingRequired,
   updateBody, deleteBlock, validPhone,
@@ -63,6 +65,8 @@ function seedOf(row: Record<string, unknown>): Record<string, unknown> {
 }
 
 export default function FieldsView() {
+  const coversStatus = useCoversStatus();
+  const coversOn = coversStatus?.available === true;
   const [data, setData] = useState<Payload | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [q, setQ] = useState("");
@@ -319,6 +323,7 @@ export default function FieldsView() {
   /* LOAD THE VENUE PICTURE FOR THE OPEN FIELD. One GET, matchops-gated, so the section renders
    * with real values for a city manager who cannot change them. */
   const loadVenue = useCallback(async (fieldId: number | null) => {
+    if (LOCAL_PAGES) return; // production finance rows; see the Venue section
     const h = await headers(); if (!h) return;
     setVenueMsg(null); setVenuePick(null); setVenueMode("new");
     const r = await fetch(`/api/venues${fieldId ? `?fieldId=${fieldId}` : ""}`, { headers: h, cache: "no-store" });
@@ -630,6 +635,13 @@ export default function FieldsView() {
               THE REAL GATE IS THE ROUTE: /api/venues refuses POST and PATCH without
               can_access_finance, and capabilities.can() refuses a confined account before the
               is_admin term. A disabled input is a courtesy. */}
+          {/* LOCAL MODE: the venue rows are PRODUCTION finance data keyed by field id, and the seed's field ids are
+              real fields' ids, so neither section renders (and /api/venues refuses in local mode). */}
+          {LOCAL_PAGES ? (
+            <Sect title="Venue & cost" tag="Clubhouse only">
+              <p className="fv-lock" data-testid="fv-venue-local">Venues are off in local mode: they are production finance rows, and a seed field&rsquo;s id is a real field&rsquo;s id.</p>
+            </Sect>
+          ) : (<>
           <Sect title="Venue & cost" tag="Clubhouse only">
             {!canFinance && (
               <p className="fv-lock" data-testid="fv-venue-locked">
@@ -786,6 +798,7 @@ export default function FieldsView() {
             {venueMsg && <p className={"fv-hint" + (venueMsg.bad ? " fv-bad" : "")} data-testid="fv-venue-msg">{venueMsg.text}</p>}
           </Sect>
           )}
+          </>)}
 
           {/* "NOTES", NOT "DESCRIPTION". The section held Description AND Parking note, so naming
               it after one of its two fields was wrong on its own — and it stacked the same word
@@ -838,7 +851,8 @@ export default function FieldsView() {
                   (GET /api/covers/status); when it ships, the "Cover image" control below is the same Default and
                   should fold into this section rather than show twice. */}
               <FieldCoversSection key={cur.id} fieldId={cur.id} />
-              <Sect title="Cover image">
+              {/* FOLDED WHEN COVERS ARE AVAILABLE: COVER PHOTOS above shows and replaces the same Default. */}
+              {!coversOn && <Sect title="Cover image">
                 <div className="fv-cover" data-testid="fv-cover">
                   {cur.cover
                     // eslint-disable-next-line @next/next/no-img-element
@@ -857,7 +871,7 @@ export default function FieldsView() {
                         all 44 production fields, do not overlap. */}
                 <PhotoUpload fieldId={cur.id} kind="cover" label={cur.cover ? "Replace cover" : "Add cover"}
                   headers={headers} onDone={() => void load()} />
-              </Sect>
+              </Sect>}
 
               <Sect title="Photos">
                 <div className="fv-imgs" data-testid="fv-photos">
@@ -866,13 +880,14 @@ export default function FieldsView() {
                     <div key={im.id} className="fv-thumb" data-testid="fv-photo">
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img src={im.url} alt="" loading="lazy" />
-                      <button className="fv-rm" data-testid="fv-photo-rm" title={`Remove photo ${im.id}`}
-                        onClick={() => void removePhoto(cur.id!, im.id)} disabled={photoBusy}>×</button>
+                      {!LOCAL_PAGES && <button className="fv-rm" data-testid="fv-photo-rm" title={`Remove photo ${im.id}`}
+                        onClick={() => void removePhoto(cur.id!, im.id)} disabled={photoBusy}>×</button>}
                     </div>
                   ))}
                 </div>
-                <PhotoUpload fieldId={cur.id} kind="gallery" label="Add photo"
-                  headers={headers} onDone={() => void load()} />
+                {LOCAL_PAGES
+                  ? <p className="fv-hint" data-testid="fv-photos-local">Gallery photos are read-only in local mode: an upload attaches through S3&rsquo;s notification, which the local backend does not have.</p>
+                  : <PhotoUpload fieldId={cur.id} kind="gallery" label="Add photo" headers={headers} onDone={() => void load()} />}
                 {photoMsg && <p className={"fv-hint" + (photoMsg.bad ? " fv-bad" : "")} data-testid="fv-photo-msg">{photoMsg.text}</p>}
               </Sect>
             </>

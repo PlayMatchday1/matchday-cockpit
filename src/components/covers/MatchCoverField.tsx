@@ -61,9 +61,10 @@ export default function MatchCoverField({ matchId, fieldDirty = false, manageHre
       if (res.verdict === "LANDED") {
         setPick(undefined); setOpen(false);
         const fresh = (res.body.match as MatchCover | undefined) ?? data;
-        // Offer only the matches that are not already on this cover.
+        // Offer the matches not already on this cover. TICKED only when on Default: a match already on another cover
+        // was given it on purpose, so it starts unticked and shows that cover's name (Ryan, 2026-10-18).
         const offer = fresh.sameSlotUpcoming.filter((m) => (m.cover?.id ?? null) !== pick);
-        setApply(offer.length ? { coverId: pick, coverName: name, ids: new Set(offer.map((m) => m.id)) } : null);
+        setApply(offer.length ? { coverId: pick, coverName: name, ids: new Set(offer.filter((m) => m.cover === null).map((m) => m.id)) } : null);
       }
     } finally { setBusy(false); }
   }
@@ -126,7 +127,7 @@ export default function MatchCoverField({ matchId, fieldDirty = false, manageHre
           {apply && offerRows.length > 0 && (
             <div className="fc-apply" data-testid="fc-apply">
               <b>Apply to other upcoming matches?</b>
-              <div className="fc-why">Same field, same weekday and start time. Uncheck any to leave as they are.</div>
+              <div className="fc-why">Same field, same weekday and start time. Matches on Default are ticked; matches already on another cover are not, so a cover someone chose stays unless you tick it.</div>
               <ul>
                 {offerRows.map((m) => (
                   <li key={m.id}><label>

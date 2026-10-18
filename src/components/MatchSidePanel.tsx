@@ -20,6 +20,7 @@
 import { useState, type ReactNode } from "react";
 import MatchPanel, { type PanelSavedPatch } from "@/components/MatchPanel";
 import ChatPane from "@/app/(internal)/match-ops/match-chats/ChatPane";
+import { LOCAL_PAGES } from "@/lib/matchEnv";
 
 export type PanelTab = "details" | "chat";
 
@@ -83,13 +84,17 @@ export default function MatchSidePanel({
           comes back and the change is gone. */}
       <div className={"gpanel-body" + (tab === "details" ? "" : " gpanel-hide")}
         data-testid="gday-panel-details" aria-hidden={tab !== "details"}>
+        {/* LOCAL MODE: no slot, so no CAMERA section (its rules are production Veo data keyed by field title). */}
         <MatchPanel key={matchId} matchId={String(matchId)} onDirtyChange={onDirtyChange}
-          onSaved={onSaved} onCancelLanded={onCancelLanded} onDeleted={onDeleted} slot={slot} />
+          onSaved={onSaved} onCancelLanded={onCancelLanded} onDeleted={onDeleted} slot={LOCAL_PAGES ? null : slot} />
       </div>
       {/* CHAT RESOLVES THE THREAD THE WAY IT WAS PROVEN TO RESOLVE: chatId is the match api_id. */}
       <div className={"gpanel-body gpanel-chat" + (tab === "chat" ? "" : " gpanel-hide")}
         data-testid="gday-panel-chat" aria-hidden={tab !== "chat"} data-chat-id={String(matchId)}>
-        <ChatPane chatId={String(matchId)} showOnMobile={false} embedded onBack={() => onTab("details")} />
+        {/* LOCAL MODE: a seed match id is a real production match's chat id. Not opened (the routes refuse too). */}
+        {LOCAL_PAGES
+          ? <p className="gpanel-local" data-testid="gday-chat-local" style={{ padding: 16, color: "#4a6157" }}>Match chat is off in local mode: a seed match id is a real production match&rsquo;s chat.</p>
+          : <ChatPane chatId={String(matchId)} showOnMobile={false} embedded onBack={() => onTab("details")} />}
       </div>
     </aside>
   );

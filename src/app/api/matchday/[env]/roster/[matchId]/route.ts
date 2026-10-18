@@ -6,6 +6,7 @@
 // single-shot no-retry all apply. There is no bulk endpoint: the screen fires these
 // one at a time.
 
+import { pathEnv, type PathEnv } from "@/lib/localMode";
 import { randomUUID } from "node:crypto";
 import { authenticateCapability } from "@/lib/capabilityAuth";
 import { authenticateMatchOpsRead, assertMatchInScope } from "@/lib/matchOpsAuth"; // GET is a Match Ops READ (Part D round 2); POST stays admin + EDIT MATCHES
@@ -19,7 +20,8 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
 
-const isEnv = (x: string): x is MatchdayEnv => x === "staging" || x === "production";
+// "local" only while local mode is on (src/lib/localMode.ts pathEnv); staging/production unchanged.
+const isEnv = (x: string): x is PathEnv => pathEnv(x) !== null;
 const num = (v: unknown) => (v === null || v === undefined || v === "" ? null : Number.isFinite(Number(v)) ? Number(v) : null);
 /** Cents on the wire → dollars, to the cent. The ONE conversion for this panel's money. */
 const dollars = (v: unknown) => Math.round(num(v) ?? 0) / 100;
@@ -140,7 +142,10 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string; ma
     const userIds = [...new Set(players.map((p) => p.playerId).filter((x) => Number.isFinite(x)))];
     const memberIds = new Set<number>();
     let membershipRead: string | null = null;
-    if (userIds.length > 0) {
+    /* LOCAL MODE: the mirror holds PRODUCTION user ids and the seed's ids collide with real people, so the
+     * lookup would badge seed players with real memberships. Not read; the badge says unknown. */
+    if (env === "local") membershipRead = "Membership is read from the production mirror; off in local mode.";
+    else if (userIds.length > 0) {
       const { data: subs, error: subErr } = await auth.supabase
         .from("mdapi_subscriptions").select("user_id").eq("status", "ACTIVE").in("user_id", userIds);
       /* THE ERROR TRAVELS WITH THE COUNT. A failed query returns no rows, which renders as "nobody

@@ -21,6 +21,7 @@
  * values, neither of them a number that reaches a person.
  */
 
+import { localModeOn } from "@/lib/localMode";
 import { authenticateMatchOpsRead } from "@/lib/matchOpsAuth";
 import { makeServerClient } from "@/lib/supabaseServer";
 import { randomUUID } from "node:crypto";
@@ -32,9 +33,10 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
 
-const ENV = "production" as const;
+// LOCAL MODE: the local backend instead of production (src/lib/localMode.ts), read per request.
+const envNow = (): "production" | "local" => (localModeOn() ? "local" : "production");
 const path = (fieldId: number) => `/admin/fields/${fieldId}/phone-numbers`;
-const list = (fieldId: number) => apiGet<PhoneRow[]>(ENV, path(fieldId));
+const list = (fieldId: number) => apiGet<PhoneRow[]>(envNow(), path(fieldId));
 
 const fieldIdOf = (req: Request) => {
   const n = Number(new URL(req.url).searchParams.get("fieldId"));
@@ -72,7 +74,7 @@ export async function POST(req: Request) {
   const saveId = randomUUID();
   const { outcome, error } = await recordWrite(
     {
-      env: ENV, source: "Fields · phone added",
+      env: envNow(), source: "Fields · phone added",
       actorName: auth.email, actorEmail: auth.email, saveId,
       matchId: null, matchName: null,
       method: "POST", path: path(fieldId),
@@ -82,7 +84,7 @@ export async function POST(req: Request) {
     },
     {
       readResource: async () => ({ n: (await list(fieldId).catch(() => [])).length }),
-      write: () => apiWrite(ENV, "POST", path(fieldId), { phoneNumber }, { canEditMatches: true, email: auth.email }),
+      write: () => apiWrite(envNow(), "POST", path(fieldId), { phoneNumber }, { canEditMatches: true, email: auth.email }),
       now: () => new Date().toISOString(),
     },
     supabaseLogStore(),
@@ -110,7 +112,7 @@ export async function DELETE(req: Request) {
   const saveId = randomUUID();
   const { outcome, error } = await recordWrite(
     {
-      env: ENV, source: "Fields · phone removed",
+      env: envNow(), source: "Fields · phone removed",
       actorName: auth.email, actorEmail: auth.email, saveId,
       matchId: null, matchName: null,
       method: "DELETE", path: `${path(fieldId)}/${phoneId}`,
@@ -119,7 +121,7 @@ export async function DELETE(req: Request) {
     },
     {
       readResource: async () => ({ n: (await list(fieldId).catch(() => [])).length }),
-      write: () => apiWrite(ENV, "DELETE", `${path(fieldId)}/${phoneId}`, undefined, { canEditMatches: true, email: auth.email }),
+      write: () => apiWrite(envNow(), "DELETE", `${path(fieldId)}/${phoneId}`, undefined, { canEditMatches: true, email: auth.email }),
       now: () => new Date().toISOString(),
     },
     supabaseLogStore(),

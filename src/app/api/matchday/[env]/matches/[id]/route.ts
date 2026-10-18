@@ -5,6 +5,7 @@
 // production bolt still apply. Production PUT is a proven PARTIAL update (Phase 9),
 // so the client sends only the changed keys.
 
+import { pathEnv, type PathEnv } from "@/lib/localMode";
 import { randomUUID } from "node:crypto";
 import { authenticateCapability } from "@/lib/capabilityAuth";
 import { authenticateMatchOpsRead, assertMatchInScope } from "@/lib/matchOpsAuth"; // GET is a Match Ops READ (Part D round 2); PUT stays admin + EDIT MATCHES
@@ -27,7 +28,8 @@ const WRITE_ONLY = new Set<string>(["teamNumbers"]); // accepted on write, absen
 const WRITABLE = new Set<string>([...EDITABLE, ...DATE_PAIR, ...WRITE_ONLY]);
 const READONLY = ["id", "startDate", "endDate", "isCancelled", "teams"];
 
-function isEnv(x: string): x is MatchdayEnv { return x === "staging" || x === "production"; }
+// "local" only while local mode is on (src/lib/localMode.ts pathEnv); staging/production unchanged.
+const isEnv = (x: string): x is PathEnv => pathEnv(x) !== null;
 
 function pickMatch(m: Record<string, unknown>) {
   const out: Record<string, unknown> = {};

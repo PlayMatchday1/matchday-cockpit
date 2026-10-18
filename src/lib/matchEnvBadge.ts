@@ -5,9 +5,13 @@
 // (its own tone + a "LIVE" label), not a colour swap on the same text.
 
 export type BadgeEnv = "staging" | "production";
+/** The Gameday Ops board and match panel only: they also run against the local backend in local mode. */
+export type DrawerEnv = BadgeEnv | "local";
 
-export function envBadge(env: BadgeEnv): { label: string; tone: "prod" | "stage" } {
+export function envBadge(env: DrawerEnv): { label: string; tone: "prod" | "stage" } {
   return env === "production"
     ? { label: "PRODUCTION — LIVE EDITS", tone: "prod" }
-    : { label: "STAGING · GUARDED", tone: "stage" };
+    : env === "local"
+      ? { label: "LOCAL · SEED DATA (localhost)", tone: "stage" }
+      : { label: "STAGING · GUARDED", tone: "stage" };
 }

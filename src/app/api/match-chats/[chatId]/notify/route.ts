@@ -15,6 +15,7 @@
 // doesn't block the rest; per-recipient outcome is recorded in the
 // audit row's recipients jsonb.
 
+import { localModeRefusal } from "@/lib/localMode";
 import Telnyx from "telnyx";
 import { authenticateCrm } from "@/lib/crmAuth";
 import { assertMatchInScope } from "@/lib/matchOpsAuth";
@@ -46,6 +47,7 @@ function matchApiIdFrom(chatId: string): number | null {
 // ---------------- GET: recipient preview ----------------
 
 export async function GET(req: Request, ctx: RouteCtx) {
+  { const local = localModeRefusal("Texting a match's players"); if (local) return local; }
   const auth = await authenticateCrm(req);
   if (!auth.ok) {
     return Response.json({ error: auth.error }, { status: auth.status });
@@ -113,6 +115,7 @@ function parseUserIds(raw: unknown): { ids: number[] | null; error: string | nul
 }
 
 export async function POST(req: Request, ctx: RouteCtx) {
+  { const local = localModeRefusal("Texting a match's players"); if (local) return local; }
   const startedAt = Date.now();
   const auth = await authenticateCrm(req);
   if (!auth.ok) {

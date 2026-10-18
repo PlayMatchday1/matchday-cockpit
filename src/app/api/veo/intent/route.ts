@@ -13,11 +13,13 @@
 // one EDIT MATCHES gate and one recordWrite() into change_log. The order is flag first, name
 // second — this route owns the source of truth, and a name write that fails leaves the flag
 // flipped and the chip showing a derived unsynced state. See src/lib/veoNameSync.ts.
+import { localModeRefusal } from "@/lib/localMode";
 import { authenticateCrm } from "@/lib/crmAuth";
 
 export const runtime = "nodejs";
 
 export async function GET(req: Request) {
+  { const local = localModeRefusal("The camera flag"); if (local) return local; }
   const auth = await authenticateCrm(req);
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   const matchApiId = Number(new URL(req.url).searchParams.get("matchApiId"));
@@ -30,6 +32,7 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
+  { const local = localModeRefusal("The camera flag"); if (local) return local; }
   const auth = await authenticateCrm(req);
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   const body = (await req.json().catch(() => ({}))) as { matchApiId?: unknown; enabled?: unknown };

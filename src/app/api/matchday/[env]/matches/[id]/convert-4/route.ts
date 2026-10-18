@@ -27,6 +27,7 @@
  * sets a capacity of 28 that nothing derives. Ours is derivable and even. Do not reconcile them.
  */
 
+import { pathEnv, type PathEnv } from "@/lib/localMode";
 import { randomUUID } from "node:crypto";
 import { authenticateCapability } from "@/lib/capabilityAuth";
 import { apiGet, apiWrite } from "@/lib/matchdayStageApi";
@@ -42,7 +43,8 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
 
-const isEnv = (e: string): e is "production" | "staging" => e === "production" || e === "staging";
+// "local" only while local mode is on (src/lib/localMode.ts pathEnv); staging/production unchanged.
+const isEnv = (x: string): x is PathEnv => pathEnv(x) !== null;
 
 /** The operating timezone's today, as TEXT. The only Date in this file, and it never touches a
  *  match's startDate — see convertRefusal. */
@@ -68,7 +70,7 @@ const toPlayers = (m: ApiMatch): ConvertPlayer[] =>
     };
   });
 
-async function planFor(env: "production" | "staging", id: string) {
+async function planFor(env: PathEnv, id: string) {
   const m = await apiGet<ApiMatch>(env, `/admin/matches/${id}`);
   const teamCount = (m.teams ?? []).length;
   const players = toPlayers(m);

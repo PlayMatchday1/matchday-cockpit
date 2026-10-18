@@ -23,6 +23,7 @@
 // CONFINED ACCOUNTS ARE REFUSED, and it costs nothing to arrange: authenticateCrm runs
 // assertConfinedRoute over this path and the path is not on the allowlist. A pattern is fleet
 // configuration, the same judgement /api/veo/intent already makes.
+import { localModeRefusal } from "@/lib/localMode";
 import { authenticateCrm } from "@/lib/crmAuth";
 import { slotKeyOf } from "@/lib/veoSchedule";
 
@@ -47,6 +48,7 @@ function keyFrom(src: { city?: unknown; field?: unknown; weekday?: unknown; hhmm
 }
 
 export async function GET(req: Request) {
+  { const local = localModeRefusal("The recurring camera rule"); if (local) return local; }
   const auth = await authenticateCrm(req);
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   const u = new URL(req.url).searchParams;
@@ -83,6 +85,7 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
+  { const local = localModeRefusal("The recurring camera rule"); if (local) return local; }
   const auth = await authenticateCrm(req);
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;

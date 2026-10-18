@@ -13,6 +13,16 @@ import {
 import { getMatchdayApiClient, fetchMatchDayJson, _resetCachedToken } from "../src/lib/matchdayApi";
 import { recordWrite, supabaseLogStore, type LogStore } from "../src/lib/changeLog";
 import { proxy } from "../src/proxy";
+import { pathEnv } from "../src/lib/localMode";
+// Route handlers that key PRODUCTION data by a match or field id (field covers wiring, 2026-10-18). Called directly.
+import * as chatNotify from "../src/app/api/match-chats/[chatId]/notify/route";
+import * as chatReply from "../src/app/api/match-chats/[chatId]/reply/route";
+import * as chatRead from "../src/app/api/match-chats/[chatId]/route";
+import * as venues from "../src/app/api/venues/route";
+import * as slotIntent from "../src/app/api/veo/slot-intent/route";
+import * as veoIntent from "../src/app/api/veo/intent/route";
+import * as fieldsRoute from "../src/app/api/fields/route";
+import * as fieldPhotos from "../src/app/api/fields/photos/route";
 
 let pass = 0, fail = 0;
 const ok = (n: string) => { pass++; console.log(`  ok  ${n}`); };
@@ -159,6 +169,47 @@ async function main() {
     const off = await recordWrite({ ...ctx, saveId: "s2" }, io, spyStore);
     eq("one insert", inserts.length, 1);
     eq("logged, not skipped", [off.logged, off.skippedLocal], [true, undefined]);
+    console.log("the /api/matchday/{env}/ path env — \"local\" exists only while local mode is on:");
+    world(true);
+    eq("on: local accepted", pathEnv("local"), "local");
+    eq("on: production and staging keep their names (the write client refuses them)", [pathEnv("production"), pathEnv("staging")], ["production", "staging"]);
+    eq("on: anything else unknown", pathEnv("prod"), null);
+    world(false);
+    eq("off: local is an unknown environment, as on main", pathEnv("local"), null);
+
+    /* THE ROUTES THAT WOULD MIX SEED IDS WITH PRODUCTION DATA. A seed match id is a real production match's chat id;
+     * "notify" for it would text real players. Flag ON: 503, and ZERO requests of any kind (Supabase included: its
+     * client uses fetch). Flag OFF, the same calls get past the refusal (401: no session): the positive control. */
+    type H = (req: Request, ctx: { params: Promise<Record<string, string>> }) => Promise<Response>;
+    const routeCalls: [string, H, string, Record<string, string>][] = [
+      ["chat notify POST (texts a match's players)", chatNotify.POST as unknown as H, "POST", { chatId: "104" }],
+      ["chat notify GET", chatNotify.GET as unknown as H, "GET", { chatId: "104" }],
+      ["chat reply POST", chatReply.POST as unknown as H, "POST", { chatId: "104" }],
+      ["chat read GET", chatRead.GET as unknown as H, "GET", { chatId: "104" }],
+      ["venues POST", venues.POST as unknown as H, "POST", {}],
+      ["venues PATCH", venues.PATCH as unknown as H, "PATCH", {}],
+      ["venues PUT", venues.PUT as unknown as H, "PUT", {}],
+      ["venues GET", venues.GET as unknown as H, "GET", {}],
+      ["camera slot rule POST", slotIntent.POST as unknown as H, "POST", {}],
+      ["camera flag POST", veoIntent.POST as unknown as H, "POST", {}],
+      ["field DELETE", fieldsRoute.DELETE as unknown as H, "DELETE", {}],
+      ["gallery photo POST", fieldPhotos.POST as unknown as H, "POST", {}],
+    ];
+    const hit = async (h: H, method: string, params: Record<string, string>) => h(
+      new Request("http://localhost:3012/api/x?id=1&fieldId=1", { method, ...(method === "GET" ? {} : { body: JSON.stringify({ user_ids: [1, 2], message_body: "hi" }), headers: { "content-type": "application/json" } }) }),
+      { params: Promise.resolve(params) });
+    console.log("production-keyed routes, flag ON — 503 and no request at all:");
+    for (const [name, h, method, params] of routeCalls) {
+      world(true); calls.length = 0;
+      const r = await hit(h, method, params);
+      eq(`${name}: 503, ${calls.length} requests`, [r.status, calls.length], [503, 0]);
+    }
+    console.log("production-keyed routes, flag OFF — past the refusal, as on main (the control for the 503s above):");
+    for (const [name, h, method, params] of routeCalls) {
+      world(false);
+      const r = await hit(h, method, params);
+      r.status !== 503 ? ok(`${name}: ${r.status}, not the local-mode refusal`) : bad(`${name}: still 503 with the flag off`);
+    }
   } finally {
     for (const k of KEYS) { if (saved[k] === undefined) delete env[k]; else env[k] = saved[k]; }
   }

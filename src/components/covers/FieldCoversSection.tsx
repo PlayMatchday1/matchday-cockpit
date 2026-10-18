@@ -30,11 +30,7 @@ function removedSummary(upcoming: number, past: number): string {
   return `${plural(upcoming, "upcoming match", "upcoming matches")} went back to Default${past ? `; ${plural(past, "past match keeps", "past matches keep")} it` : ""}.`;
 }
 
-export default function FieldCoversSection({ fieldId, onChanged }: {
-  fieldId: number;
-  /** After any write that LANDED, so a host showing matches beside it (the local page) can reload them. */
-  onChanged?: () => void;
-}) {
+export default function FieldCoversSection({ fieldId }: { fieldId: number }) {
   const status = useCoversStatus();
   const [data, setData] = useState<FieldCovers | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -52,7 +48,7 @@ export default function FieldCoversSection({ fieldId, onChanged }: {
 
   if (!status?.available) return null;
   const canEdit = status.canEdit;
-  const say = (line: string, ok: boolean) => { setMsg({ text: line, ok }); if (ok) onChanged?.(); };
+  const say = (line: string, ok: boolean) => setMsg({ text: line, ok });
 
   async function submitUpload(file: File, name: string) {
     const u = upload!;

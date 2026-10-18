@@ -57,6 +57,8 @@ export const COVER_CSS = `
 .fc-apply{border:1px solid var(--line);border-radius:12px;padding:10px;margin-top:10px;background:#fbfdfc}
 .fc-apply ul{list-style:none;margin:8px 0;padding:0;max-height:220px;overflow:auto}
 .fc-apply li label{display:flex;gap:8px;align-items:center;padding:4px 0;font-size:13px}
+/* Inside MatchPanel, ".mp input" makes every input full-width and 40px tall. Checkboxes are not text boxes. */
+.fc input[type=checkbox]{width:16px;height:16px;min-height:0;min-width:16px;padding:0;margin:0;flex:0 0 auto}
 .fc-apply li em{font-style:normal;color:var(--ink3);font-size:12px}
 
 /* upload dialog */

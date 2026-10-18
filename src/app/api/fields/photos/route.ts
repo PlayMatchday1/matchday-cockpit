@@ -32,6 +32,7 @@
  * field's photos are what a player sees before they pay to play on it.
  */
 
+import { localModeOn } from "@/lib/localMode";
 import { randomUUID } from "node:crypto";
 import { authenticateMatchOpsRead } from "@/lib/matchOpsAuth";
 import { apiGet, apiWrite } from "@/lib/matchdayStageApi";
@@ -66,6 +67,7 @@ async function readField(id: number): Promise<ApiField | null> {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export async function POST(req: Request) {
+  if (localModeOn()) return Response.json({ error: "Gallery photos are off in local mode: an upload attaches through S3's notification, which the local backend does not have. Cover photos have their own upload.", localMode: true }, { status: 503 });
   const auth = await authenticateMatchOpsRead(req);
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
 
@@ -181,6 +183,7 @@ export async function POST(req: Request) {
  * so the cover control is replace-only and this refuses anything that is not a gallery row.
  * This one IS synchronous: the row is gone on the read-back or it is not. */
 export async function DELETE(req: Request) {
+  if (localModeOn()) return Response.json({ error: "Gallery photos are off in local mode: an upload attaches through S3's notification, which the local backend does not have. Cover photos have their own upload.", localMode: true }, { status: 503 });
   const auth = await authenticateMatchOpsRead(req);
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   const url = new URL(req.url);

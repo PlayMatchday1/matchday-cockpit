@@ -33,6 +33,8 @@ import { useAuth } from "@/lib/useAuth";
 import { matchEditAccess } from "@/lib/matchEditAccess";
 import { supabase } from "@/lib/supabase";
 import MatchCoverField from "@/components/covers/MatchCoverField";
+import { DRAWER_ENV, LOCAL_PAGES } from "@/lib/matchEnv";
+import type { DrawerEnv } from "@/lib/matchEnvBadge";
 import { diffKeys, pick, MONEY_KEYS, TOGGLE_KEYS, NULLABLE_NUM } from "@/lib/matchEditModel";
 import { centsToDollars, dollarsToCents } from "@/lib/matchMoney";
 import {
@@ -153,8 +155,9 @@ export type PanelSavedPatch = {
   price: number | null; capacity: number | null; minPlayers: number | null; cancelled: boolean;
 };
 
-export default function MatchPanel({ matchId, env = "production", onDirtyChange, onSaved, onCancelLanded, onDeleted, slot }: {
-  matchId: string; env?: "production" | "staging";
+export default function MatchPanel({ matchId, env = DRAWER_ENV, onDirtyChange, onSaved, onCancelLanded, onDeleted, slot }: {
+  /* env: the drawer's environment by default (production, or the local backend in local mode; src/lib/matchEnv.ts). */
+  matchId: string; env?: DrawerEnv;
   /** The recurring slot, from the schedule row. Absent on hosts with no schedule row, and the
    *  CAMERA section below is then absent rather than guessing the key. */
   slot?: { city: string; field: string; weekday: number; hhmm: string } | null;

@@ -22,6 +22,7 @@
 // Logging: every reply logged for the first week per the same
 // observability stance as Phase 0.
 
+import { localModeRefusal } from "@/lib/localMode";
 import { randomUUID } from "node:crypto";
 import { authenticateCrm } from "@/lib/crmAuth";
 import { assertMatchInScope } from "@/lib/matchOpsAuth";
@@ -59,6 +60,7 @@ type ReplyBody = { body?: unknown };
 type RouteCtx = { params: Promise<{ chatId: string }> };
 
 export async function POST(req: Request, ctx: RouteCtx) {
+  { const local = localModeRefusal("Match chat reply"); if (local) return local; }
   const startedAt = Date.now();
   const auth = await authenticateCrm(req);
   if (!auth.ok) {

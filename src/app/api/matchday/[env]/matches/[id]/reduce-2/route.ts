@@ -44,6 +44,7 @@
  * somewhere nobody chose. One attempt per write, one verdict per write.
  */
 
+import { pathEnv, type PathEnv } from "@/lib/localMode";
 import { randomUUID } from "node:crypto";
 import { authenticateCapability } from "@/lib/capabilityAuth";
 import { apiGet, apiWrite } from "@/lib/matchdayStageApi";
@@ -60,7 +61,8 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
 
-const isEnv = (e: string): e is "production" | "staging" => e === "production" || e === "staging";
+// "local" only while local mode is on (src/lib/localMode.ts pathEnv); staging/production unchanged.
+const isEnv = (x: string): x is PathEnv => pathEnv(x) !== null;
 
 /** The operating timezone's today, as TEXT. The only Date in this file, and it never touches a
  *  match's startDate — see reduceRefusal. */
@@ -88,7 +90,7 @@ const toPlayers = (m: ApiMatch): ReducePlayer[] =>
     };
   });
 
-async function planFor(env: "production" | "staging", id: string, perTeam: number) {
+async function planFor(env: PathEnv, id: string, perTeam: number) {
   const m = await apiGet<ApiMatch>(env, `/admin/matches/${id}`);
   const teamCount = (m.teams ?? []).length;
   const plan = buildReducePlan({ maxPlayerCount: m.maxPlayerCount, maxTeamSize2Team: m.maxTeamSize2Team, teamCount }, toPlayers(m), perTeam);
