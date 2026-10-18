@@ -22,7 +22,8 @@ export type CoverOption = { id: number | null; name: string; url: string | null 
 export type SlotMatch = { id: number; name: string; startDate: string; startDateUtc: string; cover: { id: number; name: string | null } | null };
 export type MatchCover = {
   matchId: number; fieldId: number; fieldTitle: string; startDate: string; startDateUtc: string;
-  cover: { id: number; name: string } | null; coverUrl: string | null;
+  /** `removed`: a removed cover on a match that has started (it keeps it; Ryan 2026-10-18). */
+  cover: { id: number; name: string; removed?: boolean } | null; coverUrl: string | null;
   options: CoverOption[]; sameSlotUpcoming: SlotMatch[];
 };
 

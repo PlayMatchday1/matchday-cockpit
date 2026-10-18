@@ -1,5 +1,6 @@
 // GET /api/covers/fields/{fieldId}/matches — the field's matches (id, name, wall-clock start, cover), for the
-// local cover page. Reads GET /admin/matches?fieldId[]= on the local backend.
+// local cover page. Reads GET /admin/matches?fieldId[]= on the local backend. `fromDate` is REQUIRED for past
+// matches: without it the list starts 15 minutes ago (matches.repository.ts generateMatchDatesFiltersForQueryBuilder).
 import { coversGate, coversGet, idParam, upstreamMessage } from "@/lib/fieldCoversServer";
 
 export const runtime = "nodejs";
@@ -13,7 +14,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ fieldId: string
   const fieldId = idParam((await ctx.params).fieldId);
   if (!fieldId) return Response.json({ error: "A numeric field id is required." }, { status: 400 });
   try {
-    const raw = await coversGet<{ data?: ApiMatch[] }>(g.ctx, "/admin/matches", { "fieldId[]": fieldId, limit: 200, sortColumn: "startDate", sortDirection: "asc" });
+    const raw = await coversGet<{ data?: ApiMatch[] }>(g.ctx, "/admin/matches", { "fieldId[]": fieldId, fromDate: "2000-01-01", limit: 200, sortColumn: "startDate", sortDirection: "asc" });
     const rows = (raw.data ?? []).filter((m) => m.fieldId === fieldId);
     return Response.json({
       matches: rows.map((m) => ({ id: m.id, name: m.name, startDate: m.startDate, startDateUtc: m.startDateUtc, isCancelled: m.isCancelled, coverId: m.coverId ?? null, coverUrl: m.coverUrl ?? null })),

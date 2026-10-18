@@ -7445,3 +7445,9 @@ for 18596, 18680, 18679, 19700 and `/admin/matches?fromDate&toDate` windows arou
   without `excludeExtraneousValues` (e.g. `matches.controller.ts:708`, `admin-matches.controller.ts:295`), so a relation
   added to a match query reaches the app unless the DTO drops it. The field-covers branch drops its `cover` relation in
   `MatchForResponseDto` for that reason.
+- **`GET /admin/matches` leaves out every match that started more than 15 minutes ago unless `fromDate` is sent.**
+  `matches.repository.ts:1086-1094` (318da06, `generateMatchDatesFiltersForQueryBuilder`): with no `timeRange` and no
+  `fromDate`, the filter is `startDateUtc >= now - 15 min`. Local probe 2026-10-18: 16 of 28 seeded matches returned,
+  all upcoming; with `fromDate=2020-01-01`, a field's past and upcoming matches both came back. A list read from it
+  without `fromDate` is an upcoming-only list. One of the field-covers browser checks passed on an empty "past" set
+  because of this before a positive control caught it.

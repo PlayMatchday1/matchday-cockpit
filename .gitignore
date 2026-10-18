@@ -70,3 +70,6 @@ public/* [0-9].*
 retool-export-prod.json
 retool-export-stage.json
 tmp/
+
+# Field cover screenshots (local seed data)
+docs/field-covers/screens/

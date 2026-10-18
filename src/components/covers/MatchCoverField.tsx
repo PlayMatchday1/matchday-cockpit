@@ -94,8 +94,10 @@ export default function MatchCoverField({ matchId, fieldDirty = false, manageHre
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src={opt?.url ?? data.coverUrl ?? ""} alt="" />
             <div className="fc-t">
-              <b data-testid="fc-match-cover-name">{opt?.name ?? "Default"}{pick !== undefined && pick !== currentId ? " (not saved)" : ""}</b>
-              <span>{chosen === null ? "The field's main cover" : `A cover of ${data.fieldTitle}`}</span>
+              <b data-testid="fc-match-cover-name">{opt?.name ?? data.cover?.name ?? "Default"}{pick !== undefined && pick !== currentId ? " (not saved)" : ""}</b>
+              <span data-testid="fc-match-cover-sub">{chosen === null ? "The field's main cover"
+                : data.cover?.removed && pick === undefined ? "Removed from the field. This match has been played, so it keeps the photo."
+                : `A cover of ${data.fieldTitle}`}</span>
             </div>
             <button type="button" className="fc-link" disabled={!!blocked || busy} title={blocked ?? undefined}
               onClick={() => { setMsg(null); setApply(null); setOpen(!open); }} data-testid="fc-match-change">Change ▾</button>

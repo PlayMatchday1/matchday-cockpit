@@ -1,0 +1,36 @@
+PASS  [-] field panel shows the API's 2 extra covers
+PASS  [9] Default, tall image: shapes card, header, partners, share
+PASS  [9] Default, tall image: card frame 215×129 (ratio 1.669, want 1.669), image set
+PASS  [9] Default, tall image: header frame 215×162 (ratio 1.333, want 1.333), image set
+PASS  [9] Default, tall image: partners frame 215×133 (ratio 1.618, want 1.618), image set
+PASS  [9] Default, tall image: share frame 215×113 (ratio 1.905, want 1.905), image set
+PASS  [9] Default, tall image: "keep text in the center" guide drawn (369×194)
+PASS  [2] Default replaced: LANDED; API Default url changed
+PASS  [9] extra cover, square image (no Field Partners card): shapes card, header, share
+PASS  [9] extra cover, square image (no Field Partners card): card frame 215×129 (ratio 1.669, want 1.669), image set
+PASS  [9] extra cover, square image (no Field Partners card): header frame 215×162 (ratio 1.333, want 1.333), image set
+PASS  [9] extra cover, square image (no Field Partners card): share frame 215×113 (ratio 1.905, want 1.905), image set
+PASS  [9] extra cover, square image (no Field Partners card): "keep text in the center" guide drawn (369×194)
+PASS  [2] add: LANDED: cover "Rooftop lights" added (read back from the API). — API lists "Rooftop lights" as cover 4
+PASS  [2] rename: LANDED: renamed to "Rooftop lights Friday" (read back from the API). — API name "Rooftop lights Friday"
+PASS  [2] replace: LANDED: the image of "Rooftop lights Friday" replaced (read back from the API). — API url changed
+PASS  [2] replaced image serves as image/jpeg
+PASS  [4] an upcoming Default Tuesday at Parmer to start from: match 104
+PASS  [4] match panel shows Default before
+PASS  [4] Change lists Default + this field's 3 covers: Default | Night games | Winter league | Rooftop lights Friday
+PASS  [4] set: LANDED: the cover is Rooftop lights Friday (read back from the API). — API: match 104 on "Rooftop lights Friday"
+PASS  [4] apply offer = the API's same-slot upcoming matches 103, 105, 106, all ticked
+PASS  [4] apply: LANDED: 3 more matches on Rooftop lights Friday (read back from the API). — API: 103→Rooftop lights Friday, 105→Rooftop lights Friday, 106→Rooftop lights Friday
+PASS  [3] remove "Rooftop lights Friday" asks: "Remove “Rooftop lights Friday”? 4 upcoming matches go back to Default." (API: 4 upcoming, 0 past)
+PASS  [3] read-back covers the dialog's 4 upcoming and 0 past matches (got 4 and 0)
+PASS  [3] removed: "LANDED: "Rooftop lights Friday" removed (read back from the API). 4 upcoming matches went back to Default." — API: 4 upcoming on Default, 0 past still on it (marked removed)
+PASS  [3] "Rooftop lights Friday" gone from the field's list
+PASS  [3] match panel for 104 reloads to "Default" after its cover is removed (API agrees)
+PASS  [3] remove "Night games" asks: "Remove “Night games”? 4 upcoming matches go back to Default. 3 past matches keep it, so its history and old share links look the same." (API: 4 upcoming, 3 past)
+PASS  [3] read-back covers the dialog's 4 upcoming and 3 past matches (got 4 and 3)
+PASS  [3] removed: "LANDED: "Night games" removed (read back from the API). 4 upcoming matches went back to Default; 3 past matches keep it." — API: 4 upcoming on Default, 3 past still on it (marked removed)
+PASS  [3] "Night games" gone from the field's list
+PASS  [3] past match 107 panel: "Removed from the field. This match has been played, so it keeps the photo.", image is Night games
+PASS  [-] no page errors
+
+34 PASS · 0 FAIL

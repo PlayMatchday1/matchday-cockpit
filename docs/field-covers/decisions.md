@@ -50,8 +50,13 @@ any of them can be reversed.
       gallery photo.
 11. **The match cover is its own commit**, not part of MatchPanel's staged Save. It is a separate endpoint, and the
     panel's diff/Save model must stay "only what changed on the match".
-12. **Removing a cover clears it on past matches too**, not only upcoming ones. That is the brief's "clears cover_id on
-    matches using it". The confirmation counts upcoming matches, and the result line gives both counts.
+12. **Removing a cover sends only matches that have not started back to Default; started ones keep it (Ryan,
+    2026-10-18).** This replaces the first build, which cleared past matches too.
+    - The resolver serves a removed cover only on a match that has started (`hasStarted` on `start_date_utc`, true
+      UTC).
+    - Cancelled matches that have not started are cleared as well (they are not history). "Upcoming" in the counts is
+      the cards' rule: not cancelled, not started.
+    - A past week copied forward carries the removed id and shows the Default (check in `verify_api.py`).
 13. **"Same slot" for Apply** means: same field, not cancelled, not started, and the same weekday and HH:MM of the
     wall-clock `startDate`. The current match is excluded, and so are matches already on the chosen cover.
 14. **Resolution lives in one place on the backend**: `MatchForResponseDto`, a class-transformer `@Transform`.
@@ -78,3 +83,10 @@ any of them can be reversed.
       would let each API take the other's jobs);
     - database `matchday_covers_local`;
     - Clubhouse local target `localhost:3010`, on port 3012.
+20. **`VERCEL=` is blanked in this worktree's `.env.development.local`.** `.env.local` is a `vercel env pull` file
+    and (inferred, not read) sets `VERCEL`, which turns local mode off: the local page answered 404 until it was
+    blanked, and rendered straight after. Under `next dev` only; nothing deploys from here.
+21. **The local page lists past matches** by sending `fromDate` to `GET /admin/matches`. Without it the backend starts
+    the list 15 minutes ago (facts doc).
+22. **The local page reloads its match panel after a cover write on the field side** (`onChanged`). Without it the panel
+    kept showing a cover that had just been removed.

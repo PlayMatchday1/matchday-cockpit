@@ -31,6 +31,7 @@ export default function FieldCoversLocal() {
   const [matchId, setMatchId] = useState<number | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
+  const [panelTick, setPanelTick] = useState(0); // a cover write on the left reloads the match panel on the right
 
   useEffect(() => {
     void (async () => {
@@ -47,6 +48,7 @@ export default function FieldCoversLocal() {
     if (!r.ok) setErr(r.error);
   }, []);
   useEffect(() => { if (fieldId) { setMatchId(null); void loadMatches(fieldId); } }, [fieldId, loadMatches]);
+  // NOTE: loadMatches is also called after a cover write (onChanged); it keeps the selected match.
 
   const field = fields?.find((f) => f.id === fieldId) ?? null;
   const now = Date.now();
@@ -65,7 +67,8 @@ export default function FieldCoversLocal() {
       </div>
       <div className="fcl-box" data-testid="fcl-field-panel">
         {field && <><p className="fcl-head">{field.title}</p><p style={{ margin: "0 0 12px", color: "#4a6157", fontSize: 12.5 }}>Field panel · ID {field.id}</p>
-          <FieldCoversSection key={`${field.id}:${tick}`} fieldId={field.id} /></>}
+          <FieldCoversSection key={`${field.id}:${tick}`} fieldId={field.id}
+            onChanged={() => { if (fieldId) void loadMatches(fieldId); setPanelTick((t) => t + 1); }} /></>}
         <h2 style={{ marginTop: 18 }}>MATCHES AT THIS FIELD</h2>
         <button className="fcl-m" style={{ color: "#146c43", fontWeight: 700 }} onClick={() => { if (fieldId) void loadMatches(fieldId); setTick((t) => t + 1); }} data-testid="fcl-refresh">↻ Refresh</button>
         {(matches ?? []).map((m) => (
@@ -81,7 +84,7 @@ export default function FieldCoversLocal() {
           <>
             <p className="fcl-head">{matches?.find((m) => m.id === matchId)?.name}</p>
             <p style={{ margin: "0 0 12px", color: "#4a6157", fontSize: 12.5 }}>ID {matchId} · {field?.title}</p>
-            <MatchCoverField key={matchId} matchId={matchId} manageHref={(fid) => `/match-ops/field-covers?field=${fid}`} />
+            <MatchCoverField key={`${matchId}:${panelTick}`} matchId={matchId} manageHref={(fid) => `/match-ops/field-covers?field=${fid}`} />
           </>
         ) : <p style={{ color: "#4a6157" }}>Pick a match.</p>}
       </div>

@@ -20,9 +20,16 @@ before/after). **Its match-type logic is dropped**; this spec replaces those par
   cover).
 - **Other covers**: one card per extra cover with its **name**, **how many upcoming matches use it**, **Replace**,
   **Rename** and **Remove**, then a dashed **Add cover** tile. (Figma's "Add cover for a match type" becomes "Add cover".)
-- **Remove** asks first: "Remove “Night games”? 6 upcoming matches go back to Default." The count is read fresh when
-  the confirmation opens. Confirming soft-deletes the cover and puts every match using it back on Default, past ones
-  included, in one transaction. The result line gives both counts.
+- **Remove** asks first, with counts read fresh when the confirmation opens: "Remove “Night games”? 4 upcoming
+  matches go back to Default. 3 past matches keep it, so its history and old share links look the same."
+- Confirming soft-deletes the cover and, in one transaction, puts every match that has **not started** back on
+  Default. **Matches that have started keep pointing at the removed cover (Ryan, 2026-10-18).**
+- The result line: "LANDED: "Night games" removed (read back from the API). 4 upcoming matches went back to Default; 3
+  past matches keep it."
+- **Resolver rule**: a removed cover still shows on a match that has started (app payloads, share links, the match
+  panel, which says "Removed from the field. This match has been played, so it keeps the photo."), and never on one
+  that has not. That second half also covers a past week copied into the future: the copies carry the removed
+  cover's id but show the Default.
 
 ## Match panel (Gameday Ops) — COVER PHOTO field
 

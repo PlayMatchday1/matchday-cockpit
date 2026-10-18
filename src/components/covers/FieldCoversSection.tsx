@@ -19,13 +19,28 @@ import { COVER_CSS } from "./coverCss";
 
 const NO_EDIT = "Changing cover photos needs EDIT MATCHES.";
 
-export default function FieldCoversSection({ fieldId }: { fieldId: number }) {
+/* REMOVING A COVER (Ryan, 2026-10-18): upcoming matches go back to Default; matches that have already been played keep
+ * it, so their history and old share links look as they did. Both sentences say so, with the two counts. */
+function removeQuestion(upcoming: number, past: number): string {
+  const up = upcoming === 0 ? "No upcoming match uses it." : `${plural(upcoming, "upcoming match goes", "upcoming matches go")} back to Default.`;
+  const pastLine = past === 0 ? "" : ` ${plural(past, "past match keeps", "past matches keep")} it, so its history and old share links look the same.`;
+  return up + pastLine;
+}
+function removedSummary(upcoming: number, past: number): string {
+  return `${plural(upcoming, "upcoming match", "upcoming matches")} went back to Default${past ? `; ${plural(past, "past match keeps", "past matches keep")} it` : ""}.`;
+}
+
+export default function FieldCoversSection({ fieldId, onChanged }: {
+  fieldId: number;
+  /** After any write that LANDED, so a host showing matches beside it (the local page) can reload them. */
+  onChanged?: () => void;
+}) {
   const status = useCoversStatus();
   const [data, setData] = useState<FieldCovers | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [upload, setUpload] = useState<{ mode: UploadMode; coverId?: number } | null>(null);
   const [renaming, setRenaming] = useState<{ id: number; name: string } | null>(null);
-  const [confirm, setConfirm] = useState<{ cover: CoverView; upcoming: number | null; error?: string } | null>(null);
+  const [confirm, setConfirm] = useState<{ cover: CoverView; upcoming: number | null; past?: number; error?: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null);
 
@@ -37,7 +52,7 @@ export default function FieldCoversSection({ fieldId }: { fieldId: number }) {
 
   if (!status?.available) return null;
   const canEdit = status.canEdit;
-  const say = (line: string, ok: boolean) => setMsg({ text: line, ok });
+  const say = (line: string, ok: boolean) => { setMsg({ text: line, ok }); if (ok) onChanged?.(); };
 
   async function submitUpload(file: File, name: string) {
     const u = upload!;
@@ -73,8 +88,8 @@ export default function FieldCoversSection({ fieldId }: { fieldId: number }) {
   /* THE COUNT IS READ WHEN THE CONFIRMATION OPENS, not taken from the card, which may be minutes old. */
   async function askRemove(c: CoverView) {
     setConfirm({ cover: c, upcoming: null });
-    const r = await coversGetJson<{ upcomingMatches: number }>(`/api/covers/covers/${c.id}?fieldId=${fieldId}`);
-    setConfirm(r.ok ? { cover: c, upcoming: r.data.upcomingMatches } : { cover: c, upcoming: null, error: r.error });
+    const r = await coversGetJson<{ upcomingMatches: number; pastMatches: number }>(`/api/covers/covers/${c.id}?fieldId=${fieldId}`);
+    setConfirm(r.ok ? { cover: c, upcoming: r.data.upcomingMatches, past: r.data.pastMatches } : { cover: c, upcoming: null, error: r.error });
   }
 
   async function doRemove() {
@@ -82,11 +97,9 @@ export default function FieldCoversSection({ fieldId }: { fieldId: number }) {
     setBusy(true);
     try {
       const res = await coversWrite(`/api/covers/covers/${confirm.cover.id}?fieldId=${fieldId}`, { method: "DELETE" }, `"${confirm.cover.name}" removed`);
-      const reset = res.body.removed as { upcomingMatchesReset?: number; matchesReset?: number } | null;
+      const reset = res.body.removed as { upcomingMatchesReset?: number; pastMatchesKept?: number } | null;
       if (res.body.covers) setData(res.body.covers as FieldCovers);
-      say(res.verdict === "LANDED" && reset
-        ? `${res.line} ${plural(reset.upcomingMatchesReset ?? 0, "upcoming match", "upcoming matches")} went back to Default${(reset.matchesReset ?? 0) > (reset.upcomingMatchesReset ?? 0) ? ` (${reset.matchesReset} matches in all, past ones included)` : ""}.`
-        : res.line, res.verdict === "LANDED");
+      say(res.verdict === "LANDED" && reset ? `${res.line} ${removedSummary(reset.upcomingMatchesReset ?? 0, reset.pastMatchesKept ?? 0)}` : res.line, res.verdict === "LANDED");
       setConfirm(null);
     } finally { setBusy(false); }
   }
@@ -148,9 +161,8 @@ export default function FieldCoversSection({ fieldId }: { fieldId: number }) {
                   <div className="fc-confirm" data-testid="fc-remove-confirm">
                     {confirm.error ? <>Couldn&rsquo;t count the matches using it: {confirm.error}</>
                       : confirm.upcoming === null ? <>Counting the matches that use it…</>
-                      : <span data-testid="fc-remove-count" data-count={confirm.upcoming}>Remove &ldquo;{c.name}&rdquo;? {confirm.upcoming === 0
-                          ? "No upcoming match uses it."
-                          : `${plural(confirm.upcoming, "upcoming match goes", "upcoming matches go")} back to Default.`}</span>}
+                      : <span data-testid="fc-remove-count" data-count={confirm.upcoming} data-past={confirm.past ?? 0}>
+                          Remove &ldquo;{c.name}&rdquo;? {removeQuestion(confirm.upcoming, confirm.past ?? 0)}</span>}
                     <div className="fc-acts">
                       <button type="button" className="fc-link red" data-testid="fc-remove-go" disabled={busy || confirm.upcoming === null} onClick={() => void doRemove()}>Remove it</button>
                       <button type="button" className="fc-link" onClick={() => setConfirm(null)}>Keep it</button>
