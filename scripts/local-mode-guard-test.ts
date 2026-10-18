@@ -61,7 +61,7 @@ globalThis.fetch = (async (input: RequestInfo | URL) => {
 
 const PROD = "https://playmatchday.herokuapp.com/admin/matches/1";
 const STAGE = "https://matchday-stage.herokuapp.com/admin/matches/1";
-const LOCAL = "http://localhost:3000/admin/match-manager/applications";
+const LOCAL = "http://localhost:3010/admin/match-manager/applications";
 const ADMIN = { canEditMatches: false, isAdmin: true, email: "test@example.com" };
 
 async function main() {
@@ -75,26 +75,26 @@ async function main() {
     eq("off: development without the flag", localModeOn({ NODE_ENV: "development" }), false);
 
     // ── 1. WRITE CLIENT ────────────────────────────────────────────────────────────────────
-    console.log("write client, flag ON — production and staging refused, only localhost:3000 by parsed host:");
+    console.log("write client, flag ON — production and staging refused, only localhost:3010 by parsed host:");
     world(true);
     throws("production host refused as production", StageHostGuardError, () => assertAllowedHost("production", PROD));
     throws("staging host refused as staging", StageHostGuardError, () => assertAllowedHost("staging", STAGE));
     throws("production host refused even when labelled local", StageHostGuardError, () => assertAllowedHost("local", PROD));
-    noThrow("localhost:3000 accepted as local", () => assertAllowedHost("local", LOCAL));
-    throws("spoof localhost:3000.evil.com refused", StageHostGuardError, () => assertAllowedHost("local", "http://localhost:3000.evil.com/x"));
+    noThrow("localhost:3010 accepted as local", () => assertAllowedHost("local", LOCAL));
+    throws("spoof localhost:3010.evil.com refused", StageHostGuardError, () => assertAllowedHost("local", "http://localhost:3010.evil.com/x"));
     throws("another port (localhost:3001, the Clubhouse itself) refused", StageHostGuardError, () => assertAllowedHost("local", "http://localhost:3001/x"));
-    throws("127.0.0.1:3000 refused (exact host, not 'means the same')", StageHostGuardError, () => assertAllowedHost("local", "http://127.0.0.1:3000/x"));
+    throws("127.0.0.1:3010 refused (exact host, not 'means the same')", StageHostGuardError, () => assertAllowedHost("local", "http://127.0.0.1:3010/x"));
     calls.length = 0;
     await rejects("apiGet(production) refused", StageHostGuardError, () => apiGet("production", "/admin/matches/1"));
     await rejects("apiWrite(production) refused", StageHostGuardError, () => apiWrite("production", "PUT", "/admin/matches/1", { name: "x" }, { canEditMatches: true }));
     eq("…and neither sent a single request", calls.length, 0);
     await apiGet("local", "/admin/match-manager/applications");
-    eq("apiGet(local) signs in and reads at localhost:3000 only", calls, ["http://localhost:3000/auth/signin", "http://localhost:3000/admin/match-manager/applications"]);
+    eq("apiGet(local) signs in and reads at localhost:3010 only", calls, ["http://localhost:3010/auth/signin", "http://localhost:3010/admin/match-manager/applications"]);
     calls.length = 0;
     await rejects("apiWrite(local) still needs its authority (admin)", NotAuthorizedError, () => apiWrite("local", "POST", "/admin/match-manager/applications/1/accept", undefined, { canEditMatches: true }, "admin"));
     eq("…and the refused write sent nothing", calls.length, 0);
     await apiWrite("local", "POST", "/admin/match-manager/applications/1/accept", undefined, ADMIN, "admin");
-    eq("apiWrite(local) as an admin reaches localhost:3000", calls, ["http://localhost:3000/admin/match-manager/applications/1/accept"]);
+    eq("apiWrite(local) as an admin reaches localhost:3010", calls, ["http://localhost:3010/admin/match-manager/applications/1/accept"]);
 
     console.log("write client, flag OFF — exactly main: the two Heroku hosts, and no local target:");
     world(false);

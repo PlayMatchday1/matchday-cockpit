@@ -472,7 +472,10 @@ export async function apiGet<T = unknown>(env: ClientEnv, path: string, query?: 
 }
 
 // WRITES — env-explicit, single-shot, host-allowlisted, deny-listed, prod-bolted.
-export async function apiWrite<T = unknown>(env: ClientEnv, method: "POST" | "PUT" | "PATCH" | "DELETE", path: string, body?: unknown, actor?: WriteActor, requires: "edit" | "manage" | "promos" | "city" | "credits" | "memberships" | "admin" = "edit", unlock?: WriteUnlock): Promise<T> {
+// `actingStaffEmail`: X-Acting-Staff-Email (src/lib/mmStaffIdentity.ts), the signed-in person behind the
+// shared service account. Same parameter as on feature/match-manager-track; here only the field covers
+// routes pass it.
+export async function apiWrite<T = unknown>(env: ClientEnv, method: "POST" | "PUT" | "PATCH" | "DELETE", path: string, body?: unknown, actor?: WriteActor, requires: "edit" | "manage" | "promos" | "city" | "credits" | "memberships" | "admin" = "edit", unlock?: WriteUnlock, actingStaffEmail?: string): Promise<T> {
   // STEP 2 in the write pipeline (authenticated is step 1, in the route): does the caller
   // hold the required authority — EDIT MATCHES for match/roster writes, MANAGE PLAYERS for
   // ban writes, MANAGE PROMOS for promo writes? These are INDEPENDENT grants; each path names
@@ -506,7 +509,11 @@ export async function apiWrite<T = unknown>(env: ClientEnv, method: "POST" | "PU
       // Only declare a JSON content-type when there IS a body — the API rejects an
       // empty body sent with Content-Type: application/json (400). Bodyless writes
       // (DELETE a player, PATCH .../absent, PATCH .../fake-player) need no header.
-      headers: { Authorization: `Bearer ${token}`, ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
+      headers: {
+        Authorization: `Bearer ${token}`,
+        ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+        ...(actingStaffEmail ? { "X-Acting-Staff-Email": actingStaffEmail } : {}),
+      },
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: AbortSignal.timeout(WRITE_TIMEOUT_MS),
     });

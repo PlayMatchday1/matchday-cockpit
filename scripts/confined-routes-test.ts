@@ -53,6 +53,13 @@ const KNOWN_REFUSED: Record<string, string> = {
   "/api/veo/cameras": "Camera inventory across every city.",
   "/api/schedule-master": "Writes the recurring slot template for every city, not one.",
 
+  /* FIELD COVER PHOTOS (feature/field-covers). The match panel's COVER PHOTO field reaches these. Covers are a
+   * field-wide setting (one photo for every match at the field) and the routes take bare match ids, so a confined
+   * account is refused here and by coversGate itself. The field renders nothing when the status call is refused. */
+  "/api/covers/status": "Field cover photos: is the feature on here. Refused to a confined account, so the COVER PHOTO field does not render for it.",
+  "/api/covers/matches": "Field cover photos: apply a cover to several matches. Field-wide configuration, not a city's own data.",
+  "/api/covers/matches/": "Field cover photos: one match's cover. Field-wide configuration (the cover belongs to the field), refused to a confined account.",
+
   /* ── WHAT THIS CHECK SURFACED ON ITS FIRST RUN. None is the reported bug; all four are real, and
    * each is left refused with the reason rather than opened quietly or left unnamed. */
   "/api/manager-pay/week":

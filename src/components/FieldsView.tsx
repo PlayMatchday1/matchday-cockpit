@@ -18,6 +18,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useAuth, canAccess } from "@/lib/useAuth";
+import FieldCoversSection from "@/components/covers/FieldCoversSection";
 import {
   FORMATS, PITCH_OPTIONS, formatShort, recommendationReadout, missingRequired,
   updateBody, deleteBlock, validPhone,
@@ -235,6 +236,19 @@ export default function FieldsView() {
     setOpen(true);
   };
   const close = () => { setOpen(false); setCurId(null); setResult(null); };
+
+  /* ?field=<id> OPENS THAT FIELD, once, when the list first arrives. The match panel's "Manage covers on the
+   * field" link lands here. Read off window.location rather than useSearchParams so the page needs no Suspense
+   * boundary; an id that is not in the list does nothing. */
+  const deepLinked = useRef(false);
+  useEffect(() => {
+    if (deepLinked.current || !data) return;
+    deepLinked.current = true;
+    const want = Number(new URLSearchParams(window.location.search).get("field"));
+    const f = Number.isInteger(want) && want > 0 ? data.fields.find((x) => x.id === want) : undefined;
+    if (f) openEdit(f);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once, on the first payload
+  }, [data]);
 
   const set = (k: string, v: unknown) => setDraft((d) => ({ ...d, [k]: v }));
 
@@ -820,6 +834,10 @@ export default function FieldsView() {
               images[]), so nothing on screen has to explain an overlap. */}
           {mode === "edit" && cur?.id ? (
             <>
+              {/* FIELD COVER PHOTOS (feature/field-covers). Renders nothing until the backend half is available
+                  (GET /api/covers/status); when it ships, the "Cover image" control below is the same Default and
+                  should fold into this section rather than show twice. */}
+              <FieldCoversSection key={cur.id} fieldId={cur.id} />
               <Sect title="Cover image">
                 <div className="fv-cover" data-testid="fv-cover">
                   {cur.cover

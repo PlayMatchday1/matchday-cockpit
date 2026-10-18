@@ -32,6 +32,7 @@ import MoneyInput from "@/components/MoneyInput";
 import { useAuth } from "@/lib/useAuth";
 import { matchEditAccess } from "@/lib/matchEditAccess";
 import { supabase } from "@/lib/supabase";
+import MatchCoverField from "@/components/covers/MatchCoverField";
 import { diffKeys, pick, MONEY_KEYS, TOGGLE_KEYS, NULLABLE_NUM } from "@/lib/matchEditModel";
 import { centsToDollars, dollarsToCents } from "@/lib/matchMoney";
 import {
@@ -1232,6 +1233,11 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange,
                   <span className="mp-ro" data-testid="mp-type-readonly">{String(orig.type)}: read-only (not Regular or Special event)</span>
                 )}</label>
             </div>
+            {/* COVER PHOTO (feature/field-covers): its own commit, outside this panel's staged diff. Keyed on the
+                SAVED field, so a landed field change (which puts the match back on Default) reloads it. Renders
+                nothing until the backend half is available. */}
+            <MatchCoverField key={`${matchId}:${String(orig.fieldId ?? "")}`} matchId={Number(matchId)} fieldDirty={isDirty("fieldId")}
+              manageHref={(fid) => `/match-ops/fields?field=${fid}`} />
             <div className="mp-grid">
               {/* THE PRIMARY MANAGER IS THE PAID ONE. Both selects use "none" as the detach
                   sentinel rather than "": a cleared <select> yields "", the API rejects "" with a

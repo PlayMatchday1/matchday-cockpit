@@ -1,5 +1,5 @@
 // LOCAL MODE: the Clubhouse pointed at a MatchDay API running on this machine (the backend's
-// feature/match-manager-track branch on http://localhost:3000, fake seed data). One flag, and it
+// feature/field-covers branch on http://localhost:3010, fake seed data). One flag, and it
 // only works in `next dev`.
 //
 // WHY IT EXISTS. The Match Manager admin endpoints (admin/match-manager/*) exist only on the local
@@ -9,7 +9,7 @@
 //
 // WHAT THE FLAG DOES, everywhere at once (each guard has its own assertion in
 // scripts/local-mode-guard-test.ts):
-//   1. Write client (matchdayStageApi): allows the "local" environment, host EXACTLY localhost:3000
+//   1. Write client (matchdayStageApi): allows the "local" environment, host EXACTLY localhost:3010
 //      on the parsed URL, and REFUSES staging and production. Their hosts are unchanged.
 //   2. Read client (matchdayApi): refuses every call before any fetch. Every mdapi sync reads
 //      through it, so a sync has nothing to write.
@@ -22,7 +22,7 @@
 //
 // No "server-only" import: proxy.ts reads it too. It holds no secret.
 
-export const LOCAL_MDAPI_HOST = "localhost:3000";
+export const LOCAL_MDAPI_HOST = "localhost:3010"; // feature/field-covers: its own backend (Match Manager uses 3000)
 export const LOCAL_MDAPI_BASE_URL = `http://${LOCAL_MDAPI_HOST}`;
 
 type Env = Record<string, string | undefined>;
