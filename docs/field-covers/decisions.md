@@ -29,7 +29,8 @@ any of them can be reversed.
    - Local `main` was 3 ahead and 58 behind. All 3 of its commits are on `origin/main` under other hashes:
      `bd32327` → `092eb5c` (patch-identical), `34bb9be` → `74e5f3e`, `d61a1f4` → `2dab33f`.
    - For the last two, the changed lines are identical and only the surrounding context differs. Nothing is stranded.
-8. **A local-mode-only page, `/match-ops/field-covers`, hosts the two components.**
+8. **SUPERSEDED 2026-10-18 by 23: the real panels run on the local backend, and this page is removed.** Originally: a
+   local-mode-only page, `/match-ops/field-covers`, hosted the two components.
    - The Fields drawer and the Gameday Ops panel read production (the MatchDay API, plus production Supabase mirrors
      such as `mdapi_matches` and `fin_venue_fields`), and local mode refuses that read client.
    - Pointing those pages at seed data would mix seed match ids (100 to 127) with production mirror rows.
@@ -86,7 +87,28 @@ any of them can be reversed.
 20. **`VERCEL=` is blanked in this worktree's `.env.development.local`.** `.env.local` is a `vercel env pull` file
     and (inferred, not read) sets `VERCEL`, which turns local mode off: the local page answered 404 until it was
     blanked, and rendered straight after. Under `next dev` only; nothing deploys from here.
-21. **The local page lists past matches** by sending `fromDate` to `GET /admin/matches`. Without it the backend starts
-    the list 15 minutes ago (facts doc).
-22. **The local page reloads its match panel after a cover write on the field side** (`onChanged`). Without it the panel
-    kept showing a cover that had just been removed.
+21. (Removed with the local page, 2026-10-18.) It listed past matches by sending `fromDate` to `GET /admin/matches`;
+    the fact stays in the facts doc.
+22. (Removed with the local page.) It reloaded its match panel after a cover write; on the real pages the drawer and
+    the panel are on different pages.
+23. **The real panels run on the local backend in local mode (Ryan, 2026-10-18).**
+    - Client: `DRAWER_ENV` becomes `"local"` only under `next dev` with `NEXT_PUBLIC_MATCHDAY_LOCAL_API=1`.
+    - Server: the six `/api/matchday/{env}/` routes the board and panel call accept `"local"` only while local mode is
+      on.
+    - Every read or write keyed by a production match or field id is skipped or refused in local mode, because seed ids
+      collide with real ones: chat read, reply and notify; Veo intent and slot rule; venues; gameday spot and capacity
+      decorations; roster membership badges; field delete; gallery uploads.
+24. **Apply to other matches ticks only matches on Default (Ryan, 2026-10-18).** A match already on another cover starts
+    unticked and shows that cover's name.
+25. **The old "Cover image" control folds into COVER PHOTOS whenever covers are available.** That is keyed on
+    availability, not on local mode, so it holds when covers ship.
+26. **Field merge** (backend notes §8):
+    - Every not-started match moves, cancelled ones included. Started ones stay.
+    - The old Default is carried as a named cover, and the moving Default matches use it.
+    - Old extra covers used by moving matches are carried by name. This is a decision: otherwise those matches change
+      photo on the merge.
+    - Same city only.
+    - Promo codes, phones, gallery, events and the reminder config are reported, not moved.
+    - A `field_merges` row records it (SQL awaiting OK).
+    - `GET /fields/:id` follows the merge.
+    - A cover name clash gets "(old field title)", or "(old field 17)" when the cover is named after that field.

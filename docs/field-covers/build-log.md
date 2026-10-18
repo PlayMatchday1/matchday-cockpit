@@ -35,6 +35,14 @@ SHOTS=docs/field-covers/screens IMG_SQUARE=<a square jpg> IMG_TALL=<a tall jpg> 
 | 10-18 | Clubhouse typecheck | clean |
 | 10-17 | Clubhouse `npm run verify` (before `.env.local` was linked) | 101 / 107. The 6 failures needed `.env.local`, and fail the same on untouched `origin/main` in this worktree |
 | 10-18 | Clubhouse `npm run verify` with `.env.local` linked, at the final tree | **107 / 107, exit 0** |
+| 10-18 | Apply offer: only matches on Default start ticked (Ryan) | `c2e58e4` |
+| 10-18 | **Real panels on the local backend**: Gameday Ops board + match panel, Fields drawer; test page removed | `c2e58e4` |
+| 10-18 | Local-mode refusals for production-keyed routes (chat read/reply/notify, Veo, venues, field delete, gallery) | local-mode-guard-test **74 / 74** |
+| 10-18 | Browser check moved to the real panels | `_check_field_covers.mjs` **42 / 42**, 14 screenshots |
+| 10-18 | Clubhouse `npm run verify` after the wiring | **107 / 107, exit 0** |
+| 10-18 | Field merge on the backend: preview + merge endpoints, `GET /fields/:id` follows a merge, seed pairs 17→10, 18→12 | backend `bfef604`; **merge waits on the `field_merges` SQL** |
+| 10-18 | Merge preview against the seed (writes nothing) | right: 4 move (1 cancelled), 3 stay, 2 covers carried, left-behind listed; cross-city refused; player 401 |
+| 10-18 | Launch checklist | `launch-checklist.md` |
 
 ### Found while building
 
@@ -46,6 +54,12 @@ SHOTS=docs/field-covers/screens IMG_SQUARE=<a square jpg> IMG_TALL=<a tall jpg> 
 - **`GET /admin/matches` hides past matches unless `fromDate` is sent** (facts doc). It made one browser check pass on
   an empty set until a positive control was added. That check now proves the read-back covers exactly the dialog's
   counts.
+- **Wiring the real panels exposed production-keyed routes**: the panel's "text the players" (chat notify) takes user
+  ids from the roster and resolves phones in the production mirror. With seed ids (users 1 to 15, matches 100+) it would
+  have texted real people. It and the other production-keyed routes refuse in local mode before any request, proven
+  offline with the flag off as the control.
+- **MatchPanel's stylesheet sized the apply checkboxes as text boxes** (`.mp input` width 100%, 40 px). Seen in the
+  screenshot; fixed in the cover stylesheet.
 - **Local mode was off under `next dev` with the real `.env.local`**, because that file sets `VERCEL`. Fixed by
   blanking it in this worktree's `.env.development.local` (decision 20).
 
@@ -58,7 +72,8 @@ SHOTS=docs/field-covers/screens IMG_SQUARE=<a square jpg> IMG_TALL=<a tall jpg> 
    - `fields.merged_into_field_id` nullable, with FK and CHECK.
    - `field_covers_field_id_fkey` RESTRICT / RESTRICT.
    - `prisma migrate diff` between the live DB and the schema is empty.
-2. **Add, rename, replace and remove from the Clubhouse, each read back from the API: PASS (browser).** Each step's
+2. **Add, rename, replace and remove from the Clubhouse, each read back from the API: PASS (browser, the REAL Fields
+   drawer since 2026-10-18).** Each step's
    verdict is LANDED, read back from `localhost:3010` directly:
    - add "Rooftop lights" (cover 4 listed);
    - rename to "Rooftop lights Friday" (API name matches);
@@ -81,7 +96,12 @@ SHOTS=docs/field-covers/screens IMG_SQUARE=<a square jpg> IMG_TALL=<a tall jpg> 
      be chosen (404) or renamed (404).
    - Edge: a past week copied into the future carries the removed id but shows the Default.
    - Screens 09, 11, 12, 13.
-4. **Set a cover on one match, then apply it to others; read each back: PASS (browser and API).**
+4. **Set a cover on one match, then apply it to others; read each back: PASS (browser in the REAL Gameday Ops panel,
+   and API).**
+   - New rule (Ryan): 105 and 106 on Default started ticked; 103 on Winter league started unticked, showing "now Winter
+     league". Positive control: both cases were present. Apply moved 105 and 106, and 103 kept Winter league.
+   - "Manage covers on the field" lands on the Fields drawer for that field.
+   - Earlier run, on the removed test page:
    - Match 104 starts on Default.
    - Change lists Default + the field's 3 covers.
    - Save → LANDED, and the API agrees.
@@ -109,14 +129,19 @@ SHOTS=docs/field-covers/screens IMG_SQUARE=<a square jpg> IMG_TALL=<a tall jpg> 
    - Screens 02, 03.
 10. **App caching check: PASS, no leak** (2026-10-17, read-only; details in the first report and the spec).
 
+## Merge checks (item 4 of the 2026-10-18 brief): WAITING on the `field_merges` SQL
+
+- Preview: PASS (above).
+- Merge, read-backs and old links: not run. The merge writes `field_merges`, which does not exist until the SQL is
+  approved and applied.
+
 ## Not done / scope
 
+- The real Fields drawer and Gameday Ops panel now run against the local backend in local mode. Production-keyed
+  sections are off there: chat, camera, venues, spot and membership decorations, field delete, gallery uploads.
 - The Clubhouse components render nothing outside local mode. When the backend ships, `coversEnv()` picks the
   production target, and:
   - the Fields drawer's old **Cover image** control should fold into COVER PHOTOS;
   - the `matchops-auth` census should learn that `/api/covers/*` goes through `coversGate`.
-- The real Fields drawer and Gameday Ops panel were not loaded with the components in them. They read production and
-  refuse local mode (decision 8). The local page hosts the same components.
-- The local page's match panel renders nothing for a moment while it reloads after a cover write (seen in screen 12).
 - No merge tooling for fields 17 and 18; the column only.
 - `_check_field_covers.mjs` is a local browser check, not part of `npm run verify`. It needs both local servers.
