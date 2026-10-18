@@ -21,7 +21,8 @@ import { useKanbanBoard, type CardPatch } from "@/lib/useKanbanBoard";
 import { firstName, ownerName, type KanbanCard, type RoadmapBoard } from "@/lib/kanban";
 import { ROADMAP_COLS, roadmapBoardOf as boardOf, columnCards, planMove, planReorder } from "@/lib/roadmap";
 import {
-  deriveStats, doneGroups, doneOpenKey, fmtDay, fmtDayWithWeekday, readOpen, shownDoneYmd, sortReleases, todayYmd, writeOpen,
+  deriveStats, doneGroups, doneOpenKey, estimateOf, fmtDay, fmtDayWithWeekday, fmtHours, parseHours, readOpen, shownDoneYmd,
+  sortReleases, todayYmd, writeOpen,
   type Release,
 } from "@/lib/roadmapReleases";
 import { useRoadmapReleases } from "@/lib/useRoadmapReleases";
@@ -151,11 +152,11 @@ export default function RoadmapView({ board }: { board: RoadmapBoard }) {
     return api.updateCard(id, patch);
   }, [isAdmin, api]);
 
-  const createWork = async (title: string, target: AddTarget) => {
+  const createWork = async (title: string, hours: number | null, target: AddTarget) => {
     const id = await api.createCard({
       title, stage: target.stage, board, release_id: target.releaseId,
       owner_user_id: appUser?.id ?? null, // "Created by": whoever is signed in
-      data: { priority: "Medium", description: "", planned_date: null },
+      data: { priority: "Medium", description: "", planned_date: null, ...(hours !== null ? { estimated_hours: hours } : {}) },
     });
     setAdding(null);
     if (id) setSelId(id);
@@ -271,10 +272,10 @@ export default function RoadmapView({ board }: { board: RoadmapBoard }) {
                         return (
                           <div key={g.key} data-testid="done-group" data-group={g.release ? g.release.version : "none"} data-open={open ? "1" : "0"} className="flex flex-col rounded-[12px] bg-white">
                             <button type="button" data-testid="done-group-header" aria-expanded={open} onClick={() => setDoneOpen(g.key, !open)}
-                              className="flex w-full items-center gap-2 py-2.5 pl-2.5 pr-3 text-left">
+                              className="flex w-full items-start gap-2 py-2.5 pl-2.5 pr-3 text-left [&>img]:mt-[3px]">
                               <img src={open ? "/roadmap/group-open.svg" : "/roadmap/group-closed.svg"} alt="" width={14} height={14} className="block flex-none" />
                               {g.release && <VersionChip v={g.release.version} />}
-                              <span className="min-w-0 flex-1 truncate text-[13px] font-semibold" style={{ color: C.ink }}>{g.release ? g.release.name : "No release"}</span>
+                              <span className="min-w-0 flex-1 break-words text-[13px] font-semibold leading-tight" style={{ color: C.ink }}>{g.release ? g.release.name : "No release"}</span>
                               <span data-testid="done-group-count" className="flex-none rounded-full px-[9px] py-[3px] text-[11px] font-semibold" style={{ background: C.mint, color: C.forest }}>{g.cards.length}</span>
                             </button>
                             {open && (
@@ -329,7 +330,7 @@ export default function RoadmapView({ board }: { board: RoadmapBoard }) {
 
       {adding && isAdmin && (
         <AddWorkDialog target={adding} release={adding.releaseId ? releaseById.get(adding.releaseId) ?? null : null}
-          onClose={() => setAdding(null)} onCreate={(title) => createWork(title, adding)} />
+          onClose={() => setAdding(null)} onCreate={(title, hours) => createWork(title, hours, adding)} />
       )}
 
       {releaseDialog && isAdmin && (
@@ -373,8 +374,8 @@ function Stat({ label, big, small, testid, bigSize = 24 }: { label: string; big:
   return (
     <div data-testid={testid} className="flex min-w-0 flex-col gap-1 rounded-[12px] bg-white px-4 py-3.5">
       <span className="text-[10px] font-semibold tracking-[0.6px]" style={{ color: C.faint }}>{label}</span>
-      <span data-testid={`${testid}-value`} className="truncate font-bold" style={{ color: C.ink, fontSize: bigSize }}>{big}</span>
-      <span data-testid={`${testid}-sub`} className="truncate text-[12px]" style={{ color: C.muted }}>{small}</span>
+      <span data-testid={`${testid}-value`} className="break-words font-bold leading-tight" style={{ color: C.ink, fontSize: bigSize }}>{big}</span>
+      <span data-testid={`${testid}-sub`} className="break-words text-[12px]" style={{ color: C.muted }}>{small}</span>
     </div>
   );
 }
@@ -386,6 +387,7 @@ function Card({ c, release, selected, draggable, inDoneGroup, doneDay, onOpen, o
 }) {
   const done = c.stage === "shipped";
   const pri = priorityOf(c);
+  const hours = estimateOf(c);
   return (
     <div data-testid="card" data-card-id={c.id} data-stage={c.stage} role="button" tabIndex={0} aria-label={`Open ${c.title}`}
       draggable={draggable} onDragStart={onDragStart} onDragEnd={onDragEnd}
@@ -398,10 +400,12 @@ function Card({ c, release, selected, draggable, inDoneGroup, doneDay, onOpen, o
         borderLeft: done ? undefined : `3px solid ${pri ? PRIORITY_COLOR[pri] : C.line}`,
         boxShadow: selected ? `0 0 0 2px ${C.accent}` : undefined,
       }}>
-      <span className={`text-[14px] ${done ? "font-medium" : "font-semibold"}`} style={{ color: done ? C.muted : C.ink }}>{c.title}</span>
-      <span className="flex items-center gap-1.5">
+      {/* The whole title, wrapped to as many lines as it takes: never clamped or cut. */}
+      <span data-testid="card-title" className={`min-w-0 whitespace-normal break-words text-[14px] leading-snug ${done ? "font-medium" : "font-semibold"}`} style={{ color: done ? C.muted : C.ink }}>{c.title}</span>
+      <span className="flex flex-wrap items-center gap-1.5">
         {release && !inDoneGroup && <VersionChip v={release.version} />}
         <WhoChip who={c.assignee} />
+        {hours !== null && <span data-testid="card-hours" title="Estimate" className="text-[11px] font-semibold" style={{ color: C.faint }}>{fmtHours(hours)}</span>}
         <span className="flex-1" />
         {doneDay && <span data-testid="card-done-date" className="text-[11px] font-semibold" style={{ color: C.faint }}>{fmtDay(doneDay)}</span>}
       </span>
@@ -410,16 +414,18 @@ function Card({ c, release, selected, draggable, inDoneGroup, doneDay, onOpen, o
 }
 
 function AddWorkDialog({ target, release, onClose, onCreate }: {
-  target: AddTarget; release: Release | null; onClose: () => void; onCreate: (title: string) => Promise<void>;
+  target: AddTarget; release: Release | null; onClose: () => void; onCreate: (title: string, hours: number | null) => Promise<void>;
 }) {
   const [title, setTitle] = useState("");
+  const [hoursText, setHoursText] = useState("");
   const [busy, setBusy] = useState(false);
+  const hours = parseHours(hoursText);
   const where = release ? `to ${release.version} ${release.name}`.trim() : `in ${ROADMAP_COLS.find((x) => x.id === target.stage)?.title ?? "Ideas"}`;
   const submit = async () => {
     const t = title.trim();
-    if (!t || busy) return;
+    if (!t || busy || hours === undefined) return;
     setBusy(true);
-    await onCreate(t);
+    await onCreate(t, hours);
   };
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="Add work">
@@ -432,9 +438,16 @@ function AddWorkDialog({ target, release, onClose, onCreate }: {
         </div>
         <input data-testid="add-title" autoFocus value={title} onChange={(e) => setTitle(e.target.value)} placeholder="What is the work?"
           className="w-full rounded-[10px] border bg-white px-3 py-2.5 text-[14px] outline-none focus:border-[#2cdb87]" style={{ borderColor: C.line, color: C.ink }} />
+        <label className="flex items-center gap-2.5 text-[13px] font-medium" style={{ color: C.muted }}>
+          Estimate
+          <input data-testid="add-hours" value={hoursText} onChange={(e) => setHoursText(e.target.value)} inputMode="decimal" placeholder="Optional"
+            className="w-[110px] rounded-[10px] border bg-white px-3 py-2 text-[14px] outline-none focus:border-[#2cdb87]" style={{ borderColor: hours === undefined ? C.danger : C.line, color: C.ink }} />
+          hours
+          {hours === undefined && <span style={{ color: C.danger }}>Use a number, like 8 or 1.5</span>}
+        </label>
         <div className="flex justify-end gap-2.5">
           <button type="button" onClick={onClose} className="rounded-[8px] border bg-white px-3.5 py-[9px] text-[13px] font-semibold" style={{ borderColor: C.line, color: C.ink }}>Cancel</button>
-          <button type="submit" data-testid="add-save" disabled={!title.trim() || busy} className="rounded-[8px] px-3.5 py-[9px] text-[13px] font-semibold text-white disabled:opacity-40" style={{ background: C.forest }}>Add</button>
+          <button type="submit" data-testid="add-save" disabled={!title.trim() || busy || hours === undefined} className="rounded-[8px] px-3.5 py-[9px] text-[13px] font-semibold text-white disabled:opacity-40" style={{ background: C.forest }}>Add</button>
         </div>
       </form>
     </div>

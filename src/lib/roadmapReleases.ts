@@ -88,34 +88,86 @@ export function sortReleases(rs: Release[]): Release[] {
 // ── timeline ───────────────────────────────────────────────────────────────
 export type Timeline = {
   startMs: number;
-  endMs: number;
-  months: { label: string; ms: number }[];
-  /** 0..1 across the chart for a calendar day; a bar runs from its start to the END of its last day. */
+  endMs: number; // exclusive: midnight after the last day shown
+  /** Month starts inside the window (gridline + label), plus the month the window opens in, which
+   *  gets a label at the left edge but no gridline when the window opens mid-month. */
+  months: { label: string; ms: number; gridline: boolean }[];
+  /** 0..1 across the chart for the START of a calendar day; endOf is the end of that day. */
   at: (ymd: string) => number;
   endOf: (ymd: string) => number;
-  title: string; // "Oct 2026 to Mar 2027"
+  title: string; // "Sep 5, 2026 to Feb 16, 2027" or "Jan 2026 to Mar 2027"
 };
 
-/** Whole months, from the month of the earliest start (or today) to the month of the latest out-by
- *  (or today), so the today line is always on the chart. */
-export function buildTimeline(releases: Release[], today: string): Timeline {
-  const days = [today, ...releases.flatMap((r) => [r.starts_on, r.out_by])];
-  const min = days.reduce((a, b) => (a < b ? a : b));
-  const max = days.reduce((a, b) => (a > b ? a : b));
-  const [y0, m0] = min.split("-").map(Number);
-  const [y1, m1] = max.split("-").map(Number);
-  const startMs = Date.UTC(y0, m0 - 1, 1);
-  const endMs = Date.UTC(y1, m1, 1); // first day of the month after the last one
-  const months: { label: string; ms: number }[] = [];
+export type TimelineMode = "around" | "full";
+/** The default window: about six weeks back and four months ahead of today. */
+export const AROUND_BEFORE_DAYS = 42;
+export const AROUND_AFTER_DAYS = 122;
+
+const DAY = 86_400_000;
+const addDaysYmd = (ymd: string, n: number) => utcMsToYmd(ymdToUtcMs(ymd) + n * DAY);
+const fmtDayYear = (ymd: string) => `${fmtDay(ymd)}, ${ymd.slice(0, 4)}`;
+
+/** "around": today − 42 days through today + 122 days, whatever the releases are. "full": whole
+ *  months from the earliest start (or today) to the latest out-by (or today). */
+export function buildTimeline(releases: Release[], today: string, mode: TimelineMode = "full"): Timeline {
+  let first: string, last: string, title: string;
+  if (mode === "around") {
+    first = addDaysYmd(today, -AROUND_BEFORE_DAYS);
+    last = addDaysYmd(today, AROUND_AFTER_DAYS);
+    title = `${fmtDayYear(first)} to ${fmtDayYear(last)}`;
+  } else {
+    const days = [today, ...releases.flatMap((r) => [r.starts_on, r.out_by])];
+    const min = days.reduce((a, b) => (a < b ? a : b));
+    const max = days.reduce((a, b) => (a > b ? a : b));
+    first = `${min.slice(0, 7)}-01`;
+    const [y1, m1] = max.split("-").map(Number);
+    last = utcMsToYmd(Date.UTC(y1, m1, 1) - DAY); // last day of the latest month
+    title = `${MO[Number(first.slice(5, 7)) - 1]} ${first.slice(0, 4)} to ${MO[Number(last.slice(5, 7)) - 1]} ${last.slice(0, 4)}`;
+  }
+  const startMs = ymdToUtcMs(first);
+  const endMs = ymdToUtcMs(last) + DAY;
+  const months: Timeline["months"] = [];
+  const [y0, m0] = first.split("-").map(Number);
   for (let y = y0, m = m0 - 1; Date.UTC(y, m, 1) < endMs; m === 11 ? (y++, (m = 0)) : m++) {
-    months.push({ label: MO[m], ms: Date.UTC(y, m, 1) });
+    const ms = Date.UTC(y, m, 1);
+    if (ms >= startMs) months.push({ label: MO[m], ms, gridline: true });
+    else months.push({ label: MO[m], ms: startMs, gridline: false });
   }
   const span = endMs - startMs;
   const at = (ymd: string) => (ymdToUtcMs(ymd) - startMs) / span;
-  const endOf = (ymd: string) => (ymdToUtcMs(ymd) + 86_400_000 - startMs) / span;
-  const last = utcMsToYmd(endMs - 86_400_000);
-  const title = `${MO[m0 - 1]} ${y0} to ${MO[Number(last.slice(5, 7)) - 1]} ${last.slice(0, 4)}`;
+  const endOf = (ymd: string) => (ymdToUtcMs(ymd) + DAY - startMs) / span;
   return { startMs, endMs, months, at, endOf, title };
+}
+
+/** A release has a bar only if some of it falls inside the window. */
+export const inTimeline = (r: Release, t: Timeline): boolean => t.endOf(r.out_by) > 0 && t.at(r.starts_on) < 1;
+
+/** Newest first, the order the Releases tab lists them: latest out-by on top. */
+export function newestFirst(rs: Release[]): Release[] {
+  return [...rs].sort((a, b) => b.out_by.localeCompare(a.out_by) || b.starts_on.localeCompare(a.starts_on)
+    || b.version.localeCompare(a.version, undefined, { numeric: true }));
+}
+
+// ── estimates ──────────────────────────────────────────────────────────────
+/** data.estimated_hours: optional, a non-negative number of hours. Absent or invalid is no estimate. */
+export function estimateOf(c: Pick<KanbanCard, "data">): number | null {
+  const h = c.data?.estimated_hours;
+  return typeof h === "number" && Number.isFinite(h) && h >= 0 ? h : null;
+}
+/** "8h", "1.5h". */
+export const fmtHours = (h: number): string => `${Number.isInteger(h) ? h : Math.round(h * 10) / 10}h`;
+/** The total of the estimates that are set, or null when none is. */
+export function totalEstimate(cards: Pick<KanbanCard, "data">[]): number | null {
+  const set = cards.map(estimateOf).filter((h): h is number => h !== null);
+  return set.length ? set.reduce((a, b) => a + b, 0) : null;
+}
+/** What a person typed into an estimate box: "" clears it; otherwise a non-negative number, or
+ *  undefined when it is not one (the box then refuses it). */
+export function parseHours(input: string): number | null | undefined {
+  const t = input.trim().replace(/h(ours?)?$/i, "").trim();
+  if (t === "") return null;
+  const n = Number(t);
+  return Number.isFinite(n) && n >= 0 ? n : undefined;
 }
 
 // ── stats row ──────────────────────────────────────────────────────────────

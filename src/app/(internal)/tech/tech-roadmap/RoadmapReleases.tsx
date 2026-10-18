@@ -4,11 +4,11 @@
 // that is in no release and what is already out this year. Plus the release dialog (19429:154759),
 // which creates a release and edits one.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { KanbanCard, RoadmapBoard } from "@/lib/kanban";
 import {
-  buildTimeline, fmtRange, shownDoneYmd, readOpen, releaseOpenKey, releaseStatus, sortReleases, writeOpen,
-  ymdToUtcMs, type Release,
+  buildTimeline, fmtHours, fmtRange, inTimeline, newestFirst, readOpen, releaseOpenKey, releaseStatus, shownDoneYmd,
+  totalEstimate, writeOpen, ymdToUtcMs, type Release, type TimelineMode,
 } from "@/lib/roadmapReleases";
 import type { ReleaseInput } from "@/lib/useRoadmapReleases";
 import { firstLinePlain } from "@/lib/richText";
@@ -29,7 +29,8 @@ export default function RoadmapReleases({ board, cards, releases, today, viewer,
   onAddWork: (releaseId: string | null) => void;
   onEditRelease: (r: Release) => void;
 }) {
-  const sorted = useMemo(() => sortReleases(releases), [releases]);
+  // Newest first: the latest out-by date on top, going back in time.
+  const sorted = useMemo(() => newestFirst(releases), [releases]);
   const year = today.slice(0, 4);
   const loose = cards.filter((c) => !c.release_id && c.stage !== "shipped").sort(byCreated);
   const looseShown = loose.filter(passes);
@@ -98,7 +99,39 @@ export default function RoadmapReleases({ board, cards, releases, today, viewer,
 }
 
 // ── timeline ───────────────────────────────────────────────────────────────
+// Default view: about six weeks back and four months ahead, so the 1 to 3 week releases near today
+// are wide enough to read. "Full year" shows every release. A release wholly outside the window has
+// no bar; it is still in the list below. A bar's date range sits inside the bar when it fits, and just
+// to the right of it (or to the left, at the right edge) when it does not: a label is never clipped.
+const LABEL_FONT_PX = 11;
+let measureCtx: CanvasRenderingContext2D | null = null;
+function textWidth(text: string, fontFamily: string): number {
+  if (!measureCtx) measureCtx = document.createElement("canvas").getContext("2d");
+  if (!measureCtx) return text.length * 6.5;
+  measureCtx.font = `600 ${LABEL_FONT_PX}px ${fontFamily}`;
+  return measureCtx.measureText(text).width;
+}
+
 function Timeline({ releases, cards, today, isAdmin, onEdit }: { releases: Release[]; cards: KanbanCard[]; today: string; isAdmin: boolean; onEdit: (r: Release) => void }) {
+  const [mode, setMode] = useState<TimelineMode>("around");
+  const chartRef = useRef<HTMLDivElement>(null);
+  const boxRef = useRef<HTMLDivElement>(null);
+  const [chartW, setChartW] = useState(0);
+  const [boxW, setBoxW] = useState(1000);
+  const [font, setFont] = useState("sans-serif");
+  useEffect(() => {
+    const el = chartRef.current, box = boxRef.current;
+    if (!el || !box) return;
+    setFont(getComputedStyle(el).fontFamily || "sans-serif");
+    const ro = new ResizeObserver(() => { setChartW(el.clientWidth); setBoxW(box.clientWidth); });
+    ro.observe(el); ro.observe(box);
+    setChartW(el.clientWidth); setBoxW(box.clientWidth);
+    return () => ro.disconnect();
+  }, [releases.length, mode]);
+  // Narrow (a phone): no name column beside the chart, which would push the chart off-screen.
+  // Each release is stacked instead: its name on one line, its bar full width underneath.
+  const narrow = boxW < 560;
+
   if (releases.length === 0) {
     return (
       <section data-testid="timeline" className="rounded-[14px] bg-white px-5 py-[18px]">
@@ -107,62 +140,106 @@ function Timeline({ releases, cards, today, isAdmin, onEdit }: { releases: Relea
       </section>
     );
   }
-  const t = buildTimeline(releases, today);
+  const t = buildTimeline(releases, today, mode);
+  const shown = releases.filter((r) => inTimeline(r, t));
+  const hiddenCount = releases.length - shown.length;
   const pct = (x: number) => `${(x * 100).toFixed(3)}%`;
-  const statuses = releases.map((r) => releaseStatus(r, cards, today));
-  const ROW = 40;
+  const statusOf = new Map(releases.map((r) => [r.id, releaseStatus(r, cards, today)]));
+  // PAD: the bar's left+right padding, used only when the label is inside. A bar whose label sits
+  // outside has no padding, or the padding alone would make a short bar wider than its dates.
+  const ROW = narrow ? 62 : 44, HEAD = 30, BAR = 24, GAP = 6, PAD = 20, NAME_H = narrow ? 24 : ROW;
+  const todayX = (t.at(today) + t.endOf(today)) / 2;
+
   return (
-    <section data-testid="timeline" className="flex flex-col gap-3.5 rounded-[14px] bg-white px-5 pb-5 pt-[18px]">
-      <div className="flex flex-wrap items-center gap-x-3.5 gap-y-1">
+    <section data-testid="timeline" data-mode={mode} className="flex flex-col gap-3.5 rounded-[14px] bg-white px-4 pb-5 pt-[18px] sm:px-5">
+      <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2">
         <h3 className="m-0 text-[16px] font-bold" style={{ color: C.ink }}>Timeline</h3>
-        <span className="text-[12px]" style={{ color: C.muted }}>{t.title}</span>
+        <span className="text-[12px]" style={{ color: C.muted }} data-testid="timeline-range">{t.title}</span>
+        <div className="flex gap-[2px] rounded-[8px] p-[2px]" style={{ background: C.soft }} role="group" aria-label="Timeline range">
+          {([["around", "Around today"], ["full", "Full year"]] as const).map(([k, label]) => (
+            <button key={k} type="button" data-testid={`timeline-${k}`} aria-pressed={mode === k} onClick={() => setMode(k)}
+              className={`rounded-[6px] px-2.5 py-1 text-[12px] ${mode === k ? "font-semibold" : "font-medium"}`}
+              style={mode === k ? { background: C.white, color: C.ink } : { color: C.muted }}>{label}</button>
+          ))}
+        </div>
         <span className="flex-1" />
         <Legend swatch={<span className="h-2 w-3.5 rounded-[3px]" style={{ background: C.accent }} />} label="Building" />
         <Legend swatch={<span className="h-2 w-3.5 rounded-[3px] border" style={{ background: C.planBg, borderColor: C.planLine }} />} label="Planned" />
-        {statuses.includes("out") && <Legend swatch={<span className="h-2 w-3.5 rounded-[3px] border" style={{ background: C.mint, borderColor: C.accent }} />} label="Out" />}
+        {[...statusOf.values()].includes("out") && <Legend swatch={<span className="h-2 w-3.5 rounded-[3px] border" style={{ background: C.mint, borderColor: C.accent }} />} label="Out" />}
         <Legend swatch={<span className="h-3 w-[2px]" style={{ background: C.today }} />} label="Today" />
       </div>
-      <div className="overflow-x-auto">
-        <div className="relative min-w-[640px]" style={{ height: 34 + releases.length * ROW }}>
-          {/* labels */}
-          {releases.map((r, i) => (
-            <div key={r.id} className="absolute left-0 flex w-[200px] items-center gap-2 overflow-hidden" style={{ top: 34 + i * ROW, height: 24 }}>
+      <div ref={boxRef}>
+        <div className="relative" style={{ height: HEAD + Math.max(shown.length, 1) * ROW }}>
+          {/* names: full, wrapping to two lines; the hover title carries it if two is ever not enough */}
+          {shown.map((r, i) => (
+            <div key={r.id} data-testid="timeline-label" className={`absolute left-0 z-[2] flex items-center gap-2 ${narrow ? "" : "w-[230px]"}`} style={{ top: HEAD + i * ROW + (narrow ? 4 : 0), height: NAME_H }}>
               <VersionChip v={r.version} />
-              <span className="truncate text-[13px] font-semibold" style={{ color: C.ink }}>{r.name}</span>
+              {/* white backing: on a phone the name sits over the chart, and the lines must pass behind it */}
+              <span title={r.name} className="line-clamp-2 min-w-0 rounded-[4px] bg-white pr-1.5 text-[12.5px] font-semibold leading-[1.25]" style={{ color: C.ink }}>{r.name}</span>
             </div>
           ))}
-          {/* chart */}
-          <div className="absolute inset-y-0 left-[210px] right-0" data-testid="timeline-chart">
+          {shown.length === 0 && (
+            <p className="absolute left-0 m-0 text-[13px]" style={{ top: HEAD + 12, color: C.muted }}>No release falls in this range.</p>
+          )}
+          <div ref={chartRef} className="absolute inset-y-0 right-0" style={{ left: narrow ? 0 : 240 }} data-testid="timeline-chart">
             {t.months.map((m) => {
               const x = (m.ms - t.startMs) / (t.endMs - t.startMs);
               return (
                 <div key={m.ms} className="absolute inset-y-0" style={{ left: pct(x) }}>
-                  <div className="absolute inset-y-0 w-px" style={{ background: "#eceeea" }} />
+                  {m.gridline && <div className="absolute inset-y-0 w-px" style={{ background: "#eceeea" }} />}
                   <span className="absolute left-1.5 top-1 text-[11px] font-semibold tracking-[0.4px]" style={{ color: C.faint }}>{m.label}</span>
                 </div>
               );
             })}
-            {releases.map((r, i) => {
-              const st = statuses[i];
-              const left = t.at(r.starts_on);
-              const width = t.endOf(r.out_by) - left;
+            {shown.map((r, i) => {
+              const st = statusOf.get(r.id);
+              const left = Math.max(0, t.at(r.starts_on));
+              const right = Math.min(1, t.endOf(r.out_by));
               const style = st === "building" ? { background: C.accent, color: C.forest }
                 : st === "out" ? { background: C.mint, border: `1px solid ${C.accent}`, color: C.forest }
                 : { background: C.planBg, border: `1px solid ${C.planLine}`, color: C.ink };
+              const label = fmtRange(r.starts_on, r.out_by);
+              const barPx = (right - left) * chartW;
+              const need = textWidth(label, font) + PAD;
+              const inside = chartW > 0 && barPx >= need;
+              // Outside: to the right of the bar, unless that would run off the chart; then to its left.
+              const roomRight = chartW - right * chartW - GAP;
+              const outsideRight = need - PAD + 8 <= roomRight;
+              const top = narrow ? HEAD + i * ROW + 4 + NAME_H + 4 : HEAD + i * ROW + (ROW - BAR) / 2;
               return (
-                <button key={r.id} type="button" data-testid="timeline-bar" data-release={r.version} data-left={left.toFixed(5)} data-width={width.toFixed(5)}
-                  disabled={!isAdmin} onClick={() => onEdit(r)} title={isAdmin ? "Edit release" : undefined}
-                  className="absolute flex h-6 items-center overflow-hidden whitespace-nowrap rounded-[6px] px-2.5 text-[11px] font-semibold disabled:cursor-default"
-                  style={{ ...style, top: 34 + i * ROW, left: pct(left), width: pct(width) }}>
-                  {fmtRange(r.starts_on, r.out_by)}
-                </button>
+                <div key={r.id}>
+                  <button type="button" data-testid="timeline-bar" data-release={r.version} data-left={left.toFixed(5)} data-width={(right - left).toFixed(5)}
+                    data-label={inside ? "inside" : outsideRight ? "right" : "left"}
+                    disabled={!isAdmin} onClick={() => onEdit(r)} title={`${r.version} ${r.name}: ${label}`} aria-label={`${r.version} ${r.name}, ${label}`}
+                    className={`absolute flex items-center whitespace-nowrap text-[11px] font-semibold disabled:cursor-default ${inside ? "px-2.5" : "px-0"}`}
+                    style={{ ...style, top, height: BAR, left: pct(left), width: pct(right - left), minWidth: 4,
+                      borderRadius: `${t.at(r.starts_on) < 0 ? 0 : 6}px ${t.endOf(r.out_by) > 1 ? 0 : 6}px ${t.endOf(r.out_by) > 1 ? 0 : 6}px ${t.at(r.starts_on) < 0 ? 0 : 6}px` }}>
+                    {inside ? label : null}
+                  </button>
+                  {!inside && (
+                    <span data-testid="timeline-outside-label" aria-hidden className="pointer-events-none absolute z-[2] flex items-center whitespace-nowrap rounded-[4px] bg-white px-1 text-[11px] font-semibold"
+                      style={{ top, height: BAR, color: C.ink, ...(outsideRight
+                        ? { left: `calc(${pct(right)} + ${GAP}px)` }
+                        : { right: `calc(${pct(1 - left)} + ${GAP}px)` }) }}>
+                      {label}
+                    </span>
+                  )}
+                </div>
               );
             })}
-            <div data-testid="today-line" data-today={today} data-left={t.at(today).toFixed(5)} className="absolute bottom-0 w-[2px]"
-              style={{ top: 20, left: `calc(${pct((t.at(today) + t.endOf(today)) / 2)} - 1px)`, background: C.today }} />
+            {todayX >= 0 && todayX <= 1 && (
+              <div data-testid="today-line" data-today={today} data-left={t.at(today).toFixed(5)} className="absolute bottom-0 z-[1] w-[2px]"
+                style={{ top: 20, left: `calc(${pct(todayX)} - 1px)`, background: C.today }} />
+            )}
           </div>
         </div>
       </div>
+      {hiddenCount > 0 && (
+        <p className="m-0 text-[12px]" style={{ color: C.muted }} data-testid="timeline-hidden">
+          {hiddenCount} {hiddenCount === 1 ? "release falls" : "releases fall"} outside this range. They are in the list below
+          {mode === "around" && <>, or <button type="button" onClick={() => setMode("full")} className="font-semibold underline underline-offset-2" style={{ color: C.link }}>show the full year</button></>}.
+        </p>
+      )}
     </section>
   );
 }
@@ -187,6 +264,7 @@ function ReleaseCard({ r, cards, allCards, today, viewer, isAdmin, passes, onOpe
   const ryan = cards.filter((c) => c.assignee === "ryan").length;
   const scrum = cards.filter((c) => c.assignee === "scrumlaunch").length;
   const frac = cards.length ? done.length / cards.length : 0;
+  const hours = totalEstimate(cards);
 
   return (
     <section data-testid="release-card" data-release={r.version} data-open={open ? "1" : "0"} className="overflow-hidden rounded-[14px] bg-white">
@@ -195,7 +273,7 @@ function ReleaseCard({ r, cards, allCards, today, viewer, isAdmin, passes, onOpe
           className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3.5 gap-y-2 py-4 pl-5 pr-2 text-left">
           <VersionChip v={r.version} size="md" />
           <span className="flex min-w-0 flex-col gap-0.5">
-            <span className="truncate text-[17px] font-bold" style={{ color: C.ink }}>{r.name}</span>
+            <span className="break-words text-[17px] font-bold leading-tight" style={{ color: C.ink }}>{r.name}</span>
             <span className="text-[12px]" style={{ color: C.muted }}>{fmtRange(r.starts_on, r.out_by)}</span>
           </span>
           <span className="hidden flex-1 sm:block" />
@@ -203,8 +281,11 @@ function ReleaseCard({ r, cards, allCards, today, viewer, isAdmin, passes, onOpe
             {ryan > 0 && <Pill bg={C.mint} ink={C.forest}>Ryan {ryan}</Pill>}
             {scrum > 0 && <Pill bg={C.blueBg} ink={C.blueInk}>ScrumLaunch {scrum}</Pill>}
           </span>
-          <span className="flex w-[130px] flex-col gap-[5px]">
-            <span data-testid="release-progress" className="text-[12px] font-medium" style={{ color: C.muted }}>{done.length} of {cards.length} done</span>
+          <span className="flex min-w-[130px] flex-col gap-[5px]">
+            <span className="flex items-baseline gap-1.5 whitespace-nowrap text-[12px] font-medium" style={{ color: C.muted }}>
+              <span data-testid="release-progress">{done.length} of {cards.length} done</span>
+              {hours !== null && <span data-testid="release-hours" title="Total of the estimates set on this release's work">· {fmtHours(hours)}</span>}
+            </span>
             <span className="relative h-1.5 w-[130px] overflow-hidden rounded-[3px]" style={{ background: "#e9ece8" }}>
               <span className="absolute inset-y-0 left-0 rounded-[3px]" style={{ width: `${frac * 100}%`, background: C.accent }} />
             </span>

@@ -8,7 +8,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { KanbanCard, RoadmapAssignee } from "@/lib/kanban";
 import type { CardPatch } from "@/lib/useKanbanBoard";
-import { ASSIGNEE_LABEL, fmtDay, sortReleases, type Release } from "@/lib/roadmapReleases";
+import { ASSIGNEE_LABEL, estimateOf, fmtDay, parseHours, sortReleases, type Release } from "@/lib/roadmapReleases";
 import { chicagoYmd } from "@/lib/weekBuckets";
 import { ROADMAP_COLS } from "@/lib/roadmap";
 import { C, PRIORITY_COLOR, descriptionOf, priorityOf } from "./roadmapUi";
@@ -168,6 +168,15 @@ export default function WorkPanel({ card, releases, isAdmin, createdBy, onClose,
               <option value="High">High</option><option value="Medium">Medium</option><option value="Low">Low</option>
             </Select>
           </Row>
+
+          {/* estimate: optional hours, blank by default */}
+          <Row label="Estimate">
+            <EstimateInput key={card.id} card={card} disabled={!isAdmin} onSave={(hours) => {
+              const data = { ...card.data };
+              if (hours === null) delete data.estimated_hours; else data.estimated_hours = hours;
+              void onPatch({ data });
+            }} />
+          </Row>
         </div>
 
         {/* 7. footer */}
@@ -215,5 +224,30 @@ function Select({ value, onChange, disabled, dot, testid, children }: {
       </select>
       <img src="/roadmap/chevron-down.svg" alt="" width={14} height={14} className="pointer-events-none absolute right-2.5 block" />
     </label>
+  );
+}
+
+/** Hours, saved when you click away or press Enter. Empty clears the estimate; anything that is not
+ *  a number is refused and the box goes back to the saved value. */
+function EstimateInput({ card, disabled, onSave }: { card: KanbanCard; disabled: boolean; onSave: (hours: number | null) => void }) {
+  const saved = estimateOf(card);
+  const [text, setText] = useState(saved === null ? "" : String(saved));
+  const [bad, setBad] = useState(false);
+  useEffect(() => { setText(saved === null ? "" : String(saved)); setBad(false); }, [saved]);
+  const commit = () => {
+    const h = parseHours(text);
+    if (h === undefined) { setBad(true); return; }
+    setBad(false);
+    if (h !== saved) onSave(h);
+  };
+  return (
+    <div className="flex flex-1 items-center gap-2">
+      <input data-testid="estimate-input" value={text} disabled={disabled} inputMode="decimal" placeholder="Not set"
+        onChange={(e) => { setText(e.target.value); setBad(false); }} onBlur={commit}
+        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); (e.target as HTMLInputElement).blur(); } }}
+        className="w-[96px] rounded-[8px] border px-2.5 py-[7px] text-[14px] font-medium outline-none focus:border-[#2cdb87] disabled:bg-transparent"
+        style={{ borderColor: bad ? C.danger : C.line, color: C.ink }} />
+      <span className="text-[13px]" style={{ color: bad ? C.danger : C.muted }}>{bad ? "Use a number, like 8 or 1.5" : "hours"}</span>
+    </div>
   );
 }
