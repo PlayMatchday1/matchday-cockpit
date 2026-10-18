@@ -25,6 +25,13 @@ never `vercel deploy --prod`) → the merge, staging first, then production in s
       `20261018120000_add_field_merges` if approved. Both run in Heroku's release phase before the new dyno starts.
   - The old code serves for a moment against the new schema. That is safe: `cover_id` is NULL everywhere until someone
     sets one, and the two-column FK never checks a NULL.
+- [ ] **S3 permission, in the AWS console, BEFORE STAGING (Ryan):** confirm whether the API's IAM user (the one
+      behind `AWS_ACCESS_KEY_ID` on each Heroku app) has `s3:GetObject` on its bucket, for staging and production
+      separately.
+  - Registering a cover runs `HeadObject`, which S3 authorises as `s3:GetObject`.
+  - Without it, every cover register fails as `UPLOAD_NOT_FOUND`, even after a good upload.
+  - Record the policy name and the answer here. If it is missing, decide the policy change before staging; don't
+    discover it there.
 - [ ] **The `updateMatch` UTC bug** (backend notes §6.1) is either fixed in its own change first, or written down as known.
   - The merge refuses cross-city merges, so it cannot hit the bug itself. A staff field move across time zones still can.
 - [ ] **Clubhouse:**
@@ -42,10 +49,8 @@ never `vercel deploy --prod`) → the merge, staging first, then production in s
 - [ ] **The object:** it exists with the `public-read` ACL and its `x-amz-tagging` reads `field=<id>&image=extraCover`.
 - [ ] **The webhook ignores `extraCover`:** after the S3 notification fires, the field's **gallery has not grown** and
       `fields.cover_s3_key` is unchanged. Before this branch an unknown tag fell into the gallery branch.
-- [ ] **Register needs `HeadObject`:** it uses `HeadObject`, which needs `s3:GetObject` on the bucket for the API's AWS
-      user. UNKNOWN whether that user has it.
-  - A missing permission shows as `UPLOAD_NOT_FOUND` on every register.
-  - Check with one upload; read the error before changing IAM.
+- [ ] **Register needs `HeadObject`:** one real upload and register on staging, read back. It confirms the
+      `s3:GetObject` answer from section 0 (a missing permission shows as `UPLOAD_NOT_FOUND` on every register).
 - [ ] **Replace the Default from COVER PHOTOS:** `fields.cover_s3_key` changes; the old `/api/fields/photos` cover upload
       folds away.
 
@@ -125,6 +130,19 @@ Once the `field_merges` migration is approved and deployed:
   Do it on staging once.
 
 ## 8. Production, in small steps
+
+- [ ] **BEFORE merging 17 and 18 in production (Ryan), READ ONLY: list everything tied to them and decide each one.**
+  - Read with the production preview (`GET /admin/fields/17/merge-into/10/preview` and `/18/merge-into/12/preview`,
+    which write nothing) or a read-only query.
+  - **Promo codes** restricted to 17 or 18. The merge never changes a code: moved matches lose any code that is on the
+    old field only, unless staff extend it to 10 or 12 first. The preview's `warnings` lists each one with the number
+    of matches.
+  - **Phone numbers** on 17 and 18. They are the cancellation-text numbers for that field; they stay on the hidden
+    field.
+  - **Special events** at 17 or 18 that have not started. Events do not move.
+  - **Reminder settings:** is 17 or 18 in `PRE_MATCH_REMINDER_FIELD_IDS` on production while 10 or 12 is not? If so,
+    moved matches lose the pre-match reminder.
+  - Write the list and each decision here, with who decided, before the merge runs.
 
 - [ ] **Deploy the backend.** Before touching any cover, read back `GET /fields`, `GET /matches/:id` and the app, and
       confirm nothing changed.

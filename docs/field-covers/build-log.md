@@ -43,6 +43,10 @@ SHOTS=docs/field-covers/screens IMG_SQUARE=<a square jpg> IMG_TALL=<a tall jpg> 
 | 10-18 | Field merge on the backend: preview + merge endpoints, `GET /fields/:id` follows a merge, seed pairs 17→10, 18→12 | backend `bfef604`; **merge waits on the `field_merges` SQL** |
 | 10-18 | Merge preview against the seed (writes nothing) | right: 4 move (1 cancelled), 3 stay, 2 covers carried, left-behind listed; cross-city refused; player 401 |
 | 10-18 | Launch checklist | `launch-checklist.md` |
+| 10-18 | `field_merges` approved as written (Ryan), applied to `matchday_covers_local`; `migrate diff` empty | backend `855d827` |
+| 10-18 | Promo codes untouched by the merge (Ryan); a field-only code leads the preview as a plain warning | same |
+| 10-18 | **Merge checks** added to `verify_api.py` (section M) and run on a fresh seed | **71 / 71 PASS** (whole script) |
+| 10-18 | Checklist: S3 `s3:GetObject` in the AWS console before staging; a read-only list of 17/18's promo codes, phones, events and reminders, each decided, before the production merge | `launch-checklist.md` |
 
 ### Found while building
 
@@ -129,11 +133,30 @@ SHOTS=docs/field-covers/screens IMG_SQUARE=<a square jpg> IMG_TALL=<a tall jpg> 
    - Screens 02, 03.
 10. **App caching check: PASS, no leak** (2026-10-17, read-only; details in the first report and the spec).
 
-## Merge checks (item 4 of the 2026-10-18 brief): WAITING on the `field_merges` SQL
+## Merge checks: PASS (API; `verify_api.py` section M, fresh seed, 2026-10-18)
 
-- Preview: PASS (above).
-- Merge, read-backs and old links: not run. The merge writes `field_merges`, which does not exist until the SQL is
-  approved and applied.
+- **Preview** writes nothing. 17→10 leads with "Promo code TURFBONLY applies only to Northside Turf B. The 5 upcoming
+  matches moving to Northside Park will lose that discount unless staff extend TURFBONLY to Northside Park first. The
+  merge does not change promo codes." (NORTHSIDEBOTH, on both fields, is not warned.) 18→12 has no warning.
+- **17→10:**
+  - moved exactly the 6 not-started matches (138 to 141 seeded, 162 and 171 from the clone check; one cancelled), and
+    the 3 played ones stayed;
+  - covers: "Northside Turf B (old field 17)" (17's Default, renamed because 10 already had that name) on the 5
+    Default ones, and "Tournament nights" carried by name on the 1 that used it. In the app they look exactly as
+    before;
+  - played matches still show what they showed;
+  - 17 is hidden (`deleted_at`, `merged_into_field_id = 10`);
+  - **old links**: `GET /fields/17` opens Northside Park (10), and neither the app's field list nor the admin list shows
+    17.
+- **The `field_merges` row** has exactly the moved ids in order, the cover map with counts, the left-behind list
+  (TURFBONLY only on 17, NORTHSIDEBOTH on both, 1 phone, 1 gallery photo) and the staff email. TURFBONLY is still on
+  17 only.
+- **Refused:** merging 17 twice, merging into hidden 17, and a service account without `X-Acting-Staff-Email`.
+- **18→12:** 6 moved, 3 stayed, the Default carried as "Riverside Lights" and used by every moved match.
+  `GET /fields/18` opens 12, and its row is recorded.
+- **Not in the browser:** the merge has no Clubhouse control. It is an admin API call; the checklist runs it through
+  the preview first. The Clubhouse Fields page simply stops listing the merged field (checked through the admin
+  list). Its `?field=17` deep link opens nothing rather than redirecting to 10.
 
 ## Not done / scope
 
