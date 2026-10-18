@@ -34,6 +34,7 @@ SHOTS=docs/field-covers/screens IMG_SQUARE=<a square jpg> IMG_TALL=<a tall jpg> 
 | 10-18 | Clubhouse in a browser, `_check_field_covers.mjs` | **34 / 34 PASS**, 13 screenshots in `screens/` |
 | 10-18 | Clubhouse typecheck | clean |
 | 10-17 | Clubhouse `npm run verify` (before `.env.local` was linked) | 101 / 107. The 6 failures needed `.env.local`, and fail the same on untouched `origin/main` in this worktree |
+| 10-18 | Clubhouse `npm run verify` with `.env.local` linked, at the final tree | **107 / 107, exit 0** |
 
 ### Found while building
 
