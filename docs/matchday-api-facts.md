@@ -7422,3 +7422,26 @@ for 18596, 18680, 18679, 19700 and `/admin/matches?fromDate&toDate` windows arou
   "+ Add". Proven 2026-10-17: Ryan → ScrumLaunch → cleared left `owner_user_id` unchanged.
 - **`app_users` has no row for ScrumLaunch** (2026-10-17, `select id, full_name, email` on admins), which is why
   `assignee` is its own column rather than an `owner_user_id`.
+
+## Backend code facts found building field cover photos (2026-10-18, local backend only — production NOT probed)
+
+- **`RolesGuard` reads `@Roles` from the HANDLER ONLY; a class-level `@Roles` is silently ignored.** Evidence:
+  `apps/api/src/common/guards/roles.guard.ts:13` on vendor `master` 318da06:
+  `this.reflector.get<string[]>('roles', context.getHandler())`; no roles found means `return true`. Proven on the local
+  backend 2026-10-18: the field-covers controller with `@Roles(ADMIN)` on the class answered **200 to a player**; with it
+  on every handler, **401 on all ten routes** (`docs/field-covers/verify_api.py` in `~/Code/backend-field-covers`).
+- **`admin/stripe-accounts` is open to ANY signed-in user on vendor `master`.** `admin-stripe-accounts.controller.ts:29`
+  puts `@Roles(UserType.ADMIN)` on the class and none on its handlers (list, get, create, backfill, update). Proven on
+  the local backend (that controller unmodified from 318da06; `git diff origin/master -- apps/api/src/core/stripe` is
+  empty) on 2026-10-18 as `player01@example.com`: `GET /admin/stripe-accounts` → 200 with the list (no secret key in
+  the response), `PUT /admin/stripe-accounts/1 {"name":…}` → 200 and the row changed (reseeded after). Whether the update
+  accepts `secretKey` or the webhook secrets was NOT tested. **Production: UNKNOWN by probe, the same code by reading.**
+  Not fixed on any branch; needs its own change.
+- **`updateMatch` computes `startDateUtc`/`endDateUtc` in the OLD field's time zone.** `matches.service.ts:1186-1197`
+  (318da06) converts `dto.startDate`/`dto.endDate` with `match.field.city.timeZone.name` even when `dto.fieldId` moves the
+  match to a field in another time zone, and recomputes nothing when only `fieldId` is sent. Code read only; not
+  reproduced. Logged for the backend phase (backend `docs/field-covers/backend-notes.md`), not fixed.
+- **Match payloads pass every key the query includes.** The match controllers return `plainToInstance(<Dto>, row)`
+  without `excludeExtraneousValues` (e.g. `matches.controller.ts:708`, `admin-matches.controller.ts:295`), so a relation
+  added to a match query reaches the app unless the DTO drops it. The field-covers branch drops its `cover` relation in
+  `MatchForResponseDto` for that reason.
