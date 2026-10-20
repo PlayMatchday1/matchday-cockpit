@@ -13,7 +13,7 @@
  * them something outside the range they set.
  */
 
-import { weekEndOnOrAfter, weekStartOnOrBefore } from "./weekStart";
+import { MASTER_SCHEDULE_WEEK_START, weekEndOnOrAfter, weekStartOnOrBefore } from "./weekStart";
 
 export type GridMatch = {
   apiId: number; city: string; date: string; time: string; minutes: number;
@@ -133,13 +133,15 @@ const shift = (isoStr: string, n: number) => { const d = D(isoStr); d.setUTCDate
 export const isoDow = (isoStr: string): number => ((D(isoStr).getUTCDay() + 6) % 7) + 1;
 
 /**
- * Build the grid. Weeks are rows of exactly seven days, starting on WEEK_START (Sunday — shared with
- * the OpEx calendar, src/lib/weekStart.ts), from the week start on or before `from` to the week end
+ * Build the grid. Weeks are rows of exactly seven days, starting on `ws` (default
+ * MASTER_SCHEDULE_WEEK_START, Monday — this grid is the Master Schedule's; the OpEx calendar keeps
+ * its Sunday through src/lib/weekStart.ts), from the week start on or before `from` to the week end
  * on or after `to` — so a range crossing a month boundary simply keeps going as consecutive weeks
  * rather than starting a second calendar.
  */
 export function buildMonthGrid(
   from: string, to: string, matches: readonly GridMatch[], todayIso: string,
+  ws: number = MASTER_SCHEDULE_WEEK_START,
 ): GridDay[][] {
   const byDate = new Map<string, GridMatch[]>();
   for (const m of matches) {
@@ -153,8 +155,8 @@ export function buildMonthGrid(
   }
 
   const weeks: GridDay[][] = [];
-  const last = weekEndOnOrAfter(to);
-  let cursor = weekStartOnOrBefore(from);
+  const last = weekEndOnOrAfter(to, ws);
+  let cursor = weekStartOnOrBefore(from, ws);
   /* A HARD CEILING. The route caps the range at 92 days, so 20 weeks is unreachable in practice —
    * it is here so a bad `to` can never spin this loop rather than throw. */
   for (let guard = 0; cursor <= last && guard < 20; guard++) {

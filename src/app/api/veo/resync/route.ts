@@ -54,8 +54,8 @@ export async function POST(req: Request) {
    * not a rolling seven days starting Wednesday. Dates stay YYYY-MM-DD strings throughout: these
    * are calendar bounds for a query, and a Date would re-shift them by the server's offset. */
   const base = week || new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
-  /* ?ws=0 re-pulls a SUNDAY-start week — the Master Schedule's week on screen (src/lib/weekStart.ts).
-   * Absent keeps the Monday week. Without it, a Sunday week passed here re-pulled the Monday week
+  /* ?ws=0 re-pulls a SUNDAY-start week. Anything else keeps the Monday week — which is what the
+   * Master Schedule shows again since 2026-10-20 (it sends ws=1, src/lib/weekStart.ts). Without it, a Sunday week passed here re-pulled the Monday week
    * ending on that Sunday: six of the seven days on screen were not refreshed. */
   const sundayStart = new URL(req.url).searchParams.get("ws") === "0";
   const monday = sundayStart ? weekStartOnOrBefore(base, 0) : mondayOf(base);

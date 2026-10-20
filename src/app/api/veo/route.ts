@@ -19,8 +19,9 @@ export async function GET(req: Request) {
     const weekRef = m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : new Date();
     // SCOPED FROM THE SESSION, never from the request. authenticateCrm resolves confinedCity from
     // app_users on every request with no JWT caching, so a revoked confinement takes effect at once.
-    // ?ws=0 starts the week on Sunday (the Master Schedule, src/lib/weekStart.ts). Absent = Monday,
-    // as every other caller (Veo dashboard, review count) has always had.
+    // ?ws=0 starts the week on Sunday. Anything else = Monday — what the Master Schedule sends (ws=1,
+    // MASTER_SCHEDULE_WEEK_START in src/lib/weekStart.ts, since 2026-10-20) and what every other
+    // caller (Veo dashboard, review count) has always had.
     const ws = new URL(req.url).searchParams.get("ws") === "0" ? 0 : 1;
     const week = await fetchVeoWeek(auth.supabase, new Date(), weekRef, auth.confinedCity ?? null, false, ws);
     return Response.json(week, { status: 200, headers: { "Cache-Control": "no-store" } });

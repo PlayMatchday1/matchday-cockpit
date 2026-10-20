@@ -15,7 +15,7 @@ import {
   buildMonthGrid, applyFilters, fieldsAvailable, reconcileFields, fieldCountLabel,
   defaultRange, rangeTitle, isoDow, priceLabel, type GridMatch,
 } from "../src/lib/monthGrid";
-import { weekEndOnOrAfter, weekStartOnOrBefore } from "../src/lib/weekStart";
+import { MASTER_SCHEDULE_WEEK_START, WEEK_START, weekEndOnOrAfter, weekStartOnOrBefore } from "../src/lib/weekStart";
 import { EDITABLE_KEYS } from "../src/lib/matchEditModel";
 
 let pass = 0; const fails: string[] = [];
@@ -188,7 +188,7 @@ console.log("\nEXPORT WORKLIST IS GONE FROM THE TOOLBAR");
     [/exportWorklist/.test(VIEW), /needEmoji/.test(VIEW)], [true, true]);
 }
 
-console.log("\nTHE MONTH GRID: whole weeks, Sunday first (src/lib/weekStart.ts), padding empty");
+console.log("\nTHE MONTH GRID: whole weeks, Monday first (MASTER_SCHEDULE_WEEK_START), padding empty");
 {
   const M = (id: number, date: string, minutes: number, venue: string, city = "Austin"): GridMatch =>
     ({ apiId: id, city, date, time: "7:00 PM", minutes, venue, name: `m${id}`, veo: false });
@@ -203,17 +203,17 @@ console.log("\nTHE MONTH GRID: whole weeks, Sunday first (src/lib/weekStart.ts),
 
   const g = buildMonthGrid(r.from, r.to, MS, "2026-09-15");
   is("  every row is exactly seven days", g.every((w) => w.length === 7), true);
-  // SUNDAY START (2026-10-03): was "starts on a Monday" (isoDow 1) / "ends on a Sunday" (7).
-  is("  it starts on a Sunday", isoDow(g[0][0].iso), 7);
-  is("  …and ends on a Saturday", isoDow(g[g.length - 1][6].iso), 6);
+  // MONDAY START AGAIN (2026-10-20): Sunday-first from 2026-10-03 (isoDow 7 / 6).
+  is("  it starts on a Monday", isoDow(g[0][0].iso), 1);
+  is("  …and ends on a Sunday", isoDow(g[g.length - 1][6].iso), 7);
   is("  September 2026 is five rows", g.length, 5);
   const first = g[0][0];
-  // SUNDAY START: the first pad is Sunday 30 Aug (was Monday 31 Aug).
-  is("  the leading pad is out of range", [first.iso, first.inRange], ["2026-08-30", false]);
+  // MONDAY START: the first pad is Monday 31 Aug.
+  is("  the leading pad is out of range", [first.iso, first.inRange], ["2026-08-31", false]);
   /* AN OUT-OF-RANGE DAY HOLDS NO MATCHES even when one falls on it — a padding cell must be
-   * genuinely empty, not merely styled as though it were. Match 4 is on 31 Aug, now the SECOND pad
-   * cell, so that is the cell checked (was the first). */
-  const aug31 = g[0][1];
+   * genuinely empty, not merely styled as though it were. Match 4 is on 31 Aug, the first pad cell
+   * on a Monday start, so that is the cell checked. */
+  const aug31 = g[0][0];
   is("  …and the 31 Aug pad holds no matches, though match 4 is on that date", [aug31.iso, aug31.inRange, aug31.matches.length], ["2026-08-31", false, 0]);
   is("  control: match 4 IS in the input on that date", MS.some((m) => m.date === "2026-08-31"), true);
   const sep1 = g.flat().find((d) => d.iso === "2026-09-01")!;
@@ -222,12 +222,23 @@ console.log("\nTHE MONTH GRID: whole weeks, Sunday first (src/lib/weekStart.ts),
 
   /* A RANGE ACROSS A MONTH BOUNDARY KEEPS GOING AS CONSECUTIVE WEEKS. */
   const x = buildMonthGrid("2026-09-28", "2026-10-11", MS, "2026-09-15");
-  // SUNDAY START: Mon 28 Sep – Sun 11 Oct now spans three Sunday weeks, 27 Sep – 17 Oct (was two,
-  // 28 Sep – 11 Oct).
+  // MONDAY START: Mon 28 Sep – Sun 11 Oct is exactly two Monday weeks.
   is("  a cross-month range is consecutive weeks", [x.length, x[0][0].iso, x[x.length - 1][6].iso],
-    [3, "2026-09-27", "2026-10-17"]);
-  is("  …with no gap between them", weekStartOnOrBefore("2026-10-04"), "2026-10-04");
-  is("  control: weekEndOnOrAfter of a Saturday is itself", weekEndOnOrAfter("2026-10-10"), "2026-10-10");
+    [2, "2026-09-28", "2026-10-11"]);
+  is("  …with no gap between them", weekStartOnOrBefore("2026-10-05", MASTER_SCHEDULE_WEEK_START), "2026-10-05");
+  is("  control: weekEndOnOrAfter of a Sunday is itself", weekEndOnOrAfter("2026-10-11", MASTER_SCHEDULE_WEEK_START), "2026-10-11");
+
+  /* THE TEAM'S OCTOBER 2026 (2026-10-20): first row Mon 28 Sep, Oct 1 under THU, Oct 25 the SUN at
+   * the end of a row, last row ending Sun 1 Nov, today (Tue 20 Oct) under TUE. */
+  const o = buildMonthGrid("2026-10-01", "2026-10-31", [], "2026-10-20");
+  const col = (iso: string) => o.find((w) => w.some((d) => d.iso === iso))!.findIndex((d) => d.iso === iso);
+  is("  October: first row starts Mon 28 Sep, last row ends Sun 1 Nov", [o[0][0].iso, o[o.length - 1][6].iso], ["2026-09-28", "2026-11-01"]);
+  is("  October: Oct 1 is column 3 (THU), Oct 25 column 6 (SUN), Oct 20 column 1 (TUE)",
+    [col("2026-10-01"), col("2026-10-25"), col("2026-10-20")], [3, 6, 1]);
+  is("  October: today is marked on Oct 20", o.flat().filter((d) => d.isToday).map((d) => d.iso), ["2026-10-20"]);
+  /* THE OPEX CALENDAR KEEPS SUNDAY. The shared default did not move; only the Master Schedule passes Monday. */
+  is("  control: the shared WEEK_START (OpEx) is still Sunday", WEEK_START, 0);
+  is("  control: an explicit Sunday grid still starts Sun 27 Sep", buildMonthGrid("2026-10-01", "2026-10-31", [], "2026-10-20", 0)[0][0].iso, "2026-09-27");
 }
 
 console.log("\nTHE FILTERS: city single, field MULTI, count always honest");

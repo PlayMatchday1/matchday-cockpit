@@ -2,9 +2,9 @@
 //   npx tsx scripts/opex-projections-test.ts
 //
 // WHAT THIS GUARDS (Ryan, 2026-10-03):
-//   1. THE WEEK STARTS ON SUNDAY on OpEx and the Master Schedule, from ONE constant
-//      (src/lib/weekStart.ts) — and the pages that keep Monday (Match Promotion, the Veo dashboard)
-//      still get Monday from the same helpers when they do not pass it.
+//   1. THE WEEK STARTS ON SUNDAY on OpEx, from ONE constant (src/lib/weekStart.ts) — and the pages
+//      that keep Monday (Match Promotion, the Veo dashboard, and the Master Schedule again since
+//      2026-10-20) still get Monday from the same helpers when they pass it.
 //   2. OpEx draws its own header: the shell leaves the FINANCE title and period bar out there only.
 //   3. PROJECTIONS — money that might leave, added by hand on OpEx:
 //        · with "Show projections" off, every figure equals the build without projections
@@ -40,7 +40,7 @@ console.log("\n1. THE WEEK STARTS ON SUNDAY — one constant, both pages");
   is("week 1 is Oct 1–3, week 2 starts Sunday Oct 4", [oct.rangeOf(0), oct.rangeOf(1)], [[1, 3], [4, 10]]);
   is("Oct 4 (Sun) and Oct 10 (Sat) are in the same week; Oct 11 starts the next", [oct.weekOf(4), oct.weekOf(10), oct.weekOf(11)], [1, 1, 2]);
   is("the week containing Wed Oct 7 starts Sun Oct 4", weekStartOf(new Date(2026, 9, 7)).getDate(), 4);
-  is("Master Schedule month grid bounds: Sun on or before Thu Oct 1 is Sep 27", weekStartOnOrBefore("2026-10-01"), "2026-09-27");
+  is("Sunday-default (OpEx) week bounds: Sun on or before Thu Oct 1 is Sep 27", weekStartOnOrBefore("2026-10-01"), "2026-09-27");
   is("...and the Sat on or after Sat Oct 31 is itself", weekEndOnOrAfter("2026-10-31"), "2026-10-31");
   // POSITIVE CONTROL for the pages that keep Monday: the same helper, asked for Monday, gives Monday.
   is("CONTROL — Match Promotion / Veo dashboard still get Monday weeks (ws = 1): Wed Oct 7 → Mon Oct 5", weekStartOf(new Date(2026, 9, 7), 1).getDate(), 5);

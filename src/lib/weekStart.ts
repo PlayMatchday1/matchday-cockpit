@@ -1,14 +1,20 @@
-// THE WEEK STARTS ON SUNDAY — for the OpEx calendar and the Master Schedule (Ryan, 2026-10-03).
+// THE WEEK STARTS ON SUNDAY — for the OpEx calendar (Ryan, 2026-10-03).
 //
-// ONE constant, read by both pages: the OpEx calendar's columns, week rows, week totals and ledger
-// week groups; the Master Schedule's month grid, its week view (sent to /api/veo and
-// /api/veo/resync as ?ws=), its header labels and its arrows. Other pages keep the Monday week they
-// already have: Match Promotion, the Veo dashboard and Manager Pay call the same helpers WITHOUT
-// this constant and get Monday, unchanged.
+// WEEK_START is the shared DEFAULT: the OpEx calendar's columns, week rows, week totals and ledger
+// week groups read it by calling these helpers without a `ws`.
+//
+// THE MASTER SCHEDULE RUNS MONDAY TO SUNDAY (team, 2026-10-20) and passes
+// MASTER_SCHEDULE_WEEK_START explicitly everywhere: its month grid, its week view (sent to /api/veo
+// and /api/veo/resync as ?ws=), its header labels, its phone map and its arrows. It shared
+// WEEK_START from 2026-10-03 to 2026-10-20; changing the default would have moved OpEx with it.
+// Match Promotion, the Veo dashboard and Manager Pay call the same helpers with Monday, unchanged.
 //
 // Numbering is JavaScript's getDay(): 0 = Sunday … 6 = Saturday.
 
 export const WEEK_START = 0;
+
+/** The Master Schedule's week: Monday. Passed explicitly — never the shared default. */
+export const MASTER_SCHEDULE_WEEK_START = 1;
 
 export const DAY3 = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
 

@@ -216,7 +216,7 @@ export type VeoWeek = {
  * prevent. Default false: every existing caller keeps play-only semantics. */
 /* `weekStart` (getDay() numbering) picks the first day of the week. DEFAULT 1 = MONDAY, which is what
  * every caller had before and still gets: Match Promotion, the Veo dashboard, the review count. The
- * Master Schedule passes weekStart.WEEK_START (Sunday) through ?ws= on /api/veo. `mon` keeps its
+ * Master Schedule passes weekStart.MASTER_SCHEDULE_WEEK_START (Monday) through ?ws= on /api/veo. `mon` keeps its
  * name but is the week's FIRST DAY, and dayIdx counts from it. */
 export async function fetchVeoWeek(sb: SupabaseClient, now: Date, weekRef: Date = now, scopeCity: string | null = null, includeCancelled = false, weekStart = 1): Promise<VeoWeek> {
   const mon = weekStartOf(weekRef, weekStart);
