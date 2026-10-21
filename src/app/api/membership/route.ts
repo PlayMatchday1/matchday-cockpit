@@ -18,7 +18,7 @@
 import { authenticateCapability } from "@/lib/capabilityAuth";
 import { includedLinks } from "@/lib/venueLinkFilter";
 import { assertScope } from "@/lib/cityConfinement";
-import { countActiveMembers } from "@/lib/membershipStats";
+import { countActiveMembers, isLegacyLowPlan } from "@/lib/membershipStats";
 import { makeServerClient } from "@/lib/supabaseServer";
 import { fetchLegacyMatchRegistrations, loadMembershipWindowsByUserId } from "@/lib/mdapiMatchesRead";
 import { classify, CHURN_DAYS, type SpotRow, type MonthKey, monthsFrom, buildMemberShare, MONTHS_SHORT } from "@/lib/membershipModel";
@@ -213,10 +213,10 @@ export async function GET(req: Request) {
     /* PAGED. A bare select caps at 1,000 rows and there are 2,676 subscriptions — the first cut
      * of this returned 217 active where the truth is 451, and 217 is a plausible-looking number,
      * which is the worst kind of wrong. */
-    const subs: { status: string | null }[] = [];
+    const subs: { status: string | null; user_id?: number | null; price?: number | null; member_email?: string | null }[] = [];
     for (let off = 0; ; off += 1000) {
       let q = sb.from("mdapi_subscriptions")
-        .select("membership_id,city_identifier,status,price,member_email,activation_date,canceled_at")
+        .select("membership_id,user_id,city_identifier,status,price,member_email,activation_date,canceled_at")
         .order("membership_id").range(off, off + 999);
       if (scopeCity) q = q.eq("city_identifier", scopeCity);
       const { data, error } = await q;
@@ -240,6 +240,12 @@ export async function GET(req: Request) {
      * The monthly BARS still read the snapshot series; those are history and should not move. */
     const activeMembers = subs.filter((s) => s.status === "ACTIVE").length;
     const activeMembersPaid = countActiveMembers(subs, new Date());
+    /* THE LEGACY $1 PLANS' HOLDERS (Ryan, 2026-10-21), so Avg price per member spot can be shown with
+     * and without them. Members on an ACTIVE paying plan priced under $15 (membershipStats
+     * .isLegacyLowPlan). Ids only; the page divides by matches with and without these people. */
+    const legacyLowPlanUserIds = [...new Set(subs
+      .filter((s) => s.status === "ACTIVE" && s.user_id != null && isLegacyLowPlan(s))
+      .map((s) => String(s.user_id)))];
     /* THE FIELD FILTER CANNOT REACH THIS NUMBER, and that is a property of the data, not a bug to
      * fix here: mdapi_subscriptions has city_identifier and NO field column. A membership is
      * bought from a city, not from a pitch. `fieldId` is applied to the match/spot rows above
@@ -396,7 +402,7 @@ export async function GET(req: Request) {
       byCity: groupBy((r) => r.city),
       byField: groupBy((r) => (r.fieldId != null ? (fieldName.get(r.fieldId) ?? String(r.fieldId)) : null)),
       activeMembers,
-      activeMembersPaid, membersScope, fieldScoped: fieldId != null,
+      activeMembersPaid, membersScope, fieldScoped: fieldId != null, legacyLowPlanUserIds,
       /* RENAMED FROM revenueByMonth, deliberately. It changed BASIS from net to gross, and a key
        * that keeps its name through a change of meaning is how a consumer keeps reading the old
        * thing. The name now says which of the three bases it is. */

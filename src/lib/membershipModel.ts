@@ -143,14 +143,17 @@ export type MonthTotals = {
   memberConsumed: number;
   /** The same exclusion at match grain, for the KPI that divides by matches. */
   memberMatchesConsumed: number;
+  /** memberMatchesConsumed without the matches of `exclude` (the legacy $1 plans' holders), so the
+   *  price per spot can be shown with and without them (2026-10-21). Equal when nothing is excluded. */
+  memberMatchesConsumedExcl: number;
 };
 
-export function totalsByMonth(rows: readonly SpotRow[], months: readonly MonthKey[]): MonthTotals[] {
+export function totalsByMonth(rows: readonly SpotRow[], months: readonly MonthKey[], exclude: ReadonlySet<string> = new Set()): MonthTotals[] {
   const m = new Map<MonthKey, MonthTotals>();
   const seen = new Map<MonthKey, Set<string>>();
   const seenConsumed = new Map<MonthKey, Set<string>>();
   for (const k of months) {
-    m.set(k, { month: k, member: 0, daily: 0, promo: 0, other: 0, memberMatches: 0, memberConsumed: 0, memberMatchesConsumed: 0 });
+    m.set(k, { month: k, member: 0, daily: 0, promo: 0, other: 0, memberMatches: 0, memberConsumed: 0, memberMatchesConsumed: 0, memberMatchesConsumedExcl: 0 });
     seen.set(k, new Set()); seenConsumed.set(k, new Set());
   }
   for (const r of rows) {
@@ -168,8 +171,9 @@ export function totalsByMonth(rows: readonly SpotRow[], months: readonly MonthKe
       if (r.playerCanceled !== true) {
         t.memberConsumed++;
         const cset = seenConsumed.get(r.month)!;
-        if (id == null) t.memberMatchesConsumed++;
-        else if (!cset.has(id)) { cset.add(id); t.memberMatchesConsumed++; }
+        const fresh = id == null || !cset.has(id);
+        if (id != null) cset.add(id);
+        if (fresh) { t.memberMatchesConsumed++; if (!(r.userId != null && exclude.has(r.userId))) t.memberMatchesConsumedExcl++; }
       }
     }
     else if (r.cls === "DAILY PAID") t.daily++;

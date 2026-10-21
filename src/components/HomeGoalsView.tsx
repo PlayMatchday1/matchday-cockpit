@@ -11,7 +11,7 @@ import { supabase } from "@/lib/supabase";
 import { type Goal } from "@/lib/types";
 import { computeGoalPace } from "@/lib/goalPace";
 import { fetchSnapshot, type Snapshot } from "@/lib/homeStats";
-import { PAID_MEMBER_MIN_PRICE_LABEL } from "@/lib/membershipStats";
+import { PAID_MEMBER_RULE_LABEL } from "@/lib/membershipStats";
 import OrgGoalCard from "./OrgGoalCard";
 import GoalEditDrawer, { type DrawerState } from "./GoalEditDrawer";
 import GoalCommentsDrawer from "./GoalCommentsDrawer";
@@ -385,8 +385,8 @@ function SnapshotStrip({ snapshot }: { snapshot: Snapshot | null }) {
       u: "paying · as of now",
       title: "Paying, external, activated members with status ACTIVE, right now — membershipStats"
         + ".countActiveMembers, the same predicate the Membership page and members_monthly_snapshots"
-        + ` use. Excludes plans under ${PAID_MEMBER_MIN_PRICE_LABEL}/month (comps and legacy token-price`
-        + " plans) and @matchday / @playmatchday staff accounts, which is why this reads lower than"
+        + ` use: ${PAID_MEMBER_RULE_LABEL}, so intro prices count. Excludes $0 plans (comps)`
+        + " and @matchday / @playmatchday staff accounts, which is why this reads lower than"
         + " the ACTIVE rows in the table.",
     });
   if (snapshot.activeFields != null)

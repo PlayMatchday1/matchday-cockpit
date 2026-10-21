@@ -325,9 +325,9 @@ export type MembershipWindowsByUserId = Map<string, MembershipWindow[]>;
 // subscriptions (cancel + resubscribe).
 //
 // ONLY A PAYING MEMBERSHIP OPENS A WINDOW (2026-10-14). A subscription that fails the shared rule
-// — membershipStats.isPaidMemberSubscription: a plan under PAID_MEMBER_MIN_PRICE_CENTS, a staff
-// email, an INCOMPLETE checkout — creates no window, so a $0 comp's or a legacy $1 plan's FREE spot
-// reads FREE_NON_MEMBER, not MEMBER. Status is still NOT filtered, for reason 1 above: the rule
+// — membershipStats.isPaidMemberSubscription: a $0 plan, a staff email, an INCOMPLETE checkout —
+// creates no window, so a $0 comp's FREE spot reads FREE_NON_MEMBER, not MEMBER. (A legacy $1 plan
+// opens a window again since 2026-10-21.) Status is still NOT filtered, for reason 1 above: the rule
 // tests price, email and INCOMPLETE, never ACTIVE vs CANCELED.
 // Partner payouts read these windows too (approved 2026-10-14), so there is no unfiltered variant.
 export async function loadMembershipWindowsByUserId(

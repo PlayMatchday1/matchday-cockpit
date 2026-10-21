@@ -27,7 +27,7 @@ import {
   isCancelledBefore, isCancelledOnOrAfter, CUTOFF_DAY, MIX_TIERS_CENTS,
   type SubscriptionRow, type ByCityRow, type ReportDates,
 } from "../src/lib/membersByCity";
-import { PAID_MEMBER_MIN_PRICE_LABEL } from "../src/lib/membershipStats";
+import { PAID_MEMBER_EXCLUDES } from "../src/lib/membershipStats";
 
 let pass = 0; const fails: string[] = [];
 const ok = (m: string) => { pass++; console.log(`  ✓ ${m}`); };
@@ -318,7 +318,7 @@ console.log("\nTHE CSV CARRIES THE SAME NUMBERS, ROWS AND DATES AS THE SCREEN");
   is("CONTROL: and omits the line entirely when there are none",
      membersByCityCsv(buildMembersByCity([sub({ price: 66, member_email: "r@gmail.com" })], DATES), "x", DATES).includes("Not in totals"), false);
   // Copy changed with the 2026-10-14 ruling: the floor is named, from the constant, not "$0".
-  is("the footnote names both exclusions", note.includes(`Excludes plans under ${PAID_MEMBER_MIN_PRICE_LABEL}/month and internal accounts.`), true);
+  is("the footnote names both exclusions", note.includes(PAID_MEMBER_EXCLUDES), true);
 }
 
 console.log("\nTHE PAGE SAYS NOTHING BEYOND THE TABLE, and renders the dates it was given");
@@ -337,7 +337,7 @@ console.log("\nTHE PAGE SAYS NOTHING BEYOND THE TABLE, and renders the dates it 
   is("CONTROL: that scan fires on the sentence itself",
      /Month-end membership/.test("Month-end membership: who pays on the 1st"), true);
   // The component interpolates the label, so its SOURCE carries the expression, not "$15".
-  is("the footer line names both exclusions", noComments.includes("Excludes plans under {PAID_MEMBER_MIN_PRICE_LABEL}/month and internal accounts."), true);
+  is("the footer line names both exclusions", noComments.includes("{PAID_MEMBER_EXCLUDES}"), true);
 
   // THE WINDOW PILL AND THE PICKER ARE GONE, and must not come back: an earlier cutoff cannot be
   // reproduced from a base of today's status, so a control offering one renders a wrong month.
@@ -359,7 +359,7 @@ console.log("\nTHE PAGE SAYS NOTHING BEYOND THE TABLE, and renders the dates it 
      (noComments.match(/className="mbc-hl"/g) ?? []).length, 2);
   // THE MOCK'S SUB-LABELS, VERBATIM — except the first, which names the paying floor from the
   // constant since the 2026-10-14 ruling (it read "over $0").
-  for (const sub of ["status ACTIVE, {PAID_MEMBER_MIN_PRICE_LABEL}+/month", "still active, won", "total minus cancelled before", "sum of each member"])
+  for (const sub of ["status ACTIVE, {PAID_MEMBER_RULE_LABEL}", "still active, won", "total minus cancelled before", "sum of each member"])
     is(`  sub-label present: ${sub}`, noComments.includes(sub), true);
   is("  the leaver column's sub-label names both dates",
      /pay \{prettyDateShort\(view\.dates\.billingYmd\)\}, not \{prettyDateShort\(view\.dates\.runRateYmd\)\}/.test(noComments), true);

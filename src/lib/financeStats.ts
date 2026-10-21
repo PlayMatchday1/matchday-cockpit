@@ -2532,9 +2532,9 @@ export function buildMembershipHealthRows(
 ): MembershipHealthRow[] {
   if (!membershipHealthAvailable(data)) return [];
 
-  // ─── Member cohort: the shared rule (isActiveMember — ACTIVE, plan at or above
-  // PAID_MEMBER_MIN_PRICE_CENTS, not a staff email). This tested `price > 0` alone, so staff
-  // subscriptions and legacy $1 plans were members here and nowhere else.
+  // ─── Member cohort: the shared rule (isActiveMember — ACTIVE, plan above $0
+  // (PAID_MEMBER_MIN_PRICE_CENTS), not a staff email). This tested `price > 0` alone, so staff
+  // subscriptions were members here and nowhere else.
   const memberCountByCity = new Map<string, number>();
   const memberPriceCentsTotalByCity = new Map<string, number>();
   for (const m of data.members) {

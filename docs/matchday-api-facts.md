@@ -7531,3 +7531,24 @@ INFERRED from counts, not read.
   not stored here. **Email: no unsubscribe data anywhere in Clubhouse** (no email provider table, nothing
   in the user payload; `receivePushNotifications` in `mdapi_users.raw` is push, not email). The export's
   "Emails opted out" column reads "unknown" for that reason.
+
+## The paying-member rule is "plan above $0" again; the 10 legacy $1 plans are real payers (2026-10-21)
+
+Evidence: `GET /api/admin/stripe-sub-ends?probe=low_plans` on production 2026-10-21 (Stripe
+`subscriptions.retrieve` + `invoices.list` through the production client, via each MatchDay record's
+`stripeSubscriptionId`), plus read-only reads of `mdapi_subscriptions` and the partner dashboards.
+
+- **All 10 ACTIVE external plans priced under $15 are Stripe subscriptions at $1.00/month, `active`,
+  no discount, every invoice paid**, the latest on 2026-10-01 ($1.08 to $1.10 with tax), 6 paid since
+  May each. 7 STL, 1 ATX, 1 ATL, 1 OKC, activated 2025-03 to 2026-03. None is a comp.
+- **Intro-price members were never excluded by the $15 floor:** `price` is the PLAN price and a $1
+  intro member's row carries the full city plan price.
+- **Rule (Ryan):** `PAID_MEMBER_MIN_PRICE_CENTS = 1` (above $0); SQL mirror migration 0229.
+  Active members 299 → 309; Members by City total 309 = sum of its city rows.
+- **Partner payouts do not move:** every enabled partner's full dashboard payload (6 partners) is
+  byte-identical under the $15 floor and above $0, measured old → new → old with the old runs equal.
+- **What does move, and is computed live (not a frozen snapshot):** member spots and price per member
+  spot by month. The 10 holders played FREE spots: Sep 36, Oct to the 21st 35 (ATX, STL, ATL, OKC).
+- **Aug 1 to Sep 30 cancellations (paying, external), 197:** cancel reason "moving" 107 (64 within
+  their first month) and "removed by retool" 76 (staff-side cancels; 38 at 1 to 2 months). Every row
+  has a reason. 18 later re-subscribed.

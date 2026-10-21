@@ -601,7 +601,7 @@ function sectionMembership(subs: SubRow[], snapshots: SnapRow[]) {
   out.push(fmtSection("MEMBERSHIP"));
 
   // THE SHARED RULE, imported — this was an inline copy of it (price > 0), which is how a copy
-  // drifts: membershipStats moved to the PAID_MEMBER_MIN_PRICE_CENTS floor and this would not have.
+  // drifts: when membershipStats changes PAID_MEMBER_MIN_PRICE_CENTS this follows it.
   const isPaidExternal = (s: SubRow): boolean => isPaidMemberSubscription(s);
   function isActive(s: SubRow): boolean {
     return s.status === "ACTIVE" && isPaidExternal(s);

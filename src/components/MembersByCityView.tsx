@@ -29,7 +29,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { selectAll } from "@/lib/supabasePagination";
-import { PAID_MEMBER_MIN_PRICE_LABEL, countActiveMembers } from "@/lib/membershipStats";
+import { PAID_MEMBER_EXCLUDES, PAID_MEMBER_RULE_LABEL, countActiveMembers } from "@/lib/membershipStats";
 import {
   buildMembersByCity, membersByCityCsv, dollars, mixLabel, prettyDate, prettyDateShort, reportDatesFor,
   type ByCityRow, type SubscriptionRow,
@@ -180,7 +180,7 @@ export default function MembersByCityView() {
               <thead>
                 <tr>
                   <th className="mbc-l">City</th>
-                  <th data-col="total">Total active<small>status ACTIVE, {PAID_MEMBER_MIN_PRICE_LABEL}+/month</small></th>
+                  <th data-col="total">Total active<small>status ACTIVE, {PAID_MEMBER_RULE_LABEL}</small></th>
                   <th data-col="before">Cancelled before {prettyDateShort(view.dates.cutoffYmd)}<small>still active, won&apos;t bill</small></th>
                   <th className="mbc-hl" data-col="paying">Paying members<small>total minus cancelled before</small></th>
                   <th className="mbc-hl" data-col="billing">Billing {prettyDateShort(view.dates.billingYmd)}<small>sum of each member&apos;s price</small></th>
@@ -209,7 +209,7 @@ export default function MembersByCityView() {
                 Not in totals: <b>{view.table.unassigned.members} unassigned member{view.table.unassigned.members === 1 ? "" : "s"}, {dollars(view.table.unassigned.cents)}</b>.
               </span>
             )}
-            <span data-testid="mbc-footnote">Excludes plans under {PAID_MEMBER_MIN_PRICE_LABEL}/month and internal accounts.</span>
+            <span data-testid="mbc-footnote">{PAID_MEMBER_EXCLUDES}</span>
           </div>
         </div>
       ) : null}

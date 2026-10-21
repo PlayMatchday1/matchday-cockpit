@@ -53,24 +53,33 @@ export function countActiveMembers(
   return n;
 }
 
-/* THE PAYING-MEMBER PRICE FLOOR: a subscription counts as a member only when its plan's monthly
- * price is at least this. It matches the "Paid signup" definition in Jaimee's Stripe churn sheet.
+/* THE PAYING-MEMBER RULE: a subscription counts as a member when its plan's monthly price is ABOVE
+ * $0 (Ryan, 2026-10-21). Comps ($0 plans, and ADDED_FROM_ADMIN, which the mirror never carries),
+ * staff and test addresses and unfinished checkouts stay out; see isPaidExternalMember.
  *
- * WHY $15 AND NOT $0. Stripe holds 64 active subscriptions at $0/month and 12 on legacy $1/month
- * plans — comps, internal accounts and synthetic @matchday.com fill accounts. None of them pays.
- * The cheapest real plan is $18 (OKC's older band sat at $15, which the floor keeps).
+ * HISTORY. From 2026-10-14 to 2026-10-21 the floor was $15 (Jaimee's "Paid signup" definition). It
+ * took out 10 to 12 legacy plans billed $1 a month, and Ryan reversed it: on 2026-10-21 Stripe showed
+ * all 10 ACTIVE ones invoiced and paid every month through Oct 1 (admin probe low_plans). Before
+ * 2026-10-14 the rule was `price > 0`, so frozen snapshot months already match this rule.
  *
  * THIS IS THE PLAN PRICE, NOT THE $1 SIGNUP PROMO. mdapi_subscriptions.price is the plan's monthly
- * price: since 2026-09-01, 152 activations read $66 and one reads $1, against 78 sub-$2
- * membership charges in fin_txn for September — a promo member's row carries the full plan
- * price, so the floor does not drop them. Membership REVENUE does not use this; $1 invoices stay
- * in revenue and simply do not make anyone a member.
+ * price; a member on the $1 intro offer carries the full city plan price ($66 in most cities), so
+ * intro members count under either rule.
  *
- * SQL HOLDS ONE MIRROR of this value (paid_member_subscription, migration 0223), because the
+ * SQL HOLDS ONE MIRROR of this value (paid_member_subscription, migration 0229), because the
  * database cannot import it. scripts/membership-floor-test.ts fails if the two differ. */
-export const PAID_MEMBER_MIN_PRICE_CENTS = 1500;
-/** The floor as page copy says it ("$15"), derived so copy cannot drift from the rule. */
-export const PAID_MEMBER_MIN_PRICE_LABEL = `$${PAID_MEMBER_MIN_PRICE_CENTS / 100}`;
+export const PAID_MEMBER_MIN_PRICE_CENTS = 1;
+/** The rule as page copy says it, so copy cannot drift from the rule. */
+export const PAID_MEMBER_RULE_LABEL = "plan above $0";
+export const PAID_MEMBER_EXCLUDES = "Excludes $0 plans (comps) and internal accounts.";
+
+/* THE LEGACY $1 PLANS, NAMED so the Membership page can show a figure with and without them (Ryan,
+ * 2026-10-21: Avg price per member spot must not move without saying why). A paying plan priced
+ * under $15 a month. This is NOT part of the member rule; it only labels a subset of members. */
+export const LEGACY_LOW_PLAN_UNDER_CENTS = 1500;
+export function isLegacyLowPlan(r: { status?: string | null; price?: number | string | null; member_email?: string | null }): boolean {
+  return isPaidMemberSubscription(r) && Math.round(Number(r.price ?? 0) * 100) < LEGACY_LOW_PLAN_UNDER_CENTS;
+}
 
 /** A raw mdapi_subscriptions row (price in DOLLARS) against the paying-member rule, with no city
  *  mapping — for readers that must not drop an unmapped city, such as the membership windows. */

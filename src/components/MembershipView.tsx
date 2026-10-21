@@ -31,6 +31,8 @@ type Payload = {
    * activeMembersPaid  — paying, external, activated (387). THE headline, and the identical
    *                      function the Home tile calls. See membership-parity-test.ts. */
   activeMembers: number; activeMembersPaid: number;
+  /** Holders of an ACTIVE legacy plan under $15 (2026-10-21); the price tile is shown without them too. */
+  legacyLowPlanUserIds?: string[];
   membersScope: "network" | "city"; fieldScoped: boolean;
   dayMix: { day: string; member: number; daily: number; promo: number; total: number }[];
   byCity: { name: string; member: number; daily: number; promo: number }[];
@@ -123,7 +125,8 @@ export default function MembershipView() {
   useEffect(() => { void load(); }, [load]);
 
   const months = data?.months ?? [];
-  const totals: MonthTotals[] = useMemo(() => totalsByMonth(data?.rows ?? [], months), [data, months]);
+  const legacy = useMemo(() => new Set(data?.legacyLowPlanUserIds ?? []), [data]);
+  const totals: MonthTotals[] = useMemo(() => totalsByMonth(data?.rows ?? [], months, legacy), [data, months, legacy]);
   const thisMonth = totals[totals.length - 1];
   const cityName = city === "all" ? null : city;
   const fieldName = field === "all" ? null : (data?.fields.find((f) => String(f.fieldId) === field)?.name ?? null);
@@ -199,7 +202,7 @@ export default function MembershipView() {
             mdapi_subscriptions has no field column. Saying so beats showing a city figure under
             a field heading. */}
         <Kpi k="Active members" v={num(kpis.activeMembers)}
-          s={`paying, external · as of now${data?.fieldScoped ? ` · ${data.membersScope === "city" ? "city" : "network"}-wide, not per field` : ""}`} />
+          s={`Paying members, including intro prices. Comped, staff and test accounts left out.${data?.fieldScoped ? ` · ${data.membersScope === "city" ? "city" : "network"}-wide, not per field` : ""}`} />
         <Kpi k="Avg matches / member" v={kpis.avgMatchesPerMember == null ? "—" : kpis.avgMatchesPerMember.toFixed(1)}
           s={`${thisMonth?.month ?? ""}${partSuffix(part)}`} />
         {/* THE SUBTITLE NAMES ITS OWN DENOMINATOR NOW. It used to read "membership revenue ÷
@@ -207,7 +210,13 @@ export default function MembershipView() {
             words. */}
         <Kpi k="Avg price / member spot"
           v={kpis.avgPricePerMemberSpot == null ? "—" : money(kpis.avgPricePerMemberSpot)}
-          s={`${thisMonth?.month ?? ""} · gross membership revenue ÷ matches members played${partSuffix(part)}`} />
+          s={`${thisMonth?.month ?? ""} · gross membership revenue ÷ matches members played${partSuffix(part)}${
+            /* WITH AND WITHOUT THE LEGACY $1 PLANS (Ryan, 2026-10-21). They joined the member count
+               when the $15 floor came off; their matches lower this figure, so it says by how much.
+               Same revenue both ways: their $1 charges were always in it. */
+            legacy.size > 0 && thisMonth && thisMonth.memberMatchesConsumedExcl > 0 && thisMonth.memberMatchesConsumedExcl !== thisMonth.memberMatchesConsumed
+              ? ` · ${money(revenue / thisMonth.memberMatchesConsumedExcl)} without the ${num(legacy.size)} legacy $1 plans`
+              : legacy.size > 0 ? ` · the ${num(legacy.size)} legacy $1 plans played no matches this month` : ""}`} />
         <Kpi k="MoM change in churned players" v={kpis.churnedMoMPct == null ? "—" : `${kpis.churnedMoMPct.toFixed(1)}%`}
           s={kpis.churnedNow > 0
             ? `${num(kpis.churnedNow)} players ${data?.churnDays ?? 90}+ days inactive, against ${num(kpis.churnedPrior)} the month before`
