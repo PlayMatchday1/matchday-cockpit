@@ -166,3 +166,53 @@ export async function probeStripe(sb: SupabaseClient, n: number) {
     rows,
   };
 }
+
+/* ── PROBE 3: the ACTIVE plans priced above $0 and under $15 (Ryan, 2026-10-21) ─────────────────
+ * Before the paying-member floor drops to "above $0", Ryan asked whether each of these is actually
+ * invoiced and paid every month. For each: the Stripe subscription (via MatchDay's
+ * stripeSubscriptionId) and its last 24 invoices. Ids, statuses, dates and amounts only. */
+export type LowPlanRow = {
+  membershipId: number; city: string | null; activation: string | null; planCents: number;
+  stripeStatus: string | null; unitAmount: number | null; interval: string | null; discount: string | null;
+  invoices: { created: string | null; status: string | null; paid: number; due: number }[];
+  lastPaid: string | null; lastPaidCents: number | null; error: string | null;
+};
+
+export async function probeLowPricePlans(sb: SupabaseClient) {
+  const subs = await selectAll<SubRow & { city_identifier: string | null }>(() => sb.from("mdapi_subscriptions")
+    .select("membership_id,user_id,status,price,member_email,activation_date,canceled_at,city_identifier")
+    .eq("status", "ACTIVE").gt("price", 0).lt("price", 15).order("membership_id"));
+  const external = subs.filter((r) => !/@matchday\.|@playmatchday\./i.test(r.member_email ?? ""));
+  const stripe = getStripe();
+  const rows: LowPlanRow[] = [];
+  for (const r of external) {
+    const out: LowPlanRow = { membershipId: r.membership_id, city: r.city_identifier, activation: r.activation_date?.slice(0, 10) ?? null,
+      planCents: Math.round(Number(r.price) * 100), stripeStatus: null, unitAmount: null, interval: null, discount: null,
+      invoices: [], lastPaid: null, lastPaidCents: null, error: null };
+    try {
+      const p = await apiGet<Record<string, unknown>>("production", `/admin/players/${r.user_id}`);
+      const us = Array.isArray(p.userSubscriptions) ? (p.userSubscriptions as Record<string, unknown>[]) : [];
+      const hit = us.find((u) => Number(u.id) === r.membership_id) ?? us.find((u) => String(u.status) === "ACTIVE");
+      const subId = typeof hit?.stripeSubscriptionId === "string" ? hit.stripeSubscriptionId : null;
+      if (!subId) { out.error = "no stripeSubscriptionId on the MatchDay record"; rows.push(out); continue; }
+      const s = await stripe.subscriptions.retrieve(subId);
+      const item = s.items?.data?.[0];
+      out.stripeStatus = s.status;
+      out.unitAmount = item?.price?.unit_amount ?? null;
+      out.interval = item?.price?.recurring?.interval ?? null;
+      const d = (s as unknown as { discount?: { coupon?: { percent_off?: number | null; amount_off?: number | null } } | null }).discount;
+      out.discount = d?.coupon ? (d.coupon.percent_off != null ? `${d.coupon.percent_off}% off` : `${d.coupon.amount_off} off`) : (s.discounts?.length ? "discount" : null);
+      await sleep(STRIPE_GAP_MS);
+      const inv = await stripe.invoices.list({ subscription: subId, limit: 24 });
+      out.invoices = inv.data.map((x) => ({ created: iso(x.created)?.slice(0, 10) ?? null, status: x.status ?? null, paid: x.amount_paid, due: x.amount_due }));
+      const paid = inv.data.find((x) => x.status === "paid" && x.amount_paid > 0);
+      out.lastPaid = paid ? iso(paid.created)?.slice(0, 10) ?? null : null;
+      out.lastPaidCents = paid ? paid.amount_paid : null;
+    } catch (e) {
+      out.error = e instanceof Error ? e.message.slice(0, 160) : "read failed";
+    }
+    rows.push(out);
+    await sleep(MD_GAP_MS);
+  }
+  return { probe: "low_plans", total: rows.length, rows };
+}
