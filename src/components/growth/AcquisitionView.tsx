@@ -29,6 +29,7 @@ import {
   type SourceKey, type SourceWindow, type WebsiteTable, type Window,
 } from "@/lib/acquisitionModel";
 import { clickRateBand, cprBand, rankBand, type Band } from "@/lib/acquisitionTargets";
+import { useAuth } from "@/lib/useAuth";
 
 const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const short = (ymd: string | null | undefined) => { if (!ymd) return "—"; const [, m, d] = ymd.split("-"); return `${MON[Number(m) - 1]} ${Number(d)}`; };
@@ -174,7 +175,40 @@ function Cell({ v, cur, prev, invert, cls, band }: { v: React.ReactNode; cur?: n
 
 const SOURCE_NAME: Record<SourceKey, string> = { gsc: "Google Search", web: "Website analytics", app: "App analytics", meta: "Meta", apple: "App Store" };
 
+/* DOWNLOAD PLAYERS (Ryan, 2026-10-21): the players the Registrations card counts, as a CSV built on the
+ * server (/api/lifecycle/acquisition/players, lib/signupExport). Admins only; the server refuses
+ * everyone else whether or not the button shows, and records each download in the change log. */
+function DownloadPlayers({ since, until, authHeaders }: { since: string; until: string; authHeaders: Record<string, string> }) {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const go = async () => {
+    setBusy(true); setMsg(null);
+    try {
+      const r = await fetch(`/api/lifecycle/acquisition/players?${new URLSearchParams({ since, until })}`, { headers: authHeaders });
+      if (!r.ok) { const j = await r.json().catch(() => null); setMsg(j?.error ?? `Download failed (HTTP ${r.status}).`); return; }
+      const name = /filename="([^"]+)"/.exec(r.headers.get("content-disposition") ?? "")?.[1] ?? `matchday-signups-${since}-to-${until}.csv`;
+      const url = URL.createObjectURL(await r.blob());
+      const a = document.createElement("a"); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      const failed = Number(r.headers.get("x-lookup-failures") ?? 0);
+      setMsg(`${fmtInt(Number(r.headers.get("x-row-count") ?? 0))} players${failed > 0 ? `, ${fmtInt(failed)} couldn't be checked live ("unknown")` : ""}`);
+    } catch (e) {
+      setMsg(`Download failed (${e instanceof Error ? e.message : "error"}).`);
+    } finally { setBusy(false); }
+  };
+  return (
+    <span className="acq-dl">
+      <button type="button" className={styles.adsBtn} data-testid="acq-download-players" disabled={busy} onClick={() => void go()}>
+        {busy ? "Preparing…" : "Download players"}
+      </button>
+      {msg && <span className="acq-dlmsg" data-testid="acq-download-msg">{msg}</span>}
+    </span>
+  );
+}
+
 export default function AcquisitionView({ authHeaders }: { authHeaders: Record<string, string> }) {
+  const { appUser } = useAuth();
+  const canDownload = appUser?.is_admin === true && appUser.is_service_account !== true;
   const today = todayChicago();
   const [preset, setPreset] = useState<Preset>("mtd");
   const [custom, setCustom] = useState(() => presetRange("mtd", today));
@@ -244,6 +278,7 @@ export default function AcquisitionView({ authHeaders }: { authHeaders: Record<s
               onChange={(e) => e.target.value && setCustom((c) => ({ ...c, until: e.target.value }))} />
           </span>
         )}
+        {canDownload && <DownloadPlayers since={range.since} until={range.until} authHeaders={authHeaders} />}
         <select className={`${styles.adsBtn} acq-ms`} data-testid="acq-milestones" value="" aria-label="Milestones"
           onChange={(e) => { const d = e.target.value; if (d) { setCustom({ since: d, until: today }); setPreset("custom"); setVsMode("prev"); setCompareOn(true); } }}>
           <option value="">Milestones</option>
@@ -650,6 +685,8 @@ const CSS = `
 .acq .acq-cmp{display:inline-flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:12.5px;font-weight:600}
 .acq .acq-cmpon{display:inline-flex;align-items:center;gap:6px}
 .acq .acq-cmp button:disabled{opacity:.45;cursor:default}
+.acq .acq-dl{display:inline-flex;align-items:center;gap:6px}
+.acq .acq-dlmsg{font-size:12px;color:#5b6b64}
 .acq .acq-tag{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;background:#fde9bf;color:#7a4e06;border-radius:4px;padding:2px 6px}
 .acq .acq-through{font-size:11.5px;color:var(--muted,#5c7168);border-bottom:1px dotted currentColor;cursor:help}
 .acq .acq-tiles{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:14px}

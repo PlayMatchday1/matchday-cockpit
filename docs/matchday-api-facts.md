@@ -7501,3 +7501,28 @@ for 18596, 18680, 18679, 19700 and `/admin/matches?fromDate&toDate` windows arou
   claude-sonnet-5-5): without dated days the model claimed "Monday night was more than 48 hours ago" at
   about 35 hours. With `recent_days` in the clock and the rule against working out elapsed time, the
   reply no longer states it.
+
+## The admin users CSV export counts only EMAIL-VERIFIED, completed signups; the Acquisition card counts phone-verified ones too (2026-10-21)
+
+Evidence: read-only prod sweep 2026-10-21 of `GET /admin/players/{id}` for every id 93161–95300 (flags
+and dates only), against `growth_account` / `growth_acquisition_daily`, compared with Ryan's own counts
+of a users CSV exported Mon 2026-10-19 11:27 CDT. The export's code is not in this repo; its rule is
+INFERRED from counts, not read.
+
+- **One rule reproduces every count:** created in the range (Central) AND `emailVerifiedAt` set AND
+  `completedSignUpAt` set. Oct 12–18: 309 (CSV 309); Warsaw 11 (11); New York City 6 (6); Oklahoma City
+  18 (17); Oct 1–18: 1,185 (1,185). The rule reads 310 / 1,186 today because one account completed
+  signup after the export.
+- **So the export leaves out phone-only accounts.** Since the 2026-10-08 change (section "`GET
+  /admin/players` HIDES ACCOUNTS WITH `emailVerifiedAt` NULL") that is about 45% of new signups:
+  262 of the card's 590 for Oct 12–18 had a phone stamp and no email stamp.
+- **The export includes deleted accounts**, as `del_…@playmatchday.com` tombstones. Ryan's 8
+  "@playmatchday.com" rows that week were deleted accounts, not staff; no staff, test or fake account
+  was created Oct 12–18.
+- **The card (590 for Oct 12–18) breaks down as:** 288 real with an email stamp, 262 real phone-only,
+  7 real created before the week, 15 Warsaw, 18 deleted (live), 0 fake, 0 test.
+- **The mirror lags deletions:** 9 of those 18 deleted accounts were still unscrubbed in
+  `mdapi_users` on 2026-10-21. "Download players" (`/api/lifecycle/acquisition/players`) therefore
+  reads deletion and verification live per row.
+- **IDs 94548–95251 (704):** 553 real completed, 113 never finished signup, 21 deleted, 14 Warsaw
+  completed, 3 return no account (why is UNKNOWN). All 701 that answer are player accounts.
