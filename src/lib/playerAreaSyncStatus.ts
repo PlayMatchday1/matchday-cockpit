@@ -13,7 +13,10 @@ export const MANUAL_COOLDOWN_MS = 30 * 60 * 1000;
 
 /* A kill switch. null = running normally. When set, the route refuses cron and manual alike and the
  * button shows the reason. */
-export const SYNC_PAUSED: string | null = null;
+/* PAUSED 2026-10-21 (Ryan): the full walk is ~800 requests a pass, and production went down at 2:05 PM
+ * Central today (Heroku R15). It stays off until the incremental location sync ships. Undo: set null. */
+export const SYNC_PAUSED: string | null =
+  "Paused 2026-10-21 after the MatchDay API outage: the full location walk is off until the incremental location sync ships.";
 
 type RunRow = {
   id: number; started_at: string; finished_at: string | null; ok: boolean | null; triggered_by: string;

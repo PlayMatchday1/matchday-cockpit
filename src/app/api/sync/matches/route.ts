@@ -36,7 +36,14 @@ function constantTimeMatch(a: string, b: string): boolean {
   return timingSafeEqual(ab, bb);
 }
 
+/* PAUSED 2026-10-21 (Ryan), after the MatchDay API outage (Heroku R15). This route is what the GitHub
+ * hourly job calls: ~850 back-to-back MatchDay requests a run between the two. It answers 200 so the
+ * job's Master Schedule reconcile (Supabase only) still runs. The 6 AM orchestrator calls the sync
+ * library directly and is NOT paused by this. Undo: set null. */
+const PAUSED: string | null = "Paused 2026-10-21 after the MatchDay API outage, until the incremental matches sync ships.";
+
 export async function POST(req: Request) {
+  if (PAUSED) return Response.json({ paused: PAUSED });
   const startedAt = Date.now();
 
   const auth = req.headers.get("authorization") ?? "";
