@@ -52,7 +52,7 @@ const isNoise = (m: DraftMsg) =>
   (m.direction === "outbound" && m.is_auto_reply === true) || (m.direction === "inbound" && m.media_kind === "reaction");
 
 // STOP words. "cancel" is deliberately NOT here: "Cancel membership" is a real request.
-const STOP_RX = /^\s*(stop|stopall|unsubscribe|end|quit|alto|parar)\s*[.!]*\s*$/i;
+export const STOP_RX = /^\s*(stop|stopall|unsubscribe|end|quit|alto|parar)\s*[.!]*\s*$/i;
 // Greeting or acknowledgement ONLY. Anything longer than these is a request and gets a draft.
 const GREETING_RX =
   /^\s*(hi+|hello+|hey+|hola|yo|sup|good (morning|afternoon|evening)|buen(o|a)s( d[ií]as| tardes| noches)?|ok(ay)?|k|thanks?( you)?( so much)?|thank u|thx|ty|gracias|perfect|great|awesome|cool|got it|sounds good|will do|👍|🙏|👌|🙌|❤️|😊|⚽️?)[\s!.,]*(👍|🙏|🙌)?[\s!.,]*$/iu;

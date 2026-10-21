@@ -7526,3 +7526,8 @@ INFERRED from counts, not read.
   reads deletion and verification live per row.
 - **IDs 94548–95251 (704):** 553 real completed, 113 never finished signup, 21 deleted, 14 Warsaw
   completed, 3 return no account (why is UNKNOWN). All 701 that answer are player accounts.
+- **Opt-out data we hold (2026-10-21):** texts only. Player Chats has 4 inbound STOP-type replies on 4
+  threads (2 linked to an account), and no START/UNSTOP. Carrier-level opt-outs live at Telnyx and are
+  not stored here. **Email: no unsubscribe data anywhere in Clubhouse** (no email provider table, nothing
+  in the user payload; `receivePushNotifications` in `mdapi_users.raw` is push, not email). The export's
+  "Emails opted out" column reads "unknown" for that reason.

@@ -17,6 +17,15 @@
 // A deleted account gets blank email and phone, and the name MatchDay gives it ("Deleted Account").
 
 import { E2E_SERVICE_EMAIL } from "@/lib/matchOpsAuth";
+import { STOP_RX, phoneDigits10 } from "@/lib/aiDraftModel";
+
+// OPT-OUTS (Ryan, 2026-10-21).
+//   Texts opted out   the player's phone (or a thread linked to the account) has a STOP-type reply in
+//                     Player Chats (SMS or WhatsApp; aiDraftModel.STOP_RX, the same words the drafts
+//                     treat as a stop) with no later START / UNSTOP on that thread. Carrier-level opt-outs
+//                     held by Telnyx are NOT in our data, so "no" means "no STOP reply we hold".
+//   Emails opted out  "unknown" on every row: Clubhouse holds no email unsubscribe data at all
+//                     (no email provider table, nothing in the user payload; probed 2026-10-21).
 
 export type CountedAccount = { account_id: number; completed_sign_up_at: string; declared_city_raw: string | null };
 export type MirrorUser = { id: number; email: string | null; first_name: string | null; last_name: string | null; phone_number: string | null; raw: Record<string, unknown> | null };
@@ -29,8 +38,31 @@ export type LivePlayer = {
 export type SignupRow = {
   id: number; firstName: string; lastName: string; email: string; phone: string; city: string;
   completedCentral: string; verifiedBy: "email" | "phone" | "both" | "neither" | "unknown";
-  level: string; deleted: boolean; warsaw: boolean;
+  level: string; deleted: boolean; warsaw: boolean; textsOptedOut: boolean;
 };
+
+export type ChatMsg = { thread_id: string; body: string; sent_at: string };
+export type ChatThread = { id: string; phone_number: string | null; player_id: number | null };
+const START_RX = /^\s*(start|unstop)\s*[.!]*\s*$/i;
+const phoneKey = (s: string | null | undefined) => { const d = (s ?? "").replace(/\D/g, ""); return d ? phoneDigits10(d) ?? d : null; };
+
+/** Phones and accounts whose LATEST stop/start keyword in Player Chats is a stop. */
+export function textOptOuts(inbound: readonly ChatMsg[], threads: readonly ChatThread[]): { phones: Set<string>; players: Set<number> } {
+  const last = new Map<string, { at: string; stop: boolean }>();
+  for (const m of inbound) {
+    const stop = STOP_RX.test(m.body), start = START_RX.test(m.body);
+    if (!stop && !start) continue;
+    const prev = last.get(m.thread_id);
+    if (!prev || m.sent_at >= prev.at) last.set(m.thread_id, { at: m.sent_at, stop });
+  }
+  const phones = new Set<string>(), players = new Set<number>();
+  for (const t of threads) {
+    if (!last.get(t.id)?.stop) continue;
+    const k = phoneKey(t.phone_number); if (k) phones.add(k);
+    if (t.player_id != null) players.add(t.player_id);
+  }
+  return { phones, players };
+}
 
 const TOMB = /^del_[0-9a-f]{40}@playmatchday\.com$/;
 export const isTombstone = (email: string | null | undefined, first?: string | null, last?: string | null) =>
@@ -60,7 +92,8 @@ export const inRange = (a: { completed_sign_up_at: string | null }, since: strin
   return d >= since && d <= until;
 };
 
-export function buildSignupRows(accounts: readonly CountedAccount[], mirror: ReadonlyMap<number, MirrorUser>, live: ReadonlyMap<number, LivePlayer | null>): SignupRow[] {
+export function buildSignupRows(accounts: readonly CountedAccount[], mirror: ReadonlyMap<number, MirrorUser>, live: ReadonlyMap<number, LivePlayer | null>,
+  optOuts: { phones: ReadonlySet<string>; players: ReadonlySet<number> } = { phones: new Set(), players: new Set() }): SignupRow[] {
   return [...accounts]
     .sort((a, b) => a.completed_sign_up_at.localeCompare(b.completed_sign_up_at) || a.account_id - b.account_id)
     .map((a) => {
@@ -79,6 +112,9 @@ export function buildSignupRows(accounts: readonly CountedAccount[], mirror: Rea
         level: lvl == null ? "" : String(lvl),
         deleted,
         warsaw: a.declared_city_raw === "Warsaw",
+        // Read before the deleted-account blanking: a phone that said STOP stays opted out.
+        textsOptedOut: optOuts.players.has(a.account_id)
+          || [l?.phoneNumber, m?.phone_number].some((ph) => { const k = phoneKey(ph); return !!k && optOuts.phones.has(k); }),
       };
     });
 }
@@ -86,6 +122,7 @@ export function buildSignupRows(accounts: readonly CountedAccount[], mirror: Rea
 export const SIGNUP_COLUMNS = [
   "ID", "First name", "Last name", "Email", "Phone number", "City",
   "Signup completed (Central)", "Verified by", "Soccer level", "Deleted", "Warsaw",
+  "Texts opted out", "Emails opted out",
 ] as const;
 
 // A cell Excel would run as a formula (=, +, -, @, tab, CR) gets a leading apostrophe. Names and
@@ -106,6 +143,7 @@ export function signupCsv(rows: readonly SignupRow[]): string {
     lines.push([
       String(r.id), cell(r.firstName), cell(r.lastName), cell(r.email), cell(r.phone, true), cell(r.city),
       r.completedCentral, r.verifiedBy, r.level, yn(r.deleted), yn(r.warsaw),
+      yn(r.textsOptedOut), "unknown",
     ].join(","));
   }
   return "﻿" + lines.join("\r\n") + "\r\n";

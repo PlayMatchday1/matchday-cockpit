@@ -22,7 +22,7 @@ import { apiGet } from "@/lib/matchdayStageApi";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
 import {
   buildSignupRows, inRange, playerExportGate, signupCsv, signupExportLogBody, signupFileName,
-  type CountedAccount, type LivePlayer, type MirrorUser,
+  textOptOuts, type ChatMsg, type ChatThread, type CountedAccount, type LivePlayer, type MirrorUser,
 } from "@/lib/signupExport";
 
 export const runtime = "nodejs";
@@ -96,7 +96,20 @@ export async function GET(req: Request) {
     }));
     const lookupFailures = ids.filter((id) => !live.get(id)).length;
 
-    const rows = buildSignupRows(accounts, mirror, live);
+    // 4b — STOP / START replies in Player Chats. Prefiltered by the keywords; the exact-word test is
+    // textOptOuts' (so "stop by later" is not a stop).
+    const kw = ["stop", "stopall", "unsubscribe", "end", "quit", "alto", "parar", "start", "unstop"];
+    const inbound = await selectAll<ChatMsg>(() => sb.from("crm_messages").select("thread_id, body, sent_at").eq("direction", "inbound")
+      .or(kw.map((w) => `body.ilike.${w}*`).join(",")).order("sent_at").order("id"));
+    const tIds = [...new Set(inbound.map((m) => m.thread_id))];
+    const threads: ChatThread[] = [];
+    for (let i = 0; i < tIds.length; i += 300) {
+      const { data, error } = await sb.from("crm_threads").select("id, phone_number, player_id").in("id", tIds.slice(i, i + 300));
+      if (error) throw new Error(`crm_threads: ${error.message}`);
+      threads.push(...((data ?? []) as ChatThread[]));
+    }
+
+    const rows = buildSignupRows(accounts, mirror, live, textOptOuts(inbound, threads));
     const csv = signupCsv(rows);
 
     // 5 — the record: who, the range, the count. Never a player.
