@@ -38,6 +38,19 @@ edit form aimed at 100%-off codes.
   message body — that is a second copy of player PII with different access
   rules.
 
+## Reading the production API
+
+**No bulk reads of the production MatchDay API.** At most **one request every 2 seconds**, one at
+a time, and **stop at the first error** (any non-2xx, a timeout, an HTML error page). Do not retry
+past it, and do not resume until the API is confirmed healthy. For counts, totals and sweeps, use
+our database copy (`mdapi_*`) and say how fresh it is.
+
+**WHY (2026-10-21).** Ad-hoc read-only sweeps (thousands of `GET /admin/players/{id}` at eight in
+parallel, then a back-to-back walk of `GET /admin/players` in pages of 250) ran against an API
+already over its memory quota. The web dyno crashed (Heroku R15), and production returned 503 to
+everyone, the app included, until Ryan restarted the dynos and moved web to Standard-2X. "Read-only"
+does not mean harmless: a read is load.
+
 ## Traps that have already cost us
 
 - **Match `startDate`/`endDate` are LOCAL WALL CLOCK despite the `Z` suffix.**
