@@ -21,8 +21,13 @@ export type LogRowIn = {
 export type CreditEntry = {
   id: string; at: string; month: string; staff: string; playerId: number | null; source: string;
   beforeCents: number; afterCents: number; amountCents: number; reason: string; outcome: string; counted: boolean;
+  env: string;
   flags: CreditFlag[];
 };
+
+/** Why an entry is listed but not totalled, in words: a staging test, or a write that did not land. */
+export const notCountedWhy = (e: Pick<CreditEntry, "counted" | "env" | "outcome">) =>
+  e.counted ? "" : e.env !== "production" ? "staging test, not counted" : `not applied (${e.outcome})`;
 export type CreditFlag = "over_25" | "repeat_30d" | "thin_reason";
 
 export const FLAG_LABEL: Record<CreditFlag, string> = {
@@ -61,7 +66,7 @@ export function creditEntries(rows: readonly LogRowIn[]): CreditEntry[] {
       staff: (r.actor_email || r.actor_name || "unknown").toLowerCase(),
       playerId: Number(m[1]), source: r.source,
       beforeCents: before, afterCents: after, amountCents: after - before, reason,
-      outcome: r.outcome, counted: r.env === "production" && r.outcome === "landed",
+      outcome: r.outcome, env: r.env, counted: r.env === "production" && r.outcome === "landed",
       flags: [],
     });
   }
@@ -153,7 +158,7 @@ export function staffCreditsCsv(entries: readonly CreditEntry[], names: Readonly
       cell(fmt(e.at)), cell(e.staff), String(e.playerId ?? ""), cell(names.get(e.playerId ?? -1) ?? ""),
       // Signed amounts are numbers, not text a player typed, so they are written as-is.
       dollars(e.amountCents), dollars(e.beforeCents), dollars(e.afterCents),
-      cell(e.reason), cell(e.source), e.counted ? "yes" : `no (${e.outcome})`, cell(e.flags.map((f) => FLAG_LABEL[f]).join("; ")),
+      cell(e.reason), cell(e.source), e.counted ? "yes" : `no, ${notCountedWhy(e)}`, cell(e.flags.map((f) => FLAG_LABEL[f]).join("; ")),
     ].join(","));
   }
   return "﻿" + lines.join("\r\n") + "\r\n";

@@ -9,7 +9,7 @@ import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/useAuth";
 import {
-  FLAG_LABEL, chicagoDay, filterEntries, monthlyBreakdown, staffCreditsCsv, staffSummary,
+  FLAG_LABEL, chicagoDay, filterEntries, notCountedWhy, monthlyBreakdown, staffCreditsCsv, staffSummary,
   type CreditEntry, type CreditFilter,
 } from "@/lib/staffCredits";
 
@@ -169,7 +169,7 @@ export default function StaffCreditsView() {
                       <td className={`px-3 py-2 font-bold ${e.amountCents < 0 ? "text-coral" : ""}`}>{signed(e.amountCents)}</td>
                       <td className="px-3 py-2">{money(e.beforeCents)}</td>
                       <td className="px-3 py-2">{money(e.afterCents)}</td>
-                      <td className="px-3 py-2">{e.reason || <span className="text-deep-green/45">none given</span>}{!e.counted && <span className="ml-1 text-deep-green/55">(not applied: {e.outcome})</span>}</td>
+                      <td className="px-3 py-2">{e.reason || <span className="text-deep-green/45">none given</span>}{!e.counted && <span className="ml-1 text-deep-green/55">({notCountedWhy(e)})</span>}</td>
                       <td className="px-3 py-2">{e.flags.map((fl) => (
                         <span key={fl} className="mr-1 inline-block rounded-full border border-coral/40 bg-coral-soft px-1.5 text-[10px] font-semibold text-coral-hover">{FLAG_LABEL[fl]}</span>
                       ))}</td>
