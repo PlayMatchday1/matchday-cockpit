@@ -123,6 +123,10 @@ const NODE_SUITES = [
   // the whole Add venue drawer. Cheap, pure, and it pins the three call sites in the drawer she
   // used as well as the helper.
   "scripts/error-text-test.ts",
+  // How Clubhouse reads the production MatchDay API (2026-10-21, after the R15 outage): the paced
+  // client, a forced 503 stopping the location and matches syncs after one request, the hourly roster
+  // pick, reviews from rosters, the night pass's window quarters, Download players from our copy.
+  "scripts/mdapi-pacing-test.ts",
   // THE GOAL SHEET'S ARITHMETIC. Pure, sub-second, and it pins the exact fault the spreadsheet it
   // replaces has: a total that disagrees with its own rows because each row was rounded first.
   "scripts/field-goals-test.ts",

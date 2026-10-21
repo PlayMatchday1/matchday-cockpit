@@ -35,6 +35,7 @@ import { timingSafeEqual } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { syncMdapiUsers, mdapiUsersLogPatch } from "@/lib/mdapiUsersSync";
 import { runWithLog, type TriggeredBy } from "@/lib/syncLogging";
+import { inNightPassHour, NIGHT_PASS_SKIP } from "@/lib/nightPass";
 
 /* AN INCREMENTAL RUN IS A COUPLE OF PAGES. 60s is ~20x the observed incremental cost and is
  * deliberately BELOW the 120s that /api/sync/users allows itself, because that headroom exists
@@ -115,6 +116,12 @@ export async function POST(req: Request) {
     supabase = createClient(supabaseUrl, serviceKey, {
       auth: { persistSession: false, autoRefreshToken: false },
     });
+  }
+
+  /* THE NIGHT PASS (2026-10-21): in the 08:00 UTC hour the full pass is writing every mdapi_users row
+   * (lib/nightPass.ts), so this run would be a second request to MatchDay for nothing. */
+  if (triggeredBy === "cron" && inNightPassHour()) {
+    return Response.json({ triggeredBy, skipped: true, reason: NIGHT_PASS_SKIP, durationMs: Date.now() - startedAt });
   }
 
   /* THE BOOTSTRAP GUARD. syncMdapiUsers picks its own mode: no watermark means a FULL walk, and

@@ -90,10 +90,8 @@
 // (RLS allows authenticated SELECT only).
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import {
-  getMatchdayApiClient,
-  MatchdayApiError,
-} from "./matchdayApi";
+import { getPacedClient, MatchdayApiError } from "./matchdayApi";
+import { withLogPatch } from "./syncLogging";
 
 const PAGE_LIMIT = 100;
 const UPSERT_BATCH = 500;
@@ -187,7 +185,10 @@ export async function syncMdapiSubscriptions(
   supabase: SupabaseClient,
 ): Promise<MdapiSubscriptionsSyncResult> {
   const startedAt = Date.now();
-  const client = getMatchdayApiClient();
+  // PACED (2026-10-21): one request a second, no retries, the first error stops the run. What was
+  // read before it is still written (upsert only), then the run fails.
+  const client = getPacedClient();
+  let stoppedBy: string | null = null;
 
   // --- 1. Enumerate cities ---
   // /admin/cities returns a bare array (no envelope), 9 cities.
@@ -220,7 +221,6 @@ export async function syncMdapiSubscriptions(
   // collisions don't happen — verified by probe.
   const dedupedById = new Map<number, DbRow>();
   const loopErrors: Record<string, string> = {};
-  let apiCalls = 0;
   let fetchedTotal = 0;
   // ACTIVE-loop-wins guard state (see "Defensive write order" in the
   // file header). Membership ids the strict ACTIVE filter claimed this
@@ -237,7 +237,7 @@ export async function syncMdapiSubscriptions(
   };
   const syncedAt = new Date().toISOString();
 
-  for (const cityAbbr of cityAbbrs) {
+  walk: for (const cityAbbr of cityAbbrs) {
     for (const status of STATUSES) {
       const loopKey = `${cityAbbr}/${status}`;
       for (let page = 1; ; page++) {
@@ -253,10 +253,9 @@ export async function syncMdapiSubscriptions(
             limit: PAGE_LIMIT,
             page,
           });
-          apiCalls++;
         } catch (e) {
-          // Don't crash the whole sync for one bad (city, status)
-          // combination. Capture and move on.
+          // THE FIRST ERROR STOPS THE WHOLE WALK (it used to skip to the next city/status and keep
+          // going, which is a second request to a struggling server).
           const msg =
             e instanceof MatchdayApiError
               ? `HTTP ${e.status}: ${e.message}`
@@ -264,7 +263,8 @@ export async function syncMdapiSubscriptions(
                 ? e.message
                 : String(e);
           loopErrors[loopKey] = msg;
-          break;
+          stoppedBy = `${loopKey}: ${msg}`;
+          break walk;
         }
         const rows = Array.isArray(res?.data) ? res.data : [];
         for (const r of rows) {
@@ -416,6 +416,9 @@ export async function syncMdapiSubscriptions(
     }
     upserted += chunk.length;
   }
+  if (stoppedBy) {
+    throw withLogPatch(new Error(`mdapi_subscriptions stopped at ${stoppedBy} (no retry); ${upserted} rows read before it were written`), { api_calls: client.calls });
+  }
 
   return {
     fetched: fetchedTotal,
@@ -423,7 +426,7 @@ export async function syncMdapiSubscriptions(
     upserted,
     cities: cityAbbrs.length,
     statuses: STATUSES.length,
-    apiCalls,
+    apiCalls: client.calls,
     loopErrors,
     loopSanity: sanity,
     blockedActiveOverwrites,

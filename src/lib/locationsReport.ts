@@ -99,6 +99,9 @@ export function buildLocationsReport(input: {
   run: { started_at: string; finished_at: string | null; ok: boolean | null; error: string | null; complete: boolean | null } | null;
   okRun: { finished_at: string; players_total: number | null; players_internal: number | null; cities: unknown } | null;
   firstRunAt: string | null;
+  /** When the newest successful run of EITHER kind finished (an hourly incremental one, usually).
+   *  okRun is the newest successful FULL pass — the only kind that carries cities and totals. */
+  freshAt?: string | null;
   /** Active player ids (any email) and the staff ids to remove from them. */
   activeIds?: Set<number> | null;
   /** Cities with an active field. A player "in market" for any other city counts as outside
@@ -216,7 +219,7 @@ export function buildLocationsReport(input: {
   ).map((c) => ({ key: c.key, place: c.name, players: c.players, nearestCityId: c.nearestCityId, nearestMi: c.nearestCityMi }));
 
   return {
-    dataAsOf: input.okRun?.finished_at ?? null,
+    dataAsOf: input.freshAt ?? input.okRun?.finished_at ?? null,
     lastRun: input.run ? { startedAt: input.run.started_at, finishedAt: input.run.finished_at, ok: input.run.ok,
       error: input.run.error, complete: input.run.complete } : null,
     trackingSince: input.firstRunAt,

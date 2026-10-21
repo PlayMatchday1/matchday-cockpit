@@ -40,8 +40,9 @@ export async function fetchFieldSnapshots(sb: SupabaseClient, now = new Date()):
 }
 
 export async function fetchLatestCities(sb: SupabaseClient): Promise<{ cities: AreaCity[]; asOf: string | null }> {
+  // FULL passes only (migration 0230): an incremental run carries no city geometry.
   const { data, error } = await sb.from("player_area_sync_runs").select("finished_at,cities")
-    .eq("ok", true).order("finished_at", { ascending: false }).limit(1).maybeSingle();
+    .eq("ok", true).eq("kind", "full").order("finished_at", { ascending: false }).limit(1).maybeSingle();
   if (error) throw new Error(error.message);
   return { cities: (Array.isArray(data?.cities) ? data!.cities : []) as AreaCity[], asOf: data?.finished_at ?? null };
 }

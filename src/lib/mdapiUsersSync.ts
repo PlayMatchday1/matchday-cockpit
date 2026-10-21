@@ -1,35 +1,19 @@
 // Sync GET /admin/players → mdapi_users. Server-only.
 //
-// INCREMENTAL by default. This used to be a full ~24k-row re-sync on
-// every run, which became the daily cron's budget-killer: the
-// orchestrator hit its 300s maxDuration *inside* this step and got
-// killed mid-run, so the four steps after it never executed. Now:
+// INCREMENTAL by default: newest→oldest by createdAt from page 1, stopping once a page reaches past
+// (stored max created_at − 48h overlap). The overlap re-fetches a safe margin; upserts are
+// idempotent (onConflict=id). No watermark (empty mirror) or forceFull → a FULL walk.
 //
-//   1. Authenticate via the shared MatchDay API helper.
-//   2. Probe page=1&limit=1 to read totalItems (also a health check;
-//      refuses to proceed on totalItems=0 so we never mistake an
-//      upstream blip for "no users").
-//   3. Auto-detect the watermark column. We prefer `updatedAt` so that
-//      BOTH new signups AND edits to existing rows (signup completion,
-//      city change, membership flip) are caught. updatedAt is used only
-//      if the endpoint genuinely supports it — the sample must carry a
-//      parseable updatedAt on every row AND come back monotonically
-//      descending (the API silently ignores an unknown sortColumn, so
-//      "accepted the param" is not enough). Otherwise we fall back to
-//      `createdAt`, the historically-verified sort (new signups only).
-//   4. Read the high-water mark from mdapi_users (max of the chosen
-//      column) and walk pages newest→oldest, stopping once a page falls
-//      entirely past (watermark − 48h overlap). The overlap re-fetches a
-//      safe margin; upserts are idempotent (onConflict=id) so re-seeing
-//      rows costs nothing and clock skew / late rows can't slip through.
-//   5. First run / no watermark / neither sort honored → FULL sync (the
-//      old behavior). A full run populates updated_at, so the next run
-//      can go incremental.
+// PACED SINCE 2026-10-21 (the R15 outage): one request a second, no retries, stop at the first
+// error — getPacedClient in matchdayApi.ts. A normal hourly run is ONE request.
 //
-// TIMING, MEASURED 2026-08-25 — the "≈30s" above is an estimate and it is
-// WRONG. A real full run: 123 pages, 30,718 rows, 112.7s. The incremental
-// walk: 0.6s median, 0.8s max over six prod runs. Anything sizing a timeout
-// off this file should use 113s, not 30s.
+// EDITS TO EXISTING ROWS — city, membership, signup completion, a deleted account's scrub — are not
+// seen by the incremental walk. The daily 3 AM Central full pass (playerAreaSync.ts, runLeg) reads
+// every player and upserts mdapi_users with mapRow from this file; that is where they arrive.
+//
+// TIMING, MEASURED 2026-08-25 (before pacing): a full run was 123 pages, 30,718 rows, 112.7s.
+// Paced, a full run is at least one second a page (~146 pages on 2026-10-21) — a manual bootstrap
+// only; the daily full read is the 3 AM pass.
 //
 // === Endpoint behavior (from probe, May 2026) ===
 //   - totalItems IS reliable on this endpoint (unlike subscriptions
@@ -50,12 +34,9 @@
 // (RLS allows authenticated SELECT only).
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import {
-  getMatchdayApiClient,
-  MatchdayApiError,
-} from "./matchdayApi";
+import { getPacedClient, MatchdayApiError } from "./matchdayApi";
 import { normalizeCityName } from "./cityNormalization";
-import type { LogPatch } from "./syncLogging";
+import { withLogPatch, type LogPatch } from "./syncLogging";
 
 const PAGE_LIMIT = 250;
 // DB-side upsert chunk size. Initial Phase 1 setting of 500 hit
@@ -65,28 +46,13 @@ const PAGE_LIMIT = 250;
 // fast we can raise later. Don't pre-optimize — this is the
 // minimum-blast-radius fix.
 const UPSERT_BATCH = 100;
-// Politeness delay between paginated /admin/players calls. With ~96
-// pages back-to-back the upstream platform has been observed to serve
-// transient 503s and HTML error pages (the "Unexpected token 'A'…"
-// failure mode). 200ms spreads the load and reduces upstream pressure
-// at the cost of ~20s of wall-clock time across the full sync.
-const INTER_PAGE_DELAY_MS = 200;
 // How far back past the watermark an incremental walk re-fetches. The
 // watermark is derived from data we already stored, so a margin absorbs
 // clock skew, rows that landed mid-run on the previous sync, and the
 // non-atomicity of paginated reads. 48h is generous and cheap (a few
 // extra pages of idempotent re-upserts).
 const WATERMARK_OVERLAP_MS = 48 * 60 * 60 * 1000;
-// Rows pulled when sniffing whether a sortColumn is real. Small — we
-// only need enough to confirm the column exists and the order is
-// honored.
-const DETECT_SAMPLE = 10;
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-type ApiPlayer = {
+export type ApiPlayer = {
   id?: number;
   email?: string | null;
   firstName?: string | null;
@@ -107,7 +73,7 @@ type ApiPage = {
   data?: ApiPlayer[];
 };
 
-type DbRow = {
+export type DbRow = {
   id: number;
   email: string;
   first_name: string | null;
@@ -152,43 +118,21 @@ export type MdapiUsersSyncResult = {
 // updatedAt. NOT a failure — the run completes and ok stays true — but
 // it's logged so the degraded mode is never silent and is easy to grep.
 export const MDAPI_USERS_CREATEDAT_FALLBACK_NOTE =
-  "ADVISORY (sync OK): /admin/players does not expose updatedAt; running " +
-  "createdAt incremental — new signups are captured, but edits to existing " +
-  "rows (membership, city, signup completion) are NOT picked up. Revisit if " +
-  "MatchDay adds updatedAt.";
+  "ADVISORY (sync OK): createdAt incremental — new signups are captured here; " +
+  "edits to existing rows (membership, city, signup completion, deleted " +
+  "accounts) arrive with the daily 3 AM Central full pass (/api/sync/player-areas).";
 
 // Shared fin_sync_log patch for the mdapi-users step, used by both the
 // cron orchestrator and the manual /api/sync/users route so the fallback
 // advisory surfaces identically wherever the sync runs.
 export function mdapiUsersLogPatch(r: MdapiUsersSyncResult): LogPatch {
+  const base = { rows_imported: r.upserted, api_calls: r.apiCalls, run_mode: r.mode === "full" ? "full" : "incremental" };
   return r.mode === "incremental:createdAt"
-    ? { rows_imported: r.upserted, error_message: MDAPI_USERS_CREATEDAT_FALLBACK_NOTE }
-    : { rows_imported: r.upserted };
+    ? { ...base, error_message: MDAPI_USERS_CREATEDAT_FALLBACK_NOTE }
+    : base;
 }
 
-const apiTsOf = (r: ApiPlayer, field: WatermarkField): string | null | undefined =>
-  field === "updatedAt" ? r.updatedAt : r.createdAt;
-
-// A sample is "sorted desc by field" only if every row carries a
-// parseable timestamp AND the series is monotonically non-increasing.
-// This is the guard against the API silently ignoring an unknown
-// sortColumn and handing back its default order.
-function isMonotonicDesc(values: (string | null | undefined)[]): boolean {
-  if (values.length === 0) return false;
-  const ts: number[] = [];
-  for (const v of values) {
-    if (!v) return false;
-    const t = Date.parse(v);
-    if (Number.isNaN(t)) return false;
-    ts.push(t);
-  }
-  for (let i = 1; i < ts.length; i++) {
-    if (ts[i - 1] < ts[i]) return false;
-  }
-  return true;
-}
-
-function mapRow(r: ApiPlayer, syncedAt: string, unmappedSet: Set<string>): DbRow | null {
+export function mapRow(r: ApiPlayer, syncedAt: string, unmappedSet: Set<string>): DbRow | null {
   // Required: id, email, createdAt. Anything missing those is skipped —
   // we can't key the row or join on email.
   if (
@@ -270,110 +214,47 @@ async function readStoredMax(
  * advisory that /admin/players exposes no updatedAt. So edits are caught by NOTHING today, and id
  * 88053 still showed a name, email and phone here while MatchDay had it scrubbed.
  *
- * forceFull is the fix and it is the whole fix — because the scrub is in place, re-fetching the row
- * overwrites the name, nulls the phone, tombstones the email and rewrites `raw` wholesale. No new
- * column, no soft-delete flag, no separate PII pass. */
+ * Re-fetching the row is the fix and it is the whole fix — because the scrub is in place, the
+ * re-fetch overwrites the name, nulls the phone, tombstones the email and rewrites `raw` wholesale.
+ * Since 2026-10-21 the daily re-fetch is the 3 AM Central full pass in playerAreaSync.ts, which
+ * upserts every row it reads through mapRow; forceFull remains for a manual bootstrap. */
 export async function syncMdapiUsers(
   supabase: SupabaseClient,
   opts: { forceFull?: boolean } = {},
 ): Promise<MdapiUsersSyncResult> {
   const startedAt = Date.now();
-  const client = getMatchdayApiClient();
+  // PACED (2026-10-21): one request a second, no retries, stop at the first error (matchdayApi.ts,
+  // getPacedClient). The retry is the next scheduled run.
+  const client = getPacedClient();
   const syncedAt = new Date().toISOString();
-  let apiCalls = 0;
 
-  // Single page fetch + call counter. Throws on terminal upstream
-  // failures (fetchMatchDayJson has already burned its retries).
-  const getPage = (query: Record<string, string | number>): Promise<ApiPage> => {
-    apiCalls++;
-    return client.get<ApiPage>("/admin/players", query);
-  };
-
-  // --- 1. Probe to learn totalItems ---
-  let probe: ApiPage;
-  try {
-    probe = await getPage({
-      page: 1,
-      limit: 1,
-      sortColumn: "createdAt",
-      sortDirection: "desc",
-    });
-  } catch (e) {
-    const rawMsg = e instanceof Error ? e.message : String(e);
-    const status = e instanceof MatchdayApiError ? ` (HTTP ${e.status})` : "";
-    throw new Error(
-      `mdapi_users: /admin/players probe failed after retries${status}. Upstream: ${rawMsg}`,
-    );
-  }
-  const totalItems = typeof probe.totalItems === "number" ? probe.totalItems : 0;
-  if (totalItems === 0) {
-    // Endpoint should return at least one row in production. If we
-    // somehow got zero, surface it rather than silently no-oping.
-    throw new Error(
-      "mdapi_users: /admin/players probe returned totalItems=0 — refusing to wipe state",
-    );
-  }
-  const totalPages = Math.ceil(totalItems / PAGE_LIMIT);
-
-  // --- 2 + 3. Pick the incremental field + watermark, else full ---
-  // Prefer updatedAt so edits to existing rows are caught; fall back to
-  // createdAt (new signups only); fall back to a full sync when neither
-  // sort is usable or there's no stored watermark yet (first run).
-  //
-  // A field is only usable if a sample comes back genuinely sorted by it
-  // (the API silently ignores an unknown sortColumn, so "accepted the
-  // param" is not enough) AND we can read a stored high-water mark for
-  // it. updatedAt is NOT a column — it would live in the raw jsonb — so
-  // its watermark read can be slow or unsupported; if it throws we DEMOTE
-  // to the next field rather than fail the sync.
+  /* NO SORT DETECTION ANY MORE, AND NO SEPARATE PROBE. Detection spent two requests a run asking
+   * whether updatedAt sorts; it never has (every prod run since August came back createdAt, and the
+   * API silently ignores unknown sort columns — docs/matchday-api-facts.md). The probe's totalItems
+   * comes with page 1 of the walk itself. An incremental run is now ONE request on a normal hour. */
   let mode: SyncMode = "full";
-  let walkField: WatermarkField | null = null;
   let cutoff: number | null = null;
-
-  // FORCED FULL SKIPS DETECTION ENTIRELY. Not "detect and then override" — the detection loop
-  // costs two extra /admin/players calls whose only output is a mode we are about to discard.
-  for (const field of opts.forceFull ? [] : (["updatedAt", "createdAt"] as const)) {
-    let sample: ApiPlayer[];
-    try {
-      const res = await getPage({
-        page: 1,
-        limit: DETECT_SAMPLE,
-        sortColumn: field,
-        sortDirection: "desc",
-      });
-      sample = Array.isArray(res?.data) ? res.data : [];
-    } catch {
-      continue; // unknown sortColumn (4xx) / transient — try next field
+  if (!opts.forceFull) {
+    const wmTs = await readStoredMax(supabase, "createdAt");
+    if (wmTs != null) {
+      mode = "incremental:createdAt";
+      cutoff = wmTs - WATERMARK_OVERLAP_MS;
     }
-    if (
-      sample.length === 0 ||
-      !isMonotonicDesc(sample.map((r) => apiTsOf(r, field)))
-    ) {
-      continue; // field absent or sort not honored
-    }
-    let wmTs: number | null;
-    try {
-      wmTs = await readStoredMax(supabase, field);
-    } catch {
-      continue; // e.g. raw->>updatedAt scan timed out — try next field
-    }
-    if (wmTs == null) {
-      // Sort is usable but nothing stored yet → a full run bootstraps the
-      // watermark. Stop here so a less-preferred field's stale watermark
-      // can't mask a first run on the preferred one.
-      break;
-    }
-    mode = `incremental:${field}` as SyncMode;
-    walkField = field;
-    cutoff = wmTs - WATERMARK_OVERLAP_MS;
-    break;
   }
   console.log(
     `[mdapi-users] mode=${mode}` +
       (cutoff != null ? ` cutoff=${new Date(cutoff).toISOString()}` : ""),
   );
+  const fail = (e: unknown, where: string) => {
+    const rawMsg = e instanceof Error ? e.message : String(e);
+    const status = e instanceof MatchdayApiError ? ` (HTTP ${e.status})` : "";
+    return withLogPatch(
+      new Error(`mdapi_users: ${where}${status}, no retry. Upstream: ${rawMsg}`),
+      { api_calls: client.calls, run_mode: mode === "full" ? "full" : "incremental" },
+    );
+  };
 
-  // --- 4. Fetch (full or incremental walk) ---
+  // --- Fetch, newest first ---
   // Dedupe by id in case the API returns the same row twice across
   // pages (sort can be unstable when many rows share a timestamp).
   // Last-write-wins.
@@ -382,6 +263,8 @@ export async function syncMdapiUsers(
   let rowsReceived = 0;
   let rowsSkipped = 0;
   let pagesFetched = 0;
+  let totalItems = 0;
+  let totalPages = 1;
 
   const ingest = (rows: ApiPlayer[]) => {
     rowsReceived += rows.length;
@@ -395,91 +278,53 @@ export async function syncMdapiUsers(
     }
   };
 
-  if (mode === "full") {
-    // Full re-sync: page 1..totalPages, no early stop. Strict guards —
-    // an unexpected empty page mid-loop aborts rather than truncating.
-    for (let page = 1; page <= totalPages; page++) {
-      if (page > 1) await sleep(INTER_PAGE_DELAY_MS);
-      let res: ApiPage;
-      try {
-        res = await getPage({
-          page,
-          limit: PAGE_LIMIT,
-          sortColumn: "createdAt",
-          sortDirection: "desc",
-        });
-      } catch (e) {
-        const approxSynced = (page - 1) * PAGE_LIMIT;
-        const rawMsg = e instanceof Error ? e.message : String(e);
-        const status =
-          e instanceof MatchdayApiError ? ` (HTTP ${e.status})` : "";
-        throw new Error(
-          `mdapi_users: Failed on page ${page} of ~${totalPages} after retries${status}. ` +
-            `Synced ~${approxSynced.toLocaleString()} of ~${totalItems.toLocaleString()} users. ` +
-            `Upstream: ${rawMsg}`,
-        );
+  for (let page = 1; page <= totalPages; page++) {
+    let res: ApiPage;
+    try {
+      res = await client.get<ApiPage>("/admin/players", {
+        page,
+        limit: PAGE_LIMIT,
+        sortColumn: "createdAt",
+        sortDirection: "desc",
+      });
+    } catch (e) {
+      throw fail(e, `failed on page ${page} of ~${totalPages} (${mode})`);
+    }
+    pagesFetched++;
+    if (page === 1) {
+      totalItems = typeof res.totalItems === "number" ? res.totalItems : 0;
+      if (totalItems === 0) {
+        // Endpoint should return at least one row in production. If we
+        // somehow got zero, surface it rather than silently no-oping.
+        throw fail(new Error("totalItems=0"), "page 1 returned totalItems=0 — refusing to wipe state");
       }
-      pagesFetched++;
-      const rows = Array.isArray(res?.data) ? res.data : [];
+      totalPages = Math.ceil(totalItems / PAGE_LIMIT);
+    }
+    const rows = Array.isArray(res?.data) ? res.data : [];
+
+    if (mode === "full") {
+      // Strict: an unexpected empty page mid-walk aborts rather than truncating.
       ingest(rows);
       if (rows.length === 0 && page < totalPages) {
-        throw new Error(
-          `mdapi_users: page ${page} returned 0 rows but totalPages=${totalPages}`,
-        );
+        throw fail(new Error("empty page"), `page ${page} returned 0 rows but totalPages=${totalPages}`);
       }
+      continue;
     }
-  } else {
-    // Incremental walk: newest→oldest on the detected field, stop once a
-    // page falls entirely past the cutoff. A short page (< PAGE_LIMIT)
-    // or an empty page also ends the walk. totalPages caps the loop so a
-    // misbehaving sort can never spin forever.
-    const field = walkField as WatermarkField;
+
+    // Incremental: stop once a page reaches past the cutoff, or the table ends.
+    if (rows.length === 0) break;
     const cut = cutoff as number;
-    for (let page = 1; page <= totalPages; page++) {
-      if (page > 1) await sleep(INTER_PAGE_DELAY_MS);
-      let res: ApiPage;
-      try {
-        res = await getPage({
-          page,
-          limit: PAGE_LIMIT,
-          sortColumn: field,
-          sortDirection: "desc",
-        });
-      } catch (e) {
-        const rawMsg = e instanceof Error ? e.message : String(e);
-        const status =
-          e instanceof MatchdayApiError ? ` (HTTP ${e.status})` : "";
-        throw new Error(
-          `mdapi_users: incremental fetch failed on page ${page} (field=${field})${status}. ` +
-            `Upstream: ${rawMsg}`,
-        );
-      }
-      pagesFetched++;
-      const rows = Array.isArray(res?.data) ? res.data : [];
-      if (rows.length === 0) break;
-
-      const fresh: ApiPlayer[] = [];
-      let sawOlder = false;
-      for (const r of rows) {
-        const v = apiTsOf(r, field);
-        const ts = v ? Date.parse(v) : NaN;
-        if (Number.isNaN(ts)) {
-          // Defensive: a row with no parseable timestamp can't be
-          // judged against the cutoff — keep it rather than risk
-          // dropping a real update.
-          fresh.push(r);
-        } else if (ts >= cut) {
-          fresh.push(r);
-        } else {
-          sawOlder = true;
-        }
-      }
-      ingest(fresh);
-
-      // Stop when we've crossed the cutoff or the page was short (we've
-      // reached the end of the table).
-      if (sawOlder || rows.length < PAGE_LIMIT) break;
+    const fresh: ApiPlayer[] = [];
+    let sawOlder = false;
+    for (const r of rows) {
+      const ts = r.createdAt ? Date.parse(r.createdAt) : NaN;
+      // A row with no parseable timestamp can't be judged against the cutoff — keep it rather
+      // than risk dropping a real signup.
+      if (Number.isNaN(ts) || ts >= cut) fresh.push(r);
+      else sawOlder = true;
     }
+    ingest(fresh);
+    if (sawOlder || rows.length < PAGE_LIMIT) break;
   }
 
   // --- 5. Upsert in batches ---
@@ -524,7 +369,7 @@ export async function syncMdapiUsers(
     rowsSkipped,
     unmappedCities: [...unmappedSet].sort(),
     scrubbedSeen,
-    apiCalls,
+    apiCalls: client.calls,
     durationMs: Date.now() - startedAt,
   };
 }

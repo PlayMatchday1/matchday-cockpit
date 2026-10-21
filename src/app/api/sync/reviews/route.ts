@@ -1,118 +1,20 @@
-// POST /api/sync/reviews — manual trigger for the mdapi_reviews sync.
-// Backs the SyncCard "Sync now" button on /data → Reviews section.
+// GET|POST /api/sync/reviews — what the GitHub hourly job (and the Data page) call for reviews.
 //
-// Auth: same dual-mode pattern as /api/sync/stripe and /api/sync/cron.
-//   Manual: Bearer <user-session-token> from the browser. Session
-//           client used for the upsert — RLS allows authenticated
-//           INSERT/UPDATE on mdapi_reviews (migration 0014).
-//   Cron:   Bearer ${CRON_SECRET}. Service-role client bypasses RLS.
-//           Cron path isn't actually used today (the cron orchestrator
-//           hits /api/sync/cron, not this per-source endpoint), but
-//           dual-mode is kept for parity + future flexibility.
+// IT MAKES NO MATCHDAY REQUEST since 2026-10-21 (Ryan, after the R15 outage). It used to walk every
+// review, ~287 pages back to back, about seven times a day. New reviews now arrive with the hourly
+// matches run, read off the rosters it refreshes (reviewFromRoster, mdapiMatchesSync.ts — same id,
+// same values, proven on the mirror), and the full walk of /admin/matches/reviews is the night pass's
+// (/api/sync/reviews/full/{1,2}, lib/nightPass.ts).
 //
-// On success: returns 200 with { ok: true, result: { upserted, ... } }.
-// On failure: returns 500 with { ok: false, error: "..." }.
-// Either way, a fin_sync_log row is created with source='mdapi-reviews'.
+// It answers 200 so the GitHub job's next steps (the matches run, then the Master Schedule
+// reconcile) run. The workflow file still calls it: this token cannot push a workflow change.
 
-import { timingSafeEqual } from "node:crypto";
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { syncMdapiReviews } from "@/lib/mdapiReviewsSync";
-import { runWithLog, type TriggeredBy } from "@/lib/syncLogging";
-
-// mdapi_reviews sync runs ~10s typical. 60s gives 6× headroom.
-export const maxDuration = 60;
 export const runtime = "nodejs";
 
-function constantTimeMatch(a: string, b: string): boolean {
-  const ab = Buffer.from(a, "utf8");
-  const bb = Buffer.from(b, "utf8");
-  if (ab.length !== bb.length) return false;
-  return timingSafeEqual(ab, bb);
+export async function POST() {
+  return Response.json({
+    ok: true,
+    skipped: "Reviews arrive with the hourly matches run (/api/sync/matches); the full reviews walk runs nightly at about 3:47 AM Central.",
+  });
 }
-
-/* PAUSED 2026-10-21 (Ryan), after the MatchDay API outage (Heroku R15). This route is what the GitHub
- * hourly job calls: ~850 back-to-back MatchDay requests a run between the two. It answers 200 so the
- * job's Master Schedule reconcile (Supabase only) still runs. The 6 AM orchestrator calls the sync
- * library directly and is NOT paused by this. Undo: set null. */
-const PAUSED: string | null = "Paused 2026-10-21 after the MatchDay API outage, until the incremental reviews sync ships.";
-
-export async function POST(req: Request) {
-  if (PAUSED) return Response.json({ paused: PAUSED });
-  const startedAt = Date.now();
-
-  // --- Auth: bearer, dual-mode ---
-  const auth = req.headers.get("authorization") ?? "";
-  if (!auth.startsWith("Bearer ")) {
-    return Response.json(
-      { error: "Missing Authorization header" },
-      { status: 401 },
-    );
-  }
-  const token = auth.slice("Bearer ".length).trim();
-  if (!token) {
-    return Response.json({ error: "Empty bearer token" }, { status: 401 });
-  }
-
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
-  const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY?.trim();
-  if (!supabaseUrl || !supabaseKey) {
-    return Response.json(
-      { error: "Supabase env not configured" },
-      { status: 500 },
-    );
-  }
-
-  const cronSecret = process.env.CRON_SECRET;
-  let triggeredBy: TriggeredBy;
-  let supabase: SupabaseClient;
-
-  if (cronSecret && constantTimeMatch(token, cronSecret)) {
-    triggeredBy = "cron";
-    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
-    if (!serviceKey) {
-      return Response.json(
-        { error: "SUPABASE_SERVICE_ROLE_KEY is not set" },
-        { status: 500 },
-      );
-    }
-    supabase = createClient(supabaseUrl, serviceKey, {
-      auth: { persistSession: false, autoRefreshToken: false },
-    });
-  } else {
-    triggeredBy = "manual";
-    supabase = createClient(supabaseUrl, supabaseKey, {
-      global: { headers: { Authorization: `Bearer ${token}` } },
-      auth: { persistSession: false, autoRefreshToken: false },
-    });
-    const { data: userData, error: userErr } =
-      await supabase.auth.getUser(token);
-    if (userErr || !userData?.user) {
-      return Response.json({ error: "Invalid session" }, { status: 401 });
-    }
-  }
-
-  // --- Run with logging ---
-  const result = await runWithLog(
-    "mdapi-reviews",
-    triggeredBy,
-    supabase,
-    syncMdapiReviews,
-    (r) => ({ rows_imported: r.upserted }),
-  );
-
-  return Response.json(
-    {
-      triggeredBy,
-      durationMs: Date.now() - startedAt,
-      ...result,
-    },
-    { status: result.ok ? 200 : 500 },
-  );
-}
-
-// Deliberately POST-only. The hourly freshness trigger
-// (.github/workflows/hourly-sync.yml) POSTs with the CRON_SECRET
-// bearer, so there's no reason to expose a GET that performs a write —
-// prefetchers and crawlers make that a footgun. If this ever moves to
-// a Vercel cron (which triggers via GET, and needs a paid plan for
-// sub-daily schedules), add `export const GET = POST` back here.
+export const GET = POST;

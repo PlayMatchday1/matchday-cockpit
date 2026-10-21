@@ -190,8 +190,8 @@ function DownloadPlayers({ since, until, authHeaders }: { since: string; until: 
       const url = URL.createObjectURL(await r.blob());
       const a = document.createElement("a"); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 10_000);
-      const failed = Number(r.headers.get("x-lookup-failures") ?? 0);
-      setMsg(`${fmtInt(Number(r.headers.get("x-row-count") ?? 0))} players${failed > 0 ? `, ${fmtInt(failed)} couldn't be checked live ("unknown")` : ""}`);
+      const unconfirmed = Number(r.headers.get("x-unconfirmed") ?? 0);
+      setMsg(`${fmtInt(Number(r.headers.get("x-row-count") ?? 0))} players${unconfirmed > 0 ? `, ${fmtInt(unconfirmed)} not confirmed by MatchDay since last night's sync (contact left blank, Deleted "unknown")` : ""}`);
     } catch (e) {
       setMsg(`Download failed (${e instanceof Error ? e.message : "error"}).`);
     } finally { setBusy(false); }

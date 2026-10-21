@@ -74,7 +74,18 @@ export type LogPatch = Partial<{
   charges_succeeded: number;
   charges_skipped: number;
   error_message: string;
+  /** Migration 0230: MatchDay requests the run made, and which kind of run it was. (run_mode, not
+   *  "mode": mode() is a Postgres aggregate, and a filter on a missing "mode" column resolved to it.) */
+  api_calls: number;
+  run_mode: string;
 }>;
+
+/* A FAILED RUN STILL COUNTS ITS REQUESTS. A sync that throws can attach the columns it knows
+ * (api_calls, mode) to the error with this; runWithLog writes them beside error_message. */
+export function withLogPatch<E>(e: E, patch: LogPatch): E {
+  if (e && typeof e === "object") (e as { logPatch?: LogPatch }).logPatch = patch;
+  return e;
+}
 
 export type RunResult<T> =
   | { ok: true; result: T }
@@ -125,7 +136,8 @@ export async function runWithLog<T>(
     // the sync lib threw, and those libs throw sanitized text by contract (see calendarSync).
     const cls = e instanceof Error ? e.constructor.name : typeof e;
     const msg = e instanceof Error ? e.message : String(e);
-    patch = { error_message: `${cls}: ${msg}`.slice(0, 500) };
+    const carried = e && typeof e === "object" ? (e as { logPatch?: LogPatch }).logPatch : undefined;
+    patch = { ...(carried ?? {}), error_message: `${cls}: ${msg}`.slice(0, 500) };
     out = { ok: false, error: `${cls}: ${msg}` };
   } finally {
     const { error: updateErr } = await supabase

@@ -29,7 +29,7 @@ type SubRow = {
 };
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-const MD_GAP_MS = 400;     // MatchDay: at most ~2.5 calls a second
+const MD_GAP_MS = 1000;    // MatchDay: at most one call a second, and the first failure stops the probe (2026-10-21)
 const STRIPE_GAP_MS = 250; // Stripe: ~4 a second, far under its read limit
 
 /** The 597: paying plan, CANCELED, no canceled_at. */
@@ -83,6 +83,8 @@ export async function probeMatchday(sb: SupabaseClient, n: number) {
       out.stripeIdOnMatch = hit ? typeof hit.stripeSubscriptionId === "string" && hit.stripeSubscriptionId.length > 0 : null;
     } catch (e) {
       out.error = e instanceof Error ? e.message.slice(0, 160) : "read failed";
+      rows.push(out);
+      break; // the first MatchDay failure ends the probe: no second request to a struggling server
     }
     rows.push(out);
     await sleep(MD_GAP_MS);
@@ -189,8 +191,10 @@ export async function probeLowPricePlans(sb: SupabaseClient) {
     const out: LowPlanRow = { membershipId: r.membership_id, city: r.city_identifier, activation: r.activation_date?.slice(0, 10) ?? null,
       planCents: Math.round(Number(r.price) * 100), stripeStatus: null, unitAmount: null, interval: null, discount: null,
       invoices: [], lastPaid: null, lastPaidCents: null, error: null };
+    let inMatchday = true;
     try {
       const p = await apiGet<Record<string, unknown>>("production", `/admin/players/${r.user_id}`);
+      inMatchday = false;
       const us = Array.isArray(p.userSubscriptions) ? (p.userSubscriptions as Record<string, unknown>[]) : [];
       const hit = us.find((u) => Number(u.id) === r.membership_id) ?? us.find((u) => String(u.status) === "ACTIVE");
       const subId = typeof hit?.stripeSubscriptionId === "string" ? hit.stripeSubscriptionId : null;
@@ -210,6 +214,7 @@ export async function probeLowPricePlans(sb: SupabaseClient) {
       out.lastPaidCents = paid ? paid.amount_paid : null;
     } catch (e) {
       out.error = e instanceof Error ? e.message.slice(0, 160) : "read failed";
+      if (inMatchday) { rows.push(out); break; } // a MatchDay failure ends the probe; a Stripe one does not
     }
     rows.push(out);
     await sleep(MD_GAP_MS);

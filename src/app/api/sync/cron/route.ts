@@ -36,12 +36,13 @@ import { timingSafeEqual } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { commitStripe } from "@/lib/financeImport";
 import { syncStripeCharges } from "@/lib/stripeSync";
-import { syncMdapiReviews } from "@/lib/mdapiReviewsSync";
 import { syncMdapiSubscriptions } from "@/lib/mdapiSubscriptionsSync";
 import { syncMdapiPromocodes } from "@/lib/mdapiPromocodesSync";
 import {
   syncMdapiMatches,
   defaultIncrementalWindow,
+  logReviewsFromRosters,
+  matchesLogPatch,
 } from "@/lib/mdapiMatchesSync";
 import { syncFirstmatchLedger } from "@/lib/firstmatchLedgerSync";
 import { syncMdapiUsers, mdapiUsersLogPatch } from "@/lib/mdapiUsersSync";
@@ -201,20 +202,18 @@ export async function POST(req: Request) {
     }),
   );
 
-  const reviewsResult = await runWithLog(
-    "mdapi-reviews",
-    triggeredBy,
-    supabase,
-    syncMdapiReviews,
-    (r) => ({ rows_imported: r.upserted }),
-  );
+  // REVIEWS: NO WALK HERE since 2026-10-21. New reviews arrive with the matches step below (read off
+  // the rosters it refreshes, logged as mdapi-reviews 'from-rosters'); the full walk of
+  // /admin/matches/reviews is the night pass's (lib/nightPass.ts). Kept as a result so the response
+  // shape and the anyFailed gate below are unchanged.
+  const reviewsResult = { ok: true as const, result: { skipped: "reviews arrive with the matches step; full walk at night" } };
 
   const subscriptionsResult = await runWithLog(
     "mdapi-subscriptions",
     triggeredBy,
     supabase,
     syncMdapiSubscriptions,
-    (r) => ({ rows_imported: r.upserted }),
+    (r) => ({ rows_imported: r.upserted, api_calls: r.apiCalls }),
   );
 
   // Promocodes — independent of upstream syncs (no skip-on-fail
@@ -226,13 +225,14 @@ export async function POST(req: Request) {
     triggeredBy,
     supabase,
     syncMdapiPromocodes,
-    (r) => ({ rows_imported: r.upserted }),
+    (r) => ({ rows_imported: r.upserted, api_calls: r.apiCalls }),
   );
 
   // Matches — incremental refresh of mdapi_matches + mdapi_match_players
   // for the now-14d → now+60d window. Independent of upstream syncs;
   // snapshots will run even if this fails (only avg_matches stat goes
-  // stale, member metrics stay fresh). ~150s typical.
+  // stale, member metrics stay fresh). The HOURLY kind since 2026-10-21: rosters for recent, new or
+  // changed matches only (rostersToRefresh); every roster is re-read by the night pass.
   // ── GOOGLE CALENDAR — MOVED EARLY, DELIBERATELY ────────────────────────────
   // It used to be step 15 of 15. The orchestrator's maxDuration is 300s and the run reached
   // app-store-installs at +288s, so the function was killed before this step ever started —
@@ -258,16 +258,15 @@ export async function POST(req: Request) {
     if (!run.ok) console.error("[cron] google-calendar step failed (isolated, non-fatal):", run.error);
   }
 
+  const matchesStart = new Date().toISOString();
   const matchesResult = await runWithLog(
     "mdapi-matches",
     triggeredBy,
     supabase,
-    (sb) => syncMdapiMatches(sb, defaultIncrementalWindow()),
-    (r) => ({
-      rows_imported: r.matchesUpserted + r.playersUpserted,
-      rows_soft_deleted: r.rowsSoftDeleted,
-    }),
+    (sb) => syncMdapiMatches(sb, { ...defaultIncrementalWindow(), rosters: "changed", mode: "incremental" }),
+    matchesLogPatch,
   );
+  if (matchesResult.ok) await logReviewsFromRosters(supabase, triggeredBy, matchesStart, matchesResult.result);
 
   // First-match abuse ledger — captures one-way phone/email hashes for
   // is_first_match=true claims so delete-and-remake repeat abuse is

@@ -1,168 +1,18 @@
-// POST /api/sync/users-full — the DAILY FULL re-sync of mdapi_users.
+// /api/sync/users-full — RETIRED 2026-10-21 (Ryan, after the R15 outage at 2:05 PM Central).
 //
-// WHY THIS EXISTS, when /api/sync/users already syncs the same table.
+// This was the daily full re-sync of mdapi_users: ~147 back-to-back /admin/players pages at 200 ms,
+// with retries, at 09:00 UTC — the walk the facts doc records taking the API dyno to ~850 MB every
+// morning. The night pass's full player walk (/api/sync/player-areas, 08:00 UTC, lib/nightPass.ts)
+// now reads every player once, paced, and upserts mdapi_users from the same pages (mapRow), which is
+// what blanks a deleted account here. It logs under this route's source, 'mdapi-users-full'.
 //
-// A PLAYER DELETING THEIR ACCOUNT IS AN EDIT, NOT A DISAPPEARANCE. MatchDay scrubs the row in place
-// and keeps serving it from /admin/players: name "Deleted Account", phone null, email replaced by
-// an opaque 44-character token. Measured on prod: 1,669 such rows already in the mirror.
-//
-// The incremental walk cannot see it. It sorts newest-first and stops at the watermark, so a row
-// older than the watermark is never re-fetched however it changes. It PREFERS updatedAt for exactly
-// this reason — but six consecutive prod runs all came back `incremental:createdAt`, every one
-// carrying the advisory that /admin/players exposes no updatedAt. So edits are caught by nothing,
-// and prod id 88053 sat in Clubhouse with a name, an email and a phone that MatchDay had scrubbed.
-//
-// THE FULL RE-SYNC IS THE WHOLE FIX. Because the scrub is in place, re-fetching overwrites the
-// name, nulls the phone, tombstones the email and rewrites `raw` wholesale — so the second copy of
-// the PII in the jsonb goes with it. No id-set diff, no soft-delete column, no separate PII pass.
-//
-// DAILY, NOT WEEKLY: weekly would buy nothing and leave a scrubbed account readable here for up to
-// seven days.
-//
-// SEPARATE FROM THE 11:00 ORCHESTRATOR, deliberately. This step is what once blew that chain's 300s
-// budget from the inside and killed the four steps after it. On its own schedule it cannot.
-//
-// Same dual-mode auth as /api/sync/users: CRON_SECRET for the scheduled call, a valid session for a
-// manual one. Writes use the service role — RLS allows authenticated SELECT only on mdapi_users.
+// Kept as a route so a stale bookmark or cron gets an answer instead of a 404.
 
-
-import { timingSafeEqual } from "node:crypto";
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { syncMdapiUsers, mdapiUsersLogPatch } from "@/lib/mdapiUsersSync";
-import { runWithLog, type TriggeredBy } from "@/lib/syncLogging";
-
-/* MEASURED, NOT ESTIMATED — and the estimate was badly wrong. The header of mdapiUsersSync puts a
- * full run at "~19s network + ~10s upserts ≈ 30s", which is where the 120s ceiling came from. The
- * first real run took 112.7s for 123 pages and 30,718 rows: 94% of that ceiling, with 7s to spare.
- * It would have started failing on its own growth within months, and a cron that times out leaves
- * a half-applied sync and a log row that never completes.
- *
- * 300s is the platform maximum and gives 2.7x headroom on the measured figure. The number to watch
- * is in fin_sync_log: completed_at - started_at for source 'mdapi-users-full'. */
-export const maxDuration = 300;
 export const runtime = "nodejs";
 
-function constantTimeMatch(a: string, b: string): boolean {
-  const ab = Buffer.from(a, "utf8");
-  const bb = Buffer.from(b, "utf8");
-  if (ab.length !== bb.length) return false;
-  return timingSafeEqual(ab, bb);
+export async function POST() {
+  return Response.json({
+    error: "Retired: mdapi_users' daily full refresh is the 3 AM Central player pass (/api/sync/player-areas). Nothing was synced.",
+  }, { status: 410 });
 }
-
-export async function POST(req: Request) {
-  const startedAt = Date.now();
-
-  // --- Auth: bearer, dual-mode ---
-  const auth = req.headers.get("authorization") ?? "";
-  if (!auth.startsWith("Bearer ")) {
-    return Response.json(
-      { error: "Missing Authorization header" },
-      { status: 401 },
-    );
-  }
-  const token = auth.slice("Bearer ".length).trim();
-  if (!token) {
-    return Response.json({ error: "Empty bearer token" }, { status: 401 });
-  }
-
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
-  const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY?.trim();
-  if (!supabaseUrl || !supabaseKey) {
-    return Response.json(
-      { error: "Supabase env not configured" },
-      { status: 500 },
-    );
-  }
-
-  const cronSecret = process.env.CRON_SECRET;
-  let triggeredBy: TriggeredBy;
-  let supabase: SupabaseClient;
-
-  if (cronSecret && constantTimeMatch(token, cronSecret)) {
-    triggeredBy = "cron";
-    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
-    if (!serviceKey) {
-      return Response.json(
-        { error: "SUPABASE_SERVICE_ROLE_KEY is not set" },
-        { status: 500 },
-      );
-    }
-    supabase = createClient(supabaseUrl, serviceKey, {
-      auth: { persistSession: false, autoRefreshToken: false },
-    });
-  } else {
-    triggeredBy = "manual";
-    // Manual mode needs the service role too — RLS allows SELECT only
-    // on mdapi_users for authenticated, no INSERT/UPDATE policy.
-    // Verify the session token is valid before swapping in service.
-    const sessionClient = createClient(supabaseUrl, supabaseKey, {
-      global: { headers: { Authorization: `Bearer ${token}` } },
-      auth: { persistSession: false, autoRefreshToken: false },
-    });
-    const { data: userData, error: userErr } =
-      await sessionClient.auth.getUser(token);
-    if (userErr || !userData?.user) {
-      return Response.json({ error: "Invalid session" }, { status: 401 });
-    }
-    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
-    if (!serviceKey) {
-      return Response.json(
-        { error: "SUPABASE_SERVICE_ROLE_KEY is not set" },
-        { status: 500 },
-      );
-    }
-    supabase = createClient(supabaseUrl, serviceKey, {
-      auth: { persistSession: false, autoRefreshToken: false },
-    });
-  }
-
-  /* --- Run with logging ---
-   * runWithLog INSERTS THE LOG ROW BEFORE RUNNING THE SYNC and returns ok:false without running it
-   * if that insert is rejected. So until migration 0149 adds 'mdapi-users-full' to the source CHECK
-   * this route does nothing at all — and says so, rather than reporting a success it did not have.
-   * That is the loud direction: a re-sync that quietly skipped would leave scrubbed accounts
-   * readable while Recent Syncs showed nothing wrong. */
-  const result = await runWithLog(
-    "mdapi-users-full",
-    triggeredBy,
-    supabase,
-    (sb) => syncMdapiUsers(sb, { forceFull: true }),
-    mdapiUsersLogPatch,
-  );
-
-  if (!result.ok && /fin_sync_log_source_check|violates check constraint/i.test(result.error ?? "")) {
-    return Response.json({
-      error: "Migration 0149 (fin_sync_log source 'mdapi-users-full') is not applied yet. NOTHING WAS SYNCED.",
-      detail: result.error,
-    }, { status: 503 });
-  }
-
-  return Response.json(
-    {
-      triggeredBy,
-      durationMs: Date.now() - startedAt,
-      ...result,
-    },
-    { status: result.ok ? 200 : 500 },
-  );
-}
-
-/* ── VERCEL CRON SENDS GET, AND THESE ROUTES ONLY EXPORTED POST ────────────────────────────────
- * So the scheduled call has been returning 405 every night since the day it was scheduled. The
- * cron was firing perfectly; nothing was answering it. Read from the production invocation logs
- * on 2026-09-18 rather than inferred:
- *
- *   /api/sync/meta-ad-spend    10:00:39Z  GET -> 405   (and 09-17, 09-16)
- *   /api/sync/users-full       09:00:35Z  GET -> 405   (and 09-17, 09-16)
- *   /api/sync/wp-submissions   12:00:42Z  GET -> 405   (and 09-17, 09-16)
- *   /api/sync/cron             11:00:03Z  GET -> 200   (and 09-17, 09-16)
- *
- * /api/sync/cron is the only scheduled route that carried this line, and it is the only one that
- * has ever run. fin_sync_log agrees: every source inside it has 30 rows in 30 days, and
- * meta-ad-spend has ONE row in its entire life, triggered_by='manual'.
- *
- * SAME HANDLER, SAME AUTH. The bearer is read from headers and the cron path consumes no body, so
- * the verb is the only difference between the two entry points. This is the line /api/sync/cron
- * has carried since it was written, with the Vercel doc reference on it:
- * https://vercel.com/docs/cron-jobs#how-cron-jobs-work */
 export const GET = POST;

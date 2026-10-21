@@ -1,10 +1,15 @@
-// POST /api/sync/matches — manual trigger for the mdapi_matches
-// incremental refresh. Backs the SyncCard "Sync now" button on
-// /data → Matches section.
+// POST /api/sync/matches — the HOURLY mdapi_matches refresh (the GitHub Actions job, hourly except
+// 11:00 UTC) and the Data page's Matches "Sync now".
 //
-// Runs the SAME window the cron uses (defaultIncrementalWindow:
-// now-14d → now+60d). Backfill is CLI-only via
-// scripts/sync-mdapi-matches-backfill.ts.
+// Since 2026-10-21 (Ryan, after the R15 outage): the match LIST for the whole window
+// (defaultIncrementalWindow: now-14d → now+60d), but rosters re-read only for recent, new or changed
+// matches (rostersToRefresh, mdapiMatchesSync.ts) — tens of requests instead of ~560 — and paced at
+// one a second, no retries, stopped by the first error. The reviews those rosters carry are written
+// to mdapi_reviews in the same run. Every roster, and the reviews endpoint itself, are re-read by the
+// night pass (lib/nightPass.ts); in that hour this route stands down.
+//
+// A manual bounded window (body fromDate+toDate) still re-reads every roster in it. Backfill is
+// CLI-only via scripts/sync-mdapi-matches-backfill.ts.
 //
 // Auth: same dual-mode pattern as /api/sync/reviews and /api/sync/cron.
 //   Manual: Bearer <user-session-token>. Session client; RLS allows
@@ -18,8 +23,11 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import {
   syncMdapiMatches,
   defaultIncrementalWindow,
+  logReviewsFromRosters,
+  matchesLogPatch,
 } from "@/lib/mdapiMatchesSync";
 import { runWithLog, type TriggeredBy } from "@/lib/syncLogging";
+import { inNightPassHour, NIGHT_PASS_SKIP } from "@/lib/nightPass";
 import { refreshGrowthViews, refreshPlayerFinderViews } from "@/lib/growthViews";
 
 // Incremental sync runs ~15-20s typical, measured off fin_sync_log
@@ -36,14 +44,7 @@ function constantTimeMatch(a: string, b: string): boolean {
   return timingSafeEqual(ab, bb);
 }
 
-/* PAUSED 2026-10-21 (Ryan), after the MatchDay API outage (Heroku R15). This route is what the GitHub
- * hourly job calls: ~850 back-to-back MatchDay requests a run between the two. It answers 200 so the
- * job's Master Schedule reconcile (Supabase only) still runs. The 6 AM orchestrator calls the sync
- * library directly and is NOT paused by this. Undo: set null. */
-const PAUSED: string | null = "Paused 2026-10-21 after the MatchDay API outage, until the incremental matches sync ships.";
-
 export async function POST(req: Request) {
-  if (PAUSED) return Response.json({ paused: PAUSED });
   const startedAt = Date.now();
 
   const auth = req.headers.get("authorization") ?? "";
@@ -125,25 +126,28 @@ export async function POST(req: Request) {
   // just that slice, optionally guarded by a per-city launch map. Cron always
   // uses the incremental window, so its path is byte-identical. The bounded
   // window keeps the tombstone pass scoped to the same slice (see the sync).
-  const window =
-    triggeredBy === "manual" && body?.fromDate && body?.toDate
-      ? {
-          fromDate: body.fromDate,
-          toDate: body.toDate,
-          ...(body?.cityLaunch ? { cityLaunch: body.cityLaunch } : {}),
-        }
-      : defaultIncrementalWindow();
+  const bounded = triggeredBy === "manual" && !!body?.fromDate && !!body?.toDate;
+  // Answers 200 so the GitHub job's next step (the Supabase-only Master Schedule reconcile) runs.
+  if (!bounded && inNightPassHour()) {
+    return Response.json({ triggeredBy, skipped: NIGHT_PASS_SKIP, durationMs: Date.now() - startedAt });
+  }
+  const window = bounded
+    ? {
+        fromDate: body.fromDate!,
+        toDate: body.toDate!,
+        ...(body?.cityLaunch ? { cityLaunch: body.cityLaunch } : {}),
+      }
+    : { ...defaultIncrementalWindow(), rosters: "changed" as const, mode: "incremental" };
 
+  const runStart = new Date().toISOString();
   const result = await runWithLog(
     "mdapi-matches",
     triggeredBy,
     supabase,
     (sb) => syncMdapiMatches(sb, window),
-    (r) => ({
-      rows_imported: r.matchesUpserted + r.playersUpserted,
-      rows_soft_deleted: r.rowsSoftDeleted,
-    }),
+    matchesLogPatch,
   );
+  if (result.ok) await logReviewsFromRosters(supabase, triggeredBy, runStart, result.result);
 
   // Refresh the growth_* materialized views so the Growth tab reflects the new
   // matches, and the player-finder set so the finder does too. Both best-effort;

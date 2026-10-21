@@ -24,10 +24,7 @@
 // scripts run as service-role by convention).
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import {
-  getMatchdayApiClient,
-  MatchdayApiError,
-} from "./matchdayApi";
+import { getPacedClient, MatchdayApiError } from "./matchdayApi";
 
 const PAGE_LIMIT = 1000;
 const UPSERT_BATCH = 500;
@@ -79,6 +76,7 @@ export type MdapiPromocodesSyncResult = {
   fetched: number;
   upserted: number;
   pages: number;
+  apiCalls: number;
   durationMs: number;
 };
 
@@ -86,7 +84,8 @@ export async function syncMdapiPromocodes(
   supabase: SupabaseClient,
 ): Promise<MdapiPromocodesSyncResult> {
   const startedAt = Date.now();
-  const client = getMatchdayApiClient();
+  // PACED (2026-10-21): one request a second, no retries, the first error stops the run.
+  const client = getPacedClient();
 
   // === Fetch all pages ===
   const all: ApiPromocode[] = [];
@@ -165,6 +164,7 @@ export async function syncMdapiPromocodes(
     fetched: all.length,
     upserted,
     pages,
+    apiCalls: client.calls,
     durationMs: Date.now() - startedAt,
   };
 }

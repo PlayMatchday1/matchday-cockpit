@@ -7,15 +7,20 @@
 //   3. Map each API row to the typed columns + raw + synced_at.
 //   4. Upsert in batches of 500 onConflict=api_id.
 //
+// SINCE 2026-10-21 THIS WALK IS THE NIGHT PASS ONLY (lib/nightPass.ts), in two halves by page range
+// (fromPage/toPage): ~287 pages paced at one a second is longer than one function run. New reviews
+// arrive hourly with the matches run, which reads them off the rosters (reviewFromRoster,
+// mdapiMatchesSync.ts). PACED: one request a second, no retries, the first error stops the walk.
+// The endpoint states no order, so a review shifting between the two halves is refreshed the next
+// night instead; nothing is ever deleted here, so a skipped row keeps its last value.
+//
 // Caller provides the Supabase client. Writes require service role
 // (RLS allows authenticated SELECT only) — the manual script
 // constructs the client with SUPABASE_SERVICE_ROLE_KEY.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import {
-  getMatchdayApiClient,
-  MatchdayApiError,
-} from "./matchdayApi";
+import { getPacedClient, MatchdayApiError, type PacedClient } from "./matchdayApi";
+import { withLogPatch } from "./syncLogging";
 
 const PAGE_LIMIT = 100;
 const UPSERT_BATCH = 500;
@@ -53,19 +58,25 @@ export type MdapiReviewsSyncResult = {
   upserted: number; // rows actually written (after de-dupe)
   duplicatesDropped: number; // same api_id returned more than once by the API
   pages: number; // page count consumed
+  totalItems: number | null; // the endpoint's own count, from page 1 of this call's range
+  apiCalls: number;
   durationMs: number;
 };
 
 export async function syncMdapiReviews(
   supabase: SupabaseClient,
+  opts: { fromPage?: number; toPage?: number; client?: PacedClient } = {},
 ): Promise<MdapiReviewsSyncResult> {
   const startedAt = Date.now();
-  const client = getMatchdayApiClient();
+  const client = opts.client ?? getPacedClient();
+  const fromPage = opts.fromPage ?? 1;
+  const toPage = opts.toPage ?? Number.POSITIVE_INFINITY;
 
-  // --- Fetch all pages ---
+  // --- Fetch the page range ---
   const all: ApiReviewRow[] = [];
   let pages = 0;
-  for (let page = 1; ; page++) {
+  let totalItems: number | null = null;
+  for (let page = fromPage; page <= toPage; page++) {
     let res: ApiPage;
     try {
       res = await client.get<ApiPage>("/admin/matches/reviews", {
@@ -73,26 +84,20 @@ export async function syncMdapiReviews(
         limit: PAGE_LIMIT,
       });
     } catch (e) {
-      if (e instanceof MatchdayApiError) {
-        throw new Error(
-          `mdapi_reviews fetch failed on page ${page} (HTTP ${e.status}): ${e.message}`,
-        );
-      }
-      throw e;
+      const msg = e instanceof MatchdayApiError
+        ? `mdapi_reviews fetch failed on page ${page} (HTTP ${e.status}), no retry: ${e.message}`
+        : `mdapi_reviews fetch failed on page ${page}, no retry: ${e instanceof Error ? e.message : String(e)}`;
+      throw withLogPatch(new Error(msg), { api_calls: client.calls });
     }
     pages++;
     const rows = Array.isArray(res?.data) ? res.data : [];
     all.push(...rows);
+    if (typeof res.totalItems === "number") totalItems = res.totalItems;
 
     // Three-way termination — any of these signals "we're done".
     if (rows.length === 0) break;
     if (rows.length < PAGE_LIMIT) break;
-    if (
-      typeof res.totalItems === "number" &&
-      all.length >= res.totalItems
-    ) {
-      break;
-    }
+    if (totalItems != null && (page - 1) * PAGE_LIMIT + rows.length >= totalItems) break;
   }
 
   // --- Map to DB rows ---
@@ -168,6 +173,8 @@ export async function syncMdapiReviews(
     upserted,
     duplicatesDropped,
     pages,
+    totalItems,
+    apiCalls: client.calls,
     durationMs: Date.now() - startedAt,
   };
 }

@@ -63,6 +63,8 @@ type Props = {
   endpoint: string;
   // Optional helper text shown alongside the button, e.g. "~60 seconds".
   estimatedDuration?: string;
+  // Set when a manual sync must not run: the button is disabled and this says why.
+  disabledReason?: string;
 };
 
 function timeAgo(iso: string): string {
@@ -82,6 +84,7 @@ export default function SyncCard({
   source,
   endpoint,
   estimatedDuration,
+  disabledReason,
 }: Props) {
   const [lastSync, setLastSync] = useState<LastSyncRow | null>(null);
   const [lastSyncLoading, setLastSyncLoading] = useState(true);
@@ -166,12 +169,17 @@ export default function SyncCard({
         <button
           type="button"
           onClick={handleSync}
-          disabled={syncing}
+          disabled={syncing || !!disabledReason}
+          title={disabledReason}
           className="rounded-md bg-mint px-4 py-2 text-sm font-bold text-deep-green transition hover:bg-mint-hover disabled:cursor-not-allowed disabled:opacity-50"
         >
           {syncing ? "Syncing…" : "Sync now"}
         </button>
       </div>
+
+      {disabledReason && (
+        <p className="mt-2 text-[11px] text-deep-green/55">{disabledReason}</p>
+      )}
 
       {error && (
         <div className="mt-3 rounded-md border border-coral/40 bg-coral-soft px-3 py-2 text-xs text-coral">

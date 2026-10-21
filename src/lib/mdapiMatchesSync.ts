@@ -32,7 +32,8 @@
 // session (RLS allows authenticated INSERT/UPDATE per migration 0016).
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { getMatchdayApiClient, MatchdayApiError } from "./matchdayApi";
+import { getPacedClient, MatchdayApiError, type PacedClient } from "./matchdayApi";
+import { withLogPatch, type LogPatch, type TriggeredBy } from "./syncLogging";
 
 const PAGE_LIMIT = 100;
 const UPSERT_BATCH = 500;
@@ -250,7 +251,89 @@ export type MdapiMatchesSyncOptions = {
   // city-misattribution bug; the sync THROWS (writing nothing for that chunk)
   // rather than persist it. Cancelled rows are exempt (they can predate launch).
   cityLaunch?: Record<string, string>;
+  // WHICH ROSTERS TO RE-READ (2026-10-21). "all" (the default, and the 3 AM pass): every listed
+  // match. "changed" (the hourly run): only rostersToRefresh's pick — recent, new or changed matches.
+  rosters?: "all" | "changed";
+  // fin_sync_log.run_mode for this run (migration 0230). The tombstone guards compare a run only with
+  // prior runs of the same mode. Unset = the legacy behaviour (any prior mdapi-matches run).
+  mode?: string;
+  // Test seam: the paced client to use. Production always builds its own.
+  client?: PacedClient;
 };
+
+/* ── WHICH ROSTERS AN HOURLY RUN RE-READS (2026-10-21) ────────────────────────────────────────────
+ * The full refresh re-read all ~560 rosters in the window (one request each) every run, about seven
+ * times a day. Paced at one a second that is ~10 minutes — past a function's 300 s — so the hourly
+ * run re-reads only:
+ *   RECENT    start_date's calendar date within [today − RECENT_BACK_DAYS, today + RECENT_AHEAD_DAYS]
+ *             (UTC today). start_date is LOCAL WALL CLOCK despite its Z (CLAUDE.md): only its date
+ *             part is compared, and the window is a day wider each side than it needs to be, so the
+ *             few hours either way that reading costs cannot drop a match out.
+ *   NEW       not in mdapi_matches yet, or tombstoned there.
+ *   CHANGED   any of ROSTER_SIGNALS differs from the stored row: the player counts, guests, the
+ *             cancellation, the times, capacity, the review count and average, and updatedAt.
+ * What this misses until the 3 AM pass: a roster change on a match outside the recent window that
+ * moves none of those signals — one player out and another in on the same day. */
+export const RECENT_BACK_DAYS = 2;
+export const RECENT_AHEAD_DAYS = 3;
+export const ROSTER_SIGNALS = [
+  "player_count", "fake_player_count", "guest_count", "is_cancelled", "start_date", "end_date",
+  "max_player_count", "star_rating", "star_rating_count", "updated_at",
+] as const;
+export type StoredSignals = { api_id: number; deleted_at: string | null } & Partial<Record<(typeof ROSTER_SIGNALS)[number], unknown>>;
+
+const sameValue = (a: unknown, b: unknown): boolean => {
+  if (a == null || b == null) return a == null && b == null;
+  const na = Number(a), nb = Number(b);
+  if (typeof a !== "boolean" && typeof b !== "boolean" && Number.isFinite(na) && Number.isFinite(nb) && String(a).trim() !== "" && String(b).trim() !== "") return na === nb;
+  if (typeof a === "string" && typeof b === "string" && /^\d{4}-\d{2}-\d{2}T/.test(a) && /^\d{4}-\d{2}-\d{2}T/.test(b)) return Date.parse(a) === Date.parse(b);
+  return String(a) === String(b);
+};
+const ymdUtc = (d: Date) => d.toISOString().slice(0, 10);
+
+export function rostersToRefresh(
+  listed: readonly Pick<MatchDbRow, "api_id" | (typeof ROSTER_SIGNALS)[number]>[],
+  stored: ReadonlyMap<number, StoredSignals>,
+  now: Date,
+): Set<number> {
+  const from = ymdUtc(new Date(now.getTime() - RECENT_BACK_DAYS * 86_400_000));
+  const to = ymdUtc(new Date(now.getTime() + RECENT_AHEAD_DAYS * 86_400_000));
+  const pick = new Set<number>();
+  for (const m of listed) {
+    const day = typeof m.start_date === "string" ? m.start_date.slice(0, 10) : null;
+    const prev = stored.get(m.api_id);
+    if (day != null && day >= from && day <= to) pick.add(m.api_id);
+    else if (!prev || prev.deleted_at != null) pick.add(m.api_id);
+    else if (ROSTER_SIGNALS.some((k) => !sameValue(prev[k], m[k]))) pick.add(m.api_id);
+  }
+  return pick;
+}
+
+/* ── A REVIEW IS A ROSTER ROW WITH A RATING (proven 2026-10-21) ──────────────────────────────────
+ * mdapi_reviews.api_id is the roster row's id, and for the 587 reviews rated in the 7 days before
+ * 2026-10-21, every column derived as below equals what /admin/matches/reviews returned (0
+ * mismatches on 14 columns; empty tags read as null there). Over ALL 28,622 the user, manager and
+ * field names differ on a few percent: the reviews endpoint joins CURRENT accounts (a deleted
+ * player reads "Deleted Account") while an old roster row is a snapshot. So only roster rows fetched
+ * in THIS run are turned into reviews, and the 3 AM walk of the reviews endpoint overwrites every
+ * row with the endpoint's own values. docs/matchday-api-facts.md, "Reviews arrive with the rosters". */
+export function reviewFromRoster(p: ApiPlayer, m: Pick<MatchDbRow, "manager_first_name" | "manager_last_name" | "start_date" | "field_title" | "city_name">, syncedAt: string) {
+  const raw = p as ApiPlayer & { starRating?: number | null; tagsRating?: unknown; comment?: string | null; updatedAtRating?: string | null };
+  if (raw.starRating == null || typeof p.id !== "number") return null;
+  const tags = Array.isArray(raw.tagsRating) && raw.tagsRating.length === 0 ? null : (raw.tagsRating ?? null);
+  return {
+    api_id: p.id, user_id: p.userId ?? null,
+    user_first_name: p.user?.firstName ?? null, user_last_name: p.user?.lastName ?? null,
+    user_phone_number: p.user?.phoneNumber ?? null, user_email: p.user?.email ?? null,
+    manager_first_name: m.manager_first_name, manager_last_name: m.manager_last_name,
+    start_date: m.start_date, field_title: m.field_title, city_name: m.city_name,
+    star_rating: raw.starRating, tags_rating: tags, comment: raw.comment ?? null,
+    updated_at_rating: raw.updatedAtRating ?? null,
+    // Not the endpoint's payload: the 3 AM reviews walk replaces it with that.
+    raw: { derivedFrom: "roster", rosterRowId: p.id },
+    synced_at: syncedAt,
+  };
+}
 
 // Default window for daily incremental refresh: now - 14 days through
 // now + 60 days (per design doc Section 3.4).
@@ -277,6 +360,9 @@ export type MdapiMatchesSyncResult = {
   playersUpserted: number;
   pages: number;
   apiCalls: number;
+  rostersRead: number; // /players requests that came back this run
+  reviewsUpserted: number; // mdapi_reviews rows written from those rosters
+  mode: string | null;
   // Per-match errors (matchId → message). Don't crash the sync; the
   // affected match's player roster stays stale (or empty on first
   // backfill) until a re-run.
@@ -308,7 +394,12 @@ export async function syncMdapiMatches(
   opts: MdapiMatchesSyncOptions = {},
 ): Promise<MdapiMatchesSyncResult> {
   const startedAt = Date.now();
-  const client = getMatchdayApiClient();
+  // PACED (2026-10-21): one request a second, no retries, and the first error stops the run — the
+  // per-match loop below breaks on it rather than collecting errors for every match after it.
+  const client = opts.client ?? getPacedClient();
+  const rosters = opts.rosters ?? "all";
+  const failed = (e: unknown) => withLogPatch(e instanceof Error ? e : new Error(String(e)),
+    { api_calls: client.calls, ...(opts.mode ? { run_mode: opts.mode } : {}) });
 
   // Dry-run diagnostic accumulators (populated only when opts.dryRun).
   let earliestMatchDate: string | null = null;
@@ -328,7 +419,6 @@ export async function syncMdapiMatches(
   // === 1. Paginate /admin/matches ===
   const matches: ApiMatch[] = [];
   let pages = 0;
-  let apiCalls = 0;
   for (let page = 1; ; page++) {
     const query: Record<string, string | number> = {
       page,
@@ -344,13 +434,12 @@ export async function syncMdapiMatches(
       res = await client.get<MatchPage>("/admin/matches", query);
     } catch (e) {
       if (e instanceof MatchdayApiError) {
-        throw new Error(
-          `mdapi_matches list failed on page ${page} (HTTP ${e.status}): ${e.message}`,
-        );
+        throw failed(new Error(
+          `mdapi_matches list failed on page ${page} (HTTP ${e.status}), no retry: ${e.message}`,
+        ));
       }
-      throw e;
+      throw failed(e);
     }
-    apiCalls++;
     pages++;
     const rows = Array.isArray(res?.data) ? res.data : [];
     matches.push(...rows);
@@ -413,6 +502,20 @@ export async function syncMdapiMatches(
     matchRows.push(mapMatchToRow(m, syncedAt));
   }
 
+  // THE HOURLY PICK, read BEFORE the upsert below overwrites what it compares against.
+  let refresh: Set<number> | null = null;
+  if (rosters === "changed") {
+    const stored = new Map<number, StoredSignals>();
+    const ids = matchRows.map((r) => r.api_id);
+    for (let i = 0; i < ids.length; i += 300) {
+      const { data, error } = await supabase.from("mdapi_matches")
+        .select(`api_id,deleted_at,${ROSTER_SIGNALS.join(",")}`).in("api_id", ids.slice(i, i + 300));
+      if (error) throw failed(new Error(`mdapi_matches read for the hourly pick failed: ${error.message}`));
+      for (const r of (data ?? []) as unknown as StoredSignals[]) stored.set(r.api_id, r);
+    }
+    refresh = rostersToRefresh(matchRows, stored, new Date(startedAt));
+  }
+
   let matchesUpserted = 0;
   if (!opts.dryRun) {
     for (let i = 0; i < matchRows.length; i += UPSERT_BATCH) {
@@ -431,19 +534,23 @@ export async function syncMdapiMatches(
 
   // === 3. Per-match: fetch /players and accumulate ===
   const allPlayerRows: PlayerDbRow[] = [];
+  const reviewRows: NonNullable<ReturnType<typeof reviewFromRoster>>[] = [];
+  const rowById = new Map(matchRows.map((r) => [r.api_id, r]));
   const perMatchErrors: Record<string, string> = {};
   let playersFetched = 0;
+  let rostersRead = 0;
+  let stopped: Error | null = null;
 
   for (let i = 0; opts.matchesOnly ? false : i < matches.length; i++) {
     const match = matches[i];
     if (typeof match.id !== "number") continue;
+    if (refresh && !refresh.has(match.id)) continue;
 
     let players: ApiPlayer[];
     try {
       players = await client.get<ApiPlayer[]>(
         `/admin/matches/${match.id}/players`,
       );
-      apiCalls++;
     } catch (e) {
       const msg =
         e instanceof MatchdayApiError
@@ -452,10 +559,15 @@ export async function syncMdapiMatches(
             ? e.message
             : String(e);
       perMatchErrors[String(match.id)] = msg;
-      continue;
+      // THE FIRST ERROR STOPS THE RUN (paced client): no further roster is asked for.
+      stopped = e instanceof Error ? e : new Error(msg);
+      break;
     }
+    rostersRead++;
     if (!Array.isArray(players)) continue;
     playersFetched += players.length;
+    const mrow = rowById.get(match.id);
+    if (mrow) for (const p of players) { const rv = reviewFromRoster(p, mrow, syncedAt); if (rv) reviewRows.push(rv); }
 
     if (opts.dryRun && players.some((p) => p.paidStatus === "PAID")) matchesWithPaidPlayer++;
     for (const p of players) {
@@ -500,6 +612,24 @@ export async function syncMdapiMatches(
     }
   }
 
+  // === 4b. Reviews carried by the rosters just read (reviewFromRoster) ===
+  let reviewsUpserted = 0;
+  if (!opts.dryRun) {
+    const byId = new Map(reviewRows.map((r) => [r.api_id, r]));
+    const rv = [...byId.values()];
+    for (let i = 0; i < rv.length; i += UPSERT_BATCH) {
+      const { error } = await supabase.from("mdapi_reviews").upsert(rv.slice(i, i + UPSERT_BATCH), { onConflict: "api_id" });
+      if (error) throw failed(new Error(`mdapi_reviews upsert (from rosters) failed at offset ${i}: ${error.message}`));
+      reviewsUpserted += Math.min(UPSERT_BATCH, rv.length - i);
+    }
+  }
+
+  // A STOPPED RUN writes what it read (above) and then fails: no tombstones, because a roster this
+  // run never asked for must not read as one that came back empty.
+  if (stopped) {
+    throw failed(new Error(`mdapi_matches stopped after ${rostersRead} rosters, no retry: ${stopped.message}`));
+  }
+
   // === 5. Tombstone pass: soft-delete phantoms (deleted upstream) ===
   // Only for bounded incremental windows (both dates set). Backfill
   // (fromDate only) spans an unbounded forward range; tombstoning there
@@ -512,18 +642,21 @@ export async function syncMdapiMatches(
       toDate: opts.toDate,
       thisRunStartIso: new Date(startedAt).toISOString(),
       thisRunRowCount: matchesUpserted + playersUpserted,
+      mode: opts.mode,
     });
     // Same pass for player rows: a registration dropped from a match's
     // roster upstream is upsert-only here too, so it lingers as a phantom.
     // Folded into the same rows_soft_deleted counter. Matches whose player
     // fetch errored this run are excluded so a transient upstream failure
-    // can't tombstone a live roster.
-    rowsSoftDeleted += await tombstonePlayersMissing(supabase, {
+    // can't tombstone a live roster. ONLY when every roster in the window was read: an hourly run
+    // reads a few, and an unread roster is not an empty one.
+    if (rosters === "all") rowsSoftDeleted += await tombstonePlayersMissing(supabase, {
       fromDate: opts.fromDate,
       toDate: opts.toDate,
       thisRunStartIso: new Date(startedAt).toISOString(),
       thisRunRowCount: matchesUpserted + playersUpserted,
       erroredMatchIds: new Set(Object.keys(perMatchErrors).map(Number)),
+      mode: opts.mode,
     });
   }
 
@@ -533,7 +666,10 @@ export async function syncMdapiMatches(
     playersFetched,
     playersUpserted,
     pages,
-    apiCalls,
+    apiCalls: client.calls,
+    rostersRead,
+    reviewsUpserted,
+    mode: opts.mode ?? null,
     perMatchErrors,
     rowsSoftDeleted,
     // Roster-coverage counters (every path): let a backfill chunk report its
@@ -577,6 +713,7 @@ async function tombstoneMissing(
     toDate: string;
     thisRunStartIso: string;
     thisRunRowCount: number;
+    mode?: string;
   },
 ): Promise<number> {
   const { fromDate, toDate, thisRunStartIso, thisRunRowCount } = args;
@@ -590,6 +727,7 @@ async function tombstoneMissing(
     .from("fin_sync_log")
     .select("started_at, rows_imported")
     .eq("source", "mdapi-matches")
+    .match(args.mode ? { run_mode: args.mode } : {})
     .lt("started_at", thisRunStartIso)
     .not("completed_at", "is", null)
     .is("error_message", null)
@@ -668,6 +806,7 @@ async function tombstonePlayersMissing(
     thisRunStartIso: string;
     thisRunRowCount: number;
     erroredMatchIds: Set<number>;
+    mode?: string;
   },
 ): Promise<number> {
   const { fromDate, toDate, thisRunStartIso, thisRunRowCount, erroredMatchIds } =
@@ -677,6 +816,7 @@ async function tombstonePlayersMissing(
     .from("fin_sync_log")
     .select("started_at, rows_imported")
     .eq("source", "mdapi-matches")
+    .match(args.mode ? { run_mode: args.mode } : {})
     .lt("started_at", thisRunStartIso)
     .not("completed_at", "is", null)
     .is("error_message", null)
@@ -857,4 +997,25 @@ function mapPlayerToRow(
     raw: p,
     synced_at: syncedAt,
   };
+}
+
+/** fin_sync_log columns for an mdapi-matches run (api_calls and run_mode: migration 0230). */
+export function matchesLogPatch(r: MdapiMatchesSyncResult): LogPatch {
+  return {
+    rows_imported: r.matchesUpserted + r.playersUpserted,
+    rows_soft_deleted: r.rowsSoftDeleted,
+    api_calls: r.apiCalls,
+    ...(r.mode ? { run_mode: r.mode } : {}),
+  };
+}
+
+/* REVIEWS ARRIVE WITH THE ROSTERS, so the run that wrote them logs them under 'mdapi-reviews' too —
+ * the source the Reviews lens and the Data page read their freshness from. run_mode 'from-rosters', no
+ * MatchDay requests of its own. Best effort: the matches row is the run's record. */
+export async function logReviewsFromRosters(sb: SupabaseClient, triggeredBy: TriggeredBy, startedAt: string, r: MdapiMatchesSyncResult): Promise<void> {
+  const { error } = await sb.from("fin_sync_log").insert({
+    source: "mdapi-reviews", triggered_by: triggeredBy, started_at: startedAt, completed_at: new Date().toISOString(),
+    rows_imported: r.reviewsUpserted, api_calls: 0, run_mode: "from-rosters",
+  });
+  if (error) console.warn(`[mdapi-matches] mdapi-reviews from-rosters log row failed: ${error.message}`);
 }

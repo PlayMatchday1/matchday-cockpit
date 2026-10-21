@@ -51,6 +51,11 @@ already over its memory quota. The web dyno crashed (Heroku R15), and production
 everyone, the app included, until Ryan restarted the dynos and moved web to Standard-2X. "Read-only"
 does not mean harmless: a read is load.
 
+**Clubhouse's own scheduled syncs and bulk jobs** go through `getPacedClient` (`src/lib/matchdayApi.ts`):
+at most one request a second, no retries, the first error stops the run, and the retry is the next
+scheduled run. Full reads of a whole list happen only in the night pass (`src/lib/nightPass.ts`,
+~3 AM Central); during the day, sync incrementally. Single staff lookups keep the ordinary client.
+
 ## Traps that have already cost us
 
 - **Match `startDate`/`endDate` are LOCAL WALL CLOCK despite the `Z` suffix.**

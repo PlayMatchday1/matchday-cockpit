@@ -1,10 +1,11 @@
 "use client";
 
 // PLAYER LOCATIONS — the Data page's card for the player-areas sync (moved from the Locations page
-// header, 2026-10-08: nobody can start a sync from Locations any more). The same pass the cron runs,
-// logged as triggered_by "manual". ADMIN ONLY to start: the button is greyed for everyone else as a
-// courtesy; the server refuses non-admins (403), a pass in progress (409), the evening block (409)
-// and the 30-minute cooldown (429).
+// header, 2026-10-08: nobody can start a sync from Locations any more). Since 2026-10-21 Sync now runs
+// an INCREMENTAL run (/api/sync/player-areas/recent: players whose location changed since the last
+// successful run), logged as triggered_by "manual"; the full pass is the nightly cron only. ADMIN ONLY
+// to start: the button is greyed for everyone else as a courtesy; the server refuses non-admins (403),
+// a run in progress (409) and the 10-minute cooldown (429).
 //
 // It never retries. A stopped pass is shown as it stopped; the next one is a person's or the cron's.
 // State comes from /api/sync/player-areas/status (Supabase), polled every 5 s while a pass is live.
@@ -20,11 +21,11 @@ const fmtTime = (iso: string) =>
 const fmtWhen = (iso: string) =>
   new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(iso));
 
-/** Reading time (~2.3 s a page) plus the wait between legs (a leg is ~95 pages; the next starts on
- *  the 5-minute continuation tick, about a minute after the last ends). */
+/** Reading time (~1.3 s a page, paced) plus the wait between legs (a leg is ~175 pages; the next
+ *  starts on the 5-minute continuation tick, about a minute after the last ends). */
 const minsLeft = (total: number | null, done: number) => {
-  const left = Math.max(0, (total ?? 700) - done);
-  return Math.max(1, Math.round(left * 2.3 / 60 + left / 95));
+  const left = Math.max(0, (total ?? 185) - done);
+  return Math.max(1, Math.round(left * 1.3 / 60 + left / 175));
 };
 
 /** An error as one readable line: the API's HTML error page (the "Body: …" a 503 carries) is cut. */
@@ -39,8 +40,9 @@ export function passOutcome(p: RecentPass): { tone: "ok" | "err" | "running"; te
   const pages = p.pagesRead != null ? `${p.pagesRead}${p.pagesTotal ? ` of ${p.pagesTotal}` : ""} pages` : "";
   if (p.live) return { tone: "running", text: `Running · ${pages}` };
   if (!p.finishedAt) return { tone: "err", text: `Did not finish${pages ? ` · ${pages}` : ""}` };
-  if (p.ok) return { tone: "ok", text: `Complete · ${pages} · ${p.rowsInserted} new, ${p.rowsUpdated} changed` };
-  return { tone: "err", text: shortError(p.error) ?? `Stopped${pages ? ` · ${pages}` : ""}` };
+  const kind = p.kind === "incremental" ? "Changes" : "Full";
+  if (p.ok) return { tone: "ok", text: `${kind} · ${p.kind === "incremental" ? `${p.apiCalls ?? 0} requests` : pages} · ${p.rowsInserted} new, ${p.rowsUpdated} changed` };
+  return { tone: "err", text: `${kind} · ${shortError(p.error) ?? `Stopped${pages ? ` · ${pages}` : ""}`}` };
 }
 
 type Outcome = { kind: "ok" | "err"; text: string } | null;
@@ -105,11 +107,13 @@ export default function PlayerAreasSyncCard() {
     setStarting(true);
     setOutcome(null);
     try {
-      const res = await fetch("/api/sync/player-areas", { method: "POST", headers: await headers() });
+      const res = await fetch("/api/sync/player-areas/recent", { method: "POST", headers: await headers() });
       const body = await res.json().catch(() => ({}));
-      if (res.status === 202) {
-        watching.current = { since: Date.now() - 2000 };
-        setAwaiting(true);
+      if (res.ok && body?.skipped) {
+        setOutcome({ kind: "err", text: `Not run: ${body.skipped}` });
+      } else if (res.ok && body?.ok) {
+        setOutcome({ kind: "ok", text: `Synced: ${body.players} players changed since ${fmtWhen(body.since)} · ${body.inserted} new, ${body.updated} changed, ${body.cleared} cleared · ${body.apiCalls} MatchDay request${body.apiCalls === 1 ? "" : "s"}.` });
+        window.dispatchEvent(new CustomEvent("fin-sync-log:refresh"));
       } else if (res.status === 429 && body?.availableAt) {
         setOutcome({ kind: "err", text: `Not started: cooling down until ${fmtTime(body.availableAt)}.` });
       } else {
@@ -138,8 +142,8 @@ export default function PlayerAreasSyncCard() {
     : paused ? paused
     : blocked ? `${blocked} Available again at ${fmtTime(status!.availableAt!)}.`
     : r ? `A ${r.triggeredBy} pass started at ${fmtTime(r.startedAt)}.`
-    : cooling ? `One sync per 30 minutes, to protect the MatchDay API. Available again at ${fmtTime(cooling)}.`
-    : "Reads every player's home area from MatchDay, 50 a page, 2 seconds apart (about 40 minutes). Never retried.";
+    : cooling ? `One sync per 10 minutes, to protect the MatchDay API. Available again at ${fmtTime(cooling)}.`
+    : "Reads the players whose location changed since the last successful sync, 200 a page, one request a second. Never retried.";
 
   return (
     <section id="player-locations" data-testid="player-areas-card"
@@ -148,9 +152,10 @@ export default function PlayerAreasSyncCard() {
         <div className="min-w-0 flex-1">
           <h3 className="text-base font-bold text-deep-green">Sync player locations</h3>
           <p className="mt-1 text-xs text-deep-green/65">
-            Reads every player&apos;s home area from MatchDay (/admin/players) into player_area_seen, for Growth › Locations.
-            Runs at 05:10, 11:10 and 17:10 UTC; nothing runs from 5 PM to 11 PM Central. A pass reads 50 players a page,
-            2 seconds apart (about 40 minutes, in legs of 4 minutes), checks the server&apos;s response time every 10 pages and stops if it is slow.
+            Player home areas from MatchDay (/admin/players) into player_area_seen, for Growth › Locations. Every hour at :35,
+            only the players whose location changed since the last successful sync (usually one request). Once a night, at 3 AM Central
+            (08:00 UTC), a full pass reads every player 200 a page, one request a second (about 5 minutes), refreshes the player
+            copy, and clears removed locations. Any error stops a run; the next scheduled run is the retry.
           </p>
           <p className="mt-1 text-[11px] text-deep-green/50" data-testid="player-areas-fresh">
             {loadError ? <span className="text-coral">Couldn&apos;t read sync state: {loadError}</span>

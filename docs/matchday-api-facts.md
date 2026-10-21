@@ -7552,3 +7552,50 @@ Evidence: `GET /api/admin/stripe-sub-ends?probe=low_plans` on production 2026-10
 - **Aug 1 to Sep 30 cancellations (paying, external), 197:** cancel reason "moving" 107 (64 within
   their first month) and "removed by retool" 76 (staff-side cancels; 38 at 1 to 2 months). Every row
   has a reason. 18 later re-subscribed.
+
+## Clubhouse's read load on the production API, and the incremental setup (2026-10-21)
+
+Production went down at 2:05 PM Central on 2026-10-21: the Heroku web dyno ran out of memory (R15)
+on a 512 MB Basic dyno that had been over quota most of the day. Evidence below: `player_area_sync_runs`,
+`fin_sync_log`, the code on origin/main at 8f1a099, and read-only reads of the mirror. No MatchDay
+request was made to gather any of it.
+
+- **Before, per day: ~2,650 `/admin/players` requests.** The location walk: 3 passes a day
+  (05:10/11:10/17:10 UTC), each 791–800 requests (`player_area_sync_runs.api_calls`, runs 35–48: 726
+  pages of 50 + a limit=1 health check every 10th page + `/admin/cities`), ~40 minutes each. The
+  daily full user sync (09:00 UTC): 1 probe + 146 pages of 250, 200 ms apart, 3 retries a page — and
+  on 2026-10-21 it died on page 145 of 146 with a 503 (`fin_sync_log`, 222 s). The hourly signup sync:
+  ~4 requests a run (a probe, two sort-detection reads, one page), 186 runs in 7 days.
+- **Matches and reviews, before:** every run re-read all ~560 rosters in the window (one
+  `/admin/matches/{id}/players` each, no delay; 558 matches in 2026-10-07..12-21) and walked all
+  28,622 reviews (~287 pages of 100, no delay). The GitHub hourly job ran 48 times in 7 days, plus
+  the 11:00 orchestrator.
+- **`GET /admin/players` no longer returns some accounts it once did — and deleted ones appear to be
+  among them.** On 2026-10-21, 9 `mdapi_users` rows (all October 2026 signups, all completed, all
+  counted by the Registrations card) had `synced_at` 10-14..10-19, i.e. were not returned by the
+  10-20 full sync, and none was scrubbed here; 36,305 rows were returned. That is the same count the
+  Download players probe found unscrubbed among 18 deleted accounts. So a list walk cannot blank
+  every deleted account; the night pass re-reads such rows through `GET /admin/players/{id}`
+  (`refreshUnlisted`, `src/lib/playerAreaSync.ts`).
+- **A review IS a roster row with a rating.** `mdapi_reviews.api_id` = `mdapi_match_players.api_id`
+  for all 28,622 reviews (same user and star rating on all 40 newest checked). For the 587 rated in
+  the 7 days to 2026-10-21, every column derived from the roster row and its match equals what
+  `/admin/matches/reviews` returned: 0 mismatches over 14 columns, once an empty `tagsRating` `[]` is
+  read as null. Over all 28,622, names and contacts differ on a few percent (e.g. 4,870 phones, 1,009
+  first names): the reviews endpoint joins CURRENT accounts (a deleted player reads "Deleted
+  Account"), an old roster row is a snapshot. `reviewFromRoster`, `src/lib/mdapiMatchesSync.ts`.
+- **`mode` is not a safe column name here.** A PostgREST filter `mode.is.null` on `fin_sync_log`
+  (before the column existed) failed with "WITHIN GROUP is required for ordered-set aggregate mode":
+  Postgres resolved it to the `mode()` aggregate. Migration 0230 names the column `run_mode`.
+- **The new setup (code: `src/lib/nightPass.ts` has the schedule).** Every scheduled MatchDay call
+  goes through `getPacedClient` (`src/lib/matchdayApi.ts`): one request a second, no retries, the
+  first error stops the run. Hourly: locations via `locationUpdatedSince` (`runIncremental`), new
+  signups (1 request), matches with rosters only for recent/new/changed matches (`rostersToRefresh`)
+  and the reviews on them. Nightly at 08:00–08:56 UTC: the full player walk (200 a page, also writing
+  `mdapi_users`), the unlisted re-read, all rosters in four window quarters, the reviews walk in two
+  halves. `/api/sync/users-full` is retired (410).
+- **`GET /admin/players?locationUpdatedSince=…&limit=200` (Vitalii, 2026-10-21): every player whose
+  location changed after that time.** Whether it is live on production, whether an unknown filter is
+  ignored (returning everyone), whether it takes a timestamp or only a date, whether a REMOVED
+  location appears, whether unverified accounts are included, and its order: all UNKNOWN until probed.
+  `runIncremental` refuses a page-1 `totalItems` over 5,000 as "filter looks ignored".

@@ -42,7 +42,39 @@
     },
     {
       "path": "/api/sync/player-areas",
-      "schedule": "10 5,11,17 * * *"
+      "schedule": "0 8 * * *"
+    },
+    {
+      "path": "/api/sync/player-areas/recent",
+      "schedule": "35 * * * *"
+    },
+    {
+      "path": "/api/sync/player-areas/unlisted",
+      "schedule": "9 8 * * *"
+    },
+    {
+      "path": "/api/sync/matches/full/1",
+      "schedule": "12 8 * * *"
+    },
+    {
+      "path": "/api/sync/matches/full/2",
+      "schedule": "19 8 * * *"
+    },
+    {
+      "path": "/api/sync/matches/full/3",
+      "schedule": "26 8 * * *"
+    },
+    {
+      "path": "/api/sync/matches/full/4",
+      "schedule": "40 8 * * *"
+    },
+    {
+      "path": "/api/sync/reviews/full/1",
+      "schedule": "47 8 * * *"
+    },
+    {
+      "path": "/api/sync/reviews/full/2",
+      "schedule": "53 8 * * *"
     },
     {
       "path": "/api/sync/player-areas/continue",

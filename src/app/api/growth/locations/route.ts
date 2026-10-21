@@ -31,18 +31,22 @@ export async function GET(req: Request) {
     const snapsP = fetchFieldSnapshots(sb);
     const staffP = selectAll<{ id: number }>(() => sb.from("mdapi_users").select("id")
       .or("email.ilike.*@matchday.com,email.ilike.*@playmatchday.com").order("id"));
-    const [rows, lastRun, okRun, firstRun] = await Promise.all([
+    const [rows, lastRun, okRun, firstRun, freshRun] = await Promise.all([
       selectAll<SeenRow>(() => sb.from("player_area_seen")
         .select("player_id,first_seen_at,seeded,has_area,zip,lat,lng,area_label,state,area_source,location_source,is_internal,verdict,verdict_city_id,nearest_city_id,nearest_city_mi")
         .order("player_id")),
       sb.from("player_area_sync_runs").select("started_at,finished_at,ok,error,complete")
         .order("started_at", { ascending: false }).limit(1).maybeSingle(),
+      // FULL passes only (migration 0230): an incremental run carries no cities, and its players_total
+      // is the handful whose location changed, not everyone.
       sb.from("player_area_sync_runs").select("finished_at,players_total,players_internal,cities")
-        .eq("ok", true).order("finished_at", { ascending: false }).limit(1).maybeSingle(),
+        .eq("ok", true).eq("kind", "full").order("finished_at", { ascending: false }).limit(1).maybeSingle(),
       sb.from("player_area_sync_runs").select("finished_at")
         .eq("ok", true).order("finished_at", { ascending: true }).limit(1).maybeSingle(),
+      sb.from("player_area_sync_runs").select("finished_at")
+        .eq("ok", true).order("finished_at", { ascending: false }).limit(1).maybeSingle(),
     ]);
-    for (const r of [lastRun, okRun, firstRun]) if (r.error) throw new Error(r.error.message);
+    for (const r of [lastRun, okRun, firstRun, freshRun]) if (r.error) throw new Error(r.error.message);
 
     // Names for the recent table only. mdapi_users can lag a brand-new signup by up to an hour;
     // those rows render the player id instead of a name.
@@ -70,6 +74,7 @@ export async function GET(req: Request) {
       run: lastRun.data ?? null,
       okRun: okRun.data ?? null,
       firstRunAt: firstRun.data?.finished_at ?? null,
+      freshAt: freshRun.data?.finished_at ?? null,
       now: new Date(),
     });
     return Response.json(report, { headers: { "Cache-Control": "no-store" } });

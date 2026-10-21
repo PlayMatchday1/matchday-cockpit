@@ -395,3 +395,68 @@ export function getMatchdayApiClient(): MatchdayApiClient {
 export function _resetCachedToken(): void {
   cachedToken = null;
 }
+
+/* ── THE PACED CLIENT — every scheduled sync and bulk job (Ryan, 2026-10-21) ──────────────────────
+ * Production went down on 2026-10-21 at 2:05 PM Central (Heroku R15, a 512 MB dyno over quota all
+ * day) under Clubhouse's bulk reads. The rule for every scheduled sync and bulk job since:
+ *   1. AT MOST ONE REQUEST A SECOND: each request starts PACE_MS after the previous one ENDED.
+ *   2. NO RETRIES: maxRetries 0 on every call, the sign-in included.
+ *   3. STOP AT THE FIRST ERROR: once one request has failed, every later get() on this client throws
+ *      without making a request — so a caller that catches per item (the per-match roster loop)
+ *      still stops. The retry is the next scheduled run.
+ * Single staff lookups (Player Lookup, Player Chats, roster search) keep getMatchdayApiClient.
+ * One client per run: the pace and the stop are per client, not across processes, so schedules are
+ * kept apart instead (vercel.json). */
+export const PACE_MS = 1000;
+
+export interface PacedClient extends MatchdayApiClient {
+  /** Requests made (or attempted) through this client. */
+  readonly calls: number;
+  /** The first failure, once there has been one. */
+  readonly stoppedBy: Error | null;
+}
+
+export class PacedClientStopped extends Error {
+  constructor(first: Error) {
+    super(`stopped after an earlier request failed: ${first.message}`);
+    this.name = "PacedClientStopped";
+  }
+}
+
+export function getPacedClient(opts: {
+  paceMs?: number;
+  base?: MatchdayApiClient;
+  sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
+  /** Which failures stop the client. Default: every one. The unlisted-account refresh passes one
+   *  that lets a 404 through — an account the API no longer has is an answer, not a strained server. */
+  stopsOn?: (e: unknown) => boolean;
+} = {}): PacedClient {
+  const base = opts.base ?? getMatchdayApiClient();
+  const pace = opts.paceMs ?? PACE_MS;
+  const wait = opts.sleep ?? sleep;
+  const now = opts.now ?? Date.now;
+  let calls = 0;
+  let lastEnd: number | null = null;
+  let stoppedBy: Error | null = null;
+  return {
+    get calls() { return calls; },
+    get stoppedBy() { return stoppedBy; },
+    async get<T>(path: string, query?: Record<string, string | number>): Promise<T> {
+      if (stoppedBy) throw new PacedClientStopped(stoppedBy);
+      if (lastEnd != null) {
+        const gap = lastEnd + pace - now();
+        if (gap > 0) await wait(gap);
+      }
+      calls++;
+      try {
+        return await base.get<T>(path, query, { maxRetries: 0 });
+      } catch (e) {
+        if (!opts.stopsOn || opts.stopsOn(e)) stoppedBy = e instanceof Error ? e : new Error(String(e));
+        throw e;
+      } finally {
+        lastEnd = now();
+      }
+    },
+  };
+}

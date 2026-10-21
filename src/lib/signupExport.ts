@@ -5,16 +5,19 @@
 // America/Chicago day inside the range; migration 0208, growth_acquisition_daily). The route checks
 // the row count against the card's sum and refuses the file if they differ, so the two cannot drift.
 //
-// WHAT COMES FROM WHERE
+// WHAT COMES FROM WHERE — OUR COPY ONLY since 2026-10-21 (Ryan: no live per-player lookups; the first
+// version read GET /admin/players/{id} for every row, 8 at a time, up to 5,000 a click).
 //   ID, city, Warsaw, signup completed   growth_account (the card's view)
-//   names, email, phone, soccer level    the LIVE player (GET /admin/players/{id}), else the mirror
-//   verified by                          the LIVE player only: emailVerifiedAt is on the detail payload
-//                                        and never in mdapi_users.raw (docs/matchday-api-facts.md,
-//                                        "GET /admin/players HIDES ACCOUNTS WITH emailVerifiedAt NULL")
-//   deleted                              live first: 9 of 18 deleted accounts in Oct 12-18 were not yet
-//                                        scrubbed in the mirror (probed 2026-10-21), so the mirror alone
-//                                        would have put a deleted person's real address in the file.
+//   names, email, phone, soccer level    mdapi_users, kept current by the 3 AM Central full pass, which
+//                                        also re-reads the accounts the list stopped returning
+//                                        (playerAreaSync.ts, refreshUnlisted)
+//   deleted                              yes: MatchDay's scrub is in our copy. unknown: the row was not
+//                                        confirmed by the API since the last full refresh started
+//                                        (or there is no row) — 9 of 18 deleted accounts in Oct 12-18
+//                                        were exactly such rows, unscrubbed here (probed 2026-10-21).
 // A deleted account gets blank email and phone, and the name MatchDay gives it ("Deleted Account").
+// An UNCONFIRMED row gets blank name, email and phone: an address nobody can vouch for is not exported.
+// "Verified by" was dropped (Ryan, 2026-10-21): emailVerifiedAt is on the detail payload only.
 
 import { E2E_SERVICE_EMAIL } from "@/lib/matchOpsAuth";
 import { STOP_RX, phoneDigits10 } from "@/lib/aiDraftModel";
@@ -28,17 +31,11 @@ import { STOP_RX, phoneDigits10 } from "@/lib/aiDraftModel";
 //                     (no email provider table, nothing in the user payload; probed 2026-10-21).
 
 export type CountedAccount = { account_id: number; completed_sign_up_at: string; declared_city_raw: string | null };
-export type MirrorUser = { id: number; email: string | null; first_name: string | null; last_name: string | null; phone_number: string | null; raw: Record<string, unknown> | null };
-/** The fields read off GET /admin/players/{id}; null when the lookup failed. */
-export type LivePlayer = {
-  email: string | null; firstName: string | null; lastName: string | null; phoneNumber: string | null;
-  emailVerifiedAt: string | null; phoneNumberVerifiedAt: string | null; selfRatingValue: number | null;
-};
+export type MirrorUser = { id: number; email: string | null; first_name: string | null; last_name: string | null; phone_number: string | null; raw: Record<string, unknown> | null; synced_at: string };
 
 export type SignupRow = {
   id: number; firstName: string; lastName: string; email: string; phone: string; city: string;
-  completedCentral: string; verifiedBy: "email" | "phone" | "both" | "neither" | "unknown";
-  level: string; deleted: boolean; warsaw: boolean; textsOptedOut: boolean;
+  completedCentral: string; level: string; deleted: "yes" | "no" | "unknown"; warsaw: boolean; textsOptedOut: boolean;
 };
 
 export type ChatMsg = { thread_id: string; body: string; sent_at: string };
@@ -79,12 +76,6 @@ export function centralDateTime(iso: string): string {
   return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}`;
 }
 
-export function verifiedBy(live: LivePlayer | null): SignupRow["verifiedBy"] {
-  if (!live) return "unknown";
-  const e = !!live.emailVerifiedAt, p = !!live.phoneNumberVerifiedAt;
-  return e && p ? "both" : e ? "email" : p ? "phone" : "neither";
-}
-
 /** The card's predicate, applied to growth_account rows already filtered to status 'counted'. */
 export const inRange = (a: { completed_sign_up_at: string | null }, since: string, until: string) => {
   if (!a.completed_sign_up_at) return false;
@@ -92,36 +83,41 @@ export const inRange = (a: { completed_sign_up_at: string | null }, since: strin
   return d >= since && d <= until;
 };
 
-export function buildSignupRows(accounts: readonly CountedAccount[], mirror: ReadonlyMap<number, MirrorUser>, live: ReadonlyMap<number, LivePlayer | null>,
+/** `confirmedSince`: when the last successful full refresh of mdapi_users started. A mirror row read
+ *  after it was confirmed by the API; one read before it was not returned since (null = no refresh on
+ *  record, so nothing is held to it). */
+export function buildSignupRows(accounts: readonly CountedAccount[], mirror: ReadonlyMap<number, MirrorUser>, confirmedSince: string | null,
   optOuts: { phones: ReadonlySet<string>; players: ReadonlySet<number> } = { phones: new Set(), players: new Set() }): SignupRow[] {
   return [...accounts]
     .sort((a, b) => a.completed_sign_up_at.localeCompare(b.completed_sign_up_at) || a.account_id - b.account_id)
     .map((a) => {
-      const m = mirror.get(a.account_id) ?? null, l = live.get(a.account_id) ?? null;
-      const deleted = l ? isTombstone(l.email, l.firstName, l.lastName) || isTombstone(m?.email) : isTombstone(m?.email, m?.first_name, m?.last_name);
-      const lvl = l?.selfRatingValue ?? (typeof m?.raw?.selfRatingValue === "number" ? (m.raw.selfRatingValue as number) : null);
+      const m = mirror.get(a.account_id) ?? null;
+      const tomb = !!m && isTombstone(m.email, m.first_name, m.last_name);
+      const unconfirmed = !m || (confirmedSince != null && Date.parse(m.synced_at) < Date.parse(confirmedSince));
+      const deleted: SignupRow["deleted"] = tomb ? "yes" : unconfirmed ? "unknown" : "no";
+      const blankContact = deleted !== "no", blankName = deleted === "unknown";
+      const lvl = typeof m?.raw?.selfRatingValue === "number" ? (m.raw.selfRatingValue as number) : null;
       return {
         id: a.account_id,
-        firstName: (l ? l.firstName : m?.first_name) ?? "",
-        lastName: (l ? l.lastName : m?.last_name) ?? "",
-        email: deleted ? "" : ((l ? l.email : m?.email) ?? ""),
-        phone: deleted ? "" : ((l ? l.phoneNumber : m?.phone_number) ?? ""),
+        firstName: blankName ? "" : (m?.first_name ?? ""),
+        lastName: blankName ? "" : (m?.last_name ?? ""),
+        email: blankContact ? "" : (m?.email ?? ""),
+        phone: blankContact ? "" : (m?.phone_number ?? ""),
         city: a.declared_city_raw ?? "",
         completedCentral: centralDateTime(a.completed_sign_up_at),
-        verifiedBy: verifiedBy(l),
         level: lvl == null ? "" : String(lvl),
         deleted,
         warsaw: a.declared_city_raw === "Warsaw",
-        // Read before the deleted-account blanking: a phone that said STOP stays opted out.
+        // Read before the blanking: a phone that said STOP stays opted out.
         textsOptedOut: optOuts.players.has(a.account_id)
-          || [l?.phoneNumber, m?.phone_number].some((ph) => { const k = phoneKey(ph); return !!k && optOuts.phones.has(k); }),
+          || (() => { const k = phoneKey(m?.phone_number); return !!k && optOuts.phones.has(k); })(),
       };
     });
 }
 
 export const SIGNUP_COLUMNS = [
   "ID", "First name", "Last name", "Email", "Phone number", "City",
-  "Signup completed (Central)", "Verified by", "Soccer level", "Deleted", "Warsaw",
+  "Signup completed (Central)", "Soccer level", "Deleted", "Warsaw",
   "Texts opted out", "Emails opted out",
 ] as const;
 
@@ -142,7 +138,7 @@ export function signupCsv(rows: readonly SignupRow[]): string {
   for (const r of rows) {
     lines.push([
       String(r.id), cell(r.firstName), cell(r.lastName), cell(r.email), cell(r.phone, true), cell(r.city),
-      r.completedCentral, r.verifiedBy, r.level, yn(r.deleted), yn(r.warsaw),
+      r.completedCentral, r.level, r.deleted, yn(r.warsaw),
       yn(r.textsOptedOut), "unknown",
     ].join(","));
   }
@@ -162,5 +158,5 @@ export function playerExportGate(row: Record<string, unknown> | null, email: str
 }
 
 /** The change_log body: who is on the row already; this is the range and the count. NEVER a player. */
-export const signupExportLogBody = (since: string, until: string, rows: number, lookupFailures: number) =>
-  ({ since, until, rows, lookup_failures: lookupFailures });
+export const signupExportLogBody = (since: string, until: string, rows: number, unconfirmed: number) =>
+  ({ since, until, rows, unconfirmed });

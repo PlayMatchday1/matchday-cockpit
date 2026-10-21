@@ -46,9 +46,10 @@ export default function DataPage() {
         />
         <SyncCard
           title="Sync from MatchDay API"
-          description="Refreshes mdapi_reviews from /admin/matches/reviews."
+          description="New reviews arrive every hour with the Matches sync, read off the rosters it refreshes. The full walk of /admin/matches/reviews runs nightly at about 3:47 AM Central."
           source="mdapi-reviews"
           endpoint="/api/sync/reviews"
+          disabledReason="No manual reviews sync: the full walk is ~290 requests and runs only at night (Ryan, 2026-10-21). Run the Matches sync below to pick up new reviews now."
         />
       </section>
 
@@ -94,10 +95,10 @@ export default function DataPage() {
         />
         <SyncCard
           title="Sync from MatchDay API (incremental)"
-          description="Refreshes mdapi_matches + mdapi_match_players for the now-14d → now+60d window. The full backfill is CLI-only via scripts/sync-mdapi-matches-backfill.ts."
+          description="Refreshes mdapi_matches for the now-14d → now+60d window, and re-reads rosters (and the reviews on them) for recent, new or changed matches — one MatchDay request a second. Every roster is re-read nightly at about 3:12–3:43 AM Central. The full backfill is CLI-only via scripts/sync-mdapi-matches-backfill.ts."
           source="mdapi-matches"
           endpoint="/api/sync/matches"
-          estimatedDuration="~150 seconds"
+          estimatedDuration="~1–2 minutes"
         />
       </section>
 
@@ -143,10 +144,10 @@ export default function DataPage() {
         />
         <SyncCard
           title="Sync Registered Users"
-          description="Pulls registered users from MatchDay API into mdapi_users (~23,711 rows). Incremental by default (new signups via createdAt watermark); the first run with no watermark does a full re-sync. /admin/players exposes no updatedAt, so edits to existing rows aren't picked up between full syncs."
+          description="New signups from the MatchDay API into mdapi_users (createdAt watermark, usually one request). Runs hourly at :05. Edits to existing players (city, membership, signup completion, deleted accounts) arrive with the nightly full pass at 3 AM Central — see Sync player locations."
           source="mdapi-users"
           endpoint="/api/sync/users"
-          estimatedDuration="~30-60 seconds"
+          estimatedDuration="~5 seconds"
         />
         <div className="mt-4">
           <SyncCard
