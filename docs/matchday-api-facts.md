@@ -6903,8 +6903,9 @@ Evidence: a read-only full walk of prod `GET /admin/players` (`sortColumn=create
   2026-10-08: GPS shares are labelled `"zip"`** (fix in progress), so a GPS count of 0 is not
   evidence that no one shared GPS. (An earlier relay that GPS players carry no `zipCode` was
   corrected the same day.)
-- **Coming, not in evidence:** a set-at timestamp and a "changed location since <time>" filter on
-  `GET /admin/players` (Vitalii, in progress). Name, format and semantics UNKNOWN until probed.
+- **Landed 2026-10-21 (superseding "coming, not in evidence"):** the set-at timestamp is
+  `locationUpdatedAt` and the filter is `locationUpdatedSince` — probed on production, see "Clubhouse's
+  read load on the production API, and the incremental setup (2026-10-21)".
 - **GPS shares DO arrive without a `zipCode` — observed, contradicting the relay above.**
   `player_area_seen` after sync run 4 (manual, 2026-10-08 20:18:22 → 20:21:26 UTC, complete): 12
   non-internal players with an area, all `areaSource:"gps"`; **8 of the 12 have `zipCode` null with
@@ -7595,7 +7596,20 @@ request was made to gather any of it.
   `mdapi_users`), the unlisted re-read, all rosters in four window quarters, the reviews walk in two
   halves. `/api/sync/users-full` is retired (410).
 - **`GET /admin/players?locationUpdatedSince=…&limit=200` (Vitalii, 2026-10-21): every player whose
-  location changed after that time.** Whether it is live on production, whether an unknown filter is
-  ignored (returning everyone), whether it takes a timestamp or only a date, whether a REMOVED
-  location appears, whether unverified accounts are included, and its order: all UNKNOWN until probed.
-  `runIncremental` refuses a page-1 `totalItems` over 5,000 as "filter looks ignored".
+  location changed after that time.** PROBED on production 2026-10-21 ~20:50 UTC, after the server
+  upgrade: sign-in + three `limit=1` reads, 2 s apart, raw fetch, no retries, all 200 in 75–93 ms
+  (scratchpad probe3.mjs; prints counts, field names and timestamps only):
+  - `locationUpdatedSince=2026-10-01` → `totalItems` **4,149** (stored areas: 4,096 at 17:50 UTC).
+    LIVE on production.
+  - `locationUpdatedSince=2099-01-01` → `totalItems` **0**. The filter is APPLIED, not ignored.
+  - `locationUpdatedSince=2026-10-21T00:00:00.000Z` → `totalItems` **133**. A full ISO timestamp is
+    accepted and narrows below a day, so `sinceParam` = `toISOString()` stands.
+  - Rows carry the full list shape plus `locationUpdatedAt` (equal to `coordinatesUpdatedAt` on both
+    rows seen), `areaSource` ("gps"), `areaLabel`, `needsLocation`. Row 67695: `locationUpdatedAt`
+    2026-10-21T19:23:35.989Z, inside the window; row 93456: 2026-10-09T12:38:42.856Z.
+  - The 5,000 guard: a filter-ignored answer would be the whole list (~36,000); everyone with a
+    location since 10-01 is 4,149, so a real answer stays under it until locations pass ~5,000. A
+    trip writes nothing and the 3 AM full pass still covers everyone.
+  STILL UNKNOWN: the ORDER (one row per probe proves nothing — `runIncremental` reads every page
+  and does not depend on it); whether a REMOVED location appears (the 3 AM full pass clears it
+  either way); whether hidden-unverified accounts are included (they are absent from the plain list).

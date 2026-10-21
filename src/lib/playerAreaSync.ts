@@ -336,7 +336,8 @@ async function geometryFor(sb: SupabaseClient, cities: AreaCity[]): Promise<{ ci
 }
 
 /* ── THE INCREMENTAL RUN ──────────────────────────────────────────────────────────────────────────
- * GET /admin/players?locationUpdatedSince=<since>&limit=200, newest pages until the set ends.
+ * GET /admin/players?locationUpdatedSince=<since>&limit=200, every page until the set ends (the order is
+ * UNKNOWN and not relied on; the filter, and a full ISO timestamp, are probed — docs/matchday-api-facts.md).
  *   since = the START of the last successful run of either kind, minus INCREMENTAL_OVERLAP_MS. A start
  *           time, not a finish: a location changed while that run was reading has a later stamp.
  *   No successful run on record → refused (a full pass seeds it). A live full pass → stands down:
@@ -348,7 +349,7 @@ async function geometryFor(sb: SupabaseClient, cities: AreaCity[]): Promise<{ ci
  * taken to be ignored and the run stops before writing anything. */
 export const INCREMENTAL_OVERLAP_MS = 60 * 60 * 1000;
 export const INCREMENTAL_MAX = 5000;
-/** How `since` is written on the query. Set from the probe (docs/matchday-api-facts.md). */
+/** How `since` is written on the query: a full ISO timestamp, probed 2026-10-21 (docs/matchday-api-facts.md). */
 export const sinceParam = (since: Date): string => since.toISOString();
 
 export type IncrementalResult = {
