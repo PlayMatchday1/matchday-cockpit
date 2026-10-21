@@ -7484,3 +7484,20 @@ for 18596, 18680, 18679, 19700 and `/admin/matches?fromDate&toDate` windows arou
   two shapes the webhooks match (`+1XXXXXXXXXX`, `XXXXXXXXXX`). A third stored shape, if one exists,
   would be missed: UNKNOWN, not measured.
 
+
+## Claude drafts: clock and schedule (2026-10-21)
+
+- **The schedule a draft quotes is read from `mdapi_matches`** (`src/app/api/crm/threads/[id]/ai-draft/route.ts`,
+  `loadScheduleRows`): window on `start_date` as WALL CLOCK bounds (the day the player wrote, in their
+  zone, through 7 days on), `deleted_at is null` (soft delete, migration 0059), "already started" from
+  `start_date_utc`. Open spots = `max_player_count - player_count`; `player_count` IS `_count.players`
+  (this doc, "Roster spots in the mirror"). **Private matches: UNKNOWN.** No private flag was found on
+  the mirror, so a private match at a named field would be listed like any other.
+- **A field counts as "named"** when a distinctive word of its `field_title` appears in the player's last
+  6 messages (`fieldTokens` / `mentionedFields`, `src/lib/aiDraftClock.ts`): words of 4+ letters or
+  acronyms of 3+, minus generic words (soccer, park, field...). A heuristic, not proven against every
+  field name.
+- **Measured in the live check, 2026-10-21** (`scripts/ai-draft-live-check.ts`, synthetic threads,
+  claude-sonnet-5-5): without dated days the model claimed "Monday night was more than 48 hours ago" at
+  about 35 hours. With `recent_days` in the clock and the rule against working out elapsed time, the
+  reply no longer states it.

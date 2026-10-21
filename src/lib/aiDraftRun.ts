@@ -7,8 +7,10 @@
 // network call.
 //
 // ONE MODEL CALL PER REQUEST, NEVER A RETRY. A draft that fails a guard is stored as `failed` and
-// shown as such; staff press Regenerate. Reopening a thread never re-drafts a draft that was
-// already made, failed or discarded for the same player message.
+// shown as such; staff press Regenerate. Reopening a thread re-uses the draft already made for the
+// same player message, unless it has gone STALE (made more than 2 hours ago, or a match it mentions
+// has started since): then it is superseded and a fresh one is made. A failed or discarded draft
+// stays put until someone presses Regenerate.
 
 import {
   buildDraftContext, buildDraftRequest, capReached, draftCostUsd, draftEligibility, guardDraft,
@@ -16,6 +18,9 @@ import {
   accountConfirmed, unconfirmedReason, extractPhoneNumbers, decideLinkSuggestion,
   type DraftContextIn, type DraftMsg, type DraftRequest, type SkipReason, type LinkSuggestion,
 } from "@/lib/aiDraftModel";
+import {
+  buildClock, matchKey, scheduleWindow, selectSchedule, staleDraftReason, tzForCity, FALLBACK_TZ, type ScheduleRow,
+} from "@/lib/aiDraftClock";
 
 export type StoredDraft = {
   id: string;
@@ -25,6 +30,7 @@ export type StoredDraft = {
   category: string | null;
   error: string | null;
   created_at: string;
+  context_keys?: string[] | null;
 };
 
 export type NewDraftRow = {
@@ -68,12 +74,14 @@ export type DraftDeps = {
   findAccountsByPhone: (digits10: string) => Promise<{ id: number; first_name: string | null }[]>;
   /** Called ONLY for a confirmed thread: an unconfirmed one sends no account data at all. */
   loadContext: (thread: { player_id: number | null; match_ambiguous: boolean }) => Promise<{ ctx: DraftContextIn; keys: string[] } | { forbidden: true }>;
+  /** Every non-deleted match whose WALL CLOCK start_date is in [fromWall, toWall), all cities. */
+  loadScheduleRows: (window: { fromWall: string; toWall: string }) => Promise<ScheduleRow[]>;
   playbook: () => { text: string; version: string };
   callModel: (req: DraftRequest) => Promise<ModelReply>;
   insertDraft: (row: NewDraftRow) => Promise<{ id: string; created_at: string }>;
 };
 
-export type DraftView = { id: string; text: string; staff_notes: string; category: string | null; flags: string[]; created_at: string };
+export type DraftView = { id: string; text: string; staff_notes: string[]; category: string | null; flags: string[]; created_at: string };
 
 // A suggestion rides on every result after eligibility, so the card can offer "Link" even when the
 // draft itself is reused, failed or paused by the cap.
@@ -92,8 +100,10 @@ const flagsFromNotes = (notes: string | null) => {
   const m = notes?.match(/^\[flags: ([^\]]*)\]/);
   return m ? m[1].split(",").map((s) => s.trim()).filter(Boolean) : [];
 };
+// Stored as "[flags: a, b]\n- note\n- note". A row written before notes became bullets is one line.
 const viewOf = (d: StoredDraft): DraftView => ({
-  id: d.id, text: d.draft_text ?? "", staff_notes: (d.staff_notes ?? "").replace(/^\[flags: [^\]]*\]\s*/, ""),
+  id: d.id, text: d.draft_text ?? "",
+  staff_notes: (d.staff_notes ?? "").replace(/^\[flags: [^\]]*\]\s*/, "").split(/\n+/).map((l) => l.replace(/^- /, "").trim()).filter(Boolean),
   category: d.category, flags: flagsFromNotes(d.staff_notes), created_at: d.created_at,
 });
 
@@ -118,9 +128,13 @@ export async function runDraft(deps: DraftDeps): Promise<DraftResult> {
 
   // A draft already exists for this exact player message: show it, don't pay for another. A
   // discarded or failed one stays put until someone presses Regenerate.
+  let supersede = deps.regenerate;
   if (!deps.regenerate) {
     const prior = await deps.latestDraftFor(elig.basedOn.id);
-    if (prior?.outcome === "pending") return withLink({ status: "ok", reused: true, draft: viewOf(prior) });
+    if (prior?.outcome === "pending") {
+      if (!staleDraftReason(prior, deps.now())) return withLink({ status: "ok", reused: true, draft: viewOf(prior) });
+      supersede = true; // stale: replaced below, once the cap allows a new one
+    }
     if (prior?.outcome === "discarded") return withLink({ status: "discarded", draft_id: prior.id, message: "Draft discarded." });
     if (prior?.outcome === "failed") return withLink({ status: "failed", draft_id: prior.id, message: prior.error ?? "The last draft failed." });
   }
@@ -154,9 +168,21 @@ export async function runDraft(deps: DraftDeps): Promise<DraftResult> {
   }
   const context = buildDraftContext(ctxIn);
   const playbook = deps.playbook();
-  const req = buildDraftRequest({ playbook: playbook.text, context, msgs, now: deps.now() });
 
-  if (deps.regenerate) await deps.supersedePending();
+  // THE CLOCK AND THE SCHEDULE. The player's city sets the zone (Central when unknown). The
+  // schedule window starts on the day the player wrote; a field named in what they wrote picks the
+  // field, otherwise a day word ("tonight", "Saturday") picks their city.
+  const now = deps.now();
+  const playerTz = tzForCity(ctxIn.cityCode ?? null);
+  const texts = msgs.filter((m) => m.direction === "inbound").slice(-6).map((m) => m.body ?? "");
+  const rows = await deps.loadScheduleRows(scheduleWindow(elig.basedOn.sent_at, playerTz ?? FALLBACK_TZ)).catch(() => [] as ScheduleRow[]);
+  const schedule = selectSchedule({ rows, texts, cityCode: ctxIn.cityCode ?? null, now });
+  const tz = playerTz ?? tzForCity(schedule.fieldCity) ?? FALLBACK_TZ;
+  const clock = buildClock({ now, tz, latestPlayerMsgIso: elig.basedOn.sent_at });
+  const req = buildDraftRequest({ playbook: playbook.text, context, msgs, now, tz, clock, schedule });
+  if (schedule.basis) keys = [...keys, `schedule:${schedule.basis}`];
+
+  if (supersede) await deps.supersedePending();
 
   const base = {
     thread_id: deps.threadId, based_on_message_id: elig.basedOn.id, requested_by_user_id: deps.requestedBy,
@@ -181,17 +207,28 @@ export async function runDraft(deps: DraftDeps): Promise<DraftResult> {
   if (reply.stopReason === "max_tokens") return fail("The draft was cut off. Try Regenerate.", reply);
   const parsed = reply.text ? parseDraftOutput(reply.text) : null;
   if (!parsed) return fail("The draft came back in an unexpected shape. Try Regenerate.", reply);
-  const guarded = guardDraft(parsed, context);
+  // Times may come from the schedule, the conversation, or the playbook (support hours) and nowhere
+  // else. Late is decided here, from the clock, not by the model.
+  const guarded = guardDraft(parsed, {
+    courtesy_credit_eligible: context.courtesy_credit_eligible,
+    late: clock.reply_is_late,
+    allowedTimeSources: [...schedule.entries.map((e) => e.when_local), ...msgs.map((m) => m.body ?? ""), playbook.text],
+  });
   if (!guarded.ok) return fail(guarded.error, reply);
 
   const out = guarded.output;
+  // AT MOST 3 BULLETS. The reason an account is unconfirmed is stated in code, first, not left to
+  // the model; a model bullet that repeats it is dropped.
+  const modelNotes = reason
+    ? out.staff_notes.map((n) => n.split(reason).join(" ").replace(/\s{2,}/g, " ").replace(/^[\s.:,]+|[\s,:]+$/g, "")).filter(Boolean)
+    : out.staff_notes;
+  const staffNotes = [...(reason ? [reason] : []), ...modelNotes].slice(0, 3);
   // Flags ride at the front of staff_notes so the table needs no extra column for them.
-  // The reason an account is unconfirmed is stated in code, not left to the model.
-  const modelNotes = reason && out.staff_notes.startsWith(reason) ? out.staff_notes.slice(reason.length).trim() : out.staff_notes;
-  const staffNotes = [reason, modelNotes].filter(Boolean).join(" ");
-  const notes = `${out.flags.length ? `[flags: ${out.flags.join(", ")}] ` : ""}${staffNotes}`.trim();
+  const notes = [out.flags.length ? `[flags: ${out.flags.join(", ")}]` : "", ...staffNotes.map((n) => `- ${n}`)].filter(Boolean).join("\n");
+  // Which schedule matches the reply mentions, with their start: the draft goes stale at kickoff.
+  const mentioned = out.match_ids.filter((id) => schedule.startsById.get(id)).map((id) => matchKey(id, schedule.startsById.get(id)!));
   const row = await deps.insertDraft({
-    ...base, category: out.category, draft_text: out.reply, staff_notes: notes || null,
+    ...base, context_keys: [...base.context_keys, ...mentioned], category: out.category, draft_text: out.reply, staff_notes: notes || null,
     input_tokens: reply.usage.input_tokens ?? null, output_tokens: reply.usage.output_tokens ?? null,
     cost_usd: draftCostUsd(reply.usage), error: null, outcome: "pending",
   });

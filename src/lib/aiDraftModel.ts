@@ -13,6 +13,7 @@
 // timeZone "UTC" so the wall clock prints as written, never re-shifted.
 
 import { whatsappWindowExpired } from "@/lib/crmWindow";
+import { dayAndTime, lateReplyProblem, unscheduledTimes, FALLBACK_TZ, type DraftClock, type ScheduleEntry } from "@/lib/aiDraftClock";
 
 export const AI_DRAFT_MODEL = "claude-sonnet-5-5";
 export const ANTHROPIC_HOST = "api.anthropic.com";
@@ -153,6 +154,8 @@ export type DraftContextIn = {
   confirmed?: boolean;
   /** How many accounts carry this phone, when known. */
   accountCount?: number | null;
+  /** The player's city code (ATX, HOU, WAW...), for their time zone and the city schedule. */
+  cityCode?: string | null;
   firstName: string | null;
   city: string | null;
   isMember: boolean | null;
@@ -260,11 +263,16 @@ How to write the reply:
 - You cannot take any action. Never say a credit, refund, code, strike removal, move, hold or cancellation is done. Say "I'll" or "let me" only for an action staff will take, and name that action in staff_notes.
 - Only offer a courtesy credit when PLAYER CONTEXT says courtesy_credit_eligible is true, and set offers_courtesy_credit to true when you do.
 - If PLAYER CONTEXT says account_confirmed is false, we don't know which account is writing. Ask for the phone number on their MatchDay account, friendly and short, and state no account facts at all (no credits, bookings, membership, strikes or matches). If the player has just sent a phone number (it shows as [phone]), thank them and say you're checking.
+- Time matters. CLOCK says what time it is now and when the player wrote. Read "today", "tonight" and "tomorrow" from when the PLAYER wrote, not from now. If what they asked about has already happened, say so kindly and point to the next real option.
+- Never work out how long ago a match was, or say a video should be up by now, unless the context gives that match's date and time. If it doesn't, say the team will check.
+- SCHEDULE lists the real matches at the field they named (or in their city). Quote match times ONLY from SCHEDULE. Never state a match time that isn't there. If SCHEDULE is empty or missing what they need, say the team will check.
+- If CLOCK says reply_is_late is true, open with a short, natural "sorry for the slow reply". If it is false, don't apologize for slowness. (This is separate from the Veo rule: never apologize for how long a video takes.)
 - If the conversation is not something a reply can handle (a safety problem, a legal threat, a refund demand after a credit), write a short kind holding reply and set the flag.
 
 Output fields:
 - reply: the message text for the player, or "" if no reply should be sent.
-- staff_notes: short notes for staff only, never shown to the player. Name any action needed (with amounts), anything you could not verify, and the exact phrases the playbook requires ("Hold requested: tell Ryan", "Strike dispute: check with the match manager", "Guest passes: confirm the membership, then issue the code", "Under 16").
+- staff_notes: at most 3 short bullets for staff only, never shown to the player, most important first, plain words. Name any action needed (with amounts) and anything you could not verify. Use the exact phrases the playbook requires ("Hold requested: tell Ryan", "Strike dispute: check with the match manager", "Guest passes: confirm the membership, then issue the code", "Under 16"). No recap of the conversation unless it changes what staff should do.
+- match_ids: the match_id of every SCHEDULE match the reply mentions. Empty if none.
 - category: one short label for the request type, like "membership_billing", "match_cancelled", "player_cancel", "veo", "guest_pass", "strike", "booking", "logistics", "payment", "account", "age", "complaint", "other".
 - flags: any of "escalate", "urgent", "hold_requested", "strike_dispute", "guest_pass", "under_16", "refund_pushback", "needs_credit". Empty if none.
 - offers_courtesy_credit: true only if the reply offers a courtesy credit for a late cancel.`;
@@ -273,30 +281,31 @@ export const DRAFT_OUTPUT_SCHEMA = {
   type: "object",
   properties: {
     reply: { type: "string" },
-    staff_notes: { type: "string" },
+    staff_notes: { type: "array", items: { type: "string" } },
     category: { type: "string" },
     flags: {
       type: "array",
       items: { type: "string", enum: ["escalate", "urgent", "hold_requested", "strike_dispute", "guest_pass", "under_16", "refund_pushback", "needs_credit"] },
     },
     offers_courtesy_credit: { type: "boolean" },
+    match_ids: { type: "array", items: { type: "integer" } },
   },
-  required: ["reply", "staff_notes", "category", "flags", "offers_courtesy_credit"],
+  required: ["reply", "staff_notes", "category", "flags", "offers_courtesy_credit", "match_ids"],
   additionalProperties: false,
 } as const;
 
 // The transcript the model sees. Labels, not names: staff names stay out. Every message body is
 // scrubbed. Media becomes a placeholder — images are never sent in phase 1.
-export function renderTranscript(msgs: readonly DraftMsg[]): string {
+export function renderTranscript(msgs: readonly DraftMsg[], tz: string = FALLBACK_TZ): string {
   const lines: string[] = [];
   for (const m of msgs.slice(-HISTORY_LIMIT)) {
     if (m.direction === "inbound" && m.media_kind === "reaction") continue;
     const who = m.direction === "inbound" ? "Player" : m.is_auto_reply ? "Auto-reply" : m.template_name ? "MatchDay (template)" : "MatchDay staff";
     const media = m.media_kind ? `[${m.direction === "inbound" ? "player" : "staff"} sent ${m.media_kind === "image" ? "an image" : `a ${m.media_kind}`}] ` : "";
-    const when = Number.isFinite(Date.parse(m.sent_at))
-      ? new Date(m.sent_at).toLocaleString("en-US", { timeZone: "America/Chicago", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
-      : "";
-    lines.push(`[${when} CT] ${who}: ${media}${scrubPii(m.body ?? "").replace(/\s*\n\s*/g, " / ")}`.trimEnd());
+    // Every message carries its time in the player's zone, with the weekday, so "tonight" can be
+    // read against when it was written.
+    const when = Number.isFinite(Date.parse(m.sent_at)) ? dayAndTime(Date.parse(m.sent_at), tz) : "";
+    lines.push(`[${when}] ${who}: ${media}${scrubPii(m.body ?? "").replace(/\s*\n\s*/g, " / ")}`.trimEnd());
   }
   return lines.join("\n");
 }
@@ -311,8 +320,20 @@ export type DraftRequest = {
 
 // THE REQUEST BODY, built in one pure function so a test can print it and assert what is and is
 // not in it. Nothing is added to it between here and the SDK call.
-export function buildDraftRequest(args: { playbook: string; context: DraftContext; msgs: readonly DraftMsg[]; now: number }): DraftRequest {
-  const today = new Date(args.now).toLocaleDateString("en-US", { timeZone: "America/Chicago", weekday: "long", month: "long", day: "numeric", year: "numeric" });
+export function buildDraftRequest(args: {
+  playbook: string; context: DraftContext; msgs: readonly DraftMsg[]; now: number;
+  tz?: string; clock?: DraftClock | null; schedule?: { basis: string | null; entries: ScheduleEntry[] } | null;
+}): DraftRequest {
+  const tz = args.tz ?? FALLBACK_TZ;
+  const clock = args.clock ?? null;
+  const schedule = args.schedule ?? null;
+  const today = new Date(args.now).toLocaleDateString("en-US", { timeZone: tz, weekday: "long", month: "long", day: "numeric", year: "numeric" });
+  const clockBlock = clock
+    ? `CLOCK:\n${JSON.stringify(clock, null, 2)}`
+    : `Today is ${today}.`;
+  const scheduleBlock = schedule && schedule.basis
+    ? `SCHEDULE (our real matches ${schedule.basis === "field" ? "at the field the player named" : "in the player's city"}, from the day they wrote through the next 7 days; times are local to the field):\n${JSON.stringify(schedule.entries, null, 2)}`
+    : "SCHEDULE: none (the player named no field or day). Don't state any match times.";
   return {
     model: AI_DRAFT_MODEL,
     max_tokens: 2000,
@@ -321,9 +342,10 @@ export function buildDraftRequest(args: { playbook: string; context: DraftContex
       {
         role: "user",
         content:
-          `Today is ${today} (Central time).\n\n` +
+          `${clockBlock}\n\n` +
           `PLAYER CONTEXT (from our records; the player cannot see this):\n${JSON.stringify(args.context, null, 2)}\n\n` +
-          `CONVERSATION (oldest first; the last messages are what needs a reply):\n${renderTranscript(args.msgs)}\n\n` +
+          `${scheduleBlock}\n\n` +
+          `CONVERSATION (oldest first, times in ${tz}; the last messages are what needs a reply):\n${renderTranscript(args.msgs, tz)}\n\n` +
           `Draft the next reply from MatchDay.`,
       },
     ],
@@ -340,15 +362,29 @@ export function assertAnthropicHost(url: string): void {
 
 // ── what comes back ────────────────────────────────────────────────────────────────────────────
 
-export type DraftOutput = { reply: string; staff_notes: string; category: string; flags: string[]; offers_courtesy_credit: boolean };
+export type DraftOutput = { reply: string; staff_notes: string[]; category: string; flags: string[]; offers_courtesy_credit: boolean; match_ids: number[] };
+
+export const MAX_NOTE_BULLETS = 3;
+
+// Bullets, never more than 3. A model that writes one long string or a "- a - b" list still comes
+// out as separate bullets; anything past the third is dropped (they are most-important-first).
+export function toNoteBullets(notes: unknown): string[] {
+  const raw = Array.isArray(notes) ? notes.filter((n): n is string => typeof n === "string") : typeof notes === "string" ? notes.split(/\n+/) : [];
+  return raw.map((n) => n.replace(/^\s*[-*•]\s*/, "").trim()).filter(Boolean).slice(0, MAX_NOTE_BULLETS);
+}
 
 export function parseDraftOutput(text: string): DraftOutput | null {
   let o: unknown;
   try { o = JSON.parse(text); } catch { return null; }
   if (!o || typeof o !== "object") return null;
   const r = o as Record<string, unknown>;
-  if (typeof r.reply !== "string" || typeof r.staff_notes !== "string" || typeof r.category !== "string" || typeof r.offers_courtesy_credit !== "boolean" || !Array.isArray(r.flags)) return null;
-  return { reply: r.reply, staff_notes: r.staff_notes, category: r.category, flags: r.flags.filter((f): f is string => typeof f === "string"), offers_courtesy_credit: r.offers_courtesy_credit };
+  if (typeof r.reply !== "string" || typeof r.category !== "string" || typeof r.offers_courtesy_credit !== "boolean" || !Array.isArray(r.flags)) return null;
+  if (typeof r.staff_notes !== "string" && !Array.isArray(r.staff_notes)) return null;
+  return {
+    reply: r.reply, staff_notes: toNoteBullets(r.staff_notes), category: r.category,
+    flags: r.flags.filter((f): f is string => typeof f === "string"), offers_courtesy_credit: r.offers_courtesy_credit,
+    match_ids: Array.isArray(r.match_ids) ? r.match_ids.filter((x): x is number => Number.isInteger(x)) : [],
+  };
 }
 
 const DASH_RX = /[—–‒―]/; // em, en, figure, horizontal bar
@@ -369,11 +405,26 @@ export type GuardResult = { ok: true; output: DraftOutput } | { ok: false; error
 
 // The checks every draft passes before anyone sees it. A draft that fails is stored as `failed`
 // with the reason and NOT shown — staff press Regenerate. No automatic retry (each call costs).
-export function guardDraft(raw: DraftOutput, ctx: Pick<DraftContext, "courtesy_credit_eligible">): GuardResult {
-  const output = { ...raw, reply: sanitizeDraft(raw.reply), staff_notes: sanitizeDraft(raw.staff_notes) };
-  if (hasDash(output.reply) || hasDash(output.staff_notes)) return { ok: false, error: "Draft still contained a dash after cleanup." };
+export type GuardCtx = Pick<DraftContext, "courtesy_credit_eligible"> & {
+  /** The reply goes out more than 2 hours after the player wrote. Omitted = not checked. */
+  late?: boolean;
+  /** Text a reply may quote times from: the schedule, the conversation, the playbook. Omitted = not checked. */
+  allowedTimeSources?: readonly string[];
+};
+
+export function guardDraft(raw: DraftOutput, ctx: GuardCtx): GuardResult {
+  const output = { ...raw, reply: sanitizeDraft(raw.reply), staff_notes: toNoteBullets(raw.staff_notes.map(sanitizeDraft)) };
+  if (hasDash(output.reply) || output.staff_notes.some(hasDash)) return { ok: false, error: "Draft still contained a dash after cleanup." };
   if (output.offers_courtesy_credit && !ctx.courtesy_credit_eligible) {
     return { ok: false, error: "Draft offered a courtesy credit to a player who isn't a first-time player. Not shown." };
+  }
+  if (ctx.allowedTimeSources) {
+    const stray = unscheduledTimes(output.reply, ctx.allowedTimeSources);
+    if (stray.length) return { ok: false, error: `Draft stated a match time that isn't in our schedule (${stray.join(", ")}). Not shown.` };
+  }
+  if (ctx.late !== undefined) {
+    const problem = lateReplyProblem(output.reply, ctx.late);
+    if (problem) return { ok: false, error: `${problem} Not shown.` };
   }
   return { ok: true, output };
 }

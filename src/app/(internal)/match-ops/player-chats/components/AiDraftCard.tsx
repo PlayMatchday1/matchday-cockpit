@@ -21,7 +21,7 @@ import { draftEligibility, linkSuggestionText, type DraftMsg, type LinkSuggestio
 import { linkThreadToPlayer, THREAD_LINKED_EVENT } from "@/lib/crmLinkClient";
 import type { ConversationMessage } from "./MessageBubble";
 
-type Draft = { id: string; text: string; staff_notes: string; category: string | null; flags: string[] };
+type Draft = { id: string; text: string; staff_notes: string[]; category: string | null; flags: string[] };
 type Resp = (
   | { status: "ok"; reused: boolean; draft: Draft }
   | { status: "skipped" | "not_configured" | "cap_reached" | "forbidden" | "not_found"; message: string }
@@ -185,13 +185,16 @@ export default function AiDraftCard({
           ) : (
             <p className="text-xs italic text-deep-green/60">Claude suggests no reply to this one.</p>
           )}
-          {(view.draft.flags.length > 0 || view.draft.staff_notes) && (
+          {(view.draft.flags.length > 0 || view.draft.staff_notes.length > 0) && (
             <div data-testid="ai-draft-notes" className="mt-1.5 text-[12px] text-deep-green/70">
               <span className="font-semibold">Staff only: </span>
               {view.draft.flags.map((f) => (
                 <span key={f} className="mr-1 inline-block rounded-full border border-coral/40 bg-coral-soft px-1.5 text-[11px] font-semibold text-coral-hover">{FLAG_LABEL[f] ?? f}</span>
               ))}
-              {view.draft.staff_notes}
+              {/* At most 3 bullets, most important first (src/lib/aiDraftRun.ts). */}
+              <ul className="mt-0.5 list-disc pl-4">
+                {view.draft.staff_notes.map((n, i) => <li key={i}>{n}</li>)}
+              </ul>
             </div>
           )}
           {suggestionRow}

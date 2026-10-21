@@ -24,7 +24,8 @@ import { draftOutcomePatch, discardPatch } from "../src/lib/aiDraftOutcome";
 import { playbookForModel } from "../src/lib/aiDraftPlaybook";
 import { crmSendLogBody, logCrmSend } from "../src/lib/crmSendLog";
 import { linkThread, type LinkIO } from "../src/lib/crmThreadLink";
-import { phoneDigits10, extractPhoneNumbers, decideLinkSuggestion, linkSuggestionText, phoneShapes } from "../src/lib/aiDraftModel";
+import { phoneDigits10, extractPhoneNumbers, decideLinkSuggestion, linkSuggestionText, phoneShapes, renderTranscript, toNoteBullets } from "../src/lib/aiDraftModel";
+import { sinceText, buildClock, scheduleWindow, fieldTokens, mentionedFields, selectSchedule, timesIn, unscheduledTimes, lateReplyProblem, staleDraftReason, matchKey, type ScheduleRow } from "../src/lib/aiDraftClock";
 import type { LogStore } from "../src/lib/changeLog";
 
 let pass = 0, fail = 0;
@@ -116,7 +117,7 @@ console.log("\nTHE LATE-CANCEL COURTESY (rule 5):");
   const mem = buildDraftContext({ ...lateCancel(20, true), membership: { status: "ACTIVE", since: "2026-06-12T00:00:00Z", renews: "2026-11-01T00:00:00Z", canceledAt: "2026-10-06T03:30:00Z", price: 6650 } });
   eq("a billing date stored as midnight UTC on the 1st reads as the 1st, not Oct 31", mem.membership?.next_charge, "Nov 1, 2026");
   eq("a cancel at 03:30 UTC on the 6th is the 5th in Central (the day they pressed it)", mem.membership?.cancelled_on, "Oct 5, 2026");
-  const offer = { reply: "Normally we need 24 hours, but since it's your first match I'll add a one-time credit.", staff_notes: "Courtesy credit: issue $12.00", category: "player_cancel", flags: ["needs_credit"], offers_courtesy_credit: true };
+  const offer = { reply: "Normally we need 24 hours, but since it's your first match I'll add a one-time credit.", staff_notes: ["Courtesy credit: issue $12.00"], category: "player_cancel", flags: ["needs_credit"], offers_courtesy_credit: true, match_ids: [] };
   ok("guard ACCEPTS a courtesy offer to a first-time player", guardDraft(offer, first).ok);
   ok("guard REJECTS the same offer to a returning player", !guardDraft(offer, returning).ok);
   ok("guard accepts a no-courtesy reply to a returning player", guardDraft({ ...offer, reply: "Our window is 24 hours, so this one isn't eligible.", offers_courtesy_credit: false }, returning).ok);
@@ -130,8 +131,8 @@ console.log("\nNO EM DASHES (rule 2):");
   const clean = sanitizeDraft(dirty);
   ok("sanitizeDraft leaves no em or en dash", !hasDash(clean), clean);
   eq("a time range keeps a hyphen", clean.includes("8-9pm"), true);
-  const g = guardDraft({ reply: dirty, staff_notes: "Check — the host", category: "veo", flags: [], offers_courtesy_credit: false }, { courtesy_credit_eligible: false });
-  ok("every draft that passes the guard is dash-free (reply and notes)", g.ok && !hasDash(g.output.reply) && !hasDash(g.output.staff_notes));
+  const g = guardDraft({ reply: dirty, staff_notes: ["Check — the host"], category: "veo", flags: [], offers_courtesy_credit: false, match_ids: [] }, { courtesy_credit_eligible: false });
+  ok("every draft that passes the guard is dash-free (reply and notes)", g.ok && !hasDash(g.output.reply) && !g.output.staff_notes.some(hasDash));
   ok("the drafting instructions contain no dash", !hasDash(DRAFT_INSTRUCTIONS));
   const pb = playbookForModel(readFileSync("docs/support/PLAYBOOK.md", "utf8"));
   ok("POSITIVE CONTROL: the playbook sent to the model has the house rules", /^## 1\./m.test(pb) && pb.includes("No em dashes"));
@@ -153,6 +154,7 @@ function fake(over: Partial<DraftDeps> & { msgs?: DraftMsg[]; ctx?: DraftContext
     supersedePending: async () => { calls.superseded++; },
     monthSpendUsd: async () => over.spend ?? 0,
     loadContext: async () => ({ ctx: over.ctx ?? lateCancel(0), keys: ["account", "first_name"] }),
+    loadScheduleRows: async () => [],
     playbook: () => ({ text: "## 1. House rules", version: "test" }),
     callModel: async (req) => {
       calls.model.push(req);
@@ -203,7 +205,7 @@ console.log("\nORCHESTRATION (no draft, reuse, guards):");
   const reuse = fake({ prior });
   const rr = await runDraft(reuse.deps);
   ok("reopening a thread returns the stored draft for free (no model call)", rr.status === "ok" && rr.reused && reuse.calls.model.length === 0);
-  ok("  with its flags split back out of the notes", rr.status === "ok" && rr.draft.flags[0] === "escalate" && rr.draft.staff_notes === "check");
+  ok("  with its flags split back out of the notes", rr.status === "ok" && rr.draft.flags[0] === "escalate" && rr.draft.staff_notes[0] === "check");
   const disc = fake({ prior: { ...prior, outcome: "discarded" } });
   ok("a discarded draft is NOT redrafted on reopen", (await runDraft(disc.deps)).status === "discarded" && disc.calls.model.length === 0);
   const regen = fake({ prior, regenerate: true });
@@ -309,18 +311,21 @@ console.log("\nUNMATCHED PHONE NUMBERS:");
   ok("POSITIVE CONTROL: the facts fixture does carry a name, credits and a membership", factsCtx.firstName === "Jordan" && factsCtx.creditsCents === 1624);
   ok("  NO account facts in the request: no name, credits, membership or matches", !/Jordan|\$16\.24|\$66\.50|Westlake|"is_member": true/.test(sent) && sent.includes('"credit_balance": null') && sent.includes('"recent_matches": []'));
   ok("  the draft asks for the account's phone number", ru.status === "ok" && /phone number on your MatchDay account/.test(ru.draft.text));
-  ok("  staff notes say why: \"No account found for this number.\"", ru.status === "ok" && ru.draft.staff_notes.startsWith("No account found for this number."));
+  ok("  staff notes say why: \"No account found for this number.\" (first bullet)", ru.status === "ok" && ru.draft.staff_notes[0] === "No account found for this number.");
   ok("  and the stored notes say it too", (un.calls.inserts[0].staff_notes ?? "").includes("No account found for this number."));
-  const dup = fake({ loadThread: unlinkedThread, modelText: JSON.stringify({ reply: "What's the phone number on your MatchDay account?", staff_notes: "No account found for this number. Asked for it.", category: "account", flags: [], offers_courtesy_credit: false }) });
+  const dup = fake({ loadThread: unlinkedThread, modelText: JSON.stringify({ reply: "What's the phone number on your MatchDay account?", staff_notes: ["No account found for this number.", "Asked for it."], category: "account", flags: [], offers_courtesy_credit: false, match_ids: [] }) });
   const rd2 = await runDraft(dup.deps);
-  eq("  the reason appears once even when the model also wrote it", rd2.status === "ok" && rd2.draft.staff_notes, "No account found for this number. Asked for it.");
+  eq("  the reason appears once even when the model also wrote it", rd2.status === "ok" && rd2.draft.staff_notes, ["No account found for this number.", "Asked for it."]);
+  const dup2 = fake({ loadThread: unlinkedThread, modelText: JSON.stringify({ reply: "MatchDay is adult soccer, typically 16 and up.", staff_notes: ["Under 16: player says they're 14. No account found for this number."], category: "age", flags: ["under_16"], offers_courtesy_credit: false, match_ids: [] }) });
+  const rd3 = await runDraft(dup2.deps);
+  eq("  and once when the model buried it inside another bullet", rd3.status === "ok" && rd3.draft.staff_notes, ["No account found for this number.", "Under 16: player says they're 14."]);
   eq("  an unconfirmed thread is never courtesy-eligible", sent.includes('"courtesy_credit_eligible": false'), true);
 
   // AMBIGUOUS, not confirmed: same, with the account count.
   profileReads = 0;
   const amb = fake({ loadThread: async () => ({ channel: "whatsapp", player_id: 42, match_ambiguous: true, account_confirmed: false }), countAccounts: async () => 2, modelText: askText, loadContext: async () => { profileReads++; return { ctx: factsCtx, keys: [] }; } });
   const ra = await runDraft(amb.deps);
-  ok("phone on 2 accounts, unconfirmed → notes say \"Number is on 2 accounts.\"", ra.status === "ok" && ra.draft.staff_notes.startsWith("Number is on 2 accounts."));
+  ok("phone on 2 accounts, unconfirmed → notes say \"Number is on 2 accounts.\"", ra.status === "ok" && ra.draft.staff_notes[0] === "Number is on 2 accounts.");
   ok("  and the newest account's data is NOT loaded or sent", profileReads === 0 && !/Jordan/.test(amb.calls.model[0].messages[0].content));
 
   // LINKING makes the next draft include that player's info.
@@ -385,6 +390,113 @@ console.log("\nUNMATCHED PHONE NUMBERS:");
   const l4 = await linkThread({ threadId: "t4", playerId: 8, actor, confinedCity: "ATX" }, io4, store);
   ok("a city-confined account can't link to a player in another city (no write, no log)", !l4.ok && l4.status === 403 && io4.state.player_id === 5 && logRows.length === before);
   ok("POSITIVE CONTROL: the same confined account CAN link a player in its city", (await linkThread({ threadId: "t5", playerId: 7, actor, confinedCity: "ATX" }, mkIO(5), store)).ok);
+}
+
+// ── time awareness and the schedule (2026-10-21) ─────────────────────────────────────────────
+console.log("\nTIME AND SCHEDULE:");
+{
+  // The PRUMC case: the player wrote Tue Oct 20 at 3:38 PM Central about "2 games today at PRUMC";
+  // the draft is written Wed Oct 21 at 7:38 AM, 16 hours later.
+  const WROTE = "2026-10-20T20:38:00.000Z"; // 3:38 PM CDT
+  const NOW2 = Date.parse("2026-10-21T12:38:00.000Z"); // 7:38 AM CDT
+  const CT = "America/Chicago";
+  eq("how long ago, in the player's zone", sinceText(Date.parse(WROTE), NOW2, CT), "16h ago, yesterday 3:38 PM");
+  eq("minutes when under an hour", sinceText(NOW2 - 25 * 60e3, NOW2, CT), "25 min ago, today 7:13 AM");
+  const clock = buildClock({ now: NOW2, tz: CT, latestPlayerMsgIso: WROTE });
+  eq("the clock names the last 7 days by date", clock.recent_days.slice(0, 3), ["today: Wednesday, Oct 21", "yesterday: Tuesday, Oct 20", "Monday, Oct 19"]);
+  eq("the clock: now, zone, ago, late", [clock.now_local, clock.time_zone, clock.latest_player_message, clock.reply_is_late],
+    ["Wednesday, October 21, 2026 at 7:38 AM", "Central time (America/Chicago)", "16h ago, yesterday 3:38 PM", true]);
+  eq("1h59m after → not late", buildClock({ now: Date.parse(WROTE) + 119 * 60e3, tz: CT, latestPlayerMsgIso: WROTE }).reply_is_late, false);
+  eq("2h01m after → late", buildClock({ now: Date.parse(WROTE) + 121 * 60e3, tz: CT, latestPlayerMsgIso: WROTE }).reply_is_late, true);
+  eq("the zone follows the player's city (Atlanta is Eastern)", buildClock({ now: NOW2, tz: "America/New_York", latestPlayerMsgIso: WROTE }).latest_player_message, "16h ago, yesterday 4:38 PM");
+  ok("every transcript line carries its weekday and time in the player's zone",
+    renderTranscript([{ id: "x", direction: "inbound", body: "2 games today at PRUMC?", sent_at: WROTE }], CT).startsWith("[Tue, Oct 20, 3:38 PM] Player:"));
+  eq("the schedule window starts on the day the player WROTE (wall clock), 7 days on",
+    scheduleWindow(WROTE, CT), { fromWall: "2026-10-20T00:00:00.000Z", toWall: "2026-10-28T00:00:00.000Z" });
+
+  eq("PRUMC is a field token", fieldTokens("PRUMC"), ["prumc"]);
+  eq("generic words are not", fieldTokens("Mueller Soccer Park Field 2"), ["mueller"]);
+  const titles = ["PRUMC", "ATH Katy", "Mueller Soccer Park"];
+  eq("\"2 games today at PRUMC\" names PRUMC", mentionedFields(["Are there 2 games today at PRUMC?"], titles), ["PRUMC"]);
+  eq("\"at the park\" names no field", mentionedFields(["see you at the park tonight"], titles), []);
+  ok("POSITIVE CONTROL: \"mueller\" does name Mueller", mentionedFields(["is mueller on tonight"], titles).length === 1);
+
+  const row = (id: number, field: string, wall: string, utc: string, extra: Partial<ScheduleRow> = {}): ScheduleRow =>
+    ({ api_id: id, field_title: field, start_date: wall, start_date_utc: utc, city_identifier: "HOU", is_cancelled: false, player_count: 12, max_player_count: 18, ...extra });
+  const rows = [
+    row(1, "PRUMC", "2026-10-20T18:00:00.000Z", "2026-10-20T23:00:00.000Z"),
+    row(2, "PRUMC", "2026-10-20T20:00:00.000Z", "2026-10-21T01:00:00.000Z"),
+    row(3, "PRUMC", "2026-10-22T19:00:00.000Z", "2026-10-23T00:00:00.000Z", { player_count: 15 }),
+    row(4, "ATH Katy", "2026-10-21T20:00:00.000Z", "2026-10-22T01:00:00.000Z"),
+    row(5, "Mueller Soccer Park", "2026-10-21T19:00:00.000Z", "2026-10-22T00:00:00.000Z", { city_identifier: "ATX" }),
+  ];
+  const sched = selectSchedule({ rows, texts: ["Are there 2 games today at PRUMC?"], cityCode: "HOU", now: NOW2 });
+  eq("a named field picks that field's matches only", sched.entries.map((e) => e.match_id), [1, 2, 3]);
+  eq("  last night's two are already over; Thursday's is upcoming with 3 spots",
+    sched.entries.map((e) => [e.when_local, e.status, e.open_spots]),
+    [["Tue, Oct 20, 6:00 PM", "already started or finished", 6], ["Tue, Oct 20, 8:00 PM", "already started or finished", 6], ["Thu, Oct 22, 7:00 PM", "upcoming", 3]]);
+  eq("no field but \"tonight\" → the player's city", selectSchedule({ rows, texts: ["anything tonight?"], cityCode: "HOU", now: NOW2 }).entries.map((e) => e.match_id), [1, 2, 4, 3]);
+  eq("no field and no day word → no schedule", selectSchedule({ rows, texts: ["where's my credit"], cityCode: "HOU", now: NOW2 }).basis, null);
+  eq("a cancelled match says so", selectSchedule({ rows: [row(9, "PRUMC", "2026-10-22T19:00:00.000Z", "2026-10-23T00:00:00.000Z", { is_cancelled: true })], texts: ["PRUMC thursday?"], cityCode: null, now: NOW2 }).entries[0].status, "cancelled");
+
+  // Times: "8pm", "8 PM", "8:00 p.m." are one time; a reply may quote only the schedule, the chat or the playbook.
+  eq("time formats normalize", timesIn("8pm, 8 PM, 8:00 p.m. and 9:30am"), ["8:00 pm", "9:30 am"]);
+  const allowed = [...sched.entries.map((e) => e.when_local), "Are there 2 games today at PRUMC?", "Support is 9am to 9pm Central."];
+  eq("schedule times pass", unscheduledTimes("The next one is Thursday at 7:00 PM.", allowed), []);
+  eq("support hours from the playbook pass", unscheduledTimes("We're around 9am to 9pm.", allowed), []);
+  eq("an invented time is caught", unscheduledTimes("There's one tonight at 7:30pm!", allowed), ["7:30 pm"]);
+
+  // Late replies.
+  eq("late, no apology → rejected", lateReplyProblem("Those were last night! The next one is Thursday at 7:00 PM.", true) != null, true);
+  eq("late, opens with sorry → fine", lateReplyProblem("Sorry for the slow reply! Those were last night.", true), null);
+  eq("on time, apologizes for slowness → rejected", lateReplyProblem("Sorry for the slow reply! Thursday at 7:00 PM works.", false) != null, true);
+  eq("on time, sorry about something else → fine", lateReplyProblem("Sorry about tonight's match!", false), null);
+  eq("late Veo answer: slow-reply apology, video timing stated plainly → fine", lateReplyProblem("Sorry for the slow reply! Videos go up within 24 to 48 hours after the match.", true), null);
+
+  // Notes: never more than 3 bullets.
+  eq("5 bullets in → 3 out, in order", toNoteBullets(["a", "b", "c", "d", "e"]), ["a", "b", "c"]);
+  eq("a dashed list in one string → bullets", toNoteBullets("- one\n- two\n- three\n- four"), ["one", "two", "three"]);
+
+  // Through the orchestration.
+  const pastText = JSON.stringify({ reply: "Sorry for the slow reply! Both PRUMC games were last night, but there's another one Thursday at 7:00 PM with 3 spots left.", staff_notes: ["a", "b", "c", "d"], category: "booking", flags: [], offers_courtesy_credit: false, match_ids: [3] });
+  const prumcMsgs = [msg("inbound", "Are there 2 games today at PRUMC?", NOW - Date.parse(WROTE) + (NOW2 - NOW))];
+  prumcMsgs[0].sent_at = WROTE;
+  const ctxHou = { ...lateCancel(5), cityCode: "HOU", matches: [] };
+  const fy = fake({ now: () => NOW2, msgs: prumcMsgs, ctx: ctxHou, loadScheduleRows: async () => rows, modelText: pastText });
+  const ry = await runDraft(fy.deps);
+  const content = fy.calls.model[0]?.messages[0].content ?? "";
+  ok("yesterday's \"today\" question: the request carries the clock (16h ago, yesterday 3:38 PM, late)", content.includes('"latest_player_message": "16h ago, yesterday 3:38 PM"') && content.includes('"reply_is_late": true'));
+  ok("  and PRUMC's schedule with last night's games marked over and Thursday's upcoming", content.includes('"already started or finished"') && content.includes('"when_local": "Thu, Oct 22, 7:00 PM"') && content.includes("at the field the player named"));
+  ok("  the draft that treats it as past and offers the real next time is SHOWN", ry.status === "ok" && /last night/.test(ry.draft.text) && /7:00 PM/.test(ry.draft.text));
+  eq("  staff notes capped at 3 bullets", ry.status === "ok" && ry.draft.staff_notes.length, 3);
+  ok("  the stored notes are 3 bullet lines", (fy.calls.inserts[0].staff_notes ?? "").split("\n").filter((l) => l.startsWith("- ")).length === 3);
+  ok("  the mentioned match is stored with its kickoff (so the draft goes stale then)", fy.calls.inserts[0].context_keys.includes(matchKey(3, "2026-10-23T00:00:00.000Z")));
+
+  const invent = fake({ now: () => NOW2, msgs: prumcMsgs, ctx: ctxHou, loadScheduleRows: async () => rows,
+    modelText: JSON.stringify({ reply: "Sorry for the slow reply! There's one tonight at 8:30pm at PRUMC.", staff_notes: [], category: "booking", flags: [], offers_courtesy_credit: false, match_ids: [] }) });
+  const ri = await runDraft(invent.deps);
+  ok("a draft with a match time NOT in the schedule is not shown", ri.status === "failed" && /isn't in our schedule \(8:30 pm\)/.test(ri.message));
+  const noSorry = fake({ now: () => NOW2, msgs: prumcMsgs, ctx: ctxHou, loadScheduleRows: async () => rows,
+    modelText: JSON.stringify({ reply: "Both PRUMC games were last night. Next one is Thursday at 7:00 PM.", staff_notes: [], category: "booking", flags: [], offers_courtesy_credit: false, match_ids: [3] }) });
+  const rn = await runDraft(noSorry.deps);
+  ok("a 16h-late draft that doesn't open with sorry is not shown, for that reason", rn.status === "failed" && /over 2 hours late/.test(rn.message));
+  const quick = fake({ msgs: [msg("inbound", "any games tonight?", 0.5 * H)], ctx: { ...lateCancel(5), cityCode: "HOU" },
+    modelText: JSON.stringify({ reply: "Sorry for the slow reply! Let me check tonight's games.", staff_notes: [], category: "booking", flags: [], offers_courtesy_credit: false, match_ids: [] }) });
+  const rq = await runDraft(quick.deps);
+  ok("a 30-minute reply that apologizes for slowness is not shown, for that reason", rq.status === "failed" && /wasn't slow/.test(rq.message));
+
+  // Stale drafts.
+  eq("a draft made 3h ago is stale", staleDraftReason({ created_at: new Date(NOW2 - 3 * H).toISOString() }, NOW2), "it was made more than 2 hours ago");
+  eq("a draft made 30 min ago is fresh", staleDraftReason({ created_at: new Date(NOW2 - 0.5 * H).toISOString() }, NOW2), null);
+  eq("a 30-min-old draft whose mentioned match kicked off 10 min ago is stale",
+    staleDraftReason({ created_at: new Date(NOW2 - 0.5 * H).toISOString(), context_keys: [matchKey(3, new Date(NOW2 - 10 * 60e3).toISOString())] }, NOW2), "a match it mentions has started");
+  const oldPrior: StoredDraft = { id: "d-3h", outcome: "pending", draft_text: "Let me check tonight's schedule", staff_notes: "- x", category: "booking", error: null, created_at: new Date(NOW - 3 * H).toISOString(), context_keys: [] };
+  const fs1 = fake({ prior: oldPrior, msgs: [msg("inbound", "any news?", 4 * H)],
+    modelText: JSON.stringify({ reply: "Sorry for the slow reply! Still checking for you.", staff_notes: [], category: "other", flags: [], offers_courtesy_credit: false, match_ids: [] }) });
+  const rs = await runDraft(fs1.deps);
+  ok("opening a thread whose saved draft is stale supersedes it and makes a fresh one", rs.status === "ok" && !rs.reused && fs1.calls.superseded === 1 && fs1.calls.model.length === 1);
+  const fresh = fake({ prior: { ...oldPrior, created_at: new Date(NOW - 0.5 * H).toISOString() } });
+  ok("a fresh saved draft is reused (no model call)", (await runDraft(fresh.deps)).status === "ok" && fresh.calls.model.length === 0);
 }
 
 // ── source pairings (a click and an HTTP route are not observable here) ──────────────────────

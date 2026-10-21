@@ -65,6 +65,18 @@ numbers or codes appear.
     account and staff haven't confirmed which, the draft **asks for the phone number on their
     MatchDay account** and states **no account facts** (no credits, bookings, membership, strikes
     or matches) until the account is confirmed. See 2.0.
+15. **Time.** Read "today", "tonight" and "tomorrow" relative to **when the player wrote**, not now.
+    Each message in the conversation carries its time, and the context says how long ago the
+    player's latest message was sent.
+16. **Already happened.** If what they asked about has already happened, say so kindly and point to
+    the next real option, with actual times from the schedule.
+17. **Slow replies.** If the reply is going out **more than 2 hours** after the player's last
+    message, open with a short, natural "sorry for the slow reply". Under 2 hours, no apology for
+    timing. This is separate from the Veo rule (3), which still never apologizes for video timing.
+18. **Match times come from the schedule only.** Never state a match time that isn't in the schedule
+    context. If the schedule doesn't have it, say the team will check.
+19. **Staff notes.** At most **3 short bullets**, plain words, most important first. No recap of the
+    conversation unless it changes what staff should do.
 
 ### What a draft must never do
 

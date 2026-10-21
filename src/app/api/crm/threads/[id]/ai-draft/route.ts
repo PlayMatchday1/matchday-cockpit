@@ -19,7 +19,8 @@ import { authenticateCrm } from "@/lib/crmAuth";
 import { apiGet } from "@/lib/matchdayStageApi";
 import { buildProfile } from "@/lib/playerProfile";
 import { loadMirrorHistory } from "@/lib/mirrorHistory";
-import { cityNameFor } from "@/lib/cityScope";
+import { cityNameFor, resolveCityScope } from "@/lib/cityScope";
+import type { ScheduleRow } from "@/lib/aiDraftClock";
 import { FULL_EDITOR_ENV } from "@/lib/matchEnv";
 import { loadPlaybook } from "@/lib/aiDraftPlaybook";
 import { assertAnthropicHost, phoneShapes, ANTHROPIC_HOST, type DraftContextIn, type DraftMsg } from "@/lib/aiDraftModel";
@@ -89,7 +90,7 @@ export async function POST(req: Request, ctx: RouteCtx) {
     async latestDraftFor(basedOn) {
       const r = await supabase
         .from("crm_ai_drafts")
-        .select("id, outcome, draft_text, staff_notes, category, error, created_at")
+        .select("id, outcome, draft_text, staff_notes, category, error, created_at, context_keys")
         .eq("thread_id", threadId)
         .eq("based_on_message_id", basedOn)
         .neq("outcome", "superseded")
@@ -129,10 +130,11 @@ export async function POST(req: Request, ctx: RouteCtx) {
       };
       if (thread.player_id == null) return { ctx: ctxIn, keys };
 
-      const u = await supabase.from("mdapi_users").select("first_name, preferable_city_name, is_member").eq("id", thread.player_id).maybeSingle();
+      const u = await supabase.from("mdapi_users").select("first_name, preferable_city_name, preferable_city_normalized, is_member").eq("id", thread.player_id).maybeSingle();
       if (!u.error && u.data) {
         ctxIn.firstName = (u.data.first_name as string | null)?.trim() || null;
         ctxIn.city = (u.data.preferable_city_name as string | null) ?? null;
+        ctxIn.cityCode = resolveCityScope(u.data.preferable_city_normalized as string | null)?.identifier ?? null;
         ctxIn.isMember = u.data.is_member === true;
         keys.push("first_name", "city");
       }
@@ -174,6 +176,21 @@ export async function POST(req: Request, ctx: RouteCtx) {
         }
       }
       return { ctx: ctxIn, keys };
+    },
+
+    // OUR schedule, from the mirror. start_date is WALL CLOCK, so the window is wall-clock bounds;
+    // start_date_utc (an instant) decides "already started". Soft-deleted matches are left out.
+    async loadScheduleRows({ fromWall, toWall }) {
+      const r = await supabase
+        .from("mdapi_matches")
+        .select("api_id, field_title, start_date, start_date_utc, city_identifier, is_cancelled, player_count, max_player_count")
+        .gte("start_date", fromWall)
+        .lt("start_date", toWall)
+        .is("deleted_at", null)
+        .order("start_date_utc", { ascending: true })
+        .limit(1000);
+      if (r.error) throw new Error(r.error.message);
+      return (r.data ?? []) as ScheduleRow[];
     },
 
     playbook: () => loadPlaybook(),
