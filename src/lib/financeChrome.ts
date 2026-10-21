@@ -13,6 +13,8 @@
 // three grains), and one status pill in place of the partial-days chip (Ryan).
 // Cost and Cities joined on 2026-10-10: the page name, then the same pinned bar as Revenue
 // (FinancePageBar), with their own City (and, on Cost, Field) selects (Ryan).
-export const OWN_HEADER_SECTIONS: ReadonlySet<string> = new Set(["/admin/finance/opex", "/admin/finance/ledger/expenses", "/admin/finance/revenue", "/admin/finance/cost", "/admin/finance/cities"]);
+// Staff Credits joined on 2026-10-21: it has its own From / To range, so the shell's period bar would
+// be a control that does nothing there.
+export const OWN_HEADER_SECTIONS: ReadonlySet<string> = new Set(["/admin/finance/opex", "/admin/finance/ledger/expenses", "/admin/finance/revenue", "/admin/finance/cost", "/admin/finance/cities", "/admin/finance/staff-credits"]);
 
 export const drawsOwnHeader = (pathname: string): boolean => OWN_HEADER_SECTIONS.has(pathname);
