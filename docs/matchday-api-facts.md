@@ -2056,7 +2056,8 @@ frozen:
   (and only when already ambiguous). `player_id IS NULL` means no account matched at all (unlinked).
 
 **Consequence, plainly:** on a shared phone the thread attaches to whichever account was created most
-recently and stays there permanently — there is no way to correct the linkage from Clubhouse. The
+recently and stays there until a person changes it. (Until 2026-10-21 there was no way to correct
+the linkage from Clubhouse; see "Player Chats: unmatched phone numbers" below.) The
 docked chat + Player Chats header + context pane surface this as "This number is on N account(s).
 Showing {name} — it may not be who is writing." rather than the old, too-soft "historical accounts on
 file."
@@ -7456,4 +7457,30 @@ for 18596, 18680, 18679, 19700 and `/admin/matches?fromDate&toDate` windows arou
   UTC or 05:00 UTC on the 1st. Not checked against a live subscription.
 - **Not built in phase 1:** drafts in the compact dock, images sent to the model, Veo status in the
   context, codes or credits issued from a draft, auto-send.
+
+## Player Chats: unmatched phone numbers (2026-10-21)
+
+- **The tiebreak is NEWEST account wins, and the comments that said oldest were wrong.** Code:
+  `src/app/api/whatsapp/webhook/route.ts:754-781` and `src/app/api/webhooks/telnyx/route.ts:131-171`,
+  both `.order("created_at", { ascending: false })` then `candidates[0]`. Comments that said oldest:
+  the Telnyx header (`:13`, corrected), `docs/crm-mvp.md:154` (corrected), and the column comment in
+  `supabase/migrations/0029_crm_mvp.sql:58-60` (NOT edited: it is an applied migration).
+- **Newest-wins is right about 60% of the time on shared phones.** Read-only probe, 2026-10-21, every
+  thread with `match_ambiguous = true` (25): 20 phones were still on exactly 2 `mdapi_users` rows
+  (E.164 or national shape). The account with the most recent `mdapi_match_players.created_at` was
+  the NEWEST in 12 and the OLDEST in 8. The two accounts had different first names in 11 of 20. 18 of
+  the 20 threads were linked to the newest account. Kept newest-wins (the better of the two, and it
+  moves no existing link); the fix is that drafts treat a shared phone as unconfirmed.
+- **5 of the 25 flagged threads now match only one account** and stay flagged, because
+  `match_ambiguous` latches true and never clears (same probe).
+- **Linking:** `POST /api/crm/threads/[id]/link` sets `player_id` plus `account_confirmed_at` /
+  `account_confirmed_by_user_id` (migration 0228) and records `source: "crm-link"` in change_log with
+  actor, time, `from_player_id` and `to_player_id`, landed only if the read-back shows the new account
+  (`src/lib/crmThreadLink.ts`). The webhooks never overwrite it: they patch `player_id` only while it
+  is null. Auth is `authenticateCrm`; a city-confined account can only link a player whose
+  `preferable_city_normalized` resolves to its city.
+- **Phone numbers a player types are matched on digits only** (`phoneDigits10`,
+  `src/lib/aiDraftModel.ts`): strip non-digits, keep 10, or 11 starting with 1. Looked up against the
+  two shapes the webhooks match (`+1XXXXXXXXXX`, `XXXXXXXXXX`). A third stored shape, if one exists,
+  would be missed: UNKNOWN, not measured.
 

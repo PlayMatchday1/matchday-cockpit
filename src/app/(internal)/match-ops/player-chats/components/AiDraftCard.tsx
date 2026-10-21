@@ -17,15 +17,17 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { RefreshCw, Sparkles, X } from "lucide-react";
 import { supabase } from "@/lib/supabase";
-import { draftEligibility, type DraftMsg } from "@/lib/aiDraftModel";
+import { draftEligibility, linkSuggestionText, type DraftMsg, type LinkSuggestion } from "@/lib/aiDraftModel";
+import { linkThreadToPlayer, THREAD_LINKED_EVENT } from "@/lib/crmLinkClient";
 import type { ConversationMessage } from "./MessageBubble";
 
 type Draft = { id: string; text: string; staff_notes: string; category: string | null; flags: string[] };
-type Resp =
+type Resp = (
   | { status: "ok"; reused: boolean; draft: Draft }
   | { status: "skipped" | "not_configured" | "cap_reached" | "forbidden" | "not_found"; message: string }
   | { status: "discarded"; draft_id: string; message: string }
-  | { status: "failed"; draft_id: string | null; message: string };
+  | { status: "failed"; draft_id: string | null; message: string }
+) & { link_suggestion?: LinkSuggestion | null };
 
 type View =
   | { kind: "loading" }
@@ -68,6 +70,10 @@ export default function AiDraftCard({
 }) {
   const [view, setView] = useState<View>({ kind: "hidden" });
   const [busy, setBusy] = useState(false);
+  // "Matches Sam, link?" — shown when the account is unconfirmed and the player typed a number.
+  // Nothing links until a person presses Link.
+  const [suggestion, setSuggestion] = useState<LinkSuggestion | null>(null);
+  const [linkMsg, setLinkMsg] = useState<string | null>(null);
 
   // The same eligibility rule the server applies. Recomputed as messages arrive, so a reply from
   // a colleague hides the card and a new player message brings it back.
@@ -75,6 +81,7 @@ export default function AiDraftCard({
   const basedOnId = elig.ok ? elig.basedOn.id : null;
 
   const apply = useCallback((r: Resp) => {
+    setSuggestion(r.link_suggestion ?? null);
     if (r.status === "ok") setView({ kind: "draft", draft: r.draft });
     else if (r.status === "skipped") setView({ kind: "hidden" });
     else setView({ kind: "info", message: r.message, canRegenerate: r.status === "failed" || r.status === "discarded" });
@@ -95,9 +102,29 @@ export default function AiDraftCard({
   }, [threadId, apply]);
 
   useEffect(() => {
+    setSuggestion(null); setLinkMsg(null);
     if (!basedOnId) { setView({ kind: "hidden" }); return; }
     void request(false);
   }, [threadId, basedOnId, request]);
+
+  // Linked from here or from the context pane: the stored draft was superseded on the server, so
+  // asking again drafts from the newly linked account.
+  useEffect(() => {
+    const on = (e: Event) => {
+      if ((e as CustomEvent<{ threadId: string }>).detail?.threadId !== threadId || !basedOnId) return;
+      setSuggestion(null);
+      void request(false);
+    };
+    window.addEventListener(THREAD_LINKED_EVENT, on);
+    return () => window.removeEventListener(THREAD_LINKED_EVENT, on);
+  }, [threadId, basedOnId, request]);
+
+  const confirmLink = useCallback(async (playerId: number) => {
+    setBusy(true); setLinkMsg(null);
+    const r = await linkThreadToPlayer(threadId, playerId);
+    setBusy(false);
+    setLinkMsg(r.ok ? `Linked to ${r.first_name ?? "that account"}.` : `Couldn't link: ${r.error}`);
+  }, [threadId]);
 
   const discard = useCallback(async (draftId: string) => {
     setBusy(true);
@@ -114,6 +141,20 @@ export default function AiDraftCard({
   }, [threadId, onDiscarded]);
 
   if (view.kind === "hidden") return null;
+
+  const suggestionRow = (suggestion || linkMsg) && (
+    <div data-testid="ai-draft-link" data-kind={suggestion?.kind ?? "done"} className="mt-1.5 flex flex-wrap items-center gap-2 text-[12px] text-deep-green/75">
+      {suggestion && <span><span className="font-semibold">Staff only: </span>{linkSuggestionText(suggestion)}</span>}
+      {suggestion?.kind === "one" && !linkMsg && (
+        <button type="button" data-testid="ai-draft-link-confirm" disabled={busy}
+          onClick={() => void confirmLink(suggestion.player_id)}
+          className="rounded-full bg-deep-green px-2.5 py-0.5 text-[11px] font-bold text-cream hover:bg-deep-green-soft disabled:opacity-40">
+          Link
+        </button>
+      )}
+      {linkMsg && <span data-testid="ai-draft-link-result" className="font-semibold">{linkMsg}</span>}
+    </div>
+  );
 
   return (
     <div data-testid="ai-draft-card" className="mb-2 rounded-lg border border-deep-green/15 bg-cream-soft px-3 py-2 text-sm text-deep-green">
@@ -135,6 +176,7 @@ export default function AiDraftCard({
           )}
         </div>
       )}
+      {view.kind === "info" && suggestionRow}
 
       {view.kind === "draft" && (
         <>
@@ -152,6 +194,7 @@ export default function AiDraftCard({
               {view.draft.staff_notes}
             </div>
           )}
+          {suggestionRow}
           <div className="mt-2 flex flex-wrap items-center gap-2">
             {view.draft.text && (
               <button

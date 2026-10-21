@@ -64,6 +64,22 @@ const CASES: { name: string; ctx: DraftContextIn; msgs: DraftMsg[]; expect: (o: 
     msgs: [m("inbound", "Hi! I'm 14, can I play in your games?", 1 * H)],
     expect: (o) => (o.flags.includes("under_16") || /under 16/i.test(o.staff_notes) ? null : "expected the Under 16 flag"),
   },
+  {
+    name: "unlinked number asks about credit → asks for the account's phone, no account facts",
+    ctx: { linked: false, ambiguous: false, firstName: null, city: null, isMember: null, membership: null, creditsCents: null, matchesPlayed: null, strikes: null, matches: [] },
+    msgs: [m("inbound", "Hey where's my credit from the game that got cancelled last night?", 1 * H)],
+    expect: (o) => (/phone number/i.test(o.reply) && !/\$\d/.test(o.reply) ? null : "expected an ask for the phone number and no amounts"),
+  },
+  {
+    name: "unlinked number, player just sent a phone number → thanks, checking",
+    ctx: { linked: false, ambiguous: false, firstName: null, city: null, isMember: null, membership: null, creditsCents: null, matchesPlayed: null, strikes: null, matches: [] },
+    msgs: [
+      m("inbound", "Hey where's my credit from last night?", 2 * H),
+      m("outbound", "Happy to help! What's the phone number on your MatchDay account? You can find it in your profile in the app.", 1.5 * H),
+      m("inbound", "(512) 555-0100", 1 * H),
+    ],
+    expect: (o) => (!/what'?s the phone number/i.test(o.reply) && !/\$\d/.test(o.reply) ? null : "asked again for the number, or stated an amount"),
+  },
 ];
 
 async function main() {

@@ -25,6 +25,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { linkThreadToPlayer, THREAD_LINKED_EVENT } from "@/lib/crmLinkClient";
 import { supabase } from "@/lib/supabase";
 import CopyPhone from "@/components/CopyPhone";
 import { colorForCity } from "@/lib/cityColors";
@@ -121,6 +122,13 @@ export default function ContextPane({ threadId, phone }: { threadId: string; pho
   const [error, setError] = useState<string | null>(null);
   // A locally-adjusted balance, so a credit applied here updates the pane without a refetch.
   const [liveCredits, setLiveCredits] = useState<number | null>(null);
+  // Bumped when this thread is linked to an account (here or from the draft card), to reload.
+  const [reloadKey, setReloadKey] = useState(0);
+  useEffect(() => {
+    const on = (e: Event) => { if ((e as CustomEvent<{ threadId: string }>).detail?.threadId === threadId) setReloadKey((k) => k + 1); };
+    window.addEventListener(THREAD_LINKED_EVENT, on);
+    return () => window.removeEventListener(THREAD_LINKED_EVENT, on);
+  }, [threadId]);
 
   /* SECTION STATE IS A PREFERENCE, KEYED ON THE OPERATOR AND NEVER ON THE THREAD. Opening Payments
    * once during a run of billing questions leaves it open on the next conversation, which is the
@@ -152,7 +160,7 @@ export default function ContextPane({ threadId, phone }: { threadId: string; pho
       }
     })();
     return () => { off = true; };
-  }, [threadId]);
+  }, [threadId, reloadKey]);
 
   const mirror = data?.player ?? null;
   const prof = data?.profile ?? null;
@@ -195,7 +203,8 @@ export default function ContextPane({ threadId, phone }: { threadId: string; pho
       {data && !linked && (
         <div className="px-4 py-6 text-center text-[12px]" style={{ color: MUTED }}>
           <div className="font-[760]" style={{ color: INK }}>Unknown number</div>
-          <p className="mt-1 text-[11.5px]">No player account matched this number. Search above for the one they give you.</p>
+          <p className="mt-1 text-[11.5px]">No player account matched this number. Ask the player for the phone number on their account, then link it here.</p>
+          <LinkAccount threadId={threadId} linked={false} />
           {phone && (
             <div className="mt-2 inline-flex items-center gap-0.5">
               <span className="font-mono text-[12px]" data-testid="ctx-phone-unknown" style={{ color: MUTED }}>{phone}</span>
@@ -237,6 +246,7 @@ export default function ContextPane({ threadId, phone }: { threadId: string; pho
                 {prof?.membership ? "Member" : mirror?.is_member ? "Member" : "Casual"}
               </span>
             </div>
+            <LinkAccount threadId={threadId} linked />
           </header>
 
           {/* THREE HEADLINE NUMBERS, credits first because it is the commonest question in this
@@ -474,12 +484,11 @@ function CreditBox({ playerId, playerName, balanceCents, canCredit, onBalance }:
  * A thread's number often resolves to nobody and the player then gives you a different one. There
  * was nowhere to type it: the pane rendered "Unknown number" and stopped.
  *
- * LOOKING UP IS NOT LINKING. Picking a result shows that account so you can answer. It does not
- * touch crm_threads.player_id, and nothing in this repo can: /api/crm/threads/[id]/ holds assign
- * (an OPERATOR, not a player), context, follow-up, mark-read, no-reply and status. No route writes
- * that column. Linking would change who every future message on the number is attributed to, and it
- * is the one action here that can show one player another player's membership and match history —
- * so it is a separate route, a separate audit row and a separate decision. */
+ * LOOKING UP IS NOT LINKING. Picking a result here shows that account so you can answer. It does
+ * not touch crm_threads.player_id. Linking is LinkAccount below and POST /api/crm/threads/[id]/link
+ * (2026-10-21): it changes who every future message on the number is attributed to, and it is the
+ * one action here that can show one player another player's membership and match history, so it is
+ * a separate control, a separate route and its own change-log row. */
 function Search({ compact }: { compact: boolean }) {
   const [openBox, setOpenBox] = useState(!compact);
   const [q, setQ] = useState("");
@@ -561,6 +570,95 @@ function Search({ compact }: { compact: boolean }) {
           </p>
         </div>
       )}
+    </div>
+  );
+}
+
+/* ── LINK TO ACCOUNT ───────────────────────────────────────────────────────────────────────────
+ * Unlike the lookup above, this DOES change the thread: it sets crm_threads.player_id and marks the
+ * account as confirmed by a person (POST /api/crm/threads/[id]/link, which records who and when in
+ * the change log). "Link to account" on an unlinked thread, "Change account" on a linked one.
+ * Searches by phone (any format, digits only) or name, under the Player Chats access rule. */
+type LinkRow = { id: number; name: string; city: string | null; phone_last4: string | null; is_member: boolean; joined: string | null };
+
+function LinkAccount({ threadId, linked }: { threadId: string; linked: boolean }) {
+  const [openBox, setOpenBox] = useState(false);
+  const [q, setQ] = useState("");
+  const [rows, setRows] = useState<LinkRow[] | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const seq = useRef(0);
+
+  useEffect(() => { setOpenBox(false); setQ(""); setRows(null); setMsg(null); }, [threadId]);
+
+  useEffect(() => {
+    const term = q.trim();
+    if (term.length < 2) { setRows(null); setNote(null); return; }
+    const my = ++seq.current;
+    const t = window.setTimeout(async () => {
+      try {
+        const res = await authFetch(`/api/crm/players/search?q=${encodeURIComponent(term)}`);
+        const j = await res.json();
+        if (my !== seq.current) return;
+        setRows(res.ok ? ((j.results ?? []) as LinkRow[]) : []);
+        setNote(res.ok ? (j.note ?? null) : (j?.error ?? `Search failed (${res.status})`));
+      } catch (e) {
+        if (my === seq.current) { setRows([]); setNote(e instanceof Error ? e.message : String(e)); }
+      }
+    }, 250);
+    return () => window.clearTimeout(t);
+  }, [q]);
+
+  const link = async (row: LinkRow) => {
+    setBusy(true); setMsg(null);
+    const r = await linkThreadToPlayer(threadId, row.id);
+    setBusy(false);
+    if (r.ok) { setMsg(`Linked to ${row.name}.`); setOpenBox(false); setQ(""); setRows(null); }
+    else setMsg(`Couldn't link: ${r.error}`);
+  };
+
+  if (!openBox) {
+    return (
+      <div className="mt-[9px]">
+        <button type="button" data-testid={linked ? "ctx-change-account" : "ctx-link-account"} onClick={() => setOpenBox(true)}
+          className="rounded-full border px-3 py-[3px] text-[11px] font-[720]" style={{ borderColor: LINE, color: INK, background: "#fff" }}>
+          {linked ? "Change account" : "Link to account"}
+        </button>
+        {msg && <p className="mt-1 text-[11px] font-semibold" data-testid="ctx-link-result" style={{ color: msg.startsWith("Linked") ? "#12704a" : "#a83b1c" }}>{msg}</p>}
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-[9px] rounded-[10px] border p-2 text-left" data-testid="ctx-link-panel" style={{ borderColor: LINE, background: "#fff" }}>
+      <div className="flex items-center gap-2">
+        <input value={q} onChange={(e) => setQ(e.target.value)} autoComplete="off" autoFocus
+          placeholder="Phone number or name" data-testid="ctx-link-input" aria-label="Find the account to link"
+          className="min-w-0 flex-1 rounded-[8px] border px-2 py-[6px] text-[12px]" style={{ borderColor: LINE, color: INK }} />
+        <button type="button" onClick={() => { setOpenBox(false); setQ(""); setRows(null); }} className="text-[11px] font-[720]" style={{ color: MUTED }}>Cancel</button>
+      </div>
+      {note && <p className="mt-1.5 text-[11px]" style={{ color: MUTED }}>{note}</p>}
+      {rows && rows.length === 0 && !note && <p className="mt-1.5 text-[11.5px]" style={{ color: MUTED }}>No account matched that.</p>}
+      {rows && rows.length > 0 && (
+        <div className="mt-1.5">
+          {rows.map((r) => (
+            <div key={r.id} className="flex items-center gap-2 border-t py-[6px] first:border-t-0" style={{ borderColor: "#eff3f1" }} data-testid={`ctx-link-row-${r.id}`}>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[12px] font-[650]" style={{ color: INK }}>{r.name}</span>
+                <span className="block truncate text-[10.5px] font-semibold" style={{ color: MUTED }}>
+                  {[r.city, r.phone_last4 ? `phone ending ${r.phone_last4}` : null, r.is_member ? "member" : null, monthYear(r.joined) ? `joined ${monthYear(r.joined)}` : null].filter(Boolean).join(" · ")}
+                </span>
+              </span>
+              <button type="button" disabled={busy} onClick={() => void link(r)} data-testid={`ctx-link-pick-${r.id}`}
+                className="flex-none rounded-full px-2.5 py-[3px] text-[11px] font-bold disabled:opacity-40" style={{ background: INK, color: "#fff" }}>
+                Link
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      {msg && <p className="mt-1 text-[11px] font-semibold" style={{ color: "#a83b1c" }}>{msg}</p>}
     </div>
   );
 }

@@ -10,7 +10,8 @@
 //      a thread, do NOT 4xx (Telnyx would retry indefinitely).
 //   4. Match mdapi_users by phone_number: try E.164 first, fall back
 //      to bare 10-digit national (mdapi_users.phone_number is a mix
-//      of both shapes). Tiebreak by oldest created_at. If >1
+//      of both shapes). Tiebreak by NEWEST created_at (the code below;
+//      this line said "oldest" until 2026-10-21 and was wrong). If >1
 //      candidate, set match_ambiguous=true on the thread so the UI
 //      can flag it.
 //   5. Upsert crm_threads keyed on phone_number. Insert crm_messages
@@ -130,14 +131,15 @@ export async function POST(req: Request) {
   // Two candidate keys: E.164 ("+15125550123") and bare national
   // ("5125550123"). Order by created_at DESC — newest signup wins.
   //
-  // MatchDay enforces "one active account per phone number" at
-  // signup, so duplicate rows with the same phone are historical
-  // artifacts (abandoned re-registrations, legacy data) rather than
-  // parallel active accounts. The most recently created row is
-  // always the right active account to attach the conversation to.
-  // match_ambiguous still flips to true when duplicates exist — it
-  // now means "this phone has historical accounts on file" rather
-  // than "we don't know which player this is."
+  // NEWEST WINS IS A GUESS, NOT A FACT (measured 2026-10-21). This comment used to say duplicates
+  // are "historical artifacts" and the newest row is "always the right active account". On the 20
+  // phones then on two accounts, the account that booked most recently was the newest in 12 and the
+  // OLDEST in 8, and the two accounts had different first names in 11: family phones, two live
+  // people. Newest-wins stays because it is the better of the two tiebreaks and changing it would
+  // move 18 existing links. What makes it safe is that a shared phone is not trusted: Claude drafts
+  // ask for the account's phone number until a person confirms the account with "Link to account"
+  // (crm_threads.account_confirmed_at, migration 0228). match_ambiguous means "we don't know which
+  // player this is" until then.
   const candidates: { id: number }[] = [];
   const national = toNationalDigits(phone);
 

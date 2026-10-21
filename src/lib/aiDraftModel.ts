@@ -88,6 +88,50 @@ export function scrubPii(text: string): string {
     .replace(PHONE_RX, (m) => (m.replace(/\D/g, "").length >= 7 ? "[phone]" : m));
 }
 
+// ── a phone number the player typed ────────────────────────────────────────────────────────────
+// DIGITS ONLY. (512) 555-0100, 512-555-0100, 512.555.0100 and +15125550100 are the same number:
+// strip everything that is not a digit, then a US number is its last 10 digits (an 11-digit
+// number must start with the country code 1). Anything else is not a number we can match.
+export function phoneDigits10(s: string): string | null {
+  const d = s.replace(/\D/g, "");
+  if (d.length === 10) return d;
+  if (d.length === 11 && d.startsWith("1")) return d.slice(1);
+  return null;
+}
+
+export function extractPhoneNumbers(text: string): string[] {
+  const out = new Set<string>();
+  for (const m of text.match(PHONE_RX) ?? []) {
+    const d = phoneDigits10(m);
+    if (d) out.add(d);
+  }
+  return [...out];
+}
+
+// The two shapes mdapi_users stores a phone in — the same two the webhooks match on.
+export const phoneShapes = (digits10: string) => [`+1${digits10}`, digits10];
+
+export type LinkSuggestion =
+  | { kind: "one"; player_id: number; first_name: string | null; last4: string }
+  | { kind: "many"; count: number; last4: string }
+  | { kind: "none"; last4: string };
+
+// One account → suggest it. Several → say so and suggest nothing. None → say so. NEVER links: the
+// card shows the suggestion and a person presses Link.
+export function decideLinkSuggestion(digits10: string, accounts: readonly { id: number; first_name: string | null }[]): LinkSuggestion {
+  const last4 = digits10.slice(-4);
+  const unique = [...new Map(accounts.map((a) => [a.id, a])).values()];
+  if (unique.length === 1) return { kind: "one", player_id: unique[0].id, first_name: unique[0].first_name?.trim() || null, last4 };
+  if (unique.length > 1) return { kind: "many", count: unique.length, last4 };
+  return { kind: "none", last4 };
+}
+
+export function linkSuggestionText(s: LinkSuggestion): string {
+  if (s.kind === "one") return `Matches ${s.first_name ?? "an account"} (number ending ${s.last4}), link?`;
+  if (s.kind === "many") return `The number ending ${s.last4} is on ${s.count} accounts, so there's no single match to suggest.`;
+  return `No account found for the number ending ${s.last4}.`;
+}
+
 // The minimized player context. Built ONLY from these fields — there is no spread of a profile or
 // a database row anywhere on this path, so a field that is not named here cannot reach the API.
 // KEPT OUT, by construction: last name, email, phone, card brand/last4, every Stripe and
@@ -105,6 +149,10 @@ export type DraftMatchIn = {
 export type DraftContextIn = {
   linked: boolean;
   ambiguous: boolean;
+  /** A staff member confirmed this thread's account (crm_threads.account_confirmed_at). */
+  confirmed?: boolean;
+  /** How many accounts carry this phone, when known. */
+  accountCount?: number | null;
   firstName: string | null;
   city: string | null;
   isMember: boolean | null;
@@ -136,14 +184,38 @@ const hoursBefore = (kickoffUtc: string | null, at: string | null) => {
   return Number.isFinite(k) && Number.isFinite(c) ? Math.round(((k - c) / 3600e3) * 10) / 10 : null;
 };
 
+// IS THE ACCOUNT KNOWN? Unlinked: no. Linked but the phone is on several accounts and nobody has
+// confirmed which: no, the newest account won a tiebreak and may not be who is writing. Otherwise
+// yes. An unconfirmed thread gets NO account facts: the draft asks for the account's phone number.
+export const accountConfirmed = (c: Pick<DraftContextIn, "linked" | "ambiguous" | "confirmed">) =>
+  c.linked && (!c.ambiguous || c.confirmed === true);
+
+export function unconfirmedReason(c: Pick<DraftContextIn, "linked" | "accountCount">): string {
+  if (!c.linked) return "No account found for this number.";
+  return c.accountCount != null && c.accountCount > 1 ? `Number is on ${c.accountCount} accounts.` : "Number is on more than one account.";
+}
+
 export function buildDraftContext(c: DraftContextIn) {
+  if (!accountConfirmed(c)) {
+    // Built from nothing but the two flags: a field not named here cannot leave for the API.
+    return {
+      account: c.linked ? "unconfirmed: this phone is on more than one account and staff have not confirmed which" : "unconfirmed: no account matches this phone",
+      account_confirmed: false,
+      ask_for_account_phone: true,
+      first_name: null, city: null, is_member: null, membership: null, credit_balance: null,
+      matches_played: null, first_time_player: false, courtesy_credit_eligible: false, strikes: null,
+      recent_matches: [] as never[],
+    };
+  }
   const member = c.isMember === true || (c.membership != null && /active|added_from_admin/i.test(c.membership.status ?? "") && !c.membership.canceledAt);
   // FIRST-TIME PLAYER (rule 5): has never played a match with us. A booking they cancelled is not
   // "played", so a late cancel of their first-ever booking still counts as first time. Unknown
   // (no linked account, or the count failed) is NOT first time — no courtesy on a guess.
   const firstTime = c.linked && c.matchesPlayed === 0;
   return {
-    account: !c.linked ? "unlinked: no account matches this phone" : c.ambiguous ? "ambiguous: this phone is on more than one account, it may not be who is writing" : "linked",
+    account: c.ambiguous ? "confirmed by staff" : "linked",
+    account_confirmed: true,
+    ask_for_account_phone: false,
     first_name: c.firstName,
     city: c.city,
     is_member: c.linked ? member : null,
@@ -187,6 +259,7 @@ How to write the reply:
 - Answer what they actually asked, using the facts in PLAYER CONTEXT. Never invent an amount, date, code, match or policy. If you need something you don't have, ask the player for it or say the team will check.
 - You cannot take any action. Never say a credit, refund, code, strike removal, move, hold or cancellation is done. Say "I'll" or "let me" only for an action staff will take, and name that action in staff_notes.
 - Only offer a courtesy credit when PLAYER CONTEXT says courtesy_credit_eligible is true, and set offers_courtesy_credit to true when you do.
+- If PLAYER CONTEXT says account_confirmed is false, we don't know which account is writing. Ask for the phone number on their MatchDay account, friendly and short, and state no account facts at all (no credits, bookings, membership, strikes or matches). If the player has just sent a phone number (it shows as [phone]), thank them and say you're checking.
 - If the conversation is not something a reply can handle (a safety problem, a legal threat, a refund demand after a credit), write a short kind holding reply and set the flag.
 
 Output fields:

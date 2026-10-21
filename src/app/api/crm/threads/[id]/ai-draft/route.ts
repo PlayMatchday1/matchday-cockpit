@@ -22,7 +22,8 @@ import { loadMirrorHistory } from "@/lib/mirrorHistory";
 import { cityNameFor } from "@/lib/cityScope";
 import { FULL_EDITOR_ENV } from "@/lib/matchEnv";
 import { loadPlaybook } from "@/lib/aiDraftPlaybook";
-import { assertAnthropicHost, ANTHROPIC_HOST, type DraftContextIn, type DraftMsg } from "@/lib/aiDraftModel";
+import { assertAnthropicHost, phoneShapes, ANTHROPIC_HOST, type DraftContextIn, type DraftMsg } from "@/lib/aiDraftModel";
+import { toNationalDigits } from "@/lib/phone";
 import { runDraft, type StoredDraft } from "@/lib/aiDraftRun";
 
 export const runtime = "nodejs";
@@ -40,6 +41,7 @@ export async function POST(req: Request, ctx: RouteCtx) {
   if (!threadId) return Response.json({ error: "id required" }, { status: 400 });
   const body = (await req.json().catch(() => ({}))) as { regenerate?: unknown };
   const apiKey = process.env.ANTHROPIC_API_KEY?.trim();
+  let threadPhone: string | null = null;
 
   const result = await runDraft({
     threadId,
@@ -49,9 +51,27 @@ export async function POST(req: Request, ctx: RouteCtx) {
     hasKey: !!apiKey,
 
     async loadThread() {
-      const r = await supabase.from("crm_threads").select("channel, player_id, match_ambiguous").eq("id", threadId).maybeSingle();
+      // account_confirmed_at: migration 0228. Applied before this code shipped.
+      const r = await supabase.from("crm_threads").select("channel, phone_number, player_id, match_ambiguous, account_confirmed_at").eq("id", threadId).maybeSingle();
       if (r.error || !r.data) return null;
-      return { channel: (r.data.channel as string) ?? "sms", player_id: (r.data.player_id as number | null) ?? null, match_ambiguous: r.data.match_ambiguous === true };
+      threadPhone = (r.data.phone_number as string | null) ?? null;
+      return {
+        channel: (r.data.channel as string) ?? "sms", player_id: (r.data.player_id as number | null) ?? null,
+        match_ambiguous: r.data.match_ambiguous === true, account_confirmed: r.data.account_confirmed_at != null,
+      };
+    },
+
+    async countAccounts() {
+      if (!threadPhone) return null;
+      const national = toNationalDigits(threadPhone);
+      const r = await supabase.from("mdapi_users").select("id", { count: "exact", head: true }).in("phone_number", [threadPhone, ...(national ? [national] : [])]);
+      return r.error ? null : r.count ?? null;
+    },
+
+    async findAccountsByPhone(digits10) {
+      const r = await supabase.from("mdapi_users").select("id, first_name").in("phone_number", phoneShapes(digits10)).limit(10);
+      if (r.error) throw new Error(r.error.message);
+      return (r.data ?? []) as { id: number; first_name: string | null }[];
     },
 
     async loadMessages() {

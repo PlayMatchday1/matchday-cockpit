@@ -151,10 +151,13 @@ Every webhook hit and every send is logged to console (per spec). Grep
 
 - **No write to `mdapi_users`.** We never normalize that table; both
   E.164 and 10-digit shapes coexist there. The matcher tries E.164
-  first, then 10-digit national, oldest-`created_at` wins on ties.
+  first, then 10-digit national, and the NEWEST `created_at` wins on ties. (This line said oldest
+  until 2026-10-21; the code has always taken the newest. See the facts doc, "Player Chats:
+  unmatched phone numbers".)
 - **`match_ambiguous` is sticky.** Once true, it stays true even if
-  later messages from the same number only match one user. There's no
-  UI to clear it in Phase 0.
+  later messages from the same number only match one user. Since 2026-10-21 staff confirm the
+  account with "Link to account" in the context pane, which sets `account_confirmed_at` instead of
+  clearing the flag (the webhook would set it again on the next message).
 - **No assignee / read state.** Unread dots are localStorage-only and
   per-browser.
 - **No phone-search-to-link UI** for unknown numbers — placeholder

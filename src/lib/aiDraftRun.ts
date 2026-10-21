@@ -13,7 +13,8 @@
 import {
   buildDraftContext, buildDraftRequest, capReached, draftCostUsd, draftEligibility, guardDraft,
   monthStartUtcIso, parseDraftOutput, MONTHLY_CAP_USD, SKIP_REASON_TEXT, AI_DRAFT_MODEL,
-  type DraftContextIn, type DraftMsg, type DraftRequest, type SkipReason,
+  accountConfirmed, unconfirmedReason, extractPhoneNumbers, decideLinkSuggestion,
+  type DraftContextIn, type DraftMsg, type DraftRequest, type SkipReason, type LinkSuggestion,
 } from "@/lib/aiDraftModel";
 
 export type StoredDraft = {
@@ -55,12 +56,17 @@ export type DraftDeps = {
   regenerate: boolean;
   now: () => number;
   hasKey: boolean;
-  loadThread: () => Promise<{ channel: string; player_id: number | null; match_ambiguous: boolean } | null>;
+  loadThread: () => Promise<{ channel: string; player_id: number | null; match_ambiguous: boolean; account_confirmed: boolean } | null>;
   loadMessages: () => Promise<DraftMsg[]>;
   latestDraftFor: (basedOnMessageId: string) => Promise<StoredDraft | null>;
   supersedePending: () => Promise<void>;
   /** Sum of cost_usd since the given instant. MUST throw on a read error — the cap fails closed. */
   monthSpendUsd: (sinceIso: string) => Promise<number>;
+  /** How many accounts carry this thread's phone. Only asked for an unconfirmed linked thread. */
+  countAccounts: () => Promise<number | null>;
+  /** Accounts whose phone is exactly this 10-digit number, in either stored shape. */
+  findAccountsByPhone: (digits10: string) => Promise<{ id: number; first_name: string | null }[]>;
+  /** Called ONLY for a confirmed thread: an unconfirmed one sends no account data at all. */
   loadContext: (thread: { player_id: number | null; match_ambiguous: boolean }) => Promise<{ ctx: DraftContextIn; keys: string[] } | { forbidden: true }>;
   playbook: () => { text: string; version: string };
   callModel: (req: DraftRequest) => Promise<ModelReply>;
@@ -69,15 +75,18 @@ export type DraftDeps = {
 
 export type DraftView = { id: string; text: string; staff_notes: string; category: string | null; flags: string[]; created_at: string };
 
+// A suggestion rides on every result after eligibility, so the card can offer "Link" even when the
+// draft itself is reused, failed or paused by the cap.
+type WithLink = { link_suggestion?: LinkSuggestion | null };
 export type DraftResult =
   | { status: "skipped"; reason: SkipReason; message: string }
-  | { status: "not_configured"; message: string }
-  | { status: "cap_reached"; spent_usd: number; message: string }
+  | ({ status: "not_configured"; message: string } & WithLink)
+  | ({ status: "cap_reached"; spent_usd: number; message: string } & WithLink)
   | { status: "forbidden"; message: string }
   | { status: "not_found"; message: string }
-  | { status: "discarded"; draft_id: string; message: string }
-  | { status: "failed"; draft_id: string | null; message: string }
-  | { status: "ok"; reused: boolean; draft: DraftView };
+  | ({ status: "discarded"; draft_id: string; message: string } & WithLink)
+  | ({ status: "failed"; draft_id: string | null; message: string } & WithLink)
+  | ({ status: "ok"; reused: boolean; draft: DraftView } & WithLink);
 
 const flagsFromNotes = (notes: string | null) => {
   const m = notes?.match(/^\[flags: ([^\]]*)\]/);
@@ -96,31 +105,54 @@ export async function runDraft(deps: DraftDeps): Promise<DraftResult> {
   const elig = draftEligibility(msgs, thread.channel, deps.now());
   if (!elig.ok) return { status: "skipped", reason: elig.reason, message: SKIP_REASON_TEXT[elig.reason] };
 
+  // UNCONFIRMED ACCOUNT. No account data is loaded, and if the player has just typed a phone
+  // number, look it up (digits only) and SUGGEST the match. Nothing here links anything.
+  const flags = { linked: thread.player_id != null, ambiguous: thread.match_ambiguous, confirmed: thread.account_confirmed };
+  const confirmed = accountConfirmed(flags);
+  let link_suggestion: LinkSuggestion | null = null;
+  if (!confirmed) {
+    const typed = elig.pending.flatMap((m) => extractPhoneNumbers(m.body ?? ""));
+    if (typed.length > 0) link_suggestion = decideLinkSuggestion(typed[typed.length - 1], await deps.findAccountsByPhone(typed[typed.length - 1]));
+  }
+  const withLink = <T extends DraftResult>(x: T): T => (link_suggestion ? { ...x, link_suggestion } : x);
+
   // A draft already exists for this exact player message: show it, don't pay for another. A
   // discarded or failed one stays put until someone presses Regenerate.
   if (!deps.regenerate) {
     const prior = await deps.latestDraftFor(elig.basedOn.id);
-    if (prior?.outcome === "pending") return { status: "ok", reused: true, draft: viewOf(prior) };
-    if (prior?.outcome === "discarded") return { status: "discarded", draft_id: prior.id, message: "Draft discarded." };
-    if (prior?.outcome === "failed") return { status: "failed", draft_id: prior.id, message: prior.error ?? "The last draft failed." };
+    if (prior?.outcome === "pending") return withLink({ status: "ok", reused: true, draft: viewOf(prior) });
+    if (prior?.outcome === "discarded") return withLink({ status: "discarded", draft_id: prior.id, message: "Draft discarded." });
+    if (prior?.outcome === "failed") return withLink({ status: "failed", draft_id: prior.id, message: prior.error ?? "The last draft failed." });
   }
 
-  if (!deps.hasKey) return { status: "not_configured", message: "Drafts are off: ANTHROPIC_API_KEY isn't set on the server." };
+  if (!deps.hasKey) return withLink({ status: "not_configured", message: "Drafts are off: ANTHROPIC_API_KEY isn't set on the server." });
 
   // THE $20 CAP, checked before any model call. A failed spend read stops drafting too.
   let spent: number;
   try {
     spent = await deps.monthSpendUsd(monthStartUtcIso(deps.now()));
   } catch {
-    return { status: "cap_reached", spent_usd: NaN, message: "Drafting is paused: this month's draft spend couldn't be checked." };
+    return withLink({ status: "cap_reached", spent_usd: NaN, message: "Drafting is paused: this month's draft spend couldn't be checked." });
   }
   if (capReached(spent)) {
-    return { status: "cap_reached", spent_usd: spent, message: `Drafting is paused for the rest of the month: the $${MONTHLY_CAP_USD} draft budget is used up ($${spent.toFixed(2)} spent).` };
+    return withLink({ status: "cap_reached", spent_usd: spent, message: `Drafting is paused for the rest of the month: the $${MONTHLY_CAP_USD} draft budget is used up ($${spent.toFixed(2)} spent).` });
   }
 
-  const loaded = await deps.loadContext(thread);
-  if ("forbidden" in loaded) return { status: "forbidden", message: "This player is outside your city." };
-  const context = buildDraftContext(loaded.ctx);
+  let ctxIn: DraftContextIn;
+  let keys: string[];
+  let reason: string | null = null;
+  if (confirmed) {
+    const loaded = await deps.loadContext(thread);
+    if ("forbidden" in loaded) return { status: "forbidden", message: "This player is outside your city." };
+    ctxIn = { ...loaded.ctx, confirmed: thread.account_confirmed };
+    keys = loaded.keys;
+  } else {
+    const accountCount = flags.linked ? await deps.countAccounts() : 0;
+    ctxIn = { ...flags, accountCount, firstName: null, city: null, isMember: null, membership: null, creditsCents: null, matchesPlayed: null, strikes: null, matches: [] };
+    keys = ["account"];
+    reason = unconfirmedReason(ctxIn);
+  }
+  const context = buildDraftContext(ctxIn);
   const playbook = deps.playbook();
   const req = buildDraftRequest({ playbook: playbook.text, context, msgs, now: deps.now() });
 
@@ -128,7 +160,7 @@ export async function runDraft(deps: DraftDeps): Promise<DraftResult> {
 
   const base = {
     thread_id: deps.threadId, based_on_message_id: elig.basedOn.id, requested_by_user_id: deps.requestedBy,
-    model: AI_DRAFT_MODEL, playbook_version: playbook.version, context_keys: loaded.keys,
+    model: AI_DRAFT_MODEL, playbook_version: playbook.version, context_keys: keys,
   };
   const fail = async (error: string, reply: ModelReply | null): Promise<DraftResult> => {
     const row = await deps.insertDraft({
@@ -136,7 +168,7 @@ export async function runDraft(deps: DraftDeps): Promise<DraftResult> {
       input_tokens: reply?.usage.input_tokens ?? null, output_tokens: reply?.usage.output_tokens ?? null,
       cost_usd: reply ? draftCostUsd(reply.usage) : 0, error, outcome: "failed",
     });
-    return { status: "failed", draft_id: row.id, message: error };
+    return withLink({ status: "failed", draft_id: row.id, message: error });
   };
 
   let reply: ModelReply;
@@ -154,14 +186,17 @@ export async function runDraft(deps: DraftDeps): Promise<DraftResult> {
 
   const out = guarded.output;
   // Flags ride at the front of staff_notes so the table needs no extra column for them.
-  const notes = `${out.flags.length ? `[flags: ${out.flags.join(", ")}] ` : ""}${out.staff_notes}`.trim();
+  // The reason an account is unconfirmed is stated in code, not left to the model.
+  const modelNotes = reason && out.staff_notes.startsWith(reason) ? out.staff_notes.slice(reason.length).trim() : out.staff_notes;
+  const staffNotes = [reason, modelNotes].filter(Boolean).join(" ");
+  const notes = `${out.flags.length ? `[flags: ${out.flags.join(", ")}] ` : ""}${staffNotes}`.trim();
   const row = await deps.insertDraft({
     ...base, category: out.category, draft_text: out.reply, staff_notes: notes || null,
     input_tokens: reply.usage.input_tokens ?? null, output_tokens: reply.usage.output_tokens ?? null,
     cost_usd: draftCostUsd(reply.usage), error: null, outcome: "pending",
   });
-  return {
+  return withLink({
     status: "ok", reused: false,
-    draft: { id: row.id, text: out.reply, staff_notes: out.staff_notes, category: out.category, flags: out.flags, created_at: row.created_at },
-  };
+    draft: { id: row.id, text: out.reply, staff_notes: staffNotes, category: out.category, flags: out.flags, created_at: row.created_at },
+  });
 }

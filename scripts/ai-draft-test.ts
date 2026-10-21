@@ -23,6 +23,8 @@ import { runDraft, type DraftDeps, type NewDraftRow, type StoredDraft } from "..
 import { draftOutcomePatch, discardPatch } from "../src/lib/aiDraftOutcome";
 import { playbookForModel } from "../src/lib/aiDraftPlaybook";
 import { crmSendLogBody, logCrmSend } from "../src/lib/crmSendLog";
+import { linkThread, type LinkIO } from "../src/lib/crmThreadLink";
+import { phoneDigits10, extractPhoneNumbers, decideLinkSuggestion, linkSuggestionText, phoneShapes } from "../src/lib/aiDraftModel";
 import type { LogStore } from "../src/lib/changeLog";
 
 let pass = 0, fail = 0;
@@ -143,7 +145,9 @@ function fake(over: Partial<DraftDeps> & { msgs?: DraftMsg[]; ctx?: DraftContext
   const calls = { model: [] as DraftRequest[], inserts: [] as NewDraftRow[], superseded: 0 };
   const deps: DraftDeps = {
     threadId: "t1", requestedBy: "u1", regenerate: false, now: () => NOW, hasKey: true,
-    loadThread: async () => ({ channel: "whatsapp", player_id: 42, match_ambiguous: false }),
+    loadThread: async () => ({ channel: "whatsapp", player_id: 42, match_ambiguous: false, account_confirmed: false }),
+    countAccounts: async () => 1,
+    findAccountsByPhone: async () => [],
     loadMessages: async () => over.msgs ?? [msg("inbound", "I cancelled 3 hours before, can I get a credit?", 1 * H)],
     latestDraftFor: async () => over.prior ?? null,
     supersedePending: async () => { calls.superseded++; },
@@ -191,7 +195,7 @@ console.log("\nORCHESTRATION (no draft, reuse, guards):");
     ["a greeting", [msg("outbound", "Done", 3 * H), msg("inbound", "hello", 1 * H)], "whatsapp"],
     ["a closed WhatsApp window", [msg("inbound", "where's my credit", 30 * H)], "whatsapp"],
   ] as const) {
-    const f = fake({ msgs: [...msgs], loadThread: async () => ({ channel, player_id: 42, match_ambiguous: false }) });
+    const f = fake({ msgs: [...msgs], loadThread: async () => ({ channel, player_id: 42, match_ambiguous: false, account_confirmed: false }) });
     const r = await runDraft(f.deps);
     ok(`${label} → skipped, no model call, nothing stored`, r.status === "skipped" && f.calls.model.length === 0 && f.calls.inserts.length === 0);
   }
@@ -272,6 +276,117 @@ console.log("\nCHANGE LOG FOR EVERY SEND PATH:");
     { thread_id: "t1", recipient_last4: "0123", channel: "whatsapp", kind: "media", message_length: 31, media_kind: "image" });
 }
 
+// ── unmatched phone numbers (2026-10-21) ─────────────────────────────────────────────────────
+console.log("\nUNMATCHED PHONE NUMBERS:");
+{
+  // Digits only: every common format is the same number.
+  for (const f of ["(512) 555-0100", "512-555-0100", "+15125550100", "512.555.0100", "1 512 555 0100", "5125550100", "+1 (512) 555 0100"]) {
+    eq(`"${f}" → 5125550100`, phoneDigits10(f), "5125550100");
+  }
+  eq("a 7-digit local number is not matchable", phoneDigits10("555-0100"), null);
+  eq("an 11-digit number not starting with 1 is not a US number", phoneDigits10("25125550100"), null);
+  eq("a number inside a sentence is found", extractPhoneNumbers("hey it's (512) 555-0100, thanks!"), ["5125550100"]);
+  eq("the two stored shapes searched for it", phoneShapes("5125550100"), ["+15125550100", "5125550100"]);
+  eq("one account → suggest it", decideLinkSuggestion("5125550100", [{ id: 7, first_name: "Sam " }]), { kind: "one", player_id: 7, first_name: "Sam", last4: "0100" });
+  eq("the same account found under both shapes is still ONE account", decideLinkSuggestion("5125550100", [{ id: 7, first_name: "Sam" }, { id: 7, first_name: "Sam" }]).kind, "one");
+  const many = decideLinkSuggestion("5125550100", [{ id: 7, first_name: "Sam" }, { id: 9, first_name: "Ana" }]);
+  eq("a number on two accounts → suggests nothing", many, { kind: "many", count: 2, last4: "0100" });
+  ok("  and says so", /on 2 accounts, so there's no single match/.test(linkSuggestionText(many)));
+  eq("no account → says so", linkSuggestionText(decideLinkSuggestion("5125550100", [])), "No account found for the number ending 0100.");
+  eq("the suggestion reads \"Matches Sam, link?\"", linkSuggestionText({ kind: "one", player_id: 7, first_name: "Sam", last4: "0100" }), "Matches Sam (number ending 0100), link?");
+
+  // An UNLINKED thread: the draft asks for the number and carries no account facts.
+  let profileReads = 0;
+  const factsCtx = { ...lateCancel(3), creditsCents: 1624, membership: { status: "ACTIVE", since: null, renews: null, canceledAt: null, price: 6650 } };
+  const unlinkedThread = async () => ({ channel: "whatsapp", player_id: null, match_ambiguous: false, account_confirmed: false });
+  const askText = JSON.stringify({ reply: "Happy to help! What's the phone number on your MatchDay account? You can find it in your profile in the app.", staff_notes: "", category: "account", flags: [], offers_courtesy_credit: false });
+  const un = fake({ loadThread: unlinkedThread, modelText: askText, msgs: [msg("inbound", "where's my credit from last night?", 1 * H)], loadContext: async () => { profileReads++; return { ctx: factsCtx, keys: ["x"] }; } });
+  const ru = await runDraft(un.deps);
+  const sent = un.calls.model[0]?.messages[0].content ?? "";
+  ok("unlinked thread → a draft is made", ru.status === "ok" && un.calls.model.length === 1);
+  eq("  no account data is loaded at all", profileReads, 0);
+  ok("  the model is told the account is unconfirmed and to ask", sent.includes('"account_confirmed": false') && sent.includes('"ask_for_account_phone": true'));
+  ok("POSITIVE CONTROL: the facts fixture does carry a name, credits and a membership", factsCtx.firstName === "Jordan" && factsCtx.creditsCents === 1624);
+  ok("  NO account facts in the request: no name, credits, membership or matches", !/Jordan|\$16\.24|\$66\.50|Westlake|"is_member": true/.test(sent) && sent.includes('"credit_balance": null') && sent.includes('"recent_matches": []'));
+  ok("  the draft asks for the account's phone number", ru.status === "ok" && /phone number on your MatchDay account/.test(ru.draft.text));
+  ok("  staff notes say why: \"No account found for this number.\"", ru.status === "ok" && ru.draft.staff_notes.startsWith("No account found for this number."));
+  ok("  and the stored notes say it too", (un.calls.inserts[0].staff_notes ?? "").includes("No account found for this number."));
+  const dup = fake({ loadThread: unlinkedThread, modelText: JSON.stringify({ reply: "What's the phone number on your MatchDay account?", staff_notes: "No account found for this number. Asked for it.", category: "account", flags: [], offers_courtesy_credit: false }) });
+  const rd2 = await runDraft(dup.deps);
+  eq("  the reason appears once even when the model also wrote it", rd2.status === "ok" && rd2.draft.staff_notes, "No account found for this number. Asked for it.");
+  eq("  an unconfirmed thread is never courtesy-eligible", sent.includes('"courtesy_credit_eligible": false'), true);
+
+  // AMBIGUOUS, not confirmed: same, with the account count.
+  profileReads = 0;
+  const amb = fake({ loadThread: async () => ({ channel: "whatsapp", player_id: 42, match_ambiguous: true, account_confirmed: false }), countAccounts: async () => 2, modelText: askText, loadContext: async () => { profileReads++; return { ctx: factsCtx, keys: [] }; } });
+  const ra = await runDraft(amb.deps);
+  ok("phone on 2 accounts, unconfirmed → notes say \"Number is on 2 accounts.\"", ra.status === "ok" && ra.draft.staff_notes.startsWith("Number is on 2 accounts."));
+  ok("  and the newest account's data is NOT loaded or sent", profileReads === 0 && !/Jordan/.test(amb.calls.model[0].messages[0].content));
+
+  // LINKING makes the next draft include that player's info.
+  let linkedNow = false; profileReads = 0;
+  const flip = fake({
+    loadThread: async () => (linkedNow ? { channel: "whatsapp", player_id: 42, match_ambiguous: true, account_confirmed: true } : { channel: "whatsapp", player_id: null, match_ambiguous: false, account_confirmed: false }),
+    modelText: askText, loadContext: async () => { profileReads++; return { ctx: factsCtx, keys: ["first_name", "credits"] }; },
+  });
+  await runDraft(flip.deps);
+  linkedNow = true;
+  await runDraft({ ...flip.deps, regenerate: true });
+  ok("before linking: no name in the request", !flip.calls.model[0].messages[0].content.includes("Jordan"));
+  ok("after linking (confirmed by staff): the next draft's request carries the player's info", profileReads === 1 && flip.calls.model[1].messages[0].content.includes('"first_name": "Jordan"') && flip.calls.model[1].messages[0].content.includes('"credit_balance": "$16.24"'));
+  ok("  even though the phone is still flagged on two accounts (confirmation wins)", flip.calls.model[1].messages[0].content.includes('"account_confirmed": true'));
+
+  // A REPLY WITH A NUMBER suggests the single match, in any format, and never links.
+  for (const typed of ["it's (512) 555-0100", "512-555-0100", "+15125550100"]) {
+    const asked: string[] = [];
+    const s1 = fake({ loadThread: unlinkedThread, modelText: askText, msgs: [msg("outbound", "What's the phone number on your account?", 2 * H), msg("inbound", typed, 1 * H)],
+      findAccountsByPhone: async (d) => { asked.push(d); return [{ id: 7, first_name: "Sam" }]; } });
+    const r = await runDraft(s1.deps);
+    ok(`reply "${typed}" → suggests Sam (player 7), looked up by digits 5125550100`, "link_suggestion" in r && r.link_suggestion?.kind === "one" && (r.link_suggestion as { player_id: number }).player_id === 7 && asked[0] === "5125550100");
+  }
+  const s2 = fake({ loadThread: unlinkedThread, modelText: askText, msgs: [msg("inbound", "512 555 0100", 1 * H)], findAccountsByPhone: async () => [{ id: 7, first_name: "Sam" }, { id: 9, first_name: "Ana" }] });
+  const r2 = await runDraft(s2.deps);
+  ok("a number on two accounts suggests nothing and says so", "link_suggestion" in r2 && r2.link_suggestion?.kind === "many");
+  const s3 = fake({ msgs: [msg("inbound", "my number is 512 555 0100", 1 * H)], findAccountsByPhone: async () => { throw new Error("should not be asked"); } });
+  ok("a CONFIRMED thread never looks a number up", (await runDraft(s3.deps)).status === "ok");
+
+  // THE LINK itself: who, when, before and after, read back.
+  const logRows: Record<string, unknown>[] = [];
+  const store: LogStore = { insert: async (r) => { logRows.push(r as unknown as Record<string, unknown>); }, list: async () => [], resolve: async () => {} };
+  const mkIO = (start: number | null, sticks = true): LinkIO & { state: { player_id: number | null; account_confirmed_at: string | null; account_confirmed_by_user_id: string | null }; superseded: number } => {
+    const io = {
+      state: { player_id: start, account_confirmed_at: null as string | null, account_confirmed_by_user_id: null as string | null },
+      superseded: 0,
+      readThread: async () => ({ ...io.state }),
+      readTarget: async (id: number) => (id === 404 ? null : { id, first_name: id === 7 ? "Sam" : "Ana", preferable_city_normalized: id === 8 ? "WAW" : "ATX" }),
+      writeThread: async (p: { player_id: number; account_confirmed_at: string; account_confirmed_by_user_id: string | null }) => { if (sticks) io.state = { ...p }; },
+      supersedePendingDrafts: async () => { io.superseded++; },
+      now: () => "2026-10-21T15:00:00.000Z",
+    };
+    return io;
+  };
+  const actor = { appUserId: "user-ryan", email: "staff@example.com" };
+  const io1 = mkIO(5);
+  const lr = await linkThread({ threadId: "t1", playerId: 7, actor, confinedCity: null }, io1, store);
+  ok("relink 5 → 7 lands (read-back shows player 7, confirmed)", lr.ok && lr.outcome === "landed" && io1.state.player_id === 7 && io1.state.account_confirmed_at != null);
+  eq("  it is a CHANGE", lr.ok && lr.action, "change");
+  eq("  the change log row says who, when, from and to", [logRows[0].actorName, logRows[0].actorEmail, logRows[0].at, (logRows[0].body as Record<string, unknown>).from_player_id, (logRows[0].body as Record<string, unknown>).to_player_id, logRows[0].source],
+    ["staff@example.com", "staff@example.com", "2026-10-21T15:00:00.000Z", 5, 7, "crm-link"]);
+  eq("  and records the confirming user on the thread", io1.state.account_confirmed_by_user_id, "user-ryan");
+  eq("  the pending draft is superseded so the next one uses the new account", io1.superseded, 1);
+  const io2 = mkIO(null);
+  const l2 = await linkThread({ threadId: "t2", playerId: 7, actor, confinedCity: null }, io2, store);
+  eq("an unlinked thread → action link", l2.ok && l2.action, "link");
+  const io3 = mkIO(5, false);
+  const l3 = await linkThread({ threadId: "t3", playerId: 7, actor, confinedCity: null }, io3, store);
+  ok("a write that doesn't stick is NOT landed (read-back decides)", l3.ok && l3.outcome !== "landed");
+  const io4 = mkIO(5);
+  const before = logRows.length;
+  const l4 = await linkThread({ threadId: "t4", playerId: 8, actor, confinedCity: "ATX" }, io4, store);
+  ok("a city-confined account can't link to a player in another city (no write, no log)", !l4.ok && l4.status === 403 && io4.state.player_id === 5 && logRows.length === before);
+  ok("POSITIVE CONTROL: the same confined account CAN link a player in its city", (await linkThread({ threadId: "t5", playerId: 7, actor, confinedCity: "ATX" }, mkIO(5), store)).ok);
+}
+
 // ── source pairings (a click and an HTTP route are not observable here) ──────────────────────
 console.log("\nSOURCE PAIRINGS:");
 {
@@ -291,6 +406,11 @@ console.log("\nSOURCE PAIRINGS:");
     ok(`${route}: does not call recordWrite directly (one logging shape)`, !/recordWrite\(/.test(src));
   }
   const draftRoute = strip(readFileSync("src/app/api/crm/threads/[id]/ai-draft/route.ts", "utf8"));
+  const runSrc = strip(readFileSync("src/lib/aiDraftRun.ts", "utf8"));
+  ok("POSITIVE CONTROL: the link route writes player_id", /from\("crm_threads"\)\.update\(patch\)/.test(strip(readFileSync("src/app/api/crm/threads/[id]/link/route.ts", "utf8"))));
+  ok("drafting NEVER links on its own: no crm_threads update and no link call in the draft path", !/from\("crm_threads"\)\.update|\/link\b|linkThread/.test(draftRoute + runSrc));
+  const card2 = strip(readFileSync("src/app/(internal)/match-ops/player-chats/components/AiDraftCard.tsx", "utf8"));
+  ok("the card links only from the Link button's click (one call site, inside onClick)", (card2.match(/confirmLink\(/g) ?? []).length === 1 && /onClick=\{\(\) => void confirmLink\(/.test(card2) && (card2.match(/linkThreadToPlayer\(/g) ?? []).length === 1);
   ok("the draft route never sends a message (no send helpers imported)", !/sendWhatsApp|telnyx|\/api\/crm\/send/i.test(draftRoute));
   ok("the draft route reads no Stripe and spreads no profile into the context", !/fetchPlayerPayments|\.\.\.p\b|\.\.\.raw|\.\.\.listRow/.test(draftRoute));
 }

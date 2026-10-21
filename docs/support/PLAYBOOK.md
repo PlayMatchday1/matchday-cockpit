@@ -61,6 +61,10 @@ numbers or codes appear.
     to give. Send a warm apology and help them find another match.
 13. **Age.** This is adult soccer. Players are typically **16+**, and anyone **under 18 needs a
     parent or guardian's permission.** Flag any player who says they are under 16.
+14. **Unconfirmed account.** When no account matches the phone, or the phone is on more than one
+    account and staff haven't confirmed which, the draft **asks for the phone number on their
+    MatchDay account** and states **no account facts** (no credits, bookings, membership, strikes
+    or matches) until the account is confirmed. See 2.0.
 
 ### What a draft must never do
 
@@ -82,6 +86,33 @@ Sorted by how often they came up. Each type has its frequency, example messages,
 actually answered, and a suggested standard answer. The suggested answers use `{placeholders}`
 for values the draft must fill in from player data. If the value isn't there, the draft asks
 the player or leaves a note for staff.
+
+### 2.0 Unmatched phone number
+
+The thread's phone matches no account, or it matches more than one and nobody has confirmed which.
+Of the 668 threads in the history, 104 matched no account and 25 were flagged as on more than
+one. Staff asked "what number is on your account?" again and again (players write from a new phone, a
+partner's phone, or an account that was deleted and recreated). On the 20 phones that were on two
+accounts in October 2026, the two accounts had different first names in 11, so a shared phone is
+often two different people.
+
+**What players wrote**
+- "Where's my credit from last night?" (from a number on no account)
+- "I'm writing from my wife's phone, can you check my booking?"
+- "512 555 0100" (a reply giving the account's number)
+
+**Suggested answer (asking)**
+> Happy to help! What's the phone number on your MatchDay account? You can find it in your
+> profile in the app.
+
+**Suggested answer (they just sent a number)**
+> Thanks! Give me a sec to find your account.
+
+Rule 14: no account facts until the account is confirmed, even if the conversation makes it look
+obvious. Staff notes start with the reason: "No account found for this number." or "Number is on N
+accounts." When the player sends a number that matches exactly one account, the card suggests
+"Matches {first name}, link?" and a person presses Link. Nothing links on its own. A number on
+more than one account suggests nothing and says so.
 
 ### 2.1 Membership cancel, billing and price: about 115 requests (the largest group)
 
