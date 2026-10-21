@@ -91,8 +91,19 @@ export const FINANCE_SECTIONS: RailItem[] = [
   },
   // ── SYSTEM ─────────────────────────────────────────────────────────────────────────────────
   {
+    key: "fin-staff-credits", group: "System", label: "Staff Credits", href: "/admin/finance/staff-credits",
+    desc: "Who gave which player credit, and why",
+    icon: <I><circle cx="12" cy="12" r="8.5" /><path d="M14.5 9.2c-.5-.8-1.4-1.2-2.5-1.2-1.5 0-2.5.8-2.5 1.9 0 2.6 5 1.4 5 4.1 0 1.1-1 2-2.6 2-1.1 0-2.1-.5-2.6-1.3" /><path d="M12 6.5v1.5M12 16v1.5" /></I>,
+  },
+  {
     key: "fin-change-log", group: "System", label: "Change Log", href: "/admin/finance/change-log",
     desc: "Every production write, and whether it landed",
     icon: <I><path d="M4 5h16v14H4z" /><path d="M8 9h8M8 13h6" /><circle cx="17.5" cy="16.5" r="2.2" /></I>,
   },
 ];
+
+/* ADMIN-ONLY SECTIONS (Staff Credits, 2026-10-21). Finance is open to can_access_finance; these
+ * are not. The rail hides them from non-admins, and each one's route refuses them on its own. */
+export const ADMIN_ONLY_FINANCE_KEYS = new Set(["fin-staff-credits"]);
+export const financeSectionsFor = (isAdmin: boolean): RailItem[] =>
+  isAdmin ? FINANCE_SECTIONS : FINANCE_SECTIONS.filter((i) => !ADMIN_ONLY_FINANCE_KEYS.has(i.key));

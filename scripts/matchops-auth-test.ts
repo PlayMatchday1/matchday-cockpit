@@ -256,6 +256,9 @@ is("authenticateAdmin guards the User access screen and the Fields mapping admin
     // backfill. is_admin because they read production MatchDay player records and Stripe customers
     // by email; no narrower flag means "may read Stripe customers". GET only; nothing is written.
     "admin/stripe-sub-ends/route.ts",
+    // +1 admin/staff-credits (2026-10-21) — Credits given by staff, READ-ONLY. is_admin because
+    // Ryan made it admins only: it names which staff member gave which player money, and why.
+    "admin/staff-credits/route.ts",
     "admin/users/auth-status/route.ts", "admin/users/city-manager/route.ts", "admin/users/delete/route.ts",
     "admin/users/match-permissions/route.ts", "admin/users/permissions/route.ts",
     "admin/users/resend-invite/route.ts",

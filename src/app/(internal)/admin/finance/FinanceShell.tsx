@@ -34,7 +34,7 @@ import {
   type FinancePeriod, type Grain,
 } from "@/lib/financePeriod";
 import { FinanceQuarterProvider } from "@/lib/financeQuarter";
-import { FINANCE_SECTIONS, SECTION_GRAINS } from "./financeSections";
+import { SECTION_GRAINS, financeSectionsFor } from "./financeSections";
 import { drawsOwnHeader } from "@/lib/financeChrome";
 import { useAuth } from "@/lib/useAuth";
 
@@ -59,9 +59,11 @@ export default function FinanceShell({ children }: { children: React.ReactNode }
 function FinanceShellInner({ children }: { children: React.ReactNode }) {
   const pathname = usePathname() ?? "";
   const { appUser } = useAuth();
+  const isAdmin = appUser?.is_admin === true && appUser.is_service_account !== true;
+  const sections = useMemo(() => financeSectionsFor(isAdmin), [isAdmin]);
   /* PUBLISHED TO THE SHELL'S ONE APP BAR instead of rendering a second one inside <main>.
    * See src/components/SectionNav.tsx for why the bar cannot live in here. */
-  useSectionNav({ items: FINANCE_SECTIONS, label: "Finance", showSwitch: false });
+  useSectionNav({ items: sections, label: "Finance", showSwitch: false });
   const searchParams = useSearchParams();
 
   const [collapsed, setCollapsed] = useState(false);
@@ -148,7 +150,7 @@ function FinanceShellInner({ children }: { children: React.ReactNode }) {
           height: "calc(100dvh - env(safe-area-inset-top, 0px) - var(--nav-h))",
           width: railW, transition: "width .18s ease-out",
         }}>
-        <ChatsRail collapsed={collapsed} onToggle={toggle} items={FINANCE_SECTIONS} showSwitch={false} label="Finance" />
+        <ChatsRail collapsed={collapsed} onToggle={toggle} items={sections} showSwitch={false} label="Finance" />
       </div>
       <div
         style={{ "--mo-rail-w": railW } as React.CSSProperties}
