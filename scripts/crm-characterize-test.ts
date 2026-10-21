@@ -122,7 +122,11 @@ eq("EXACTLY ONE realtime subscription across the CRM conversation code (feature 
 // METADATA ONLY. The message body is never copied into change_log (a second store of player PII
 // under different access rules). logCrmSend takes a LENGTH, not the text, so the body structurally
 // cannot reach the log.
-const SEND_SRC = noComments(readFileSync("src/app/api/crm/send/route.ts", "utf8"));
+// SELECTOR-PATH EDIT (2026-10-20): logCrmSend moved from the send route into src/lib/crmSendLog.ts
+// so send-media and send-template record through the same shape. The three assertions below read
+// that file now; their bodies are unchanged. That each route CALLS it is pinned in
+// scripts/ai-draft-test.ts ("CHANGE LOG FOR EVERY SEND PATH" + "SOURCE PAIRINGS").
+const SEND_SRC = noComments(readFileSync("src/lib/crmSendLog.ts", "utf8"));
 /recordWrite\(/.test(SEND_SRC) ? ok("send route logs via recordWrite (Resend is the same route, so also logged)") : bad("send route not recordWrite-logged");
 // change_log metadata is minimized: message_length (not the body) AND recipient LAST-4 only (not
 // the full phone — a second copy of player PII in a table with an is_admin audience). thread_id is

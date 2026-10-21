@@ -64,6 +64,7 @@ import {
 import { formatBytes, maybeCompressImage } from "@/lib/imageCompression";
 import TemplatesPicker from "./TemplatesPicker";
 import TemplateSendModal from "./TemplateSendModal";
+import AiDraftCard from "./AiDraftCard";
 
 const GSM7_RX =
   /^[\n\rA-Za-z0-9 @£$¥èéùìòÇØøÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ!"#¤%&'()*+,\-./:;<=>?¡ÄÖÑÜ§¿äöñüà€\\[\]{}|~^]*$/;
@@ -122,6 +123,7 @@ export default function Composer({
   sendLabel,
   compact = false,
   onOpenInFullPane,
+  draftMessages,
 }: {
   threadId: string;
   appUserId: string | null;
@@ -149,6 +151,8 @@ export default function Composer({
   // Compact ONLY: the expired-window escape is a plain navigation to the full pane (where the
   // approved-template send lives) — NOT a modal that appears to send from the dock.
   onOpenInFullPane?: () => void;
+  // The thread's messages, for the Claude draft card (full pane only). Omitted → no card.
+  draftMessages?: ConversationMessage[];
 }) {
   const [internalBody, setInternalBody] = useState("");
   const controlled = onBodyChange !== undefined;
@@ -159,6 +163,9 @@ export default function Composer({
   );
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The Claude draft currently in the reply box (set by "Use draft"). Sent along as draft_id so the
+  // server records whether it went out unchanged or edited. Cleared on send, discard and switch.
+  const [usedDraftId, setUsedDraftId] = useState<string | null>(null);
   // The server 422'd this send as an EXPIRED window while the client believed it open (the window
   // closed between the client check and the request). This flips the composer to the expired state
   // — NOT a generic send failure, and NOT a failed bubble — and keeps the draft. Cleared on thread
@@ -252,6 +259,7 @@ export default function Composer({
     setOriginalSize(null);
     setDragActive(false);
     setServerClosedWindow(false); // a new thread has its own window
+    setUsedDraftId(null);
     dragCounterRef.current = 0;
   }, [threadId, controlled]);
 
@@ -342,7 +350,7 @@ export default function Composer({
       const res = await fetch("/api/crm/send", {
         method: "POST",
         headers,
-        body: JSON.stringify({ thread_id: threadId, body }),
+        body: JSON.stringify({ thread_id: threadId, body, ...(usedDraftId ? { draft_id: usedDraftId } : {}) }),
       });
       const j = (await res.json().catch(() => ({}))) as {
         message?: ConversationMessage;
@@ -363,12 +371,13 @@ export default function Composer({
       }
       if (j.message) onSent(j.message);
       setBody("");
+      setUsedDraftId(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setSending(false);
     }
-  }, [body, sending, threadId, onSent, canSendMessages, whatsappWindowExpired]);
+  }, [body, sending, threadId, onSent, canSendMessages, whatsappWindowExpired, usedDraftId, setBody]);
 
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -582,6 +591,27 @@ export default function Composer({
           WhatsApp window closes in <strong data-testid="crm-window-soon-time">{fmtRemaining(windowClosesInMs)}</strong> — reply now, or the player must message first to reopen it.
         </div>
       ) : null}
+
+      {!compact && draftMessages && (
+        <AiDraftCard
+          threadId={threadId}
+          channel={channel}
+          messages={draftMessages}
+          usedDraftId={usedDraftId}
+          // FILLS THE BOX, NEVER SENDS. The staff member reads it, edits it, and presses Send.
+          onUse={(text, draftId) => {
+            setBody(text);
+            setUsedDraftId(draftId);
+            setTimeout(() => taRef.current?.focus(), 0);
+          }}
+          onDiscarded={(draftId) => {
+            if (usedDraftId === draftId) {
+              setUsedDraftId(null);
+              setBody("");
+            }
+          }}
+        />
+      )}
 
       {file && kind ? (
         <MediaPreview

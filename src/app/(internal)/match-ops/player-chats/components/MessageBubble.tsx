@@ -65,6 +65,10 @@ export type ConversationMessage = {
   // here so a v2 "render under the parent bubble" change has the
   // data it needs without another wire change.
   reaction_target_wamid?: string | null;
+  // The out-of-hours acknowledgment and template sends. The Claude draft card reads both to tell
+  // "the player is waiting" from "we already answered".
+  is_auto_reply?: boolean;
+  template_name?: string | null;
 };
 
 function formatBytes(n: number): string {

@@ -29,11 +29,15 @@
 //  11. Return { message } shaped like /api/crm/send: signed_media_url
 //      minted server-side, raw media_url stripped.
 //
+// CHANGE LOG (2026-10-20): every attempt that reaches Meta is recorded through logCrmSend, the
+// same metadata-only shape as /api/crm/send (caption LENGTH, never the caption or the file).
+//
 // SMS-channel threads cannot send media (Telnyx MMS is a separate
 // feature; rejected with 400 here).
 
 import { randomUUID } from "node:crypto";
 import { authenticateCrm } from "@/lib/crmAuth";
+import { logCrmSend } from "@/lib/crmSendLog";
 import {
   sendWhatsAppAudio,
   sendWhatsAppDocument,
@@ -74,7 +78,7 @@ export async function POST(req: Request) {
   if (!auth.ok) {
     return Response.json({ error: auth.error }, { status: auth.status });
   }
-  const { appUserId, supabase } = auth;
+  const { appUserId, email: actorEmail, supabase } = auth;
 
   // -------- parse + validate body --------
   let form: FormData;
@@ -212,6 +216,7 @@ export async function POST(req: Request) {
   } catch (err) {
     const msg = describeMetaError(err);
     console.error("[crm:send-media] meta upload failed", msg);
+    await logCrmSend({ kind: "media", path: "/api/crm/send-media", threadId, toPhone, channel: "whatsapp", appUserId, actorEmail, bodyLength: caption.length, sendError: msg, nowIso: new Date().toISOString(), mediaKind: kind });
     return Response.json({ error: msg }, { status: 502 });
   }
 
@@ -243,8 +248,12 @@ export async function POST(req: Request) {
   } catch (err) {
     const msg = describeMetaError(err);
     console.error("[crm:send-media] meta send failed", msg);
+    await logCrmSend({ kind: "media", path: "/api/crm/send-media", threadId, toPhone, channel: "whatsapp", appUserId, actorEmail, bodyLength: caption.length, sendError: msg, nowIso: new Date().toISOString(), mediaKind: kind });
     return Response.json({ error: msg }, { status: 502 });
   }
+
+  // Meta accepted it: the player has the message. Record it before anything below can fail.
+  await logCrmSend({ kind: "media", path: "/api/crm/send-media", threadId, toPhone, channel: "whatsapp", appUserId, actorEmail, bodyLength: caption.length, sendError: null, nowIso: new Date().toISOString(), mediaKind: kind });
 
   // -------- 3. Storage upload (best-effort once Meta accepted) --------
   const newMessageId = randomUUID();

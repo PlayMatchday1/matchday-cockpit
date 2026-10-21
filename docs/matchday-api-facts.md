@@ -2023,6 +2023,18 @@ so it is not a *wider*-audience leak, but the full phone is still a gratuitous s
 PII that `thread_id` already resolves for any log reader. Last-4 keeps a human "which player" hint
 without the duplicate PII. Pinned by `scripts/crm-characterize-test.ts`.
 
+**CORRECTION 2026-10-20: the change log was NOT complete until this date.** `/api/crm/send-media`
+and `/api/crm/send-template` are also operator send paths, and neither called `recordWrite`
+(`send-media/route.ts:77` and `send-template/route.ts:49` read `{ appUserId, supabase }` from auth
+and never logged). Both now record through the shared `logCrmSend` (`src/lib/crmSendLog.ts`), same
+metadata-only shape plus `kind`, `media_kind` and `template_name`, never the caption or the template
+variables. Pinned at runtime in `scripts/ai-draft-test.ts`. **Still true and NOT changed:** neither
+route checks `can_send_messages`, so an account with chats READ access can send media and
+templates. That is a permission gap, not fixed here.
+- A provider failure logs as outcome `unknown` (NO ANSWER), not `failed`: the provider error is a
+  plain `Error`, and `outcomeForThrow` keys on `err.name` (`src/lib/changeLogModel.ts:24`). This is
+  the classification `/api/crm/send` has always given a failed Telnyx or Meta send.
+
 ## How an inbound thread is linked to a player — `player_id` + `match_ambiguous` (Phase 19)
 
 Read from the two inbound webhooks (`/api/whatsapp/webhook`, `/api/webhooks/telnyx`), identical
@@ -7422,3 +7434,26 @@ for 18596, 18680, 18679, 19700 and `/admin/matches?fromDate&toDate` windows arou
   "+ Add". Proven 2026-10-17: Ryan → ScrumLaunch → cleared left `owner_user_id` unchanged.
 - **`app_users` has no row for ScrumLaunch** (2026-10-17, `select id, full_name, email` on admins), which is why
   `assignee` is its own column rather than an `owner_user_id`.
+
+## Claude drafts in Player Chats (phase 1, 2026-10-20)
+
+- **`crm_ai_drafts` exists in production** (migration 0227, applied by Ryan). Evidence, REST with the
+  service role on 2026-10-20: `GET /rest/v1/crm_ai_drafts?select=<all 20 columns>&limit=1` returned
+  `HTTP 200 []`; the same with a bogus column returned `HTTP 400 {"code":"42703",...}`, so the 200
+  proves every named column exists. The first probe that day, before Ryan re-ran the SQL, returned
+  `HTTP 404 PGRST205 "Could not find the table 'public.crm_ai_drafts' in the schema cache"`.
+- **Request size, measured** (`scripts/ai-draft-live-check.ts`, 5 synthetic threads, claude-sonnet-5-5,
+  effort low, structured output): 10,849 to 10,985 input tokens (the playbook is most of it), 185 to
+  320 output tokens. That is $0.024 to $0.025 a draft at $2/$10 per million, so the $20 cap is about
+  800 drafts a month. Whole run: $0.1215.
+- **Structured output works on claude-sonnet-5-5 with `output_config: { effort: "low", format:
+  { type: "json_schema", schema } }`** via `@anthropic-ai/sdk` 0.137.0, `client.messages.create`. All
+  five replies parsed, `stop_reason: "end_turn"`. Same run.
+- **None of the five raw replies contained an em or en dash** before `sanitizeDraft` ran. The
+  sanitizer and the guard still run on every draft.
+- **Stripe's `currentPeriodEnd` time of day: UNKNOWN.** Drafts print membership start and renewal as
+  UTC calendar days (`src/lib/aiDraftModel.ts`, `dateOnly`), which is right if the instant is midnight
+  UTC or 05:00 UTC on the 1st. Not checked against a live subscription.
+- **Not built in phase 1:** drafts in the compact dock, images sent to the model, Veo status in the
+  context, codes or credits issued from a draft, auto-send.
+

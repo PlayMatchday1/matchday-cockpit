@@ -250,6 +250,10 @@ const NODE_SUITES = [
   "scripts/cost-ratio-band-test.ts",
   "scripts/pace-projection-test.ts",
   "scripts/crm-characterize-test.ts",
+  // CLAUDE DRAFTS IN PLAYER CHATS. Model-written text built from player data sent to a third party,
+  // on a $20 monthly budget: what leaves for the API (no email, no phone), the courtesy-credit and
+  // em dash guards, the cap, the sent/edited/discarded record, and the change log on every send path.
+  "scripts/ai-draft-test.ts",
   "scripts/crm-host-guard-test.ts",
   "scripts/seam-stripped-test.ts",
   "scripts/matchops-auth-test.ts",

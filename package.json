@@ -16,6 +16,7 @@
     "check:one-editor": "node scripts/e2e/check-one-editor.mjs"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "0.137.0",
     "@supabase/supabase-js": "^2.104.1",
     "@tiptap/extension-placeholder": "^3.22.4",
     "@tiptap/markdown": "3.22.4",

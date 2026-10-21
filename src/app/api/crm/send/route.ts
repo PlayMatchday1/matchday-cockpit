@@ -1,6 +1,10 @@
 // POST /api/crm/send — outbound reply from a cockpit operator.
 //
-// Body: { thread_id: string, body: string }
+// Body: { thread_id: string, body: string, draft_id?: string }
+//
+// draft_id: set when the text started as a Claude draft ("Use draft"). After a SUCCESSFUL send the
+// server compares what went out with the stored draft and records sent_unchanged / sent_edited and
+// the edit distance on crm_ai_drafts (src/lib/aiDraftOutcome). It never changes what is sent.
 //
 // Auth: dual-mode bearer via src/lib/crmAuth (session JWT with
 // app_users.is_admin=true, OR CRON_SECRET). Cron path records
@@ -23,11 +27,11 @@
 //   5. Update thread last_message_at + last_message_preview.
 //   6. Return the new message row.
 
-import { randomUUID } from "node:crypto";
 import Telnyx from "telnyx";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { authenticateCrm } from "@/lib/crmAuth";
-import { recordWrite, supabaseLogStore, phoneLast4 } from "@/lib/changeLog";
+import { logCrmSend } from "@/lib/crmSendLog";
+import { recordDraftSent } from "@/lib/aiDraftOutcome";
 import {
   sendWhatsAppText,
   WhatsAppApiError,
@@ -44,7 +48,7 @@ const MAX_BODY_LEN = 1600; // ~10 SMS segments — sanity bound (WhatsApp's own 
 // those in Phase 1.
 const WHATSAPP_WINDOW_MS = 24 * 60 * 60 * 1000;
 
-type SendBody = { thread_id?: unknown; body?: unknown };
+type SendBody = { thread_id?: unknown; body?: unknown; draft_id?: unknown };
 
 export async function POST(req: Request) {
   const startedAt = Date.now();
@@ -84,6 +88,7 @@ export async function POST(req: Request) {
   }
   const threadId = typeof parsed.thread_id === "string" ? parsed.thread_id : "";
   const body = typeof parsed.body === "string" ? parsed.body : "";
+  const draftId = typeof parsed.draft_id === "string" && parsed.draft_id ? parsed.draft_id : null;
   if (!threadId) {
     return Response.json({ error: "thread_id required" }, { status: 400 });
   }
@@ -122,6 +127,7 @@ export async function POST(req: Request) {
       actorEmail,
       supabase,
       startedAt,
+      draftId,
     });
   }
   // Default branch: SMS. Anything other than the two valid channel
@@ -135,47 +141,8 @@ export async function POST(req: Request) {
     actorEmail,
     supabase,
     startedAt,
+    draftId,
   });
-}
-
-// Record every send into change_log via the shared recordWrite hook (Phase 19 Step 1). Logs the
-// thread id, recipient LAST-4 (a hint, not the full number — Step 3b closeout), channel, actor,
-// timestamp and message LENGTH — NEVER the body OR the full phone: both are player PII, and the
-// text/number already live in crm_messages; copying them into an audit table with a different
-// (is_admin) audience is a second store of the same PII. `write` here is a no-op that
-// merely reflects the already-known provider outcome so recordWrite classifies landed vs failed;
-// the real send happened above (this hook is logging, not the send path). Best-effort: recordWrite
-// never throws over the send.
-async function logCrmSend(args: {
-  threadId: string; toPhone: string; channel: "sms" | "whatsapp";
-  appUserId: string | null; actorEmail: string | null; bodyLength: number;
-  sendError: string | null; nowIso: string; supabase: SupabaseClient;
-}) {
-  try {
-    await recordWrite(
-      {
-        env: "production", source: "crm-send",
-        actorName: args.actorEmail ?? (args.appUserId ? args.appUserId : "cron"),
-        actorEmail: args.actorEmail ?? null,
-        saveId: randomUUID(),
-        matchId: null, matchName: null,
-        method: "POST", path: "/api/crm/send",
-        // metadata ONLY — no message text ever enters change_log.
-        body: { thread_id: args.threadId, recipient_last4: phoneLast4(args.toPhone), channel: args.channel, message_length: args.bodyLength },
-        keys: [], label: (k) => k,
-        applied: () => !args.sendError,
-        changes: [{ key: "message", field: "Message", before: "", after: `${args.channel} message · ${args.bodyLength} chars` }],
-      },
-      {
-        readResource: async () => ({}),
-        write: async () => { if (args.sendError) throw new Error(args.sendError); return true; },
-        now: () => args.nowIso,
-      },
-      supabaseLogStore(),
-    );
-  } catch (e) {
-    console.error("[crm:send] change_log record failed (send already happened):", e);
-  }
 }
 
 // ============================================================
@@ -190,6 +157,7 @@ type SendArgs = {
   actorEmail: string | null;
   supabase: SupabaseClient;
   startedAt: number;
+  draftId: string | null;
 };
 
 async function handleSmsSend({
@@ -200,6 +168,7 @@ async function handleSmsSend({
   actorEmail,
   supabase,
   startedAt,
+  draftId,
 }: SendArgs) {
   const apiKey = process.env.TELNYX_API_KEY?.trim();
   const fromNumber = process.env.TELNYX_FROM_NUMBER?.trim();
@@ -280,7 +249,10 @@ async function handleSmsSend({
     `[crm:send] done channel=sms thread=${threadId} telnyx_id=${telnyxMessageId ?? "-"} segments=${segmentCount} elapsed=${elapsed}ms${sendError ? ` ERROR=${sendError}` : ""}`,
   );
 
-  await logCrmSend({ threadId, toPhone, channel: "sms", appUserId, actorEmail, bodyLength: body.length, sendError, nowIso, supabase });
+  await logCrmSend({ kind: "text", path: "/api/crm/send", threadId, toPhone, channel: "sms", appUserId, actorEmail, bodyLength: body.length, sendError, nowIso });
+  if (draftId && !sendError) {
+    await recordDraftSent(supabase, { draftId, threadId, sentBody: body, messageId: inserted.data.id as string, userId: appUserId });
+  }
 
   if (sendError) {
     return Response.json(
@@ -303,6 +275,7 @@ async function handleWhatsAppSend({
   actorEmail,
   supabase,
   startedAt,
+  draftId,
 }: SendArgs) {
   // 1. 24-hour session window check. Look up the most recent inbound
   //    message timestamp for this thread; if older than 24h, refuse
@@ -416,7 +389,10 @@ async function handleWhatsAppSend({
     `[crm:send] done channel=whatsapp thread=${threadId} wamid=${wamid ?? "-"} elapsed=${elapsed}ms${sendError ? ` ERROR=${sendError}` : ""}`,
   );
 
-  await logCrmSend({ threadId, toPhone, channel: "whatsapp", appUserId, actorEmail, bodyLength: body.length, sendError, nowIso, supabase });
+  await logCrmSend({ kind: "text", path: "/api/crm/send", threadId, toPhone, channel: "whatsapp", appUserId, actorEmail, bodyLength: body.length, sendError, nowIso });
+  if (draftId && !sendError) {
+    await recordDraftSent(supabase, { draftId, threadId, sentBody: body, messageId: inserted.data.id as string, userId: appUserId });
+  }
 
   if (sendError) {
     return Response.json(

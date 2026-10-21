@@ -5,6 +5,11 @@ const nextConfig: NextConfig = {
   // proof in scripts/seam-stripped-test.ts) can run without clobbering a running `next dev` .next.
   // Defaults to ".next" — production/Vercel builds are unaffected.
   distDir: process.env.NEXT_DIST_DIR || ".next",
+  // Claude drafts read the playbook at runtime (src/lib/aiDraftPlaybook.ts). It is not imported,
+  // so file tracing would leave it out of the function bundle without this.
+  outputFileTracingIncludes: {
+    "/api/crm/threads/[id]/ai-draft": ["./docs/support/PLAYBOOK.md"],
+  },
   // Build stamp — so "is this deployed?" is one glance, not a diagnostic round.
   // VERCEL_GIT_COMMIT_SHA is set by Vercel at build time from the deployed commit;
   // the build time is stamped when this config evaluates (i.e. during the build).

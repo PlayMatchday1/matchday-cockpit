@@ -1483,6 +1483,7 @@ function Conversation({
         whatsappWindowExpired={whatsappWindowExpired}
         customerName={detail?.thread.player?.first_name?.trim() ?? ""}
         onSent={onSent}
+        draftMessages={messages as ConversationMessage[]}
       />
     </>
   );

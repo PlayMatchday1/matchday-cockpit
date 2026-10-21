@@ -23,8 +23,12 @@
 // (Meta overrode the requested Utility). Each send is billable; Meta
 // enforces marketing opt-outs and returns an error we surface + mark
 // the row failed. No internal opt-in/opt-out ledger in v1.
+//
+// CHANGE LOG (2026-10-20): every send, landed or failed, is recorded through logCrmSend, the same
+// metadata-only shape as /api/crm/send: template NAME and body LENGTH, never the variables.
 
 import { authenticateCrm } from "@/lib/crmAuth";
+import { logCrmSend } from "@/lib/crmSendLog";
 import { sendWhatsAppTemplate, WhatsAppApiError } from "@/lib/whatsapp";
 import { getTemplate, renderTemplateBody } from "@/lib/whatsappTemplates";
 import { writeThreadStatusLog } from "@/lib/crmThreadStatus";
@@ -46,7 +50,7 @@ export async function POST(req: Request) {
   if (!auth.ok) {
     return Response.json({ error: auth.error }, { status: auth.status });
   }
-  const { appUserId, supabase } = auth;
+  const { appUserId, email: actorEmail, supabase } = auth;
 
   let parsed: Body;
   try {
@@ -142,6 +146,8 @@ export async function POST(req: Request) {
 
   const nowIso = new Date().toISOString();
   const preview = renderedBody.slice(0, PREVIEW_LIMIT);
+
+  await logCrmSend({ kind: "template", path: "/api/crm/send-template", threadId, toPhone, channel: "whatsapp", appUserId, actorEmail, bodyLength: renderedBody.length, sendError, nowIso, templateName: tpl.name });
 
   const inserted = await supabase
     .from("crm_messages")
