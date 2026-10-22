@@ -14,7 +14,7 @@
 
 import {
   buildDraftContext, buildDraftRequest, capReached, draftCostUsd, draftEligibility, guardDraft,
-  monthStartUtcIso, parseDraftOutput, MONTHLY_CAP_USD, SKIP_REASON_TEXT, AI_DRAFT_MODEL,
+  monthStartUtcIso, parseDraftOutput, finalStaffNotes, MONTHLY_CAP_USD, SKIP_REASON_TEXT, AI_DRAFT_MODEL,
   accountConfirmed, unconfirmedReason, extractPhoneNumbers, decideLinkSuggestion,
   type DraftContextIn, type DraftMsg, type DraftRequest, type SkipReason, type LinkSuggestion,
 } from "@/lib/aiDraftModel";
@@ -211,18 +211,15 @@ export async function runDraft(deps: DraftDeps): Promise<DraftResult> {
   // else. Late is decided here, from the clock, not by the model.
   const guarded = guardDraft(parsed, {
     courtesy_credit_eligible: context.courtesy_credit_eligible,
-    late: clock.reply_is_late,
+    veryLate: clock.reply_is_very_late,
     allowedTimeSources: [...schedule.entries.map((e) => e.when_local), ...msgs.map((m) => m.body ?? ""), playbook.text],
   });
   if (!guarded.ok) return fail(guarded.error, reply);
 
   const out = guarded.output;
   // AT MOST 3 BULLETS. The reason an account is unconfirmed is stated in code, first, not left to
-  // the model; a model bullet that repeats it is dropped.
-  const modelNotes = reason
-    ? out.staff_notes.map((n) => n.split(reason).join(" ").replace(/\s{2,}/g, " ").replace(/^[\s.:,]+|[\s,:]+$/g, "")).filter(Boolean)
-    : out.staff_notes;
-  const staffNotes = [...(reason ? [reason] : []), ...modelNotes].slice(0, 3);
+  // the model; a model clause that restates it is cut (finalStaffNotes).
+  const staffNotes = finalStaffNotes(out.staff_notes, reason);
   // Flags ride at the front of staff_notes so the table needs no extra column for them.
   const notes = [out.flags.length ? `[flags: ${out.flags.join(", ")}]` : "", ...staffNotes.map((n) => `- ${n}`)].filter(Boolean).join("\n");
   // Which schedule matches the reply mentions, with their start: the draft goes stale at kickoff.

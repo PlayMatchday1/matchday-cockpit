@@ -24,7 +24,7 @@ import { draftOutcomePatch, discardPatch } from "../src/lib/aiDraftOutcome";
 import { playbookForModel } from "../src/lib/aiDraftPlaybook";
 import { crmSendLogBody, logCrmSend } from "../src/lib/crmSendLog";
 import { linkThread, type LinkIO } from "../src/lib/crmThreadLink";
-import { phoneDigits10, extractPhoneNumbers, decideLinkSuggestion, linkSuggestionText, phoneShapes, renderTranscript, toNoteBullets } from "../src/lib/aiDraftModel";
+import { phoneDigits10, extractPhoneNumbers, decideLinkSuggestion, linkSuggestionText, phoneShapes, renderTranscript, toNoteBullets, finalStaffNotes } from "../src/lib/aiDraftModel";
 import { sinceText, buildClock, scheduleWindow, fieldTokens, mentionedFields, selectSchedule, timesIn, unscheduledTimes, lateReplyProblem, staleDraftReason, matchKey, type ScheduleRow } from "../src/lib/aiDraftClock";
 import type { LogStore } from "../src/lib/changeLog";
 
@@ -404,10 +404,10 @@ console.log("\nTIME AND SCHEDULE:");
   eq("minutes when under an hour", sinceText(NOW2 - 25 * 60e3, NOW2, CT), "25 min ago, today 7:13 AM");
   const clock = buildClock({ now: NOW2, tz: CT, latestPlayerMsgIso: WROTE });
   eq("the clock names the last 7 days by date", clock.recent_days.slice(0, 3), ["today: Wednesday, Oct 21", "yesterday: Tuesday, Oct 20", "Monday, Oct 19"]);
-  eq("the clock: now, zone, ago, late", [clock.now_local, clock.time_zone, clock.latest_player_message, clock.reply_is_late],
-    ["Wednesday, October 21, 2026 at 7:38 AM", "Central time (America/Chicago)", "16h ago, yesterday 3:38 PM", true]);
-  eq("1h59m after → not late", buildClock({ now: Date.parse(WROTE) + 119 * 60e3, tz: CT, latestPlayerMsgIso: WROTE }).reply_is_late, false);
-  eq("2h01m after → late", buildClock({ now: Date.parse(WROTE) + 121 * 60e3, tz: CT, latestPlayerMsgIso: WROTE }).reply_is_late, true);
+  eq("the clock: now, zone, ago, very late (16h is not)", [clock.now_local, clock.time_zone, clock.latest_player_message, clock.reply_is_very_late],
+    ["Wednesday, October 21, 2026 at 7:38 AM", "Central time (America/Chicago)", "16h ago, yesterday 3:38 PM", false]);
+  eq("23h59m after → not very late", buildClock({ now: Date.parse(WROTE) + (24 * 60 - 1) * 60e3, tz: CT, latestPlayerMsgIso: WROTE }).reply_is_very_late, false);
+  eq("24h01m after → very late", buildClock({ now: Date.parse(WROTE) + (24 * 60 + 1) * 60e3, tz: CT, latestPlayerMsgIso: WROTE }).reply_is_very_late, true);
   eq("the zone follows the player's city (Atlanta is Eastern)", buildClock({ now: NOW2, tz: "America/New_York", latestPlayerMsgIso: WROTE }).latest_player_message, "16h ago, yesterday 4:38 PM");
   ok("every transcript line carries its weekday and time in the player's zone",
     renderTranscript([{ id: "x", direction: "inbound", body: "2 games today at PRUMC?", sent_at: WROTE }], CT).startsWith("[Tue, Oct 20, 3:38 PM] Player:"));
@@ -446,26 +446,44 @@ console.log("\nTIME AND SCHEDULE:");
   eq("support hours from the playbook pass", unscheduledTimes("We're around 9am to 9pm.", allowed), []);
   eq("an invented time is caught", unscheduledTimes("There's one tonight at 7:30pm!", allowed), ["7:30 pm"]);
 
-  // Late replies.
-  eq("late, no apology → rejected", lateReplyProblem("Those were last night! The next one is Thursday at 7:00 PM.", true) != null, true);
-  eq("late, opens with sorry → fine", lateReplyProblem("Sorry for the slow reply! Those were last night.", true), null);
-  eq("on time, apologizes for slowness → rejected", lateReplyProblem("Sorry for the slow reply! Thursday at 7:00 PM works.", false) != null, true);
-  eq("on time, sorry about something else → fine", lateReplyProblem("Sorry about tonight's match!", false), null);
-  eq("late Veo answer: slow-reply apology, video timing stated plainly → fine", lateReplyProblem("Sorry for the slow reply! Videos go up within 24 to 48 hours after the match.", true), null);
+  // Apologies (2026-10-22): a sorry for the wait only past 24 hours; under that, none.
+  eq("over 24h, no apology → rejected", lateReplyProblem("Those were last night! The next one is Thursday at 7:00 PM.", true) != null, true);
+  eq("over 24h, opens with sorry → fine", lateReplyProblem("Sorry for the slow reply! Those were last night.", true), null);
+  eq("under 24h, apologizes for slowness → rejected", lateReplyProblem("Sorry for the slow reply! Thursday at 7:00 PM works.", false) != null, true);
+  eq("under 24h, no apology, just the answer → fine", lateReplyProblem("Videos go up within 24 to 48 hours after the match.", false), null);
+  eq("under 24h, sorry for a match we cancelled → fine", lateReplyProblem("Sorry about tonight's match!", false), null);
+  eq("over 24h Veo answer: slow-reply apology, video timing stated plainly → fine", lateReplyProblem("Sorry for the slow reply! Videos go up within 24 to 48 hours after the match.", true), null);
+
+  // Staff notes: the reason once, first, counted in the 3. Model shapes from stored drafts, 2026-10-22.
+  const R = "No account found for this number.";
+  eq("\"No account found for this number, so ...\" is cut to what follows", finalStaffNotes([
+    "No account found for this number, so no account facts stated. Need the account phone before checking the two cancellations.",
+    "Player asked for a refund of about $8 per cancelled booking.",
+  ], R), [R, "Need the account phone before checking the two cancellations.", "Player asked for a refund of about $8 per cancelled booking."]);
+  eq("\"Account still unconfirmed: no account matches this phone, so no facts verified.\" is cut", finalStaffNotes([
+    "Account still unconfirmed: no account matches this phone, so no facts verified. Player gave a number but it did not link.",
+  ], R), [R, "Player gave a number but it did not link."]);
+  eq("\"Account still unconfirmed, check which ...\" keeps the instruction", finalStaffNotes(["Player just sent a phone number. Account still unconfirmed, check which account it matches."], R),
+    [R, "Player just sent a phone number. Check which account it matches."]);
+  eq("a bullet that is only the reason, in another shape, is dropped", finalStaffNotes(["No account matches this phone.", "Asked for it."], R), [R, "Asked for it."]);
+  eq("\"No booking or account facts stated.\" is dropped", finalStaffNotes(["Under 16: player says they're 14.", "No booking or account facts stated."], R), [R, "Under 16: player says they're 14."]);
+  eq("the reason counts as one of the 3", finalStaffNotes(["a", "b", "c"], R), [R, "a", "b"]);
+  eq("two bullets that say the same thing → one", finalStaffNotes(["Check the cancel time.", "check the cancel time"], null), ["Check the cancel time."]);
+  ok("POSITIVE CONTROL: a linked thread's notes are not cut", finalStaffNotes(["Account unconfirmed in Stripe, check it."], null)[0] === "Account unconfirmed in Stripe, check it.");
 
   // Notes: never more than 3 bullets.
   eq("5 bullets in → 3 out, in order", toNoteBullets(["a", "b", "c", "d", "e"]), ["a", "b", "c"]);
   eq("a dashed list in one string → bullets", toNoteBullets("- one\n- two\n- three\n- four"), ["one", "two", "three"]);
 
   // Through the orchestration.
-  const pastText = JSON.stringify({ reply: "Sorry for the slow reply! Both PRUMC games were last night, but there's another one Thursday at 7:00 PM with 3 spots left.", staff_notes: ["a", "b", "c", "d"], category: "booking", flags: [], offers_courtesy_credit: false, match_ids: [3] });
+  const pastText = JSON.stringify({ reply: "Both PRUMC games were last night, but there's another one Thursday at 7:00 PM with 3 spots left.", staff_notes: ["a", "b", "c", "d"], category: "booking", flags: [], offers_courtesy_credit: false, match_ids: [3] });
   const prumcMsgs = [msg("inbound", "Are there 2 games today at PRUMC?", NOW - Date.parse(WROTE) + (NOW2 - NOW))];
   prumcMsgs[0].sent_at = WROTE;
   const ctxHou = { ...lateCancel(5), cityCode: "HOU", matches: [] };
   const fy = fake({ now: () => NOW2, msgs: prumcMsgs, ctx: ctxHou, loadScheduleRows: async () => rows, modelText: pastText });
   const ry = await runDraft(fy.deps);
   const content = fy.calls.model[0]?.messages[0].content ?? "";
-  ok("yesterday's \"today\" question: the request carries the clock (16h ago, yesterday 3:38 PM, late)", content.includes('"latest_player_message": "16h ago, yesterday 3:38 PM"') && content.includes('"reply_is_late": true'));
+  ok("yesterday's \"today\" question: the request carries the clock (16h ago, yesterday 3:38 PM, not very late)", content.includes('"latest_player_message": "16h ago, yesterday 3:38 PM"') && content.includes('"reply_is_very_late": false'));
   ok("  and PRUMC's schedule with last night's games marked over and Thursday's upcoming", content.includes('"already started or finished"') && content.includes('"when_local": "Thu, Oct 22, 7:00 PM"') && content.includes("at the field the player named"));
   ok("  the draft that treats it as past and offers the real next time is SHOWN", ry.status === "ok" && /last night/.test(ry.draft.text) && /7:00 PM/.test(ry.draft.text));
   eq("  staff notes capped at 3 bullets", ry.status === "ok" && ry.draft.staff_notes.length, 3);
@@ -473,17 +491,19 @@ console.log("\nTIME AND SCHEDULE:");
   ok("  the mentioned match is stored with its kickoff (so the draft goes stale then)", fy.calls.inserts[0].context_keys.includes(matchKey(3, "2026-10-23T00:00:00.000Z")));
 
   const invent = fake({ now: () => NOW2, msgs: prumcMsgs, ctx: ctxHou, loadScheduleRows: async () => rows,
-    modelText: JSON.stringify({ reply: "Sorry for the slow reply! There's one tonight at 8:30pm at PRUMC.", staff_notes: [], category: "booking", flags: [], offers_courtesy_credit: false, match_ids: [] }) });
+    modelText: JSON.stringify({ reply: "There's one tonight at 8:30pm at PRUMC.", staff_notes: [], category: "booking", flags: [], offers_courtesy_credit: false, match_ids: [] }) });
   const ri = await runDraft(invent.deps);
   ok("a draft with a match time NOT in the schedule is not shown", ri.status === "failed" && /isn't in our schedule \(8:30 pm\)/.test(ri.message));
-  const noSorry = fake({ now: () => NOW2, msgs: prumcMsgs, ctx: ctxHou, loadScheduleRows: async () => rows,
-    modelText: JSON.stringify({ reply: "Both PRUMC games were last night. Next one is Thursday at 7:00 PM.", staff_notes: [], category: "booking", flags: [], offers_courtesy_credit: false, match_ids: [3] }) });
+  // Over 24 hours is only reachable on SMS: a WhatsApp thread that old is window_closed and gets no draft.
+  const noSorry = fake({ now: () => NOW2 + 14 * H, msgs: prumcMsgs, ctx: ctxHou, loadScheduleRows: async () => rows,
+    loadThread: async () => ({ channel: "sms", player_id: 42, match_ambiguous: false, account_confirmed: false }),
+    modelText: JSON.stringify({ reply: "Both PRUMC games were Tuesday night. Next one is Thursday at 7:00 PM.", staff_notes: [], category: "booking", flags: [], offers_courtesy_credit: false, match_ids: [3] }) });
   const rn = await runDraft(noSorry.deps);
-  ok("a 16h-late draft that doesn't open with sorry is not shown, for that reason", rn.status === "failed" && /over 2 hours late/.test(rn.message));
+  ok("a 30h-late SMS draft that doesn't open with sorry is not shown, for that reason", rn.status === "failed" && /over 24 hours late/.test(rn.message));
   const quick = fake({ msgs: [msg("inbound", "any games tonight?", 0.5 * H)], ctx: { ...lateCancel(5), cityCode: "HOU" },
     modelText: JSON.stringify({ reply: "Sorry for the slow reply! Let me check tonight's games.", staff_notes: [], category: "booking", flags: [], offers_courtesy_credit: false, match_ids: [] }) });
   const rq = await runDraft(quick.deps);
-  ok("a 30-minute reply that apologizes for slowness is not shown, for that reason", rq.status === "failed" && /wasn't slow/.test(rq.message));
+  ok("a 30-minute reply that apologizes for slowness is not shown, for that reason", rq.status === "failed" && /wait under 24 hours/.test(rq.message));
 
   // Stale drafts.
   eq("a draft made 3h ago is stale", staleDraftReason({ created_at: new Date(NOW2 - 3 * H).toISOString() }, NOW2), "it was made more than 2 hours ago");
@@ -492,7 +512,7 @@ console.log("\nTIME AND SCHEDULE:");
     staleDraftReason({ created_at: new Date(NOW2 - 0.5 * H).toISOString(), context_keys: [matchKey(3, new Date(NOW2 - 10 * 60e3).toISOString())] }, NOW2), "a match it mentions has started");
   const oldPrior: StoredDraft = { id: "d-3h", outcome: "pending", draft_text: "Let me check tonight's schedule", staff_notes: "- x", category: "booking", error: null, created_at: new Date(NOW - 3 * H).toISOString(), context_keys: [] };
   const fs1 = fake({ prior: oldPrior, msgs: [msg("inbound", "any news?", 4 * H)],
-    modelText: JSON.stringify({ reply: "Sorry for the slow reply! Still checking for you.", staff_notes: [], category: "other", flags: [], offers_courtesy_credit: false, match_ids: [] }) });
+    modelText: JSON.stringify({ reply: "Still checking for you.", staff_notes: [], category: "other", flags: [], offers_courtesy_credit: false, match_ids: [] }) });
   const rs = await runDraft(fs1.deps);
   ok("opening a thread whose saved draft is stale supersedes it and makes a fresh one", rs.status === "ok" && !rs.reused && fs1.calls.superseded === 1 && fs1.calls.model.length === 1);
   const fresh = fake({ prior: { ...oldPrior, created_at: new Date(NOW - 0.5 * H).toISOString() } });

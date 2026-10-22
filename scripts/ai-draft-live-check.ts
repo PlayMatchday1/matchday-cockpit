@@ -6,7 +6,7 @@
 //
 //   NODE_OPTIONS="--conditions=react-server" npx tsx scripts/ai-draft-live-check.ts [--time]
 //
-// --time runs only the three time-awareness threads. Reads ANTHROPIC_API_KEY from .env.local (never
+// --time runs only the time-awareness threads; --next-step only the 2026-10-22 next-step/apology ones. Reads ANTHROPIC_API_KEY from .env.local (never
 // printed). About $0.03 a thread. That spend is NOT recorded in crm_ai_drafts, so it does not count
 // toward the $20 draft cap.
 
@@ -39,16 +39,57 @@ const row = (id: number, wall: string, extra: Partial<ScheduleRow> = {}): Schedu
   city_identifier: "HOU", is_cancelled: false, player_count: 12, max_player_count: 18, ...extra,
 });
 
-type Case = { name: string; time?: boolean; now: number; ctx: DraftContextIn; msgs: DraftMsg[]; rows?: ScheduleRow[]; expect: (r: DraftResult, req: string) => string | null };
+type Case = { name: string; time?: boolean; nextStep?: boolean; channel?: "whatsapp" | "sms"; now: number; ctx: DraftContextIn; msgs: DraftMsg[]; rows?: ScheduleRow[]; expect: (r: DraftResult, req: string) => string | null };
 
 const T = Date.parse("2026-10-21T12:38:00.000Z"); // Wed Oct 21, 7:38 AM Central
+// An apology anywhere in the reply's first sentence, or a sorry for the wait anywhere at all.
+const apologizes = (t: string) => /\b(sorry|apolog)/i.test(t.split(/(?<=[.!?])\s/)[0] ?? "") || /slow (reply|response)|sorry (for|about) the (wait|delay)/i.test(t);
+const okText = (r: DraftResult) => (r.status === "ok" ? null : `not shown: ${"message" in r ? r.message : r.status}`);
 const CASES: Case[] = [
   {
-    name: "TIME 1: asked yesterday 3:38 PM about 'tonight at Oak Hollow', answered 16h later",
+    name: "NEXT 1: unlinked number, cancelled 2 of 3 bookings, wants a 'refund', answered 15h later",
+    nextStep: true, now: T, ctx: unlinked,
+    msgs: [
+      at(ago(T, 15.2 * H), "inbound", "Hi I booked 3 spots for Saturday at Oak Hollow and cancelled 2 of them on Wednesday"),
+      at(ago(T, 15 * H), "inbound", "I cancelled way before the deadline. I want a refund for the 2 spots, $8 each back to my card please"),
+    ],
+    expect: (r) => okText(r) ?? (r.status !== "ok" ? null
+      : apologizes(r.draft.text) ? "apologized"
+      : !/credit/i.test(r.draft.text) ? "no credit answer"
+      : !/(24 hours|day before)/i.test(r.draft.text) ? "did not state the 24 hour rule"
+      : !/automatic/i.test(r.draft.text) ? "did not say the credit is automatic"
+      : !/phone number/i.test(r.draft.text) ? "did not ask for the account phone number"
+      : /e-?mail/i.test(r.draft.text) ? "asked for an email"
+      : !/(I'll|I will|let me|once I|then I)/i.test(r.draft.text) ? "did not say what happens next"
+      : /\brefund(ed)? (is|will|has)/i.test(r.draft.text) ? "promised a refund"
+      : r.draft.staff_notes[0] !== "No account found for this number." ? "reason line not first"
+      : r.draft.staff_notes.slice(1).some((x) => /no account|unconfirmed|unlinked/i.test(x)) ? "a later bullet restates the account status"
+      : null),
+  },
+  {
+    name: "NEXT 2: simple question answered 5h late → no apology, just the answer",
+    nextStep: true, now: T, ctx: linked(),
+    msgs: [at(ago(T, 5 * H), "inbound", "Do I need cleats or are turf shoes fine?")],
+    expect: (r) => okText(r) ?? (r.status === "ok" && apologizes(r.draft.text) ? "apologized" : r.status === "ok" && !/(turf|cleats)/i.test(r.draft.text) ? "did not answer" : null),
+  },
+  {
+    name: "NEXT 3: a match WE cancelled → the apology stays",
+    nextStep: true, now: T, ctx: linked({ matches: [{ name: "Oak Hollow 8v8", startDate: "2026-10-20T19:00:00.000Z", startDateUtc: "2026-10-21T00:00:00.000Z", state: "club_cancelled", price: 1200, charged: 1299, playerCancelledAt: null }] }),
+    msgs: [at(ago(T, 0.5 * H), "inbound", "Got a text that last night's game was cancelled. Do I get my money back?")],
+    expect: (r) => okText(r) ?? (r.status === "ok" && !/\b(sorry|apolog)/i.test(r.draft.text) ? "no apology for a match we cancelled" : r.status === "ok" && !/credit/i.test(r.draft.text) ? "no credit answer" : null),
+  },
+  {
+    name: "NEXT 4: SMS simple question answered 30h late → sorry for the wait",
+    nextStep: true, channel: "sms", now: T, ctx: linked(),
+    msgs: [at(ago(T, 30 * H), "inbound", "Do I need cleats or are turf shoes fine?")],
+    expect: (r) => okText(r) ?? (r.status === "ok" && !/\b(sorry|apolog)/i.test(r.draft.text.split(/(?<=[.!?])\s/)[0]) ? "no sorry after a 30h wait" : null),
+  },
+  {
+    name: "TIME 1: asked yesterday 3:38 PM about 'tonight at Oak Hollow', answered 16h later (no apology: under 24h)",
     time: true, now: T, ctx: linked(),
     msgs: [at("2026-10-20T20:38:00.000Z", "inbound", "Hey are there still 2 games tonight at Oak Hollow? Want to bring a friend")],
     rows: [row(101, "2026-10-20T19:00"), row(102, "2026-10-20T20:15"), row(103, "2026-10-22T19:30", { player_count: 14 }), row(104, "2026-10-24T09:00")],
-    expect: (r) => r.status !== "ok" ? `not shown: ${"message" in r ? r.message : r.status}` : !/^(sorry|so sorry)/i.test(r.draft.text) ? "no slow-reply apology" : !/(last night|yesterday|already)/i.test(r.draft.text) ? "did not treat it as past" : !/7:30/.test(r.draft.text) ? "no next real time" : null,
+    expect: (r) => r.status !== "ok" ? `not shown: ${"message" in r ? r.message : r.status}` : apologizes(r.draft.text) ? "apologized for a 16h wait" : !/(last night|yesterday|already)/i.test(r.draft.text) ? "did not treat it as past" : !/7:30/.test(r.draft.text) ? "no next real time" : null,
   },
   {
     name: "TIME 2: asked 30 min ago about tonight at Oak Hollow (on time)",
@@ -58,10 +99,10 @@ const CASES: Case[] = [
     expect: (r) => r.status !== "ok" ? `not shown: ${"message" in r ? r.message : r.status}` : /slow|delay|sorry for the wait/i.test(r.draft.text) ? "apologized when on time" : !/7:30/.test(r.draft.text) ? "did not give tonight's real time" : null,
   },
   {
-    name: "TIME 3: Veo question answered 5h late → slow-reply sorry, no video-timing apology",
+    name: "TIME 3: Veo question answered 5h late → no apology of any kind",
     time: true, now: T, ctx: linked({ matches: [] }),
     msgs: [at(ago(T, 5 * H), "inbound", "When does the video from Monday night's game go up?")],
-    expect: (r) => r.status !== "ok" ? `not shown: ${"message" in r ? r.message : r.status}` : !/^(sorry|so sorry)/i.test(r.draft.text) ? "no slow-reply apology" : !/24 to 48|24-48/.test(r.draft.text) ? "no 24 to 48 hours" : /sorry (it|the video|for the video)|apolog\w* (for|about) the (video|delay in)/i.test(r.draft.text) ? "apologized for video timing" : /(more than|over) 48 hours|should (be up|have been posted) by now/i.test(r.draft.text) ? "worked out an elapsed time it had no data for" : null,
+    expect: (r) => r.status !== "ok" ? `not shown: ${"message" in r ? r.message : r.status}` : apologizes(r.draft.text) ? "apologized" : !/24 to 48|24-48/.test(r.draft.text) ? "no 24 to 48 hours" : /sorry (it|the video|for the video)|apolog\w* (for|about) the (video|delay in)/i.test(r.draft.text) ? "apologized for video timing" : /(more than|over) 48 hours|should (be up|have been posted) by now/i.test(r.draft.text) ? "worked out an elapsed time it had no data for" : null,
   },
   {
     name: "first-time player, late cancel → courtesy offered",
@@ -99,15 +140,15 @@ async function main() {
   const playbook = playbookForModel(readFileSync("docs/support/PLAYBOOK.md", "utf8"));
   const client = new Anthropic({ apiKey, baseURL: "https://api.anthropic.com", maxRetries: 0, timeout: 60_000 });
   assertAnthropicHost(client.baseURL);
-  const only = process.argv.includes("--time");
+  const only = process.argv.includes("--time") ? "time" : process.argv.includes("--next-step") ? "next" : null;
   let bad = 0, cost = 0, ran = 0;
-  for (const c of CASES.filter((x) => !only || x.time)) {
+  for (const c of CASES.filter((x) => !only || (only === "time" ? x.time : x.nextStep))) {
     ran++;
     let reqText = "";
     const inserts: NewDraftRow[] = [];
     const r = await runDraft({
       threadId: "synthetic", requestedBy: null, regenerate: false, now: () => c.now, hasKey: true,
-      loadThread: async () => ({ channel: "whatsapp", player_id: c.ctx.linked ? 1 : null, match_ambiguous: false, account_confirmed: false }),
+      loadThread: async () => ({ channel: c.channel ?? "whatsapp", player_id: c.ctx.linked ? 1 : null, match_ambiguous: false, account_confirmed: false }),
       loadMessages: async () => c.msgs,
       latestDraftFor: async () => null,
       supersedePending: async () => {},
@@ -126,8 +167,8 @@ async function main() {
       insertDraft: async (row) => { inserts.push(row); return { id: `d${inserts.length}`, created_at: new Date(c.now).toISOString() }; },
     });
     console.log(`\n── ${c.name}`);
-    const clock = reqText.match(/"latest_player_message": "([^"]+)"[\s\S]*?"reply_is_late": (true|false)/);
-    if (clock) console.log(`  clock: player wrote ${clock[1]} · late=${clock[2]}`);
+    const clock = reqText.match(/"latest_player_message": "([^"]+)"[\s\S]*?"reply_is_very_late": (true|false)/);
+    if (clock) console.log(`  clock: player wrote ${clock[1]} · very late=${clock[2]}`);
     if (r.status === "ok") {
       console.log(`  reply: ${r.draft.text}`);
       console.log(`  notes: ${r.draft.staff_notes.map((x) => `\n    - ${x}`).join("")}${r.draft.flags.length ? `\n  flags: ${r.draft.flags.join(", ")}` : ""}`);
@@ -135,6 +176,8 @@ async function main() {
       if (timesIn(r.draft.text).length) console.log(`  times in reply: ${timesIn(r.draft.text).join(", ")} · in schedule: ${schedTimes.join(", ") || "(none)"}`);
       if (hasDash(r.draft.text)) { bad++; console.log("  ✗ dash in the draft"); }
       if (r.draft.staff_notes.length > 3) { bad++; console.log("  ✗ more than 3 note bullets"); }
+      const keys = r.draft.staff_notes.map((x) => x.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim());
+      if (new Set(keys).size !== keys.length) { bad++; console.log("  ✗ a staff note repeats"); }
     } else {
       console.log(`  NOT SHOWN: ${"message" in r ? r.message : r.status}`);
     }

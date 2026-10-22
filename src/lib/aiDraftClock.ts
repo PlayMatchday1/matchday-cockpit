@@ -4,10 +4,12 @@
 // hours later said "let me check the schedule for PRUMC tonight": the model had no idea what time it
 // was, when the player wrote, or what had already been played. This module gives it all three:
 //   - the clock, in the player's city time zone (Central when unknown)
-//   - how long ago the player wrote, and whether the reply is late (over 2 hours)
+//   - how long ago the player wrote, and whether the reply is very late (over 24 hours)
 //   - the real matches at the field they named (or in their city) from the day they wrote, 7 days on
 // and the guards that hold the draft to them: no match time that isn't in the schedule, an apology
-// opening a late reply and not a timely one.
+// opening a reply over 24 hours late, and no slow-reply apology on anything sooner (2026-10-22: the
+// 2 hour apology opened almost every draft; Ryan wants the next step first, sorry only when we
+// caused something).
 //
 // TWO TIME MODELS, kept apart (CLAUDE.md "Traps"): a message's sent_at and a match's
 // start_date_utc are TRUE INSTANTS, formatted in a real time zone. A match's start_date is LOCAL WALL
@@ -18,7 +20,9 @@ import { timezoneFor } from "@/lib/cityTimezones";
 import { resolveCityScope } from "@/lib/cityScope";
 
 export const FALLBACK_TZ = "America/Chicago";
-export const LATE_REPLY_MS = 2 * 3600e3;
+export const VERY_LATE_REPLY_MS = 24 * 3600e3;
+// A saved draft older than this is redrafted. Not an apology threshold: it was one until 2026-10-22.
+export const STALE_DRAFT_MS = 2 * 3600e3;
 const SCHEDULE_DAYS = 7;
 const SCHEDULE_LIMIT = 30;
 
@@ -64,7 +68,8 @@ export type DraftClock = {
   time_zone: string;
   latest_player_message: string;
   hours_since_player_message: number;
-  reply_is_late: boolean;
+  /** Over 24 hours since the player wrote: the one wait that earns a sorry. */
+  reply_is_very_late: boolean;
 };
 
 export function buildClock(args: { now: number; tz: string; latestPlayerMsgIso: string }): DraftClock {
@@ -78,7 +83,7 @@ export function buildClock(args: { now: number; tz: string; latestPlayerMsgIso: 
     time_zone: `${TZ_LABEL[args.tz] ?? args.tz} (${args.tz})`,
     latest_player_message: sinceText(then, args.now, args.tz),
     hours_since_player_message: Math.round(((args.now - then) / 3600e3) * 10) / 10,
-    reply_is_late: args.now - then > LATE_REPLY_MS,
+    reply_is_very_late: args.now - then > VERY_LATE_REPLY_MS,
   };
 }
 
@@ -198,10 +203,10 @@ export function opensWithApology(reply: string): boolean {
   return APOLOGY_RX.test(first);
 }
 
-export function lateReplyProblem(reply: string, late: boolean): string | null {
+export function lateReplyProblem(reply: string, veryLate: boolean): string | null {
   if (!reply.trim()) return null;
-  if (late && !opensWithApology(reply)) return "The reply is over 2 hours late but doesn't open with a short sorry.";
-  if (!late && SLOW_RX.test(reply)) return "The reply apologizes for a slow reply that wasn't slow.";
+  if (veryLate && !opensWithApology(reply)) return "The reply is over 24 hours late but doesn't open with a short sorry.";
+  if (!veryLate && SLOW_RX.test(reply)) return "The reply apologizes for a wait under 24 hours.";
   return null;
 }
 
@@ -218,6 +223,6 @@ export function staleDraftReason(prior: { created_at: string; context_keys?: rea
     const start = m ? Date.parse(m[2]) : NaN;
     if (Number.isFinite(start) && made < start && start <= now) return "a match it mentions has started";
   }
-  if (now - made > LATE_REPLY_MS) return "it was made more than 2 hours ago";
+  if (now - made > STALE_DRAFT_MS) return "it was made more than 2 hours ago";
   return null;
 }

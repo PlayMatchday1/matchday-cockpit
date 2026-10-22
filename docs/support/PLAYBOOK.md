@@ -1,6 +1,7 @@
 # Player Chats playbook
 
-Draft 2, 2026-10-20. Built from every Player Chats message from 2026-05-15 to 2026-10-20:
+Draft 3, 2026-10-22 (rules 14, 17, 19 to 21: apologies, next step first, notes). Built from
+every Player Chats message from 2026-05-15 to 2026-10-20:
 668 threads, 6,337 messages, read in full. The house rules come from Ryan. Everything else
 describes what the team actually did.
 
@@ -63,20 +64,32 @@ numbers or codes appear.
     parent or guardian's permission.** Flag any player who says they are under 16.
 14. **Unconfirmed account.** When no account matches the phone, or the phone is on more than one
     account and staff haven't confirmed which, the draft **asks for the phone number on their
-    MatchDay account** and states **no account facts** (no credits, bookings, membership, strikes
-    or matches) until the account is confirmed. See 2.0.
+    MatchDay account** (it shows in their profile in the app; never ask for an email, which the
+    app doesn't show) and states **no account facts** (no credits, bookings, membership, strikes
+    or matches) until the account is confirmed. **The rules are not account facts:** the draft
+    still explains the rule that applies to what they asked, then asks for the number and says
+    what happens next. See 2.0.
 15. **Time.** Read "today", "tonight" and "tomorrow" relative to **when the player wrote**, not now.
     Each message in the conversation carries its time, and the context says how long ago the
     player's latest message was sent.
 16. **Already happened.** If what they asked about has already happened, say so kindly and point to
     the next real option, with actual times from the schedule.
-17. **Slow replies.** If the reply is going out **more than 2 hours** after the player's last
-    message, open with a short, natural "sorry for the slow reply". Under 2 hours, no apology for
-    timing. This is separate from the Veo rule (3), which still never apologizes for video timing.
+17. **Apologize only when we caused a problem.** A match we cancelled, a mistake on our side, or a
+    very long wait (**more than 24 hours** since the player's last message). Never as a default
+    opener, and no apology for a wait under 24 hours. The Veo rule (3) still never apologizes for
+    video timing.
 18. **Match times come from the schedule only.** Never state a match time that isn't in the schedule
     context. If the schedule doesn't have it, say the team will check.
 19. **Staff notes.** At most **3 short bullets**, plain words, most important first. No recap of the
-    conversation unless it changes what staff should do.
+    conversation unless it changes what staff should do. Never repeat a line. When the account is
+    unconfirmed, the reason line ("No account found for this number.") is added by the system as
+    the first bullet and **counts as one of the 3**; don't restate it.
+20. **Lead with the answer or the next step.** Before writing, work out what the player is asking
+    for, the rule that applies, the next concrete step, and the single piece of information (if
+    any) needed to take it. The reply opens with that, in plain words.
+21. **Refund requests get the credit answer directly,** stated positively: the money goes to their
+    MatchDay account as credit and applies automatically to their next booking. Escalate only if
+    they push back after hearing that (rule 7).
 
 ### What a draft must never do
 
@@ -116,6 +129,15 @@ often two different people.
 **Suggested answer (asking)**
 > Happy to help! What's the phone number on your MatchDay account? You can find it in your
 > profile in the app.
+
+**Suggested answer (asking, when the question has a rule behind it)**
+> If you cancelled more than 24 hours before kickoff, the match price goes back to your
+> MatchDay account as credit automatically, and it applies to your next booking. Send me the
+> phone number on your account (it's in your profile in the app) and I'll check that both
+> cancels came through.
+
+Explain the rule first, then ask (rule 14). Never say whether their cancels did or didn't
+qualify until the account is confirmed.
 
 **Suggested answer (they just sent a number)**
 > Thanks! Give me a sec to find your account.
@@ -300,7 +322,7 @@ Notes: the requested move, and whether the target team has open spots.
 > next booking, with no tax or fees on top.
 
 **Suggested answer (inside 24 hours, first-time player)**
-> Hey {first name}, sorry to hear that! Normally we need 24 hours notice to give a credit, but
+> Hey {first name}! Normally we need 24 hours notice to give a credit, but
 > since this was going to be your first match with us, I'll add a one-time credit so you can
 > come play another day. Hope to see you out there soon!
 
@@ -308,8 +330,8 @@ Only when the context says `courtesy_credit_eligible: true`. Notes: "Courtesy cr
 first-time player: issue {match price}."
 
 **Suggested answer (inside 24 hours, everyone else)**
-> Hey {first name}, sorry to hear that! Our cancellation window is 24 hours before kickoff, so
-> this one isn't eligible for a credit. Next time, if you need to switch matches, message us
+> Hey {first name}, our cancellation window is 24 hours before kickoff, so this one isn't
+> eligible for a credit. Next time, if you need to switch matches, message us
 > before you cancel and we can try to move you.
 
 No courtesy credit (rule 5). If they push back, escalate.
@@ -453,10 +475,15 @@ Notes: "Prior accounts on this phone: {n}. Prior bookings: {n}. Prior promo used
 was paid over Venmo, and credits were cashed out. Other times: "There are no refunds, only
 credits." See section 4.
 
-**Suggested answer**
-> I totally understand. We handle these as credits, which go straight to your account and
-> apply automatically to your next match, so there's no wait. Let me get someone from the team
-> to look at this with you.
+**Suggested answer (first ask)**
+> Cancels more than 24 hours out go back to your MatchDay account as credit, so the money's
+> there for you right away. It applies automatically the next time you book, with no tax or
+> card fees on top.
+
+Lead with where the money goes and how they use it (rule 21). Don't escalate on the first ask.
+
+**Suggested answer (they push back after hearing it)**
+> Got it. Let me get someone from the team to look at this with you.
 
 Then mark the thread **escalate** (rule 7). Never write "refund" as something that will
 happen.
@@ -487,11 +514,12 @@ bugs.
   button."
 - Password: use the forgot password link, or Profile → change password.
 - Bugs: "Try updating the app."
-- Deleted accounts can't be looked up by phone. Staff asked for the email.
+- Deleted accounts can't be looked up by phone. Staff asked for the email. A draft asks for the
+  phone number (rule 14); if that finds nothing, staff take it from there.
 
 **Suggested answer (unlinked or different phone)**
-> Happy to help! What's the phone number or email on your MatchDay account? I want to make sure
-> I'm looking at the right one.
+> Happy to help! What's the phone number on your MatchDay account? It's in your profile in the
+> app, and it lets me make sure I'm looking at the right one.
 
 ### 2.14 Age and eligibility: about 15 requests
 
