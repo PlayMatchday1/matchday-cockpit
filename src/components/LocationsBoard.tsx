@@ -11,6 +11,13 @@
 // TWO TABS, KEPT IN THE URL: ?tab=map opens the Map (LocationsMapTab), and ?city=<id> opens a city
 // inside it, so a link lands on exactly what was shared. No tab param = Overview.
 //
+// ONE MARKET (2026-10-23): with `market` set this same board is Match Ops → Locations for an account
+// confined to it (/match-ops/market-locations, Poland for WAW). Its routes are the scoped
+// /api/matchops/market-locations*, which filter in SQL; every distance arrives in the market's unit
+// (km). It drops what has no meaning inside one market (New markets, the per-zip table, competitors,
+// the admin player panel) and gains a place list with the nearest field. The expandable player
+// detail is NOT offered there: its route (/api/growth/locations/player) is Growth's and unscoped.
+//
 // TODO(api): four fields the MatchDay API does not expose yet, so this page leaves them out entirely
 // (no empty columns, no placeholder cards). Wire each in when /admin/players carries it:
 //   - area city id        → replace the computed verdict with the backend's own assignment
@@ -30,6 +37,7 @@ import Link from "next/link";
 import { useAuth } from "@/lib/useAuth";
 import { downloadCsv } from "@/components/growth/format";
 import { placeName } from "@/lib/playerAreaModel";
+import { fmtDistance, perMile, type DistanceUnit } from "@/lib/locationScopes";
 import { type LocationsReport, type ZipRow, type DayPoint } from "@/lib/locationsReport";
 
 const CHI = "America/Chicago";
@@ -38,7 +46,6 @@ const fmtWhen = (iso: string) =>
 const fmtDay = (ymd: string) =>
   new Intl.DateTimeFormat("en-US", { timeZone: "UTC", month: "short", day: "numeric" }).format(new Date(`${ymd}T12:00:00Z`));
 const int = (n: number) => n.toLocaleString("en-US");
-const mi = (n: number | null) => (n == null ? "—" : `${n < 10 ? n.toFixed(1) : Math.round(n)} mi`);
 
 const ZIP_COLOR = "#1baf7a";
 const STALE_AFTER_MINS = 13 * 60;
@@ -50,8 +57,14 @@ const VERDICT_FILTERS: { key: VerdictFilter; label: string }[] = [
   { key: "unidentified", label: "Unidentified" },
 ];
 
-export default function LocationsBoard() {
+/** A market's view of the board (see the header). */
+export type LocationsMarket = { apiBase: string; name: string; cityName: string; unit: DistanceUnit; home: [number, number]; coverageRadiusMiles: number };
+
+export default function LocationsBoard({ market = null }: { market?: LocationsMarket | null } = {}) {
   const { appUser } = useAuth();
+  const apiBase = market?.apiBase ?? "/api/growth/locations";
+  const unit: DistanceUnit = market?.unit ?? "mi";
+  const mi = useCallback((n: number | null) => fmtDistance(n, unit), [unit]);
   const [data, setData] = useState<LocationsReport | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -85,7 +98,7 @@ export default function LocationsBoard() {
     try {
       const { data: sess } = await supabase.auth.getSession();
       const token = sess.session?.access_token;
-      const res = await fetch("/api/growth/locations", {
+      const res = await fetch(apiBase, {
         cache: "no-store", headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       const body = await res.json();
@@ -97,7 +110,7 @@ export default function LocationsBoard() {
     } finally {
       setRefreshing(false);
     }
-  }, []);
+  }, [apiBase]);
   useEffect(() => { void load(); }, [load]);
   // Refresh and a finished Sync now re-read BOTH tabs (Supabase only).
   const [openNextReload, setOpenNextReload] = useState(0);
@@ -126,7 +139,7 @@ export default function LocationsBoard() {
   }), [data, vf, city]);
 
   const exportZips = () => {
-    const rows: (string | number)[][] = [["Area", "Zip", "Place", "Players", "Nearest city", "Distance (mi)", "Status"]];
+    const rows: (string | number)[][] = [["Area", "Zip", "Place", "Players", "Nearest city", `Distance (${unit})`, "Status"]];
     for (const r of zipView) rows.push([
       r.zip ?? placeName(r.area) ?? r.area, r.zip ?? "", placeName(r.label) ?? "", r.players,
       r.verdict === "unidentified" ? "" : cityName(r.nearestCityId),
@@ -135,6 +148,14 @@ export default function LocationsBoard() {
     ]);
     const tag = [city != null ? cityName(city) : "", vf !== "all" ? vf : ""].filter(Boolean).join("-").replace(/[^A-Za-z0-9-]+/g, "_");
     downloadCsv(`player-locations${tag ? "-" + tag : ""}.csv`, rows);
+  };
+
+  // THE MARKET'S PLACE LIST and its export — the table as shown, row for row.
+  const places = data?.scope?.places ?? [];
+  const exportPlaces = () => {
+    const rows: (string | number)[][] = [["City", "Players", "Nearest field", `Distance (${unit})`]];
+    for (const p of places) rows.push([p.place, p.players, p.nearestFieldTitle ?? "", p.nearestFieldDist ?? ""]);
+    downloadCsv(`player-locations-${(market?.name ?? "market").replace(/[^A-Za-z0-9]+/g, "_")}.csv`, rows);
   };
 
   // Freshness stamp: the last SUCCESSFUL sync's finish time. A newer failed run is said out loud.
@@ -153,8 +174,10 @@ export default function LocationsBoard() {
       <div className="loc-card">
         <div className="loc-head">
           <div>
-            <div className="loc-h-title">Locations</div>
-            <div className="loc-h-sub">Home areas players have shared in the app. Staff accounts are not counted.</div>
+            <div className="loc-h-title">{market ? `Locations · ${market.name}` : "Locations"}</div>
+            <div className="loc-h-sub">{market
+              ? `Home areas players in ${market.name} have shared in the app. Staff accounts are not counted. Distances in ${unit === "km" ? "kilometres" : "miles"}.`
+              : "Home areas players have shared in the app. Staff accounts are not counted."}</div>
           </div>
           <div className="loc-h-right">
             <span className="loc-fresh">
@@ -172,7 +195,7 @@ export default function LocationsBoard() {
             </span>
             {/* NO SYNC FROM HERE (2026-10-08). Sync now lives on the Data page, with the other syncs;
                 admins get a link to it. */}
-            {appUser?.is_admin && (
+            {appUser?.is_admin && !market && (
               <Link href="/data#player-locations" className="loc-settings" data-testid="loc-sync-settings">Sync settings</Link>
             )}
           </div>
@@ -193,7 +216,8 @@ export default function LocationsBoard() {
 
       {tab === "map" ? (
         <LocationsMapTab cityId={mapCity} reloadKey={mapReload}
-          onCity={(id) => go({ tab: "map", city: id })} isAdmin={appUser?.is_admin === true} />
+          onCity={(id) => go({ tab: "map", city: id })} isAdmin={appUser?.is_admin === true && !market}
+          {...(market ? { apiBase: market.apiBase, unit, home: market.home, competitors: false } : {})} />
       ) : error && !data ? (
         <div className="loc-card"><div className="loc-state">{error} <button type="button" className="loc-btn" onClick={() => void load()}>Retry</button></div></div>
       ) : !data ? (
@@ -203,6 +227,11 @@ export default function LocationsBoard() {
       ) : (
         <>
           {error && <div className="loc-card"><div className="loc-warn">Couldn&apos;t refresh: {error}. Showing the last data loaded.</div></div>}
+          {/* A market whose city is not in the latest FULL pass yet (only a full pass reads
+              /admin/cities) has no centre and no fields to measure against. Say so, not "no field". */}
+          {market && data.cities.length === 0 && (
+            <div className="loc-card"><div className="loc-warn" data-testid="loc-no-city">{market.cityName} is not in the latest full location sync yet, so coverage and nearest fields cannot be worked out. The full sync runs once a day, overnight.</div></div>
+          )}
 
           {/* 1 — KPI cards */}
           <div className="loc-kpis" data-testid="loc-kpis" style={{ ["--kpi-cols" as string]: data.kpis.unidentified > 0 ? 5 : 4 }}>
@@ -214,13 +243,18 @@ export default function LocationsBoard() {
                 // "or booked", not just "played": the Users lens definition counts an upcoming booking,
                 // and on 2026-10-08 six of the nine active players with a location had booked but not
                 // yet played. "Played" alone would have been false for most of them.
-                ? <>{int(data.active.withLocation)} of {int(data.active.total)}<span className="loc-kpi-unit loc-kpi-unit-line">active players (played or booked in the last 30 days)</span></>
+                ? <>{int(data.active.withLocation)} of {int(data.active.total)}<span className="loc-kpi-unit loc-kpi-unit-line">{market
+                  ? `active ${market.cityName} players (played or booked a ${market.cityName} match in the last 30 days)`
+                  : "active players (played or booked in the last 30 days)"}</span></>
                 : <>{int(data.kpis.areaSet)} <span className="loc-kpi-unit">players</span></>}
-              sub={data.playersTotal != null ? `${int(data.kpis.areaSet)} of ${int(data.playersTotal)} including inactive and new signups` : `${int(data.kpis.areaSet)} players`}
+              sub={data.playersTotal != null
+                ? market ? `${int(data.kpis.areaSet)} of ${int(data.playersTotal)} ${market.cityName} players, ever (booked a ${market.cityName} match or located in ${market.name})`
+                  : `${int(data.kpis.areaSet)} of ${int(data.playersTotal)} including inactive and new signups`
+                : `${int(data.kpis.areaSet)} players`}
               note={data.active ? undefined : "Active players could not be read just now."} />
             <Kpi label="GPS" value={int(data.kpis.gps)} sub="shared their location" />
             <Kpi label="Zip only" value={int(data.kpis.zip)} sub="typed a home zip" />
-            <Kpi label="Outside coverage" value={int(data.kpis.outside)} sub="no city within range" />
+            <Kpi label="Outside coverage" value={int(data.kpis.outside)} sub={market ? `farther than ${Math.round(market.coverageRadiusMiles * perMile(unit))} ${unit} from ${market.cityName}` : "no city within range"} />
             {/* Only when there are any: since the zip-centroid fallback (0221) this is normally 0. */}
             {data.kpis.unidentified > 0 && <Kpi label="Unidentified zips" value={int(data.kpis.unidentified)} sub="zip that does not exist" />}
           </div>
@@ -258,13 +292,16 @@ export default function LocationsBoard() {
                     <tbody>
                       {data.recent.length === 0 && <tr><td colSpan={5} className="loc-td-empty">No player has set a location yet.</td></tr>}
                       {data.recent.map((r) => {
-                        const open = openPlayer === r.playerId;
+                        const open = !market && openPlayer === r.playerId;
+                        // No detail row on a market's board (see the header): the row is plain, not a control.
+                        const rowProps = market ? {} : {
+                          className: "loc-row-x" + (open ? " loc-row-open" : ""), tabIndex: 0, "aria-expanded": open,
+                          onClick: (e: React.MouseEvent) => { if ((e.target as HTMLElement).closest("a")) return; setOpenPlayer(open ? null : r.playerId); },
+                          onKeyDown: (e: React.KeyboardEvent) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setOpenPlayer(open ? null : r.playerId); } },
+                        };
                         return (
                           <Fragment key={r.playerId}>
-                            <tr className={"loc-row-x" + (open ? " loc-row-open" : "")} tabIndex={0} aria-expanded={open}
-                              data-testid={`recent-row-${r.playerId}`}
-                              onClick={(e) => { if ((e.target as HTMLElement).closest("a")) return; setOpenPlayer(open ? null : r.playerId); }}
-                              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setOpenPlayer(open ? null : r.playerId); } }}>
+                            <tr {...rowProps} data-testid={`recent-row-${r.playerId}`}>
                               <td className="loc-nowrap">{r.seeded ? <span className="loc-muted" title="Set before tracking began">Before tracking</span> : fmtWhen(r.firstSeenAt)}</td>
                               <td><a className="loc-link" href={`/match-ops/player-lookup?id=${r.playerId}`}>{r.name ?? `Player ${r.playerId}`}</a></td>
                               <td>{r.zip ?? placeName(r.label) ?? "—"}{r.zip && r.label ? <span className="loc-muted"> ({placeName(r.label)})</span> : null}</td>
@@ -285,6 +322,31 @@ export default function LocationsBoard() {
             )}
           </div>
 
+          {/* 3 — A market's place list (city, players, nearest field, distance), or the US per-zip table. */}
+          {market ? (
+            <div className="loc-card">
+              <div className="loc-sec-head">
+                <div className="loc-sec-title">Places in {market.name}</div>
+                <button type="button" className="loc-btn" onClick={exportPlaces} disabled={places.length === 0} data-testid="places-export">Export CSV</button>
+              </div>
+              <div className="loc-tablewrap">
+                <table className="loc-table" data-testid="loc-places">
+                  <thead><tr><th>City</th><th className="loc-num">Players</th><th>Nearest field</th><th className="loc-num">Distance</th></tr></thead>
+                  <tbody>
+                    {places.length === 0 && <tr><td colSpan={4} className="loc-td-empty">No player in {market.name} has set a location yet.</td></tr>}
+                    {places.map((p) => (
+                      <tr key={p.place}>
+                        <td>{p.place}</td><td className="loc-num">{int(p.players)}</td>
+                        <td>{p.nearestFieldTitle ?? "No active field"}</td><td className="loc-num">{mi(p.nearestFieldDist)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="loc-foot">Grouped by the place MatchDay names for each location. Distance is straight-line from the place&apos;s players&apos; average position to the nearest active field.</div>
+            </div>
+          ) : (
+          <>
           {/* 3 — Player locations */}
           <div className="loc-card">
             <div className="loc-sec-head">
@@ -337,6 +399,9 @@ export default function LocationsBoard() {
             )}
           </div>
 
+          </>
+          )}
+
           {/* 4 — Unidentified zips: only when there are any */}
           {data.unidentified.length > 0 && (
             <div className="loc-card">
@@ -353,10 +418,11 @@ export default function LocationsBoard() {
           )}
 
           {/* 5 — Where to open next: new fields inside the cities we serve (server-computed). */}
-          <LocationsOpenNext cities={pillCities} reloadKey={openNextReload} />
+          <LocationsOpenNext cities={pillCities} reloadKey={openNextReload} {...(market ? { apiBase: market.apiBase, unit } : {})} />
 
-          {/* 6 — New markets: clusters of players outside every city (within 25 miles of each other). */}
-          <div className="loc-card">
+          {/* 6 — New markets: clusters of players outside every city (within 25 miles of each other).
+              Not on a market's board: inside one market, outside-coverage places are in the place list. */}
+          {!market && <div className="loc-card">
             <div className="loc-sec-head"><div className="loc-sec-title">New markets</div></div>
             <div className="loc-tablewrap">
               <table className="loc-table" data-testid="loc-outside">
@@ -372,7 +438,7 @@ export default function LocationsBoard() {
                 </tbody>
               </table>
             </div>
-          </div>
+          </div>}
         </>
       )}
     </div>

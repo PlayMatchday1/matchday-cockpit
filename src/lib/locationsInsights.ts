@@ -40,7 +40,9 @@ export type NewMarket = {
 
 /** Single-linkage clusters: two players within 25 mi of each other share a cluster (and so,
  *  transitively, does anyone within 25 mi of either). Named by the most common place label. */
-export function clusterOutside(points: OutsidePoint[], cities: AreaCity[], withinMi = NEW_MARKET_CLUSTER_MI): NewMarket[] {
+/** `perMile` scales the REPORTED nearest-city distance (1 = miles, 1.609344 = km); the clustering
+ *  distance is always miles. */
+export function clusterOutside(points: OutsidePoint[], cities: AreaCity[], withinMi = NEW_MARKET_CLUSTER_MI, perMile = 1): NewMarket[] {
   const parent = points.map((_, i) => i);
   const find = (i: number): number => (parent[i] === i ? i : (parent[i] = find(parent[i])));
   for (let i = 0; i < points.length; i++) for (let j = i + 1; j < points.length; j++) {
@@ -57,8 +59,28 @@ export function clusterOutside(points: OutsidePoint[], cities: AreaCity[], withi
     const name = label ?? (zips.size === 1 && g[0].zip ? g[0].zip : GPS_NO_ZIP);
     const memberKeys = [...new Set(g.map((p) => p.key))];
     return { key: memberKeys.slice().sort().join("+"), name, players: g.length, lat: r2(lat), lng: r2(lng),
-      nearestCityId: nearest?.id ?? null, nearestCityMi: nearest ? r1(nearest.mi) : null, memberKeys };
+      nearestCityId: nearest?.id ?? null, nearestCityMi: nearest ? r1(nearest.mi * perMile) : null, memberKeys };
   }).sort((a, b) => b.players - a.players || a.name.localeCompare(b.name));
+}
+
+// ── PLACES (a scope's place list) ─────────────────────────────────────────────────────────────
+export type PlaceNearest = { place: string; players: number; nearestFieldId: number | null; nearestFieldTitle: string | null; nearestFieldDist: number | null };
+/** Players grouped by the place their label names ("Warsaw", "Kraków"), each with the field nearest
+ *  to the place's average position. `perMile` sets the distance unit. Unlabelled players group under
+ *  `GPS, no zip`. Sorted by players, then name. */
+export function placesWithNearestField(points: { lat: number; lng: number; label: string | null }[], fields: FieldPoint[], perMile = 1): PlaceNearest[] {
+  const g = new Map<string, { n: number; sLat: number; sLng: number }>();
+  for (const p of points) {
+    const k = cityPart(p.label) ?? GPS_NO_ZIP;
+    const e = g.get(k) ?? { n: 0, sLat: 0, sLng: 0 };
+    e.n++; e.sLat += p.lat; e.sLng += p.lng; g.set(k, e);
+  }
+  return [...g].map(([place, e]) => {
+    const lat = e.sLat / e.n, lng = e.sLng / e.n;
+    let nf: { f: FieldPoint; mi: number } | null = null;
+    for (const f of fields) { const d = milesBetween(lat, lng, f.lat, f.lng); if (!nf || d < nf.mi) nf = { f, mi: d }; }
+    return { place, players: e.n, nearestFieldId: nf?.f.id ?? null, nearestFieldTitle: nf?.f.title ?? null, nearestFieldDist: nf ? r1(nf.mi * perMile) : null };
+  }).sort((a, b) => b.players - a.players || a.place.localeCompare(b.place));
 }
 
 // ── WHERE TO OPEN NEXT ────────────────────────────────────────────────────────────────────────
@@ -85,8 +107,11 @@ export type CityOpenNext =
   | { cityId: number; status: "ok"; players: number; suggestions: Suggestion[] }
   | { cityId: number; status: "too_few"; players: number; needed: number };
 
-/** Greedy max-coverage on a ~1-mile grid over the city's uncovered players. */
-export function openNextForCity(cityId: number, players: CityPlayer[], fields: FieldPoint[], reachMi: number): CityOpenNext {
+/** Greedy max-coverage on a ~1-mile grid over the city's uncovered players. `reach` is in the unit
+ *  `perMile` names (1 = miles, the US page; 1.609344 = km, the Poland tab), and so is the reported
+ *  nearestFieldMi. The grid and the haversine work stay in miles. */
+export function openNextForCity(cityId: number, players: CityPlayer[], fields: FieldPoint[], reach: number, perMile = 1): CityOpenNext {
+  const reachMi = reach / perMile;
   if (players.length < MIN_PLAYERS_FOR_SUGGESTIONS) {
     return { cityId, status: "too_few", players: players.length, needed: MIN_PLAYERS_FOR_SUGGESTIONS };
   }
@@ -132,7 +157,7 @@ export function openNextForCity(cityId: number, players: CityPlayer[], fields: F
       cityId, rank, name, playersReached: reached.length,
       coverageNowPct: Math.round((coveredNow / players.length) * 100),
       coverageWithPct: Math.round((coveredSoFar / players.length) * 100),
-      nearestFieldId: nf?.f.id ?? null, nearestFieldTitle: nf?.f.title ?? null, nearestFieldMi: nf ? r1(nf.mi) : null,
+      nearestFieldId: nf?.f.id ?? null, nearestFieldTitle: nf?.f.title ?? null, nearestFieldMi: nf ? r1(nf.mi * perMile) : null,
     });
     const hit = new Set(hits);
     uncovered = uncovered.filter((_, k) => !hit.has(k));

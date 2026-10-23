@@ -4,6 +4,8 @@
 // NO TIMES IN THIS FILE. first_seen_at is a true UTC instant written by our own sync; the page
 // renders it in America/Chicago. Nothing here touches match wall-clock or promo UTC helpers.
 
+import { scopedCityRadius } from "./locationScopes";
+
 export type AreaCity = { id: number; name: string; abbr: string; lat: number; lng: number; radiusMiles: number };
 
 export type Verdict = "in_market" | "waitlist" | "unidentified";
@@ -109,13 +111,17 @@ export function computeVerdict(lat: unknown, lng: unknown, cities: AreaCity[], m
   };
 }
 
-/** US cities only — Warsaw is excluded from verdicts and from the page (Ryan). */
-export function usCities(raw: unknown[]): AreaCity[] {
+/** The cities verdicts are computed against: every US city, plus the city of each Locations scope
+ *  (Warsaw, src/lib/locationScopes.ts) at the coverage radius that scope sets. Warsaw was excluded
+ *  until 2026-10-23, which made every Poland player "outside coverage, nearest New York City,
+ *  4,260 mi". Its own radiusMiles (1000) is NOT used — see locationScopes.ts. */
+export function areaCities(raw: unknown[]): AreaCity[] {
   const out: AreaCity[] = [];
   for (const c of raw as Record<string, unknown>[]) {
     const id = num(c?.id), lat = num(c?.lat), lng = num(c?.lng), radiusMiles = num(c?.radiusMiles);
-    if (c?.country !== "United States" || id == null || lat == null || lng == null || radiusMiles == null) continue;
-    out.push({ id, name: String(c.name ?? ""), abbr: String(c.abbr ?? ""), lat, lng, radiusMiles });
+    const scoped = scopedCityRadius(c?.abbr);
+    if ((c?.country !== "United States" && scoped == null) || id == null || lat == null || lng == null || radiusMiles == null) continue;
+    out.push({ id, name: String(c.name ?? ""), abbr: String(c.abbr ?? ""), lat, lng, radiusMiles: scoped ?? radiusMiles });
   }
   return out.sort((a, b) => a.id - b.id);
 }
@@ -164,7 +170,7 @@ export function areaGroupName(zip: string | null, labels: Iterable<string | null
 /** A place as the page shows it: "City, ST". areaLabel is "City, United States" and MatchDay carries
  *  no state, so `state` is the one the sync worked out from the player's coordinates (usState.ts,
  *  stored in player_area_seen.state). No state — outside every state, or no coordinates — shows the
- *  city alone. The country is always dropped: every city on this page is in the US. */
+ *  city alone. ", United States" is dropped; any other country stays ("Warsaw, Poland"). */
 export function placeName(label: string | null, state?: string | null): string | null {
   if (!label) return null;
   const city = label.replace(/,\s*United States$/i, "").trim() || label;

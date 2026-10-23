@@ -50,7 +50,7 @@ import { getPacedClient, MatchdayApiError, type PacedClient } from "./matchdayAp
 import { mapRow as mapUserRow, type ApiPlayer as ApiUser, type DbRow as UserRow } from "./mdapiUsersSync";
 import { selectAll } from "./supabasePagination";
 import {
-  apiCoords, computeVerdict, geometryKey, hasArea, isInternalEmail, usCities, zip5, zipOf, type AreaCity, type LocationSource,
+  apiCoords, computeVerdict, geometryKey, hasArea, isInternalEmail, areaCities, zip5, zipOf, type AreaCity, type LocationSource,
 } from "./playerAreaModel";
 import { stateForPoint } from "./usState";
 import { activeFields } from "./locationsMap";
@@ -271,8 +271,8 @@ export async function runLeg(sb: SupabaseClient, runId: number): Promise<LegResu
     let cities: AreaCity[] = Array.isArray(run.cities) && run.cities.length ? (run.cities as AreaCity[]) : [];
     if (cities.length === 0) {
       const raw = await client.get<unknown>("/admin/cities");
-      cities = usCities(Array.isArray(raw) ? raw : []);
-      if (cities.length === 0) throw new Error("/admin/cities returned no US city with lat/lng/radiusMiles — refusing to compute verdicts");
+      cities = areaCities(Array.isArray(raw) ? raw : []);
+      if (cities.length === 0) throw new Error("/admin/cities returned no city with lat/lng/radiusMiles — refusing to compute verdicts");
       await sb.from("player_area_sync_runs").update({ cities }).eq("id", runId);
     }
     const g = await geometryFor(sb, cities);

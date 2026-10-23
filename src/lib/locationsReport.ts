@@ -9,7 +9,8 @@
 // the first sync run, not the day the player set anything.
 
 import { chicagoYmd } from "./weekBuckets";
-import { clusterOutside, effectiveVerdict } from "./locationsInsights";
+import { clusterOutside, effectiveVerdict, type PlaceNearest } from "./locationsInsights";
+import type { DistanceUnit } from "./locationScopes";
 import { areaGroupKey, areaGroupName, placeName, sourceKind, type AreaCity, type SourceKind, type Verdict } from "./playerAreaModel";
 
 export type SeenRow = {
@@ -74,6 +75,9 @@ export type LocationsReport = {
   zips: ZipRow[];
   unidentified: { zip: string; players: number }[];
   outside: PlaceRow[];
+  /** SCOPED ONLY (the Poland tab): the market, its distance unit (every distance above is in it),
+   *  and its place list. Absent on the US page. */
+  scope?: { name: string; cityName: string; unit: DistanceUnit; places: PlaceNearest[] };
 };
 
 const DAY_MS = 86_400_000;
@@ -108,8 +112,13 @@ export function buildLocationsReport(input: {
    *  coverage (the sync stores the same; applying it here keeps the page right before the next run). */
   markets?: ReadonlySet<number> | null;
   internalIds?: Set<number> | null;
+  /** Scoped: the market's own player count, replacing the sync's estate-wide players_total. */
+  playersTotal?: number | null;
+  /** Multiply a stored mile distance (nearest_city_mi) by this for the result. Default 1. */
+  perMile?: number;
   now: Date;
 }): LocationsReport {
+  const k = input.perMile ?? 1;
   const { names, now } = input;
   // Labels become "City, ST" ONCE, here, so every group, name and export below carries the state —
   // and Grandview, MO and Grandview, WA are two places, not one.
@@ -117,8 +126,8 @@ export function buildLocationsReport(input: {
     .map((r) => ({ ...r, area_label: placeName(r.area_label, r.state) }))
     .map((r) => (input.markets ? effectiveVerdict(r, input.markets) : r));
   const cities = (Array.isArray(input.okRun?.cities) ? input.okRun!.cities : []) as AreaCity[];
-  const playersTotal = input.okRun?.players_total != null
-    ? input.okRun.players_total - (input.okRun.players_internal ?? 0) : null;
+  const playersTotal = input.playersTotal !== undefined ? input.playersTotal
+    : input.okRun?.players_total != null ? input.okRun.players_total - (input.okRun.players_internal ?? 0) : null;
 
   const kinds = live.map(kindOf);
   const kpis = {
@@ -194,7 +203,7 @@ export function buildLocationsReport(input: {
       area: key === "no-location" ? NO_LOCATION : areaGroupName(g[0].zip, g.map((r) => r.area_label)),
       label: g.find((r) => r.area_label)?.area_label ?? null, players: g.length,
       nearestCityId: mode(g.map((r) => r.nearest_city_id)),
-      nearestMi: mis.length ? Math.min(...mis) : null,
+      nearestMi: mis.length ? Math.round(Math.min(...mis) * k * 10) / 10 : null,
       verdict, verdictCityId: verdict === "in_market" ? mode(g.map((r) => r.verdict_city_id)) : null,
       fromZip: g.filter((r) => r.location_source === "zip_centroid").length,
     };
@@ -215,7 +224,7 @@ export function buildLocationsReport(input: {
   const outside: PlaceRow[] = clusterOutside(
     live.filter((r) => r.verdict === "waitlist" && r.lat != null && r.lng != null)
       .map((r) => ({ lat: r.lat as number, lng: r.lng as number, label: r.area_label, zip: r.zip, key: String(r.player_id) })),
-    cities,
+    cities, undefined, k,
   ).map((c) => ({ key: c.key, place: c.name, players: c.players, nearestCityId: c.nearestCityId, nearestMi: c.nearestCityMi }));
 
   return {

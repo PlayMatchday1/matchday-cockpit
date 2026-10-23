@@ -23,6 +23,7 @@ import { areaGroupKey, areaGroupName, milesBetween, placeName, type AreaCity } f
 import { clusterOutside, effectiveVerdict, type OutsidePoint } from "./locationsInsights";
 import { activityOf, emptyActivity, summarizePlays, venuePlayFields, type Activity, type BubblePlays, type Play, type PlayField } from "./wherePlayed";
 import { groupIntoUnits, unitIdOf, venueUnitId, type UnitMember, type VenueLink } from "./venueUnits";
+import { perMile, type DistanceUnit } from "./locationScopes";
 
 export const REACHES = [3, 5, 10, 15] as const;
 export type Reach = (typeof REACHES)[number];
@@ -177,6 +178,11 @@ export function buildLocationsMap(input: {
   /** Field -> canonical venue (locationsData.fetchVenueLinks). Absent = every field is its own unit. */
   venueLinks?: ReadonlyMap<number, VenueLink>;
   now?: Date;
+  /** THE UNIT OF EVERY DISTANCE AND REACH in the result. Default miles (the US page). In "km" the
+   *  REACHES 3 / 5 / 10 / 15 are kilometres and every `…Mi` field carries kilometres (the Poland
+   *  tab). City radii, the 25-mile New markets clustering and the bad-field test stay in miles —
+   *  they are definitions, not readouts. */
+  unit?: DistanceUnit;
 }): LocationsMap {
   const core = buildCore(input, null);
   const split = buildCore(input, "activity");
@@ -201,6 +207,9 @@ const sinkOf = (sink: KeySink, id: number) => { const e = sink.get(id) ?? {}; si
 
 function buildCore(input: Parameters<typeof buildLocationsMap>[0], split: "activity" | null, sink?: KeySink): Omit<LocationsMap, "zipsActivity" | "nationalActivity" | "playFields"> {
   const nowMs = (input.now ?? new Date()).getTime();
+  // Every distance this function REPORTS or compares to a reach goes through dist (input.unit).
+  const K = perMile(input.unit);
+  const dist = (aLat: number, aLng: number, bLat: number, bLng: number) => milesBetween(aLat, aLng, bLat, bLng) * K;
   const playsOf = (p: MapPlayerRow): Play[] => (p.player_id != null ? input.history?.playsByPlayer.get(p.player_id) ?? [] : []);
   const actOf = (p: MapPlayerRow): Activity => {
     const plays = playsOf(p);
@@ -210,7 +219,7 @@ function buildCore(input: Parameters<typeof buildLocationsMap>[0], split: "activ
   const links = input.venueLinks ?? new Map<number, VenueLink>();
   const fieldById = new Map(playFieldsWithVenues(input).map((f) => [f.id, f]));
   const unitOf = (id: number) => unitIdOf(id, links);
-  const summarize = (members: MapPlayerRow[], lat: number, lng: number) => summarizePlays(members.map(playsOf), { lat, lng }, fieldById, unitOf);
+  const summarize = (members: MapPlayerRow[], lat: number, lng: number) => scalePlays(summarizePlays(members.map(playsOf), { lat, lng }, fieldById, unitOf), K);
   const tally = (members: MapPlayerRow[]) => { const a = emptyActivity(); for (const m of members) a[actOf(m)]++; return a; };
   const fromZipOf = (members: MapPlayerRow[]) => members.filter((m) => m.location_source === "zip_centroid").length;
   const cityIds = new Set(input.cities.map((c) => c.id));
@@ -228,7 +237,7 @@ function buildCore(input: Parameters<typeof buildLocationsMap>[0], split: "activ
   const nearestCity = (lat: number, lng: number) => {
     let best: { id: number; mi: number } | null = null;
     for (const c of input.cities) {
-      const d = milesBetween(lat, lng, c.lat, c.lng);
+      const d = dist(lat, lng, c.lat, c.lng);
       if (!best || d < best.mi) best = { id: c.id, mi: d };
     }
     return best;
@@ -268,7 +277,7 @@ function buildCore(input: Parameters<typeof buildLocationsMap>[0], split: "activ
   }).sort((a, b) => b.players - a.players || a.key.localeCompare(b.key));
   // NEW MARKETS: outside-coverage players clustered within 25 miles of each other (the Overview
   // shows the same clusters). zipKeys = the national bubbles in the cluster, for selecting one.
-  const outside: OutsidePlace[] = clusterOutside(outPts, input.cities).map((c) => ({
+  const outside: OutsidePlace[] = clusterOutside(outPts, input.cities, undefined, K).map((c) => ({
     place: c.name, players: c.players, nearestCityId: c.nearestCityId, nearestCityMi: c.nearestCityMi,
     lat: c.lat, lng: c.lng, zipKeys: c.memberKeys,
   }));
@@ -298,14 +307,14 @@ function buildCore(input: Parameters<typeof buildLocationsMap>[0], split: "activ
   const zips: MapZip[] = zipsExact.map((z) => {
     let best: { id: number; mi: number } | null = null;
     for (const f of fieldsRaw) {
-      const mi = milesBetween(z.lat, z.lng, f.lat, f.lng);
+      const mi = dist(z.lat, z.lng, f.lat, f.lng);
       if (!best || mi < best.mi) best = { id: f.id, mi };
     }
     if (best) nearestExact.set(z.key, best.mi);
     const inReach = Object.fromEntries(REACHES.map((r) => [r, best != null && best.mi <= r])) as Record<Reach, boolean>;
     const nearby: MapZip["nearby"] = [];
     for (const f of fieldsRaw) {
-      const d = milesBetween(z.lat, z.lng, f.lat, f.lng);
+      const d = dist(z.lat, z.lng, f.lat, f.lng);
       const minReach = REACHES.find((r) => d <= r);
       if (minReach != null) nearby.push({ fieldId: f.id, mi: r1(d), minReach });
     }
@@ -322,7 +331,7 @@ function buildCore(input: Parameters<typeof buildLocationsMap>[0], split: "activ
   if (sink) for (const z of zipsExact) {
     const fr: Record<number, Reach> = {};
     for (const f of fieldsRaw) {
-      const r = REACHES.find((x) => milesBetween(z.lat, z.lng, f.lat, f.lng) <= x);
+      const r = REACHES.find((x) => dist(z.lat, z.lng, f.lat, f.lng) <= x);
       if (r != null) fr[f.id] = r;
     }
     for (const m of z.members) if (m.player_id != null) sinkOf(sink, m.player_id).fieldReach = fr;
@@ -331,7 +340,7 @@ function buildCore(input: Parameters<typeof buildLocationsMap>[0], split: "activ
   const fields: MapField[] = fieldsRaw.map((f) => {
     const reach = zeroByReach();
     for (const z of zipsExact) {
-      const mi = milesBetween(z.lat, z.lng, f.lat, f.lng);
+      const mi = dist(z.lat, z.lng, f.lat, f.lng);
       for (const r of REACHES) if (mi <= r) reach[r] += z.n;
     }
     return { ...f, reach };
@@ -351,6 +360,15 @@ function buildCore(input: Parameters<typeof buildLocationsMap>[0], split: "activ
   }).sort((a, b) => b.players - a.players || b.fields - a.fields || a.name.localeCompare(b.name));
 
   return { cities, fields, zips, national, outside, badFields, waitlistPlayers, unidentifiedPlayers, activeWindowDays: ACTIVE_WINDOW_DAYS };
+}
+
+/** A bubble's play summary in the result's unit (summarizePlays reports miles). */
+function scalePlays(p: BubblePlays, k: number): BubblePlays {
+  if (k === 1) return p;
+  const sc = (n: number | null) => (n == null ? null : r1(n * k));
+  const line = (f: BubblePlays["fields"][number]): BubblePlays["fields"][number] =>
+    ({ ...f, mi: sc(f.mi), ...(f.parts ? { parts: f.parts.map(line) } : {}) });
+  return { ...p, medianMi: sc(p.medianMi), fields: p.fields.map(line) };
 }
 
 /* ── ONE ROW PER PLAYER, for the admin-only "Players in this area" table ─────────────────────────

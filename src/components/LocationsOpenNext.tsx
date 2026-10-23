@@ -9,13 +9,18 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { downloadCsv } from "@/components/growth/format";
 import { MIN_PLAYERS_PER_SUGGESTION, type CityOpenNext, type Suggestion } from "@/lib/locationsInsights";
+import { fmtDistance, type DistanceUnit } from "@/lib/locationScopes";
 
 const REACHES = [3, 5, 10, 15] as const;
 type Payload = { reach: number; minPlayers: number; cities: { id: number; name: string }[]; results: CityOpenNext[] };
 const int = (n: number) => n.toLocaleString("en-US");
-const mi = (n: number | null) => (n == null ? "" : `${n < 10 ? n.toFixed(1) : Math.round(n)} mi`);
 
-export default function LocationsOpenNext({ cities, reloadKey }: { cities: { id: number; name: string }[]; reloadKey: number }) {
+/** `apiBase` + "/open-next" is the route; `unit` is what its reach and distances are in (the Poland
+ *  tab's route answers in km). Defaults are the US page's. */
+export default function LocationsOpenNext({ cities, reloadKey, apiBase = "/api/growth/locations", unit = "mi" }: {
+  cities: { id: number; name: string }[]; reloadKey: number; apiBase?: string; unit?: DistanceUnit;
+}) {
+  const mi = (n: number | null) => fmtDistance(n, unit, "");
   const [reach, setReach] = useState<number>(10);
   const [city, setCity] = useState<number | null>(null);
   const [data, setData] = useState<Payload | null>(null);
@@ -25,7 +30,7 @@ export default function LocationsOpenNext({ cities, reloadKey }: { cities: { id:
     try {
       const { data: sess } = await supabase.auth.getSession();
       const token = sess.session?.access_token;
-      const res = await fetch(`/api/growth/locations/open-next?reach=${r}`, {
+      const res = await fetch(`${apiBase}/open-next?reach=${r}`, {
         cache: "no-store", headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       const body = await res.json();
@@ -35,7 +40,7 @@ export default function LocationsOpenNext({ cities, reloadKey }: { cities: { id:
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
-  }, []);
+  }, [apiBase]);
   useEffect(() => { void load(reach); }, [load, reach, reloadKey]);
 
   const nameOf = useMemo(() => {
@@ -53,10 +58,10 @@ export default function LocationsOpenNext({ cities, reloadKey }: { cities: { id:
     && (r.status === "too_few" || (r.status === "ok" && r.suggestions.length === 0))), [data, city]);
 
   const exportCsv = () => {
-    const out: (string | number)[][] = [["City", "Area", "Players it would reach", "Coverage now (%)", "Coverage with a field there (%)", "Nearest field", "Nearest field (mi)", "Reach (mi)"]];
+    const out: (string | number)[][] = [["City", "Area", "Players it would reach", "Coverage now (%)", "Coverage with a field there (%)", "Nearest field", `Nearest field (${unit})`, `Reach (${unit})`]];
     for (const s of rows) out.push([nameOf(s.cityId), s.name, s.playersReached, s.coverageNowPct, s.coverageWithPct, s.nearestFieldTitle ?? "", s.nearestFieldMi ?? "", reach]);
     const tag = city != null ? `-${nameOf(city).replace(/[^A-Za-z0-9]+/g, "_")}` : "";
-    downloadCsv(`where-to-open-next-${reach}mi${tag}.csv`, out);
+    downloadCsv(`where-to-open-next-${reach}${unit}${tag}.csv`, out);
   };
 
   return (
@@ -77,7 +82,7 @@ export default function LocationsOpenNext({ cities, reloadKey }: { cities: { id:
         <span className="loc-control-label">Reach</span>
         {REACHES.map((r) => (
           <button type="button" key={r} aria-pressed={reach === r} data-testid={`open-next-reach-${r}`}
-            className={"loc-chip" + (reach === r ? " loc-chip-on" : "")} onClick={() => setReach(r)}>{r} mi</button>
+            className={"loc-chip" + (reach === r ? " loc-chip-on" : "")} onClick={() => setReach(r)}>{r} {unit}</button>
         ))}
       </div>
       {error && !data ? (

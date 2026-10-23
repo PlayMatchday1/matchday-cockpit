@@ -45,13 +45,17 @@ export function isPaidActiveSub(s: SubLike): boolean {
  * active — start on or after now − 30 days, plus a day of slack for the wall-clock column, then
  * filtered on the TRUE instant — and their roster rows. Supabase only.
  */
-export async function activePlayerIds(sb: SupabaseClient, now: Date): Promise<Set<number>> {
+/** `cityIdentifier` narrows to matches in one city (mdapi_matches.city_identifier), in the query —
+ *  the Locations scope's "active Warsaw players". Omitted = every city, as before. */
+export async function activePlayerIds(sb: SupabaseClient, now: Date, cityIdentifier?: string | null): Promise<Set<number>> {
   // start_date is wall clock with a Z it does not mean; it is used ONLY to narrow the fetch, with a
   // day of slack either way. The decision is made on matchStartMs below.
   const floor = new Date(now.getTime() - (ACTIVE_DAYS + 1) * DAY_MS).toISOString().slice(0, 10);
-  const matches = await selectAll<{ api_id: number; start_date: string | null; start_date_utc: string | null }>(() =>
-    sb.from("mdapi_matches").select("api_id,start_date,start_date_utc")
-      .gte("start_date", floor).eq("is_cancelled", false).is("deleted_at", null).order("api_id"));
+  const matches = await selectAll<{ api_id: number; start_date: string | null; start_date_utc: string | null }>(() => {
+    const q = sb.from("mdapi_matches").select("api_id,start_date,start_date_utc")
+      .gte("start_date", floor).eq("is_cancelled", false).is("deleted_at", null);
+    return (cityIdentifier ? q.eq("city_identifier", cityIdentifier) : q).order("api_id");
+  });
   const ids = matches.filter((m) => isActiveByLastPlay(matchStartMs(m.start_date_utc, m.start_date), now)).map((m) => m.api_id);
 
   const out = new Set<number>();

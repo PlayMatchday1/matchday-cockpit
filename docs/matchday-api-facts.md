@@ -7613,3 +7613,39 @@ request was made to gather any of it.
   STILL UNKNOWN: the ORDER (one row per probe proves nothing — `runIncremental` reads every page
   and does not depend on it); whether a REMOVED location appears (the 3 AM full pass clears it
   either way); whether hidden-unverified accounts are included (they are absent from the plain list).
+
+## Warsaw on the Locations page, and the Poland tab (2026-10-23)
+
+Evidence: read-only Supabase reads on 2026-10-23 ~13:00 UTC (`mdapi_matches`, `player_area_seen`,
+`player_area_sync_runs` run 83, `mdapi_users.raw`, `fin_venue_fields`, `fin_venues`).
+
+- **Warsaw's city object** (`mdapi_users.raw->preferableCity` on a Warsaw-preferring user, the same
+  shape `/admin/cities` returns): `id` 10, `abbr` "WAW", `lat` 52.2296756, `lng` 21.0122287,
+  **`radiusMiles` 1000**, **`country` "Europe"** (not "Poland"), `stripeTaxRateValue` 0.
+- **Until this change `usCities()` dropped it** (`country !== "United States"`), so the sync stored
+  every Poland player as `waitlist`, nearest city 6 (New York City) at 4,260.1 mi. Run 83's
+  `cities` held the nine US cities only.
+- **Warsaw has exactly ONE field in our mirror: 1684 "Hala Piłkarska Bemowo"** (52.251849,
+  20.940122, `raw.field.cityId` 10, address "ul. Księcia Bolesława 1/3"). 42 WAW match rows, 29 not
+  cancelled or deleted, last 2026-10-28. It has **no `fin_venue_fields` row** (Unmapped).
+- **"Turf On" is NOT a Warsaw field.** It is Houston field 1882 (`city_identifier` HOU, `cityId` 2,
+  fin venue 87 "Turf on"). No `mdapi_matches` row with `cityId` 10 carries any other field. A Warsaw
+  field with no match yet would be invisible here — the mirror only knows fields through matches.
+- **Poland players:** 97 placed, non-internal, every one labelled "…, Poland" (Warsaw 90, Kraków 3,
+  Płock, Radom County, Mszadla, Sękocin Stary 1 each). Exactly the same 97 sit inside a Poland
+  bounding box. 89 GPS, 8 zip. 0 internal.
+- **Other non-US labels:** Spain 5, Mexico 3, United Kingdom 3, Greece 1, France 1.
+- **What changed (`areaCities`, `src/lib/playerAreaModel.ts`):** the sync now keeps Warsaw too,
+  at a **100-mile** coverage radius (`src/lib/locationScopes.ts`), not its own 1,000. Computed
+  against the live rows with Warsaw's real geometry: of 4,392 placed players, **106 change and none is
+  in the US** — 94 Poland → in market for Warsaw; 3 Kraków stay outside coverage (Warsaw 251 km);
+  Spain 4, UK 3, Greece 1, France 1 stay outside coverage with nearest city Warsaw instead of New York.
+  With the raw 1,000-mile radius London, Paris and Athens players would have become "in market".
+- **It lands on the next FULL pass** (cron `0 8 * * *`): only a full pass reads `/admin/cities`;
+  incremental runs reuse the last full run's `cities`.
+- **The Poland tab** is Match Ops → Locations (`/match-ops/market-locations`), for accounts confined
+  to WAW. Routes `/api/matchops/market-locations{,/map,/open-next}` take the scope from the session
+  (`src/lib/marketLocationsAuth.ts`) and filter in SQL: `player_area_seen.area_label ilike '%, Poland'`,
+  `mdapi_matches.city_identifier = 'WAW'`, cities to WAW. Distances and reaches in km.
+  On 2026-10-23 (before Warsaw's first full pass): 97 players, 46 of 79 active Warsaw players with a
+  location, 189 Warsaw players ever.

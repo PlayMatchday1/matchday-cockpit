@@ -53,6 +53,23 @@ const KNOWN_REFUSED: Record<string, string> = {
   "/api/veo/cameras": "Camera inventory across every city.",
   "/api/schedule-master": "Writes the recurring slot template for every city, not one.",
 
+  /* ── LOCATIONS (market-locations): the SHARED board's US defaults. The Poland tab renders the same
+   * LocationsBoard / LocationsMapTab as /growth/locations with `market` set, which points every read
+   * at /api/matchops/market-locations*. These four are the US page's, and stay refused: each is
+   * unscoped Growth data, and none is requested in market mode. */
+  "/api/growth/locations":
+    "The US page's apiBase DEFAULT. In market mode apiBase is /api/matchops/market-locations (and "
+    + "/map, /open-next), so this estate-wide read is never requested.",
+  "/api/growth/locations/competitors":
+    "The competitor layer — US captures only. LocationsMapTab gets competitors={false} in market "
+    + "mode: no fetch, and the Show competitors control is not rendered.",
+  "/api/growth/locations/players":
+    "Players in this area, admin only and estate-wide. Fetched only when isAdmin, which the board "
+    + "passes as false in market mode.",
+  "/api/growth/locations/player":
+    "The expandable player detail on Recent activity. Not offered in market mode: rows are plain "
+    + "(no click, no detail row); the name still links to Player Lookup, which is allowed.",
+
   /* ── WHAT THIS CHECK SURFACED ON ITS FIRST RUN. None is the reported bug; all four are real, and
    * each is left refused with the reason rather than opened quietly or left unnamed. */
   "/api/manager-pay/week":

@@ -9,20 +9,31 @@ import { activeFields, type MapPlayerRow } from "./locationsMap";
 import { fetchFieldSnapshots, fetchLatestCities, fetchVenueLinks } from "./locationsData";
 import { fetchPlayHistory } from "./playHistory";
 import { milesBetween } from "./playerAreaModel";
+import { areaLabelPattern, type LocationScope } from "./locationScopes";
 
-export async function loadLocationsInputs(sb: SupabaseClient) {
+/* A SCOPE (locationScopes.ts) filters IN THE QUERIES: players by area label, fields by the match's
+ * city, cities to the scope's own. Play history is then cut to that city's fields, so a scoped
+ * payload names no field outside the market. */
+export async function loadLocationsInputs(sb: SupabaseClient, scope?: LocationScope | null) {
+  const now = new Date();
   const [players, fieldSnapshots, latest, venueLinks] = await Promise.all([
-    selectAll<MapPlayerRow>(() => sb.from("player_area_seen")
-      .select("player_id,zip,area_label,state,lat,lng,verdict,verdict_city_id,location_source")
-      .eq("has_area", true).eq("is_internal", false)
-      .order("player_id")),
-    fetchFieldSnapshots(sb),
-    fetchLatestCities(sb),
+    selectAll<MapPlayerRow>(() => {
+      const q = sb.from("player_area_seen")
+        .select("player_id,zip,area_label,state,lat,lng,verdict,verdict_city_id,location_source")
+        .eq("has_area", true).eq("is_internal", false);
+      return (scope ? q.ilike("area_label", areaLabelPattern(scope)) : q).order("player_id");
+    }),
+    fetchFieldSnapshots(sb, now, scope),
+    fetchLatestCities(sb, scope),
     fetchVenueLinks(sb),
   ]);
-  const now = new Date();
   const { fields: live } = activeFields(fieldSnapshots, latest.cities);
   const history = await fetchPlayHistory(sb, players.map((p) => p.player_id!).filter((x) => x != null), new Set(live.map((f) => f.id)), now);
+  if (scope) {
+    const inScope = new Set(latest.cities.map((c) => c.id));
+    for (const [id, f] of history.fields) if (f.cityId == null || !inScope.has(f.cityId)) history.fields.delete(id);
+    for (const [pid, plays] of history.playsByPlayer) history.playsByPlayer.set(pid, plays.filter((p) => history.fields.has(p.fieldId)));
+  }
   /* A played field's stored position is held to the same rule as the map's: farther from its own
    * city's centre than that city's radius (1849 Wheatley Heights once sat in China) is no position. */
   for (const f of history.fields.values()) {

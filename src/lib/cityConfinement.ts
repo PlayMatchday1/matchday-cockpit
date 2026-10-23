@@ -92,6 +92,11 @@ export const CONFINED_RAIL_KEYS: readonly string[] = [
    * it was added — six items rendered, not seven. verify-confined-rail now asserts every entry in
    * this list resolves to a real section key, which is what would have caught it. */
   "master",
+  /* LOCATIONS, scoped to the account's market (2026-10-23): where its players say they live, against
+   * its fields. The boundary is NOT this list — /api/matchops/market-locations* take the scope from
+   * the SESSION (marketLocationsAuth.ts) and filter player_area_seen and mdapi_matches in SQL. The
+   * rail item also shows only for a confined city that HAS a scope (sections.tsx, scopedOnly). */
+  "market-locations",
 ];
 
 export const CONFINED_ERROR =
@@ -312,6 +317,13 @@ const CONFINED_ROUTE_EXACT: readonly string[] = [
    * EXACT, NOT A PREFIX. There is nothing beneath this path today, and a prefix is a promise about
    * routes that do not exist yet. */
   "/api/match-managers",
+  /* LOCATIONS (the scoped tab), three EXACT reads. Safe because each one resolves the scope from the
+   * session and filters in the query (marketLocationsAuth.ts, locationsLoaders.ts); no ?city= is
+   * read. Exact, not "/api/matchops/", which would open /api/matchops/checkin/* wholesale for routes
+   * not yet written. /api/growth/locations/* stays refused: it is the unscoped estate-wide page. */
+  "/api/matchops/market-locations",
+  "/api/matchops/market-locations/map",
+  "/api/matchops/market-locations/open-next",
   /* "/api/venues" WAS ADDED HERE AND TAKEN BACK OUT, same day. The idea was that a confined city
    * manager should SEE whether a pitch has a cost mapping. It was never reachable: /api/fields
    * already refuses those accounts, so the Fields list never renders for them and the drawer never

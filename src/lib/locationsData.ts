@@ -1,7 +1,8 @@
 // The Locations page's Supabase reads that more than one route needs — SERVER-ONLY. Never MatchDay.
 //
-// Field coordinates come from mdapi_matches.raw.field (the existing match sync stores them), US
-// cities from the latest successful player-areas run. Shared by /api/growth/locations/map and the
+// Field coordinates come from mdapi_matches.raw.field (the existing match sync stores them), cities
+// from the latest successful player-areas run. A Locations SCOPE (locationScopes.ts) narrows both IN
+// THE QUERY / before return, so a scoped route never holds another market's fields or cities. Shared by /api/growth/locations/map and the
 // Overview's player detail (/api/growth/locations/player) so both see the same fields.
 
 import "server-only";
@@ -10,6 +11,7 @@ import { selectAll } from "./supabasePagination";
 import { ACTIVE_WINDOW_DAYS, type FieldSnapshot } from "./locationsMap";
 import type { AreaCity } from "./playerAreaModel";
 import type { VenueLink } from "./venueUnits";
+import type { LocationScope } from "./locationScopes";
 
 type MatchFieldRow = {
   api_id: number; field_id: number | null; field_title: string | null;
@@ -20,12 +22,14 @@ type MatchFieldRow = {
  * wall clock carrying a Z it does not mean; comparing it to a YYYY-MM-DD string 60 days back can
  * misplace a match by a few hours at the edge, which cannot change whether a field played in the
  * last two months. No Date is built from start_date here. */
-export async function fetchFieldSnapshots(sb: SupabaseClient, now = new Date()): Promise<FieldSnapshot[]> {
+export async function fetchFieldSnapshots(sb: SupabaseClient, now = new Date(), scope?: LocationScope | null): Promise<FieldSnapshot[]> {
   const since = new Date(now.getTime() - ACTIVE_WINDOW_DAYS * 86_400_000).toISOString().slice(0, 10);
-  const matches = await selectAll<MatchFieldRow>(() => sb.from("mdapi_matches")
-    .select("api_id,field_id,field_title,lat:raw->field->lat,lng:raw->field->lng,cityId:raw->field->cityId,del:raw->field->deletedAt,upd:raw->field->updatedAt")
-    .gte("start_date", since).is("deleted_at", null).eq("is_cancelled", false)
-    .order("api_id"));
+  const matches = await selectAll<MatchFieldRow>(() => {
+    const q = sb.from("mdapi_matches")
+      .select("api_id,field_id,field_title,lat:raw->field->lat,lng:raw->field->lng,cityId:raw->field->cityId,del:raw->field->deletedAt,upd:raw->field->updatedAt")
+      .gte("start_date", since).is("deleted_at", null).eq("is_cancelled", false);
+    return (scope ? q.eq("city_identifier", scope.cityAbbr) : q).order("api_id");
+  });
   const out: FieldSnapshot[] = [];
   for (const m of matches) {
     if (m.field_id == null) continue;
@@ -39,12 +43,13 @@ export async function fetchFieldSnapshots(sb: SupabaseClient, now = new Date()):
   return out;
 }
 
-export async function fetchLatestCities(sb: SupabaseClient): Promise<{ cities: AreaCity[]; asOf: string | null }> {
+export async function fetchLatestCities(sb: SupabaseClient, scope?: LocationScope | null): Promise<{ cities: AreaCity[]; asOf: string | null }> {
   // FULL passes only (migration 0230): an incremental run carries no city geometry.
   const { data, error } = await sb.from("player_area_sync_runs").select("finished_at,cities")
     .eq("ok", true).eq("kind", "full").order("finished_at", { ascending: false }).limit(1).maybeSingle();
   if (error) throw new Error(error.message);
-  return { cities: (Array.isArray(data?.cities) ? data!.cities : []) as AreaCity[], asOf: data?.finished_at ?? null };
+  const all = (Array.isArray(data?.cities) ? data!.cities : []) as AreaCity[];
+  return { cities: scope ? all.filter((c) => c.abbr === scope.cityAbbr) : all, asOf: data?.finished_at ?? null };
 }
 
 /** Field -> canonical venue (fin_venue_fields + fin_venues.venue_name), for grouping field records into

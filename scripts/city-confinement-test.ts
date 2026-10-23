@@ -303,9 +303,11 @@ console.log("\n── the sentence on the User access screen ──");
   // Eight since 2026-09-05: Veo joined it. Warsaw has camera matches, so a confined operator needs
   // the page that says whether their films landed; /api/veo/day scopes the rows in SQL from the
   // session's city, which is the boundary — this list only decides what appears in the rail.
-  t("the confined rail is exactly these eight, in order", () =>
+  // Nine since 2026-10-23: Locations, scoped to the account's market (Poland for WAW). The routes
+  // take the scope from the session; this list only decides what appears in the rail.
+  t("the confined rail is exactly these nine, in order", () =>
     assert.deepEqual([...CONFINED_RAIL_KEYS],
-      ["gameday", "player-lookup", "veo", "promos", "reviews", "match-chats", "player-chats", "master"]));
+      ["gameday", "player-lookup", "veo", "promos", "reviews", "match-chats", "player-chats", "master", "market-locations"]));
 
   const waw = confinementSummary({ cityName: "Warsaw", isCityManager: false, pageCount: CONFINED_RAIL_KEYS.length });
   t("a city manager is told about city manager pages", () => assert.match(cm, /city manager pages only$/));

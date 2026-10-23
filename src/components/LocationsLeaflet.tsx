@@ -300,6 +300,10 @@ export default function LocationsLeaflet(props: {
   fields: MapField[];
   zips: MapZip[];
   reach: Reach;
+  /** The unit `reach` is in — the Poland tab's reaches are kilometres. Default miles. */
+  reachUnit?: "mi" | "km";
+  /** Where the national view opens when it has nothing to fit to. Default the US. */
+  home?: [number, number];
   selected: Selection;
   highlightFieldId: number | null;
   onCity: (id: number) => void;
@@ -353,20 +357,21 @@ export default function LocationsLeaflet(props: {
   }), [zips, reach]);
 
   const points = useMemo<[number, number][]>(() => {
-    if (!city) return [...cities.map((c) => [c.lat, c.lng] as [number, number]), ...nationalAll.map((z) => [z.lat, z.lng] as [number, number])].filter(inLower48);
+    // A scoped map (home set) fits to its own market's points; the US map keeps to the lower 48.
+    if (!city) return [...cities.map((c) => [c.lat, c.lng] as [number, number]), ...nationalAll.map((z) => [z.lat, z.lng] as [number, number])].filter(props.home ? () => true : inLower48);
     const pts: [number, number][] = [...fields.map((f) => [f.lat, f.lng] as [number, number]), ...zips.map((z) => [z.lat, z.lng] as [number, number])];
     return pts.length ? pts : [[city.lat, city.lng]];
-  }, [cities, city, fields, zips, nationalAll]);
+  }, [cities, city, fields, zips, nationalAll, props.home]);
 
 
   return (
-    <MapContainer center={[33, -92]} zoom={5} scrollWheelZoom={false} className="loc-leaflet" attributionControl>
+    <MapContainer center={props.home ?? [33, -92]} zoom={props.home ? 6 : 5} scrollWheelZoom={false} className="loc-leaflet" attributionControl>
       <TileLayer
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
         maxZoom={18}
       />
-      <Fit points={points} fallback={city ? [city.lat, city.lng] : [33, -92]} zoom={city ? 10 : 5} onZoom={setZoom} />
+      <Fit points={points} fallback={city ? [city.lat, city.lng] : props.home ?? [33, -92]} zoom={city ? 10 : props.home ? 6 : 5} onZoom={setZoom} />
       <ZoomWatch onZoom={setZoom} />
       <BoundsWatch onBounds={onBounds} />
       {!city && <CityTagLayout cities={cities} showCount={showCount} obstacles={bubbles} onLayout={setDirs} />}
@@ -396,7 +401,7 @@ export default function LocationsLeaflet(props: {
         const on = highlightFieldId === f.id || (selected?.kind === "field" && selected.id === f.id);
         if (!on && !showReach) return null;
         return (
-          <Circle key={`ring-${f.id}`} center={[f.lat, f.lng]} radius={reach * MI_TO_M}
+          <Circle key={`ring-${f.id}`} center={[f.lat, f.lng]} radius={reach * (props.reachUnit === "km" ? 1000 : MI_TO_M)}
             pathOptions={{ color: FOREST, weight: on ? 2.5 : 1.2, opacity: on ? 0.8 : 0.3, fillColor: FOREST, fillOpacity: on ? 0.07 : 0.025 }}
             interactive={false} />
         );

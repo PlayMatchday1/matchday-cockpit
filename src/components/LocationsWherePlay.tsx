@@ -5,19 +5,22 @@
 
 import { Fragment, useState } from "react";
 import type { BubblePlays, PlayField } from "@/lib/wherePlayed";
+import { fmtDistance, type DistanceUnit } from "@/lib/locationScopes";
 
 const TOP = 6;
-const mi = (n: number | null) => (n == null ? "—" : `${n < 10 ? n.toFixed(1) : Math.round(n)} mi`);
 // A match day is its LOCAL calendar day, formatted at UTC noon so no time zone can move it.
 const fmtDay = (ymd: string) => new Intl.DateTimeFormat("en-US", { timeZone: "UTC", month: "short", day: "numeric", year: "numeric" }).format(new Date(`${ymd}T12:00:00Z`));
 
-export default function LocationsWherePlay({ plays, fieldById, outsideView }: {
+export default function LocationsWherePlay({ plays, fieldById, outsideView, unit = "mi" }: {
   plays: BubblePlays;
+  /** The unit the payload's distances are in (km on the Poland tab). */
+  unit?: DistanceUnit;
   fieldById: Map<number, PlayField>;
   /** True for a field that is not on the map as it stands (another city, or off screen). */
   outsideView?: (f: PlayField | undefined, fieldId: number) => boolean;
 }) {
   const [all, setAll] = useState(false);
+  const mi = (n: number | null) => fmtDistance(n, unit);
   const group = plays.players > 1;
   if (plays.matches === 0) {
     return (

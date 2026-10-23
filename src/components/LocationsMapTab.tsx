@@ -5,7 +5,7 @@
 // the server (src/lib/locationsMap.ts); this file only picks which of them to show.
 //
 // The city lives in the URL (?tab=map&city=<id>) via onCity, so a shared link opens that city.
-// Reach (3 / 5 / 10 mi) and the selected pin or bubble are view state, not URL state.
+// Reach (3 / 5 / 10 / 15 mi; km on the Poland tab, /match-ops/market-locations) and the selected pin or bubble are view state, not URL state.
 
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -18,6 +18,7 @@ import LocationsPlayersPanel from "@/components/LocationsPlayersPanel";
 import type { AreaPlayer } from "@/lib/areaPlayers";
 import LocationsCompetitorCard, { PlaceVenueCard, SharedVenueCard, type Placing } from "@/components/LocationsCompetitorCard";
 import { COMP_CSS, SOURCE_FILL, SOURCE_NAME, compHtml, sharedHtml, type CompetitorPayload, type CompetitorVenue, type SharedVenue } from "@/lib/competitorVenues";
+import { fmtDistance, type DistanceUnit } from "@/lib/locationScopes";
 import { ACTIVITIES, ACTIVITY_FILL, ACTIVITY_INK, ACTIVITY_LABEL, ACTIVITY_SHORT, type Activity, type BubblePlays, type PlayField } from "@/lib/wherePlayed";
 
 // Legend samples: the SAME HTML the map draws (locationsMarks), shrunk — so the legend cannot drift
@@ -36,22 +37,29 @@ const IN_REACH = "#1baf7a";
 const GAP = "#eb6834";
 const int = (n: number) => n.toLocaleString("en-US");
 const pct = (n: number, d: number) => (d > 0 ? `${Math.round((n / d) * 100)}%` : "—");
-const mi = (n: number | null) => (n == null ? "—" : `${n < 10 ? n.toFixed(1) : Math.round(n)} mi`);
 const NO_PLAYERS = "No players have set a location here yet.";
 const NAT_FILTERS: { key: NatFilter; label: string }[] = [
   { key: "all", label: "All players" }, { key: "in_market", label: "In market" }, { key: "waitlist", label: "Outside coverage" },
 ];
 
-export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin }: {
+export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin, apiBase = "/api/growth/locations", unit = "mi", home, competitors = true }: {
   cityId: number | null;
   reloadKey: number;
   onCity: (id: number | null) => void;
   /** Admins see "Players in this area" under the map (the route also refuses anyone else). */
   isAdmin: boolean;
+  /** SCOPED (the Poland tab): its map route's base, the unit that route answers in (reaches and
+   *  every distance), where the map opens, and no competitor layer (Growth's route, US only). */
+  apiBase?: string;
+  unit?: DistanceUnit;
+  home?: [number, number];
+  competitors?: boolean;
 }) {
+  const mi = (n: number | null) => fmtDistance(n, unit);
+  const U = unit, UL = unit === "km" ? "km" : "miles";
   const [data, setData] = useState<LocationsMap | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [reach, setReach] = useState<Reach>(10); // default reach is 10 miles everywhere (Ryan, 2026-10-08)
+  const [reach, setReach] = useState<Reach>(10); // default reach is 10 (miles; km on the Poland tab) (Ryan, 2026-10-08)
   const [selected, setSelected] = useState<Selection>(null);
   const [highlight, setHighlight] = useState<number | null>(null);
   const [natFilter, setNatFilter] = useState<NatFilter>("all");
@@ -71,7 +79,7 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin }: 
     try {
       const { data: sess } = await supabase.auth.getSession();
       const token = sess.session?.access_token;
-      const res = await fetch("/api/growth/locations/map", {
+      const res = await fetch(`${apiBase}/map`, {
         cache: "no-store", headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       const body = await res.json();
@@ -81,7 +89,7 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin }: 
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
-  }, []);
+  }, [apiBase]);
   useEffect(() => { void load(); }, [load, reloadKey]);
 
   /* COMPETITORS (Ryan, 2026-10-09): venues from competitor_venues, what they sell from the
@@ -97,6 +105,7 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin }: 
   const [moving, setMoving] = useState<number | null>(null);
   const [compMsg, setCompMsg] = useState<{ text: string; bad: boolean } | null>(null);
   const loadComp = useCallback(async () => {
+    if (!competitors) return;
     try {
       const { data: sess } = await supabase.auth.getSession();
       const token = sess.session?.access_token;
@@ -105,7 +114,7 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin }: 
       if (!res.ok) throw new Error(body?.error ?? `HTTP ${res.status}`);
       setComp(body as CompetitorPayload); setCompErr(null);
     } catch (e) { setCompErr(e instanceof Error ? e.message : String(e)); }
-  }, []);
+  }, [competitors]);
   useEffect(() => { void loadComp(); }, [loadComp, reloadKey]);
   /* An admin's correction: ONLY the changed fields go in the body; the outcome comes from the read-back. */
   const saveComp = useCallback(async (id: number, set: Record<string, string | number | null>) => {
@@ -176,7 +185,9 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin }: 
   }
   if (!data) return <div className="loc-card"><div className="loc-state">Loading map…</div></div>;
   if (data.cities.length === 0) {
-    return <div className="loc-card"><div className="loc-state">No city centres yet: they come from the location sync, which has not completed a run.</div></div>;
+    return <div className="loc-card"><div className="loc-state">{home
+      ? "This market's city centre is not in the latest full location sync yet. The full sync runs once a day, overnight."
+      : "No city centres yet: they come from the location sync, which has not completed a run."}</div></div>;
   }
 
   const fieldsSorted = [...fields].sort((a, b) => b.reach[reach] - a.reach[reach] || a.title.localeCompare(b.title));
@@ -204,7 +215,7 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin }: 
   const area: { title: string; rows: AreaPlayer[] } = (() => {
     const all = people ?? [];
     if (city && selZip) return { title: selZip.zip ? `Zip ${selZip.zip}` : selZip.area, rows: all.filter((p) => (act ? p.keys.cityAct : p.keys.city) === selZip.key) };
-    if (city && areaField) return { title: `Within ${reach} mi of ${areaField.title}`, rows: all.filter((p) => (p.fieldReach[areaField.id] ?? Infinity) <= reach) };
+    if (city && areaField) return { title: `Within ${reach} ${U} of ${areaField.title}`, rows: all.filter((p) => (p.fieldReach[areaField.id] ?? Infinity) <= reach) };
     if (city) return { title: city.name, rows: all.filter((p) => p.verdict === "in_market" && p.cityId === city.id && p.keys.city != null) };
     if (selNational) return { title: selNational.zip ? `Zip ${selNational.zip}` : selNational.area, rows: all.filter((p) => (act ? p.keys.natAct : p.keys.nat) === selNational.key) };
     return { title: "All cities", rows: all };
@@ -285,7 +296,7 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin }: 
             <div className="lm-seg">
               {REACHES.map((r) => (
                 <button type="button" key={r} aria-pressed={reach === r} data-testid={`reach-${r}`}
-                  className={"lm-seg-btn" + (reach === r ? " lm-seg-on" : "")} onClick={() => setReach(r)}>{r} mi</button>
+                  className={"lm-seg-btn" + (reach === r ? " lm-seg-on" : "")} onClick={() => setReach(r)}>{r} {U}</button>
               ))}
             </div>
             <label className="lm-check">
@@ -319,17 +330,20 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin }: 
             </div>
           </div>
         )}
-        <label className={"lm-check lm-check-comp" + (!comp?.ready || compMarkets.length === 0 ? " lm-check-off" : "")} title={compTitle} data-testid="show-competitors-label">
-          <input type="checkbox" checked={showComp} data-testid="show-competitors" disabled={!comp?.ready || compMarkets.length === 0}
-            onChange={(e) => { setShowComp(e.target.checked); if (!e.target.checked) { setSelComp(null); setSelShared(null); setMoving(null); setPlacing(null); } }} />
-          Show competitors
-        </label>
+        {/* No competitor layer on a scoped map: the capture is US-only and its route is Growth's. */}
+        {competitors && (
+          <label className={"lm-check lm-check-comp" + (!comp?.ready || compMarkets.length === 0 ? " lm-check-off" : "")} title={compTitle} data-testid="show-competitors-label">
+            <input type="checkbox" checked={showComp} data-testid="show-competitors" disabled={!comp?.ready || compMarkets.length === 0}
+              onChange={(e) => { setShowComp(e.target.checked); if (!e.target.checked) { setSelComp(null); setSelShared(null); setMoving(null); setPlacing(null); } }} />
+            Show competitors
+          </label>
+        )}
       </div>
 
       <div className="lm-body">
         <div className="lm-left">
           <div className="lm-map" data-testid="loc-map">
-            <LocationsLeaflet cities={data.cities} city={city} fields={fields} zips={zips} reach={reach}
+            <LocationsLeaflet cities={data.cities} city={city} fields={fields} zips={zips} reach={reach} reachUnit={unit} home={home}
               selected={selected} highlightFieldId={highlight}
               onCity={(id) => onCity(id)} onSelect={(s) => { setSelected(s); setHighlight(null); setSelComp(null); setSelShared(null); setMoving(null); }}
               national={national} nationalAll={data.national} selectedNational={selNat}
@@ -350,19 +364,19 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin }: 
                 {ACTIVITIES.map((a) => (
                   <span key={a} data-testid={`legend-${a}`}><Sample html={bubbleHtml(1, "in", false, { fill: ACTIVITY_FILL[a], ink: ACTIVITY_INK[a] })} />{ACTIVITY_LABEL[a]}</span>
                 ))}
-                <span><Sample html={bubbleHtml(1, "in", false, { fill: "#ffffff", ink: "#1d2b25" })} />Solid edge: {city ? `a field within ${reach} mi` : "inside a city's area"}</span>
-                <span><Sample html={bubbleHtml(1, "gap", false, { fill: "#ffffff", ink: "#1d2b25" })} />Dashed edge: {city ? `no field within ${reach} mi` : "outside coverage"}</span>
+                <span><Sample html={bubbleHtml(1, "in", false, { fill: "#ffffff", ink: "#1d2b25" })} />Solid edge: {city ? `a field within ${reach} ${U}` : "inside a city's area"}</span>
+                <span><Sample html={bubbleHtml(1, "gap", false, { fill: "#ffffff", ink: "#1d2b25" })} />Dashed edge: {city ? `no field within ${reach} ${U}` : "outside coverage"}</span>
               </>
             ) : (
               <>
-                <span><Sample html={bubbleHtml(3, "in")} />Players. Number = players in that area{city ? `, with a field within ${reach} mi` : ""}</span>
-                <span><Sample html={bubbleHtml(3, "gap")} />{city ? `No field within ${reach} mi` : "Outside coverage"}</span>
+                <span><Sample html={bubbleHtml(3, "in")} />Players. Number = players in that area{city ? `, with a field within ${reach} ${U}` : ""}</span>
+                <span><Sample html={bubbleHtml(3, "gap")} />{city ? `No field within ${reach} ${U}` : "Outside coverage"}</span>
               </>
             )}
             {city ? (
               <>
                 <span><Sample html={pinHtml(false)} scale={0.8} />Field</span>
-                {(showReach || areaField) && <span><i className="lm-ring" />Field reach, {reach} mi</span>}
+                {(showReach || areaField) && <span><i className="lm-ring" />Field reach, {reach} {U}</span>}
               </>
             ) : (
               <>
@@ -459,7 +473,7 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin }: 
                 <div className="lm-sub">Nearest city: {cityLabel(selNational.nearestCityId)}, {mi(selNational.nearestCityMi)} away</div>
                 {selNational.bucket && <div className="lm-sub">{ACTIVITY_LABEL[selNational.bucket]}</div>}
                 {selNational.fromZip > 0 && <div className="lm-sub lm-fromzip" data-testid="bubble-from-zip">{selNational.fromZip === selNational.players ? "Located from zip" : `${selNational.fromZip} located from zip`}: MatchDay sent no coordinates, so this is the zip&apos;s Census centre.</div>}
-                <LocationsWherePlay plays={selNational.plays} fieldById={playFieldById} outsideView={(f) => outsideView(f)} />
+                <LocationsWherePlay plays={selNational.plays} fieldById={playFieldById} outsideView={(f) => outsideView(f)} unit={unit} />
               </div>
             )}
             <div className="lm-pcard">
@@ -478,7 +492,7 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin }: 
                   ))}
                 </tbody>
               </table>
-              <div className="lm-note">Near a field = players within 10 miles of an active field.</div>
+              <div className="lm-note">Near a field = players within 10 {UL} of an active field.</div>
               {noFieldCities.length > 0 && (
                 <div className="lm-note" data-testid="map-no-fields">No fields yet: {noFieldCities.map((c) => c.name).join(", ")}.</div>
               )}
@@ -511,14 +525,14 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin }: 
           ) : (
             <>
               <div className="lm-pcard" data-testid="map-coverage">
-                <div className="lm-ptitle">Coverage at {reach} mi</div>
+                <div className="lm-ptitle">Coverage at {reach} {U}</div>
                 {city.players === 0 ? (
                   <div className="lm-empty">{NO_PLAYERS}</div>
                 ) : (
                   <>
                     <div className="lm-big">{pct(covered, city.players)}</div>
-                    <div className="lm-sub">{int(covered)} of {int(city.players)} players have a field within {reach} mi</div>
-                    <div className="lm-sub">{int(city.players - covered)} {city.players - covered === 1 ? "has" : "have"} no field within {reach} mi</div>
+                    <div className="lm-sub">{int(covered)} of {int(city.players)} players have a field within {reach} {U}</div>
+                    <div className="lm-sub">{int(city.players - covered)} {city.players - covered === 1 ? "has" : "have"} no field within {reach} {U}</div>
                   </>
                 )}
                 {city.unplaced > 0 && <div className="lm-note">{int(city.unplaced)} more {city.unplaced === 1 ? "player has" : "players have"} no location we can map.</div>}
@@ -532,7 +546,7 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin }: 
                   </div>
                   {selField ? (
                     <>
-                    <div className="lm-sub">{city.players === 0 ? NO_PLAYERS : `${int(selField.reach[reach])} ${selField.reach[reach] === 1 ? "player" : "players"} within ${reach} mi`}</div>
+                    <div className="lm-sub">{city.players === 0 ? NO_PLAYERS : `${int(selField.reach[reach])} ${selField.reach[reach] === 1 ? "player" : "players"} within ${reach} ${U}`}</div>
                     {selField.venueId != null ? (
                       <>
                         <div className="lw-title lm-within-title">MatchDay fields here</div>
@@ -550,14 +564,14 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin }: 
                     <>
                       <div className="lm-sub">{int(selZip!.players)} {selZip!.players === 1 ? "player" : "players"}{selZip!.bucket ? `, ${ACTIVITY_LABEL[selZip!.bucket].toLowerCase()}` : ""}</div>
                       {selZip!.fromZip > 0 && <div className="lm-sub lm-fromzip" data-testid="bubble-from-zip">{selZip!.fromZip === selZip!.players ? "Located from zip" : `${selZip!.fromZip} located from zip`}: MatchDay sent no coordinates, so this is the zip&apos;s Census centre.</div>}
-                      <LocationsWherePlay plays={selZip!.plays} fieldById={playFieldById} outsideView={(f) => outsideView(f)} />
-                      <div className="lw-title lm-within-title">Fields within {reach} miles</div>
+                      <LocationsWherePlay plays={selZip!.plays} fieldById={playFieldById} outsideView={(f) => outsideView(f)} unit={unit} />
+                      <div className="lw-title lm-within-title">Fields within {reach} {UL}</div>
                       {/* The fields within the current reach of THIS bubble. minReach is the server's
                           exact-distance answer. */}
                       {(() => {
                         const inRing = selZip!.nearby.filter((n) => n.minReach <= reach);
                         return inRing.length === 0 ? (
-                          <div className="lm-sub" data-testid="detail-no-field">No field within {reach} miles.</div>
+                          <div className="lm-sub" data-testid="detail-no-field">No field within {reach} {UL}.</div>
                         ) : (
                           <ul className="lm-near" data-testid="detail-fields">
                             {inRing.map((n) => (
@@ -577,7 +591,7 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin }: 
                   <div className="lm-empty">No active fields here.</div>
                 ) : (
                   <table className="lm-list" data-testid="map-fields">
-                    <thead><tr><th>Field</th><th className="loc-num">Players within {reach} mi</th></tr></thead>
+                    <thead><tr><th>Field</th><th className="loc-num">Players within {reach} {U}</th></tr></thead>
                     <tbody>
                       {fieldsSorted.map((f) => (
                         <tr key={f.id} className={"lm-row" + (highlight === f.id ? " lm-row-on" : "")} tabIndex={0}
@@ -596,7 +610,7 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin }: 
                 {city.players === 0 ? (
                   <div className="lm-empty">{NO_PLAYERS}</div>
                 ) : gaps.length === 0 ? (
-                  <div className="lm-empty">Every area here has a field within {reach} mi.</div>
+                  <div className="lm-empty">Every area here has a field within {reach} {U}.</div>
                 ) : (
                   <table className="lm-list" data-testid="map-gaps">
                     <thead><tr><th>Area</th><th className="loc-num">Players</th><th>Miles to nearest field</th></tr></thead>

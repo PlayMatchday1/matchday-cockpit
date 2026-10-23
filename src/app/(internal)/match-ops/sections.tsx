@@ -12,7 +12,8 @@
 
 import type { AppUser, PageName } from "@/lib/useAuth";
 import { canAccess } from "@/lib/useAuth";
-import { isConfined, CONFINED_RAIL_KEYS } from "@/lib/cityConfinement";
+import { isConfined, confinedCity, CONFINED_RAIL_KEYS } from "@/lib/cityConfinement";
+import { locationScopeForCity } from "@/lib/locationScopes";
 
 // Phase 24 — Match Ops is TWO TABS: what you do today, and what you manage over weeks.
 // THE ROUTES DID NOT MOVE. Every href is still /match-ops/*, there is still ONE route group and
@@ -53,6 +54,9 @@ export type MatchOpsSection = RailItem & {
   section: MatchOpsTab;
   group: MatchOpsGroup;
   access: MatchOpsAccess;
+  /** Shown ONLY to an account confined to a city that has a Locations scope (locationScopes.ts) —
+   *  the Poland tab is that market's page, not a page for every Match Ops viewer. */
+  scopedOnly?: true;
 };
 
 function I({ children }: { children: React.ReactNode }) {
@@ -85,6 +89,9 @@ export const MATCH_OPS_SECTIONS: MatchOpsSection[] = [
   { key: "ops", section: "back", group: "Fields", label: "Field Ops", href: "/match-ops/field-ops", desc: "Tonight's fields and staff", access: "matchops", icon: <I><rect x="2.5" y="5.5" width="19" height="13" rx="2" /><path d="M12 5.5v13" /><circle cx="12" cy="12" r="3" /></I> },
   { key: "inventory", section: "back", group: "Fields", label: "Inventory", href: "/match-ops/inventory", desc: "Balls, bibs and manager reports", access: "matchops", icon: <I><path d="M21 8l-9-5-9 5 9 5 9-5z" /><path d="M3 8v8l9 5 9-5V8" /><path d="M12 13v8" /></I> },
   // LOCATIONS MOVED TO GROWTH (2026-10-08): /growth/locations. /match-ops/locations 308s there.
+  // The item below is the SCOPED one (2026-10-23): one market's players and fields, in km, for the
+  // accounts confined to it. Its own path, because /match-ops/locations already redirects.
+  { key: "market-locations", section: "back", group: "Fields", label: "Locations", href: "/match-ops/market-locations", desc: "Where players in your market live, against your fields", access: "matchops", scopedOnly: true, icon: <I><path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11z" /><circle cx="12" cy="10" r="2.4" /></I> },
   { key: "manager-pay", section: "back", group: "People", label: "Manager Pay", href: "/match-ops/manager-pay", desc: "What each manager is owed, and the Gusto file", access: "matchops", icon: <I><rect x="2.5" y="6" width="19" height="12" rx="2.5" /><circle cx="12" cy="12" r="2.6" /><path d="M6 9.5v5M18 9.5v5" /></I>, badge: "manager-pay" },
   { key: "check-ins", section: "back", group: "People", label: "City Manager Check-Ins", href: "/match-ops/check-ins", desc: "Who has submitted this month, and when they are paid", access: "matchops", icon: <I><path d="M4.5 5.5h15v14h-15z" /><path d="M4.5 9.5h15" /><path d="M8 3v3M16 3v3" /><path d="M8.5 14l2.2 2.2 4.3-4.3" /></I> },
   /* APPLICATIONS — everyone who filled in a form on playmatchday.com. `matchops`, not `tech`,
@@ -112,6 +119,7 @@ export function visibleSections(
   return MATCH_OPS_SECTIONS.filter((s) =>
     (tab === undefined || s.section === tab) &&
     (!bounded || CONFINED_RAIL_KEYS.includes(s.key)) &&
+    (!s.scopedOnly || (bounded && locationScopeForCity(confinedCity(appUser ?? undefined)) != null)) &&
     (s.access === "admin" ? !bounded && !!appUser?.is_admin
      : canAccess(appUser ?? null, s.access as PageName)),
   );
