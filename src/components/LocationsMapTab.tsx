@@ -613,7 +613,7 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin, ap
                   <div className="lm-empty">Every area here has a field within {reach} {U}.</div>
                 ) : (
                   <table className="lm-list" data-testid="map-gaps">
-                    <thead><tr><th>Area</th><th className="loc-num">Players</th><th>Miles to nearest field</th></tr></thead>
+                    <thead><tr><th>Area</th><th className="loc-num">Players</th><th>{unit === "km" ? "Km" : "Miles"} to nearest field</th></tr></thead>
                     <tbody>
                       {gaps.map((z) => (
                         <tr key={z.key} className={"lm-row" + (selZip?.key === z.key ? " lm-row-on" : "")} tabIndex={0}
