@@ -1598,6 +1598,44 @@ endpoint we call. `/api/matchday/{env}/matches/{id}/fakes` re-reads the roster a
 `not_applied` with both numbers rather than believing the status; asserted end to end in
 `scripts/e2e/verify-fakes-route-staging.mjs` (asked 9, got 8, reported not_applied).
 
+## THE LADDER ON PRODUCTION, MEASURED FROM THE MIRROR (2026-10-23)
+
+Source: `mdapi_match_players` fake rows (`user_is_fake_player`) and `mdapi_matches` for matches with
+`start_date_utc` 2026-08-24 → 2026-10-22 (1,191 matches, 13,050 fake rows). Read-only, no API calls.
+A fake row's `created_at` is exact. Its removal is bounded by sync timing: `synced_at` is the last
+run that saw it (the tombstone update sets only `deleted_at`, `src/lib/mdapiMatchesSync.ts:632`), and
+it was gone by the next successful `mdapi-matches` run in `fin_sync_log`. Those runs are irregular,
+about 8 a day, so a removal is known only to within a few hours unless a run happened to land close.
+
+- **NO FAKES BEFORE 36H.** Fake rows are created at the marks: 4,297 at 36.0–36.1h before kickoff,
+  2,232 at 24.0–24.1h, 3,857 at 12.0–12.1h, 1,058 at 6.0–6.1h, 317 at 3.0–3.1h. Only 45 of 13,050
+  were created more than 36.2h out. So the 36h rung is not "in force from match creation", whatever
+  `markInForce` returns for 48h (`src/lib/fakeLadder.ts:66`): the reconciler starts at 36h. The
+  smaller clusters between marks follow real cancellations (a fake re-added when a real row cancels).
+- **FAKES ARE NOT DRAINED BEFORE KICKOFF.** Nothing removes a fake after the 3h mark except a real
+  player joining, or a rung raised by hand. Of 773 played matches, 107 still carried 3+ fakes at
+  kickoff and 41 carried 5+.
+- **SOME FAKES ARE REMOVED WHEN A MATCH AUTO-CANCELS.** On 165 auto-cancelled matches, fakes seen by a
+  sync 1.4–1.5h before kickoff were tombstoned afterwards, and `_count.fakePlayers` read after the
+  cancel was lower than the pre-deadline count on 147 of 165. Some remain (5+ remain on 42). So a
+  post-cancel `fakePlayers` UNDER-reports what players saw before the cancel.
+- **THE AUTO-CANCEL FIRES AT THE 75-MINUTE MARK.** `autoCanceledMinutes` = 75 on 1,151 of 1,191
+  matches (40 read 0). 170 of 233 non-deleted cancelled matches have `updated_at` 66–75 minutes before
+  kickoff, and 171 of the 173 in that band were below `minPlayerCount` on real players at the deadline
+  (consistent with the real-only basis above).
+- **CAPACITY CHANGES DURING A MATCH'S LIFE, AND THE MIRROR KEEPS ONLY THE LAST VALUE.** Using today's
+  `maxPlayerCount` and rungs, `capacity − rung − real` matched the fakes actually added at the 36h
+  mark on only 576 of 998 matches. The capacity implied by the added rows was usually another format's
+  total (e.g. 18081 now caps 18 but received 8 fakes at 36h under a 28 rung, i.e. capacity 36 then).
+  **So fake history cannot be rebuilt from the formula and today's fields.** Count the fake rows
+  instead. Doing that reproduces `_count.fakePlayers` at kickoff on 757 of 780 played matches.
+- **`_count.fakePlayers` IS OBSERVED, AND THE ROSTER CAN EXCEED TODAY'S CAPACITY** (19740: capacity
+  18, 19 real + 13 fake at kickoff). Treat `real + fake + open === capacity` as true at read time only.
+- **A RUNG ABOVE CAPACITY IS ACCEPTED AND STORED**: 47 non-deleted production matches read `28/20/8/6/4` on
+  capacity 18. That means zero fakes at that rung, not an error.
+- **178 of the 411 cancelled matches in the window were also DELETED upstream** (tombstoned in the
+  mirror), most of them days before kickoff. Only 8 ever carried a fake row.
+
 ## STRIKES — the real model (Phase 18 investigation, confirmed by Ryan + live probe)
 
 A strike is a **COUNT toward a suspension, NOT a fine.** The per-city strike PRICE
