@@ -9,9 +9,10 @@
  * next, so the gap between any two requests of a run is at least one second.
  *
  * ── THE DECISION IS MADE AGAIN, ON A FRESH READ ──────────────────────────────────────────────────
- * The preview was a snapshot. Between it and this call a match can cross its 3h mark, be
- * cancelled, or be put on the new ladder by hand. So the match is read here and planNewLadder —
- * the same function the preview counted with — decides. Anything but "change" sends nothing.
+ * The preview was a snapshot. Between it and this call a match can cross its 36h mark (from which
+ * players can see fakes), be cancelled, or have its ladder changed by hand. So the match is read
+ * here, change_log is read again for hand edits, and planNewLadder — the same function the preview
+ * counted with — decides. Anything but "change" sends nothing.
  *
  * ── THE WRITE ─────────────────────────────────────────────────────────────────────────────────
  * PUT /admin/matches/{id} with ONLY the rungs that differ (the diff IS the body; PUT patches —
@@ -30,6 +31,7 @@ import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
 import { NO_EDIT_MATCHES } from "@/lib/matchEditAccess";
 import { refreshMatchMirror } from "@/lib/mirrorWriteThrough";
 import { planNewLadder } from "@/lib/fakeLadder";
+import { handEditsFor } from "@/lib/fakeLadderHandEdits";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -62,8 +64,11 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
   const actor = { canEditMatches: auth.canEditMatches, email: auth.email, userId: auth.appUserId };
 
   try {
+    const hand = await handEditsFor(auth.supabase, env, [Number(id)]);
+    if (!hand.ok) return Response.json({ error: `Couldn't check for hand edits, so nothing was sent: ${hand.error}`, outcome: "failed", requests: 0 }, { status: 500 });
     let cached = await apiGet<Record<string, unknown>>(env, `/admin/matches/${id}`);
-    const plan = planNewLadder(cached, Date.now());
+    /* THE 36H RULE ON THE CLOCK AS IT IS NOW, right after the read and a second before the write. */
+    const plan = planNewLadder(cached, Date.now(), { handEdited: hand.byMatch.has(Number(id)) });
     if (plan.status !== "change") {
       return Response.json({ ok: true, status: plan.status, outcome: null, requests: 1 });
     }

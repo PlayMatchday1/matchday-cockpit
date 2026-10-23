@@ -26,6 +26,7 @@ type Row = {
   id: number; name: string; city: string | null; field: string | null; startDate: string;
   hoursToKickoff: number | null; capacity: number | null;
   current: Record<string, number | null>; target: Record<string, number> | null; status: NewLadderStatus;
+  handEdit: { source: string; at: string } | null;
 };
 type Switch = {
   id: number; kind: "defaults" | "bulk"; scope_city: string | null; actor_email: string | null;
@@ -37,6 +38,12 @@ type Preview = {
   counts: Record<NewLadderStatus, number>; checkedAt: string; canWrite: boolean;
   switches: Switch[]; switchesError: string | null;
 };
+type Side = {
+  from: string; to: string; onNewLadder: number; matches: number; played: number; playedRate: number | null;
+  autoCancels: number; viableAutoCancels: number; fakesAtKickoff: number | null; playedWithFakeCount: number;
+  gap: number | null; gapMatches: number; realAtDeadline: number | null; reviews: number; lowStarShare: number | null;
+};
+type Compare = { switchAt: string | null; switchError: string | null; before: Side | null; after: Side | null };
 type Result = { id: number; label: string; verdict: "landed" | "unchanged" | "skipped" | "failed" | "notapplied" | "unknown"; note: string };
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -52,6 +59,8 @@ const ct = (iso: string) =>
   new Date(iso).toLocaleString("en-US", { timeZone: "America/Chicago", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) + " CT";
 const ladderText = (l: Record<string, number | null> | null) =>
   l ? RUNG_KEYS.map((k) => (l[k] == null ? "–" : String(l[k]))).join(" / ") : "–";
+const pct = (v: number | null) => (v == null ? "–" : `${Math.round(v * 100)}%`);
+const num1 = (v: number | null) => (v == null ? "–" : v.toFixed(1));
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function authed(path: string, init?: RequestInit) {
@@ -66,13 +75,29 @@ export default function FakeLadderView() {
   const [data, setData] = useState<Preview | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [onlyChange, setOnlyChange] = useState(true);
+  const [view, setView] = useState<"change" | "handEdited" | "all">("change");
   const [confirming, setConfirming] = useState(false);
   const [running, setRunning] = useState(false);
   const [results, setResults] = useState<Result[]>([]);
   const [halt, setHalt] = useState<string | null>(null);
   const [runTotal, setRunTotal] = useState(0);
   const stopRef = useRef(false);
+  const [cmp, setCmp] = useState<Compare | null>(null);
+  const [cmpErr, setCmpErr] = useState<string | null>(null);
+  /* THE BEFORE/AFTER PANEL loads on its own. It reads only the mirror, and a failure there must not
+   * take the preview — the thing a run depends on — down with it. */
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      try {
+        const r = await authed(`/api/matchday/${WRITE_ENV}/fake-ladder/compare`);
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error ?? `HTTP ${r.status}`);
+        if (live) setCmp(j);
+      } catch (e) { if (live) setCmpErr(e instanceof Error ? e.message : String(e)); }
+    })();
+    return () => { live = false; };
+  }, []);
 
   const load = useCallback(async (c: string) => {
     setLoading(true); setErr(null);
@@ -89,7 +114,7 @@ export default function FakeLadderView() {
   useEffect(() => { void load(city); }, [load, city]);
 
   const changing = useMemo(() => (data?.rows ?? []).filter((r) => r.status === "change"), [data]);
-  const shown = useMemo(() => (data?.rows ?? []).filter((r) => !onlyChange || r.status === "change"), [data, onlyChange]);
+  const shown = useMemo(() => (data?.rows ?? []).filter((r) => view === "all" || r.status === view), [data, view]);
   const scopeLabel = data?.city ?? (city || "every city");
 
   /* WHY THE BUTTON IS GREY, said beside it — a disabled control with no reason reads as broken. */
@@ -241,6 +266,39 @@ export default function FakeLadderView() {
         </section>
       )}
 
+
+      <section className="fl-card" data-testid="fl-compare">
+        <div className="fl-cardh">Before and after · Warsaw excluded</div>
+        {cmpErr ? <div className="fl-err">Couldn&apos;t compute the comparison: {cmpErr}</div>
+          : !cmp ? <div className="fl-empty">Loading…</div> : (
+          <>
+            <p className="fl-note fl-cmpnote">{cmp.switchAt
+              ? <>Switched {ct(cmp.switchAt)}. Before is the 28 days of kickoffs up to it; after starts 36 hours later (matches sooner than that kept the old ladder) and runs to two hours ago.</>
+              : <>No switch recorded yet{cmp.switchError ? ` (${cmp.switchError})` : ""}. Showing the last 28 days as the baseline.</>}</p>
+            <div className="fl-cmp" role="table">
+              <div className="fl-cmpr fl-cmph" role="row"><span role="columnheader" /><span role="columnheader">Before</span><span role="columnheader">After</span></div>
+              {([
+                ["Completed matches", (x: Side) => `${x.matches}`],
+                ["On the new ladder now", (x: Side) => `${x.onNewLadder}`],
+                ["Played", (x: Side) => pct(x.playedRate)],
+                ["Auto-cancels that looked viable at 3h", (x: Side) => `${x.viableAutoCancels} of ${x.autoCancels}`],
+                ["Fakes at kickoff (avg, played)", (x: Side) => num1(x.fakesAtKickoff)],
+                ["Shown minus checked in (avg)", (x: Side) => x.gap == null ? "–" : `${num1(x.gap)} · ${x.gapMatches} matches`],
+                ["Real players at the deadline (avg)", (x: Side) => num1(x.realAtDeadline)],
+                ["1–2 star reviews", (x: Side) => x.lowStarShare == null ? "–" : `${pct(x.lowStarShare)} of ${x.reviews}`],
+              ] as [string, (x: Side) => string][]).map(([label, f]) => (
+                <div className="fl-cmpr" role="row" key={label}>
+                  <span role="rowheader">{label}</span>
+                  <span role="cell">{cmp.before ? f(cmp.before) : "–"}</span>
+                  <span role="cell">{cmp.after ? f(cmp.after) : "not yet"}</span>
+                </div>
+              ))}
+            </div>
+            <p className="fl-note">Fakes at 3h come from each match&apos;s ladder and today&apos;s capacity; fakes at kickoff are MatchDay&apos;s own count. The gap only counts matches where check-in covered most of the roster.</p>
+          </>
+        )}
+      </section>
+
       {data && (
         <section className="fl-card" data-testid="fl-switches">
           <div className="fl-cardh">Switch record</div>
@@ -271,7 +329,13 @@ export default function FakeLadderView() {
         <section className="fl-card" data-testid="fl-list">
           <div className="fl-listh">
             <div className="fl-cardh">Matches</div>
-            <label className="fl-chk"><input type="checkbox" checked={onlyChange} onChange={(e) => setOnlyChange(e.target.checked)} /> Will change only</label>
+            <div className="fl-seg" role="group" aria-label="Which matches" data-testid="fl-view">
+              {([["change", "Will change"], ["handEdited", "Changed by hand"], ["all", "All"]] as const).map(([k, l]) => (
+                <button key={k} type="button" className={view === k ? "on" : ""} aria-pressed={view === k} onClick={() => setView(k)}>
+                  {l} <span>{k === "all" ? data.rows.length : data.counts[k]}</span>
+                </button>
+              ))}
+            </div>
           </div>
           {shown.length === 0 ? <div className="fl-empty">No matches to show.</div> : (
             <ul className="fl-rows">
@@ -285,7 +349,8 @@ export default function FakeLadderView() {
                     <span className="fl-cap">cap {r.capacity ?? "–"}</span>
                     <span className="fl-lad">{ladderText(r.current)}</span>
                     {r.status === "change" && <><span className="fl-arrow">→</span><span className="fl-lad fl-new">{ladderText(r.target)}</span></>}
-                    {r.status !== "change" && <span className="fl-skip">{NEW_LADDER_SKIP_LABEL[r.status]}</span>}
+                    {r.status !== "change" && <span className="fl-skip">{NEW_LADDER_SKIP_LABEL[r.status]}
+                      {r.handEdit ? ` · ${r.handEdit.source || "edit"}, ${ct(r.handEdit.at)}` : ""}</span>}
                   </div>
                 </li>
               ))}
@@ -298,9 +363,11 @@ export default function FakeLadderView() {
         <div className="fl-modalwrap" role="dialog" aria-modal="true">
           <div className="fl-modal" data-testid="fl-confirm">
             <h2>Apply the new ladder to {changing.length} {changing.length === 1 ? "match" : "matches"}?</h2>
-            <p>Upcoming matches in {scopeLabel}. Each one gets capacity −2 / −2 / −3 / −2 / capacity at 36 / 24 / 12 / 6 / 3 hours.
-              Matches already past their 3h mark are left alone. It writes one match at a time, about {minutes} min, and stops at the
-              first write that does not land. This is recorded as the switch date for {scopeLabel}.</p>
+            <p>Upcoming matches in {scopeLabel} that are more than 36 hours from kickoff, so no player has seen a fake on them yet.
+              Each one gets capacity −2 / −2 / −3 / −2 / capacity at 36 / 24 / 12 / 6 / 3 hours. Matches inside 36 hours, and
+              matches whose ladder or spots left was changed by hand, are left alone — both are checked again just before each
+              write. One match at a time, about {minutes} min; it stops at the first write that does not land. This is recorded
+              as the switch date for {scopeLabel}.</p>
             <div className="fl-modalf">
               <button type="button" className="fl-btn" onClick={() => setConfirming(false)}>Cancel</button>
               <button type="button" className="fl-go" data-testid="fl-confirm-go" onClick={() => void run()}>Apply to {changing.length}</button>
@@ -352,7 +419,10 @@ export default function FakeLadderView() {
         .fl-swn{color:var(--mut);overflow-wrap:anywhere}
         .fl-empty{color:var(--mut);font-size:13px}
         .fl-listh{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
-        .fl-chk{font-size:12.5px;color:var(--mut);display:flex;gap:6px;align-items:center;margin-bottom:10px}
+        .fl-seg{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+        .fl-seg button{border:1px solid var(--line);background:#fff;border-radius:999px;padding:5px 11px;font:inherit;font-size:12px;font-weight:700;color:#3C4F44;cursor:pointer}
+        .fl-seg button.on{background:var(--forest);border-color:var(--forest);color:#fff}
+        .fl-seg button span{font-weight:800;opacity:.75;margin-left:3px}
         .fl-row{display:flex;flex-wrap:wrap;gap:4px 16px;justify-content:space-between;padding:9px 0;border-top:1px solid var(--line)}
         .fl-rt{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1 1 220px}
         .fl-rt span{color:var(--mut);font-size:12.5px;overflow-wrap:anywhere}
@@ -367,6 +437,13 @@ export default function FakeLadderView() {
         .fl-modal h2{font-size:17px;margin:0 0 8px}
         .fl-modal p{font-size:13.5px;line-height:1.6;margin:0 0 16px;color:#33463B}
         .fl-modalf{display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap}
+        .fl-cmpnote{margin:0 0 10px}
+        .fl-cmp{display:flex;flex-direction:column}
+        .fl-cmpr{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr) minmax(0,1fr);gap:8px;padding:7px 0;border-top:1px solid var(--line);font-size:13px;align-items:baseline}
+        .fl-cmpr span{min-width:0;overflow-wrap:anywhere}
+        .fl-cmpr span:not(:first-child){font-variant-numeric:tabular-nums;font-weight:700}
+        .fl-cmph{border-top:0;font-size:10.5px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#6F8478}
+        .fl-cmph span{font-weight:800 !important}
         @media (max-width:560px){
           .fl-marks{grid-template-columns:repeat(3,minmax(0,1fr))}
         }

@@ -1667,6 +1667,16 @@ reason). The bulk run's change_log rows carry `save_id = ladder-<switch id>-<mat
 **PREVIEW COUNT AT BUILD TIME** (live `/admin/matches`, 2026-10-23 ~20:00 UTC, read-only): 245
 upcoming, **217 would change**, 19 past their 3h mark, 9 cancelled, 0 already on the new ladder.
 
+**REVISED SAME DAY — THE BULK ACTION NEVER REMOVES A FAKE A PLAYER CAN SEE.** It now rewrites only
+matches MORE than 36h (+5 min margin) from kickoff — fakes first appear at 36h — and re-checks that
+on a fresh read immediately before each write. It also skips, and lists, any match whose ladder or
+"Spots left now" was changed by hand: a production change_log row, landed or unknown, that sent a
+rung or changed the fake roster (`isHandLadderEdit`). Positive control at build time: 699 such rows
+on 297 matches since 2026-08-01 (gameday-fakes 288, gameday-spots 274, Match panel 81, …), all
+day-of edits — so **0 of the upcoming >36h matches were hand-edited**. **Retool edits leave no
+change_log row and cannot be detected.** Recount 2026-10-23 ~21:30 UTC: 245 upcoming, **184 would
+change**, 51 inside 36h, 10 cancelled, 0 hand-edited.
+
 ## STRIKES — the real model (Phase 18 investigation, confirmed by Ryan + live probe)
 
 A strike is a **COUNT toward a suspension, NOT a fine.** The per-city strike PRICE

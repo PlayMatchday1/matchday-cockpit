@@ -530,8 +530,11 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
   if (!state || !loaded || !meta) return <div style={{ padding: 24, fontFamily: "system-ui", color: "#5C6B62" }}>Loading match {id}…</div>;
 
   const groupCount = (g: Spec["group"]) => changedKeys.filter((k) => FIELDS.find((f) => f.key === k)?.group === g).length;
-  const ladderVals = LADDER.map((k) => Number(state[k]));
-  const descending = ladderVals.every((v, i) => i === 0 || v <= ladderVals[i - 1]);
+  /* THE NEW DEFAULT FOR THIS MATCH'S CAPACITY, and whether the match is already on it. The old
+   * "these should descend" warning is gone: the new ladder RISES at 3h on purpose (capacity, zero
+   * fakes), and the match panel dropped the same check for the same reason. */
+  const defLadder = newDefaultLadder(state.maxPlayerCount);
+  const onDefault = !!defLadder && LADDER.every((k) => state[k] !== "" && state[k] != null && Number(state[k]) === defLadder[k]);
   /* THE STORED TEAM COUNT, not a guess between two. This read `>= 4 ? 4 : 2`, so every 3-team
    * match was reported as 2 — production 18136 is 3 × 6 and this panel said "18 total, 9 a side".
    * 28 of 711 non-cancelled matches over 8 weeks run 3 teams, so 3 is not a corner case. */
@@ -1063,9 +1066,21 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
           <Section id="spots" title="Spots shown" open={!!openSec.spots} onToggle={() => toggleSec("spots")}
             dirty={groupCount("ladder") > 0} summary={sumSpots}>
             <div><div className="ladder">{inGroup("ladder").map(renderField)}</div>
-              <div className="ladderNote" data-testid="ladder-note">{descending
-                ? "Spots still unsold are released back at each mark. Each number should be no higher than the one before it."
-                : <><b>These should descend.</b> {ladderVals.join(" → ")} rises at some point, which releases more spots closer to kick-off than further out.</>}</div></div>
+              <div className="ladderNote" data-testid="ladder-note">
+                The most spots shown as left from each mark. Fakes fill the rest: capacity − this − real players.
+              </div>
+              {/* STAGES the new default like any hand edit — nothing goes out until Save. */}
+              {defLadder && (
+                <div className="ladderNote" data-testid="ladder-default">
+                  {onDefault ? "On the new default ladder." : (
+                    <>
+                      <button type="button" className="ladderBtn" data-testid="ladder-default-btn"
+                        onClick={() => { for (const k of LADDER) set(k, defLadder[k]); }}>Use new ladder</button>{" "}
+                      {LADDER.map((k) => defLadder[k]).join(" → ")} · at most 2–3 fakes early, none from 3h
+                    </>
+                  )}
+                </div>
+              )}</div>
           </Section>
 
           <Section id="auto" title="Automation" open={!!openSec.auto} onToggle={() => toggleSec("auto")}
@@ -1458,6 +1473,7 @@ const CSS = `
 .me .ladder .f label{text-align:center}
 .me .ladder input{text-align:center;font-variant-numeric:tabular-nums}
 .me .ladderNote{font-size:11px;color:var(--muted);margin-top:9px;line-height:1.5}
+.me .ladderBtn{font:inherit;font-size:12px;font-weight:700;border:1px solid var(--line, #DCE5DF);background:#fff;border-radius:8px;padding:5px 10px;cursor:pointer;margin-right:4px}
 .me .ladderNote b{color:var(--coralInk);font-weight:900}
 .me .ladderNote code{background:var(--slot);border:1px solid var(--line);border-radius:5px;padding:1px 5px;font-size:10.5px}
 .me .team{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center;padding:10px 12px;border:1px solid var(--line);border-radius:11px;margin-bottom:9px}

@@ -125,6 +125,10 @@ is("authenticateMatchOpsRead is imported by EXACTLY the 22 intended routes", imp
   // can_access_matchops gates read AND write here, which is why the whole route is on this gate
   // with no write flag on top. Deliberately NOT recordWrite'd — change_log is for API writes.
   "slate-notes/route.ts",
+  /* 2026-10-23 — the Fake Ladder before/after panel. A pure READ of the mdapi mirror (matches,
+   * rosters, reviews); no MatchDay call and no write. On this gate because a confined account is
+   * scoped by it — the route pushes confinedCity into its match query. */
+  "matchday/[env]/fake-ladder/compare/route.ts",
   /* THE VENUE READ. GET is matchops so a city manager can SEE whether a field has a cost mapping;
      POST and PATCH on the same file are authenticateCapability(req, "finance") and are refused for
      them. Visible, not editable — the split Ryan approved. */

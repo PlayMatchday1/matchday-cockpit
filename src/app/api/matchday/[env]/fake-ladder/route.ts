@@ -30,6 +30,7 @@ import { apiGet, StageHostGuardError, StageConfigError, type MatchdayEnv } from 
 import { NO_EDIT_MATCHES } from "@/lib/matchEditAccess";
 import { cityNameFor } from "@/lib/cityScope";
 import { planNewLadder, RUNG_KEYS, type NewLadderStatus } from "@/lib/fakeLadder";
+import { handEditsFor } from "@/lib/fakeLadderHandEdits";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -51,6 +52,8 @@ export type LadderPreviewRow = {
   startDate: string; hoursToKickoff: number | null; capacity: number | null;
   current: Record<string, number | null>; target: Record<string, number> | null;
   status: NewLadderStatus;
+  /** For a hand-edited match: the most recent hand change, as evidence. */
+  handEdit: { source: string; at: string } | null;
 };
 
 export async function GET(req: Request, ctx: { params: Promise<{ env: string }> }) {
@@ -69,7 +72,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string }> 
       if (page > 1) await sleep(PAGE_PAUSE_MS);
       const res = await apiGet<{ data?: Raw[]; totalItems?: number }>(env, "/admin/matches", {
         // ONE DAY OF SLACK BEHIND: the list filters on calendar dates, and a match tonight in
-        // Central is tomorrow in UTC. Anything already past its 3h mark is skipped by the plan.
+        // Central is tomorrow in UTC. Anything 36h or less out is skipped by the plan.
         fromDate: ymd(now - 86_400_000), toDate: ymd(now + AHEAD_DAYS * 86_400_000),
         page, limit: PAGE_LIMIT, sortColumn: "startDateUtc", sortDirection: "asc",
       });
@@ -87,10 +90,16 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string }> 
      * every city that has an upcoming match — and only those. */
     const cities = [...new Set(raw.map(cityOf).filter((c): c is string => !!c))].sort();
 
-    const rows: LadderPreviewRow[] = raw
-      .filter((m) => !city || cityOf(m) === city)
+    const scoped = raw.filter((m) => !city || cityOf(m) === city);
+    /* HAND EDITS, from change_log, for every match in scope in one read. A failed read is an
+     * ERROR, never "nobody edited anything" — that would put hand-set ladders in the write set. */
+    const hand = await handEditsFor(auth.supabase, env, scoped.map((m) => Number(m.id)));
+    if (!hand.ok) return Response.json({ error: `Couldn't check for hand edits, so nothing is counted: ${hand.error}` }, { status: 500 });
+
+    const rows: LadderPreviewRow[] = scoped
       .map((m) => {
-        const plan = planNewLadder(m, now);
+        const edit = hand.byMatch.get(Number(m.id)) ?? null;
+        const plan = planNewLadder(m, now, { handEdited: !!edit });
         const f = (m.field ?? {}) as Raw;
         const current: Record<string, number | null> = {};
         for (const k of RUNG_KEYS) current[k] = m[k] == null ? null : Number(m[k]);
@@ -100,12 +109,13 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string }> 
           startDate: String(m.startDate ?? ""), hoursToKickoff: plan.hoursToKickoff,
           capacity: m.maxPlayerCount == null ? null : Number(m.maxPlayerCount),
           current, target: plan.target, status: plan.status,
+          handEdit: plan.status === "handEdited" ? edit : null,
         };
       })
       // Soonest first, by the TRUE instant the plan already computed.
       .sort((a, b) => (a.hoursToKickoff ?? Infinity) - (b.hoursToKickoff ?? Infinity));
 
-    const counts: Record<NewLadderStatus, number> = { change: 0, unchanged: 0, past3h: 0, cancelled: 0, nocap: 0 };
+    const counts: Record<NewLadderStatus, number> = { change: 0, unchanged: 0, inside36h: 0, handEdited: 0, cancelled: 0, nocap: 0 };
     for (const r of rows) counts[r.status]++;
 
     const sw = await auth.supabase.from("fake_ladder_switches")
