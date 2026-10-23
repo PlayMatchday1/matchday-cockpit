@@ -8,7 +8,7 @@
 // to it; it still applies to the full pass (playerAreaSync.ts).
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { isLive, type RunKind, type StopReason } from "./playerAreaSync";
+import { EVENING_MESSAGE, inEveningBlock, isLive, type RunKind, type StopReason } from "./playerAreaSync";
 
 export const MANUAL_COOLDOWN_MS = 10 * 60 * 1000;
 
@@ -41,6 +41,9 @@ export type SyncStatus = {
   availableAt: string | null;
   /** Why no pass may start right now (the evening block); null = it may. */
   blocked: string | null;
+  /** Why a MANUAL FULL pass may not start right now (the evening block, which the incremental
+   *  Sync now is exempt from); null = it may. Run full sync on the Data page reads this. */
+  fullBlocked: string | null;
   /** Why no pass may start at all (the kill switch); null = not paused. */
   paused: string | null;
   /** The last 10 passes, newest first. */
@@ -73,6 +76,7 @@ export async function readSyncStatus(sb: SupabaseClient, now = new Date()): Prom
     } : null,
     availableAt: live ? null : until != null && until > t ? new Date(until).toISOString() : null,
     blocked: null,
+    fullBlocked: inEveningBlock(now) ? EVENING_MESSAGE : null,
     paused: SYNC_PAUSED,
     recent: rows.map((r) => ({
       runId: r.id, startedAt: r.started_at, finishedAt: r.finished_at, triggeredBy: r.triggered_by, ok: r.ok,

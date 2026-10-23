@@ -7649,3 +7649,9 @@ Evidence: read-only Supabase reads on 2026-10-23 ~13:00 UTC (`mdapi_matches`, `p
   `mdapi_matches.city_identifier = 'WAW'`, cities to WAW. Distances and reaches in km.
   On 2026-10-23 (before Warsaw's first full pass): 97 players, 46 of 79 active Warsaw players with a
   location, 189 Warsaw players ever.
+- **Manual full pass (2026-10-23, Ryan, replacing "at night or not at all"):** "Run full sync" on the
+  Data page POSTs `/api/sync/player-areas` — the same `startPass` the 08:00 UTC cron opens, logged
+  `triggered_by` "manual". Admin only (Tech gate + `is_admin`); refused while any run is live (409,
+  and `startPass`/`runIncremental` already skip each other), for 10 minutes after the last run of
+  either kind started (429), and in the evening block 22:00–04:00 UTC (409). Sync now is unchanged
+  and still runs the incremental pass, which reuses the last full run's `cities`.

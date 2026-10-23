@@ -3,9 +3,11 @@
 // PLAYER LOCATIONS — the Data page's card for the player-areas sync (moved from the Locations page
 // header, 2026-10-08: nobody can start a sync from Locations any more). Since 2026-10-21 Sync now runs
 // an INCREMENTAL run (/api/sync/player-areas/recent: players whose location changed since the last
-// successful run), logged as triggered_by "manual"; the full pass is the nightly cron only. ADMIN ONLY
-// to start: the button is greyed for everyone else as a courtesy; the server refuses non-admins (403),
-// a run in progress (409) and the 10-minute cooldown (429).
+// successful run), logged as triggered_by "manual". RUN FULL SYNC (2026-10-23) opens the same full pass
+// the nightly cron does (/api/sync/player-areas), also logged "manual", and is additionally refused in
+// the evening block. ADMIN ONLY to start either: the buttons are greyed for everyone else as a
+// courtesy; the server refuses non-admins (403), a run in progress (409) and the 10-minute cooldown
+// (429) — one guard for both buttons, counted from the last run of either kind.
 //
 // It never retries. A stopped pass is shown as it stopped; the next one is a person's or the cron's.
 // State comes from /api/sync/player-areas/status (Supabase), polled every 5 s while a pass is live.
@@ -52,6 +54,7 @@ export default function PlayerAreasSyncCard() {
   const [status, setStatus] = useState<(SyncStatus & { canSync: boolean }) | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
+  const [startingFull, setStartingFull] = useState(false);
   const [outcome, setOutcome] = useState<Outcome>(null);
   const watching = useRef<{ since: number; runId?: number } | null>(null);
   const [awaiting, setAwaiting] = useState(false);
@@ -88,7 +91,7 @@ export default function PlayerAreasSyncCard() {
   }, [headers]);
 
   useEffect(() => { void poll(); }, [poll]);
-  const live = !!status?.running || starting || awaiting;
+  const live = !!status?.running || starting || startingFull || awaiting;
   useEffect(() => {
     if (!live) return;
     const t = setInterval(() => void poll(), 5000);
@@ -127,6 +130,31 @@ export default function PlayerAreasSyncCard() {
     }
   };
 
+  /* RUN FULL SYNC: answers 202 at once with the run id; the pass then runs in legs (about 5 minutes)
+   * and the poll above reports how it ended, exactly as it does for a pass someone else started. */
+  const startFull = async () => {
+    setStartingFull(true);
+    setOutcome(null);
+    try {
+      const res = await fetch("/api/sync/player-areas", { method: "POST", headers: await headers() });
+      const body = await res.json().catch(() => ({}));
+      if (res.status === 202 && body?.runId != null) {
+        watching.current = { since: Date.now(), runId: body.runId };
+        setAwaiting(true);
+        setOutcome({ kind: "ok", text: `Full pass ${body.runId} started. It reads every player, about 5 minutes; this card reports how it ends.` });
+      } else if (res.status === 429 && body?.availableAt) {
+        setOutcome({ kind: "err", text: `Not started: cooling down until ${fmtTime(body.availableAt)}.` });
+      } else {
+        setOutcome({ kind: "err", text: `Not started: ${body?.skipped ?? body?.error ?? `HTTP ${res.status}`}` });
+      }
+      await poll();
+    } catch (e) {
+      setOutcome({ kind: "err", text: `Not started: ${e instanceof Error ? e.message : String(e)}` });
+    } finally {
+      setStartingFull(false);
+    }
+  };
+
   const r = status?.running;
   const paused = !r ? status?.paused ?? null : null;
   const blocked = !r && !paused ? status?.blocked ?? null : null;
@@ -144,6 +172,18 @@ export default function PlayerAreasSyncCard() {
     : r ? `A ${r.triggeredBy} pass started at ${fmtTime(r.startedAt)}.`
     : cooling ? `One sync per 10 minutes, to protect the MatchDay API. Available again at ${fmtTime(cooling)}.`
     : "Reads the players whose location changed since the last successful sync, 200 a page, one request a second. Never retried.";
+  const fullBlocked = !r && !paused ? status?.fullBlocked ?? null : null;
+  const fullLabel = paused ? "Sync paused"
+    : fullBlocked ? "No full sync in match hours"
+    : startingFull ? "Starting…"
+    : cooling ? `Full sync at ${fmtTime(cooling)}`
+    : "Run full sync";
+  const fullWhy = !isAdmin ? "Only admins can start a location sync."
+    : paused ? paused
+    : fullBlocked ? fullBlocked
+    : r ? `A ${r.triggeredBy} pass started at ${fmtTime(r.startedAt)}.`
+    : cooling ? `One sync per 10 minutes, to protect the MatchDay API. Available again at ${fmtTime(cooling)}.`
+    : "The same full pass the 3 AM cron runs: every player, 200 a page, one request a second, about 5 minutes. Picks up city changes, which Sync now does not. Never retried.";
 
   return (
     <section id="player-locations" data-testid="player-areas-card"
@@ -155,7 +195,8 @@ export default function PlayerAreasSyncCard() {
             Player home areas from MatchDay (/admin/players) into player_area_seen, for Growth › Locations. Every hour at :35,
             only the players whose location changed since the last successful sync (usually one request). Once a night, at 3 AM Central
             (08:00 UTC), a full pass reads every player 200 a page, one request a second (about 5 minutes), refreshes the player
-            copy, and clears removed locations. Any error stops a run; the next scheduled run is the retry.
+            copy, and clears removed locations. Run full sync starts that same pass now (admins, not in match hours). Any error stops a run;
+            the next scheduled run is the retry.
           </p>
           <p className="mt-1 text-[11px] text-deep-green/50" data-testid="player-areas-fresh">
             {loadError ? <span className="text-coral">Couldn&apos;t read sync state: {loadError}</span>
@@ -168,14 +209,24 @@ export default function PlayerAreasSyncCard() {
               : "No pass yet"}
           </p>
         </div>
-        <button type="button" data-testid="player-areas-sync-now" onClick={() => void start()} title={why}
-          disabled={!isAdmin || !status || starting || awaiting || !!r || !!cooling || !!paused || !!blocked}
-          className="rounded-md bg-mint px-4 py-2 text-sm font-bold text-deep-green transition hover:bg-mint-hover disabled:cursor-not-allowed disabled:opacity-50">
-          {label}
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button type="button" data-testid="player-areas-sync-full" onClick={() => void startFull()} title={fullWhy}
+            disabled={!isAdmin || !status || starting || startingFull || awaiting || !!r || !!cooling || !!paused || !!fullBlocked}
+            className="rounded-md border-[1.5px] border-deep-green/25 bg-white px-4 py-2 text-sm font-bold text-deep-green transition hover:bg-cream-soft disabled:cursor-not-allowed disabled:opacity-50">
+            {fullLabel}
+          </button>
+          <button type="button" data-testid="player-areas-sync-now" onClick={() => void start()} title={why}
+            disabled={!isAdmin || !status || starting || startingFull || awaiting || !!r || !!cooling || !!paused || !!blocked}
+            className="rounded-md bg-mint px-4 py-2 text-sm font-bold text-deep-green transition hover:bg-mint-hover disabled:cursor-not-allowed disabled:opacity-50">
+            {label}
+          </button>
+        </div>
       </div>
       {(!isAdmin || blocked || paused || cooling) && status && (
         <p className="mt-2 text-[11px] text-deep-green/55" data-testid="player-areas-why">{why}</p>
+      )}
+      {isAdmin && fullBlocked && !blocked && !paused && status && (
+        <p className="mt-1 text-[11px] text-deep-green/55" data-testid="player-areas-full-why">Run full sync: {fullBlocked}</p>
       )}
       {outcome && (
         <div data-testid="player-areas-outcome"
