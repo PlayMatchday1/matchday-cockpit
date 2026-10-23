@@ -9,8 +9,9 @@
 import { readFileSync } from "node:fs";
 import {
   RUNG_MARKS, RUNG_KEYS, rungKey, fakesFor, rungFor, markInForce, marksFrom,
-  fakesWriteDiff, fakesWriteNote,
+  fakesWriteDiff, fakesWriteNote, newDefaultLadder, ladderDiff, planNewLadder,
 } from "../src/lib/fakeLadder";
+import { buildCopyBody } from "../src/lib/copyMatch";
 import { EDITABLE_KEYS } from "../src/lib/matchEditModel";
 
 let pass = 0; const fails: string[] = [];
@@ -125,6 +126,77 @@ console.log("\nTHE RUNG FIELDS ARE EDITABLE, AND THE LADDER NEED NOT BE MONOTONI
   const panel = readFileSync("src/components/MatchPanel.tsx", "utf8")
     .replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
   is("  the monotonic ladder check is gone from the editor", /ladderBreak/.test(panel), false);
+}
+
+console.log("\nTHE NEW DEFAULT LADDER (2026-10-23): capacity −2 / −2 / −3 / −2 / capacity");
+{
+  /* COMPUTED, NOT RESTATED: the fake count at each mark on an empty match comes out of fakesFor —
+   * the formula reproduced on production 18360 above — fed the default rung. */
+  const L = newDefaultLadder(18)!;
+  is("  capacity 18 -> 16 / 16 / 15 / 16 / 18", RUNG_KEYS.map((k) => L[k]), [16, 16, 15, 16, 18]);
+  is("  fakes on an EMPTY match at 36 / 24 / 12 / 6 / 3h", RUNG_KEYS.map((k) => fakesFor(18, L[k], 0)), [2, 2, 3, 2, 0]);
+  is("  real players replace fakes one for one (2 real at 12h -> 1 fake)", fakesFor(18, L.fakeSpotLeft12h, 2), 1);
+  is("  …and never below zero (5 real at 12h)", fakesFor(18, L.fakeSpotLeft12h, 5), 0);
+  is("  ZERO fakes from 3h whatever the real count", [0, 1, 9, 17, 18].map((r) => fakesFor(18, L.fakeSpotLeft3h, r)), [0, 0, 0, 0, 0]);
+  is("  a tiny capacity floors at 0, never negative", RUNG_KEYS.map((k) => newDefaultLadder(2)![k]), [0, 0, 0, 0, 2]);
+  is("  no capacity -> no ladder (special event)", [newDefaultLadder(0), newDefaultLadder(null), newDefaultLadder("")], [null, null, null]);
+  // CONTROL: the old production ladder would NOT pass the zero-at-3h line.
+  is("  control: an old ladder (…/4 at 3h) leaves fakes at 3h", fakesFor(18, 4, 0), 14);
+}
+
+console.log("\nTHE BULK ACTION'S PLAN — what the preview counts and the write route re-checks");
+{
+  const NOW = Date.parse("2026-10-23T18:00:00.000Z");
+  const at = (h: number) => new Date(NOW + h * 3_600_000).toISOString();
+  const OLD = { fakeSpotLeft36h: 16, fakeSpotLeft24h: 12, fakeSpotLeft12h: 6, fakeSpotLeft6h: 4, fakeSpotLeft3h: 2 };
+  const NEW = newDefaultLadder(18)!;
+  const M = (h: number, extra: Record<string, unknown> = {}) => ({ maxPlayerCount: 18, isCancelled: false, startDateUtc: at(h), ...OLD, ...extra });
+  is("  48h out, old ladder -> change", planNewLadder(M(48), NOW).status, "change");
+  is("  10h out (inside 36h) -> still changes", planNewLadder(M(10), NOW).status, "change");
+  is("  3.1h out -> change", planNewLadder(M(3.1), NOW).status, "change");
+  is("  EXACTLY 3h out -> skipped as past its 3h mark", planNewLadder(M(3), NOW).status, "past3h");
+  is("  2h out -> skipped", planNewLadder(M(2), NOW).status, "past3h");
+  is("  already kicked off -> skipped", planNewLadder(M(-1), NOW).status, "past3h");
+  is("  unreadable kickoff -> skipped, never assumed future", planNewLadder(M(48, { startDateUtc: null }), NOW).status, "past3h");
+  is("  cancelled -> skipped", planNewLadder(M(48, { isCancelled: true }), NOW).status, "cancelled");
+  is("  no capacity -> skipped", planNewLadder(M(48, { maxPlayerCount: 0 }), NOW).status, "nocap");
+  is("  already on the new ladder -> unchanged, nothing sent", planNewLadder(M(48, NEW), NOW).status, "unchanged");
+  /* THE KICKOFF IS THE TRUE INSTANT. A wall-clock startDate four hours later than the instant must
+   * not move a match out of the skip set — startDate is not read. */
+  is("  startDate (wall clock) is ignored; startDateUtc decides", planNewLadder(M(2, { startDate: at(6) }), NOW).status, "past3h");
+
+  /* THE DIFF IS THE BODY: only the rungs that differ. 36h is already 16 on the old ladder. */
+  is("  diff carries only the four rungs that differ", planNewLadder(M(48), NOW).diff,
+    { fakeSpotLeft24h: 16, fakeSpotLeft12h: 15, fakeSpotLeft6h: 16, fakeSpotLeft3h: 18 });
+  is("  a null stored rung is a difference, not zero", ladderDiff({ ...NEW, fakeSpotLeft6h: null }, NEW), { fakeSpotLeft6h: 16 });
+
+  /* THE PREVIEW COUNT, on a mixed fixture with a known answer: 3 change, 5 skipped. */
+  const fixture = [M(48), M(30), M(3.5), M(3), M(1), M(48, { isCancelled: true }), M(48, { maxPlayerCount: null }), M(72, NEW)];
+  const counts: Record<string, number> = {};
+  for (const m of fixture) { const s = planNewLadder(m, NOW).status; counts[s] = (counts[s] ?? 0) + 1; }
+  is("  preview counts: 3 change · 2 past 3h · 1 cancelled · 1 no cap · 1 unchanged", counts,
+    { change: 3, past3h: 2, cancelled: 1, nocap: 1, unchanged: 1 });
+}
+
+console.log("\nA NEW MATCH GETS THE NEW DEFAULTS");
+{
+  const SRC = { name: "n", description: "d", type: "REGULAR", startDate: "2026-11-04T19:30:00.000Z", endDate: "2026-11-04T21:00:00.000Z",
+    fieldId: 1, maxPlayerCount: 22, isFreeMember: false, teams: [{}, {}],
+    fakeSpotLeft36h: 16, fakeSpotLeft24h: 12, fakeSpotLeft12h: 6, fakeSpotLeft6h: 4, fakeSpotLeft3h: 2 };
+  const body = buildCopyBody(SRC, { iso: "2026-11-11" });
+  is("  a copy carries the new ladder for ITS capacity (22), not the source's rungs",
+    RUNG_KEYS.map((k) => body[k]), [20, 20, 19, 20, 22]);
+  is("  control: the source's own rungs really were different", RUNG_KEYS.map((k) => (SRC as Record<string, unknown>)[k]), [16, 12, 6, 4, 2]);
+  /* THE CREATE ROUTE FILLS ANY RUNG A CALLER LEAVES OUT. Source-level, because the route's fill sits
+   * between an HTTP request and a MatchDay write — not reachable inside the gate. */
+  const route = readFileSync("src/app/api/matchday/[env]/matches/create/route.ts", "utf8");
+  is("  the create route fills absent rungs from newDefaultLadder(payload.maxPlayerCount)",
+    /newDefaultLadder\(payload\.maxPlayerCount\)/.test(route), true);
+  // NEGATIVE: a rung the caller DID send is never overwritten wholesale.
+  is("  …and never overwrites a rung the caller sent", /Object\.assign\(payload,\s*ladder\)/.test(route), false);
+  /* STEP TWO OF A COPY MUST NOT PUT THE SOURCE'S LADDER BACK. */
+  const editor = readFileSync("src/app/(internal)/match-ops/matches/[id]/MatchEditor.tsx", "utf8");
+  is("  the editor's copy overlay skips the rung keys", /if \(RUNG_KEYS\.includes\(k\)\) continue;/.test(editor), true);
 }
 
 console.log(`\nfake-ladder: ${pass} passed, ${fails.length} failed`);

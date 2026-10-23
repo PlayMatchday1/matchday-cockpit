@@ -49,6 +49,7 @@ import {
   type Pending, type RosterOrigin, type EditRow, type PlannedWrite, type PlayerKind,
 } from "@/lib/rosterEditModel";
 import { TEMPLATE_LABELS, buildTemplateBody, smsSegments, unfilledTokens } from "@/lib/matchNotify";
+import { newDefaultLadder } from "@/lib/fakeLadder";
 
 // Only these two `type` values are exposed. The known enum also has BRACKET and GROUP and the full
 // set is UNKNOWN (no spec in repo). A match whose current type is NOT one of these renders as
@@ -1453,6 +1454,27 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange,
                 );
               })}
             </div>
+            {/* THE NEW DEFAULT, ONE CLICK AWAY AND NOT APPLIED. It STAGES the five rungs for this
+                match's capacity (fakeLadder.ts newDefaultLadder) like any hand edit, so the diff shows
+                them and nothing goes out until Save. Hidden when the match is already on it. */}
+            {(() => {
+              const def = newDefaultLadder(capacity);
+              if (!def) return null;
+              const same = MARKS.every((h) => Number(cur[`fakeSpotLeft${h}h`]) === def[`fakeSpotLeft${h}h`] && cur[`fakeSpotLeft${h}h`] !== "");
+              return (
+                <div className="mp-ladderdef" data-testid="mp-ladder-default">
+                  {same ? <span>On the new default ladder.</span> : (
+                    <>
+                      <button type="button" className="mp-btn" data-testid="mp-ladder-default-btn" disabled={!!opBusy}
+                        onClick={() => { for (const h of MARKS) setField(`fakeSpotLeft${h}h`, def[`fakeSpotLeft${h}h`]); }}>
+                        Use new ladder
+                      </button>
+                      <span>{MARKS.map((h) => def[`fakeSpotLeft${h}h`]).join(" / ")} · at most 2–3 fakes early, none from 3h</span>
+                    </>
+                  )}
+                </div>
+              );
+            })()}
 
             <hr className="mp-secrule" />
             <Toggle id="mp-ac" on={!!cur.autoCanceled} dirty={isDirty("autoCanceled")} onToggle={(v) => setField("autoCanceled", v)}
@@ -2697,6 +2719,7 @@ const CSS = `
 .mp-relmk{display:block;font-size:10.5px;font-weight:800;letter-spacing:.09em;color:var(--ink2);margin-bottom:6px}
 .mp-relin{width:100%;text-align:center;font-size:16px;font-weight:800;min-height:44px;padding:6px 4px;background:#fff}
 .mp-relfk{display:block;margin-top:4px;font-size:10px;font-weight:700;color:#6b5200;background:#fdf2c8;border:1px solid #e6cf7a;border-radius:5px;padding:1px 0;white-space:nowrap}
+.mp-ladderdef{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin-top:10px;font-size:12px;color:var(--ink2)}
 .mp-tog{display:flex;align-items:flex-start;gap:11px;cursor:pointer;min-height:44px;position:relative}
 .mp-tog input{position:absolute;opacity:0;width:1px;height:1px;min-height:0;margin:0}
 .mp-knob{flex:0 0 44px;width:44px;height:26px;border-radius:999px;background:#d6e0da;position:relative;margin-top:2px;transition:background .12s}

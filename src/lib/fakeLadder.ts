@@ -144,3 +144,71 @@ export function spotsLeftWriteDiff(
 /** The value the control shows: the rung in force right now. */
 export const spotsLeftNow = (ladder: Ladder, hoursToKickoff: number): number =>
   Number(ladder[rungKey(markInForce(hoursToKickoff))] ?? 0);
+
+/* ── THE NEW DEFAULT LADDER (2026-10-23) ───────────────────────────────────────────────────────
+ * Decided from 60 days of production (docs/matchday-api-facts.md, "THE LADDER ON PRODUCTION"):
+ * more fakes did not bring more real joins, they made matches about to auto-cancel look healthy,
+ * and they were still on the roster at kickoff. So the default shows a couple early and none from
+ * 3 hours out:
+ *
+ *     36h  capacity − 2      24h  capacity − 2      12h  capacity − 3
+ *      6h  capacity − 2       3h  capacity          (zero fakes)
+ *
+ * IN RUNG TERMS, because rungs are what the API stores (see the top of this file): "capacity − 2"
+ * means at most 2 fakes, and real players replace them one for one. capacity is maxPlayerCount.
+ *
+ * NOT PROOF AGAINST A LATER CAPACITY RISE. The rungs come from the capacity at the moment they are
+ * written. If a match is bumped to a bigger format afterwards, a 3h rung equal to the OLD capacity
+ * leaves `new − old − real` fakes. A bump usually happens once the match is full on real players,
+ * which makes that zero; a hand edit of capacity is not covered. */
+export const NEW_LADDER_OFFSET: Record<RungMark, number> = { 36: 2, 24: 2, 12: 3, 6: 2, 3: 0 };
+
+/** The five rungs for `capacity`. null when there is no capacity (a special event has no cap and
+ *  no ladder to speak of). */
+export function newDefaultLadder(capacity: unknown): Ladder | null {
+  const cap = Number(capacity);
+  if (capacity == null || capacity === "" || !Number.isFinite(cap) || cap <= 0) return null;
+  const out: Ladder = {};
+  for (const m of RUNG_MARKS) out[rungKey(m)] = Math.max(0, Math.round(cap) - NEW_LADDER_OFFSET[m]);
+  return out;
+}
+
+/** ONLY THE RUNGS THAT DIFFER. The diff IS the request body. A missing or null stored rung is a
+ *  difference — it is not "already zero". */
+export function ladderDiff(current: Record<string, unknown>, target: Ladder): Ladder {
+  const diff: Ladder = {};
+  for (const k of RUNG_KEYS) {
+    const cur = current[k];
+    if (cur == null || cur === "" || Number(cur) !== target[k]) diff[k] = target[k];
+  }
+  return diff;
+}
+
+/* ── THE BULK ACTION'S PLAN, ONE MATCH AT A TIME ───────────────────────────────────────────────
+ * Pure, so the preview count and the write decision are the SAME function: the page counts what
+ * this returns as "change", and the write route re-runs it on a fresh read immediately before
+ * writing. A match that moved into a skip state between the two is skipped, not written. */
+export type NewLadderStatus = "change" | "unchanged" | "past3h" | "cancelled" | "nocap";
+export type NewLadderPlan = { status: NewLadderStatus; hoursToKickoff: number | null; target: Ladder | null; diff: Ladder };
+
+export const NEW_LADDER_SKIP_LABEL: Record<Exclude<NewLadderStatus, "change">, string> = {
+  unchanged: "already on the new ladder",
+  past3h: "past its 3h mark",
+  cancelled: "cancelled",
+  nocap: "no capacity (special event)",
+};
+
+export function planNewLadder(m: Record<string, unknown>, nowMs: number): NewLadderPlan {
+  /* THE TRUE INSTANT. startDateUtc, never startDate: startDate is local wall clock wearing a Z it
+   * does not mean, and reading it as UTC puts a Central evening match hours off its 3h mark. */
+  const kick = Date.parse(String(m.startDateUtc ?? ""));
+  const hoursToKickoff = Number.isFinite(kick) ? (kick - nowMs) / 3_600_000 : null;
+  const target = newDefaultLadder(m.maxPlayerCount);
+  const none = { hoursToKickoff, target, diff: {} as Ladder };
+  if (m.isCancelled === true) return { status: "cancelled", ...none };
+  /* AN UNREADABLE KICKOFF IS SKIPPED, never assumed to be in the future. */
+  if (hoursToKickoff === null || hoursToKickoff <= 3) return { status: "past3h", ...none };
+  if (!target) return { status: "nocap", ...none };
+  const diff = ladderDiff(m, target);
+  return { status: Object.keys(diff).length ? "change" : "unchanged", hoursToKickoff, target, diff };
+}

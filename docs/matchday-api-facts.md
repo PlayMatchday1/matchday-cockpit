@@ -1636,6 +1636,37 @@ about 8 a day, so a removal is known only to within a few hours unless a run hap
 - **178 of the 411 cancelled matches in the window were also DELETED upstream** (tombstoned in the
   mirror), most of them days before kickoff. Only 8 ever carried a fake row.
 
+## THE NEW DEFAULT LADDER (shipped 2026-10-23)
+
+**Rungs: capacity −2 / −2 / −3 / −2 / capacity at 36h / 24h / 12h / 6h / 3h** (`newDefaultLadder`,
+`src/lib/fakeLadder.ts`). On an empty match that is at most 2 / 2 / 3 / 2 / 0 fakes; real players
+replace them one for one; zero fakes from 3h whatever the real count. Applied by: Copy match (both
+the full editor's create mode and Master Schedule "copy to dates", `copyMatch.ts buildCopyBody`), a
+server fallback for any rung a create omits (`matches/create/route.ts`), a "Use new ladder" button
+that STAGES it in the match panel, and the bulk "Apply new ladder" at `/match-ops/fake-ladder`.
+
+**MEASURED ON STAGING 2026-10-23, match 2620, capacity 18, 0 real** (`scripts/stage-new-ladder-probe.mjs`),
+new ladder written, kickoff moved into each band, live roster sampled every ~19s:
+
+```
+36h band (30h out)   expect 2   got 2   settled 308s
+12h band ( 9h out)   expect 3   got 3   settled 269s
+24h band (20h out)   expect 2   got 2   settled 289s   (a REMOVAL, 3 -> 2)
+ 6h band ( 5h out)   expect 2   got 2   (no move: 2 -> 2, so this step proves nothing on its own)
+ 3h band ( 2h out)   expect 0   got 0   settled 250s   (a REMOVAL, 2 -> 0)
+```
+
+The ADDS took ~270–310s this time, not the ~100s recorded on 2026-09-02. Reconciler timing on
+staging varies; quote five minutes for either direction. Match restored after (dates, rungs, 0 fakes).
+
+**THE SWITCH DATES live in `fake_ladder_switches` (migration 0231)**: one `defaults` row for the
+code change, one `bulk` row per "Apply new ladder" run (scope city, start, finish, tally, stop
+reason). The bulk run's change_log rows carry `save_id = ladder-<switch id>-<match id>` and source
+"Apply new ladder". The run refuses to start if the switch row cannot be inserted.
+
+**PREVIEW COUNT AT BUILD TIME** (live `/admin/matches`, 2026-10-23 ~20:00 UTC, read-only): 245
+upcoming, **217 would change**, 19 past their 3h mark, 9 cancelled, 0 already on the new ladder.
+
 ## STRIKES — the real model (Phase 18 investigation, confirmed by Ryan + live probe)
 
 A strike is a **COUNT toward a suspension, NOT a fine.** The per-city strike PRICE

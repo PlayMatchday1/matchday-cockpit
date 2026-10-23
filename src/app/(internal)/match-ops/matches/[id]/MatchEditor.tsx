@@ -35,6 +35,7 @@ import MoneyInput from "@/components/MoneyInput";
  * there is nothing panel-specific in them and nothing to fork. Reimplementing either here would
  * bring back the stale-rung bug that put production match 18125 at 5.5 players a team. */
 import { rungKeyFor, teamCountWrites, teamShapeError } from "@/lib/rosterEditModel";
+import { newDefaultLadder, RUNG_KEYS } from "@/lib/fakeLadder";
 import { noteLogResponse } from "@/lib/logHealth";
 import LogHealthBanner from "@/components/LogHealthBanner";
 import { useAuth, canEditMatches } from "@/lib/useAuth";
@@ -330,6 +331,10 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
             if (!cur) return cur;
             const next: Data = { ...cur };
             for (const k of EDITABLE_KEYS) {
+              /* EXCEPT THE FAKE LADDER. The copy was created on the NEW default ladder (copyMatch.ts);
+               * overlaying the source's rungs here would stage the old ladder as a change and put it
+               * back on Save. */
+              if (RUNG_KEYS.includes(k)) continue;
               const v = src[k];
               next[k] = v ?? (TOGGLE.has(k) ? false : null);
             }
@@ -351,7 +356,10 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
       }
     }
     if (mode === "create") {
-      // THE COPY ARRIVES WITHOUT A DATE, ON PURPOSE. Everything else is the source's.
+      // THE COPY ARRIVES WITHOUT A DATE, ON PURPOSE. Everything else is the source's — except the
+      // fake ladder, which starts on the new default for the source's capacity and stays editable.
+      const ladder = newDefaultLadder(json.match?.maxPlayerCount);
+      if (ladder) setState((cur) => (cur ? { ...cur, ...ladder } : cur));
       setStartAt(""); setEndAt("");
       setMeta((m) => ({ ...(m ?? {}), id: null, startDate: null, endDate: null }));
     }
