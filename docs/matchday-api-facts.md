@@ -1636,14 +1636,45 @@ about 8 a day, so a removal is known only to within a few hours unless a run hap
 - **178 of the 411 cancelled matches in the window were also DELETED upstream** (tombstoned in the
   mirror), most of them days before kickoff. Only 8 ever carried a fake row.
 
-## THE NEW DEFAULT LADDER (shipped 2026-10-23)
+## THE DEFAULT LADDER IS FIXED VALUES AGAIN (2026-10-24) — supersedes the section below
+
+**Rungs (most spots shown as left): 12 / 8 / 8 / 6 / 6 at 36h / 24h / 12h / 6h / 3h, each capped at
+`maxPlayerCount`** (`FIXED_LADDER` / `defaultLadder`, `src/lib/fakeLadder.ts`). Ryan's decision; the
+capacity-relative ladder below ran for one day. Same call sites as before: Copy match
+(`copyMatch.ts buildCopyBody`, full editor create mode), the create route's fill for an omitted rung,
+"Use default ladder" in the match panel and full editor (stages, never saves). Per-match edits are
+unchanged.
+
+**THE FAKE LADDER PAGE IS GONE** (`/match-ops/fake-ladder`, its nav item, `FakeLadderView`, the
+preview/start/finish route, the before/after `compare` route and `fakeLadderCompare.ts`). It owned no
+cron and no env var. **`fake_ladder_switches` (0231) is kept, not dropped, and no longer written**: it
+holds row 1 (`defaults`, 2026-10-23 21:19 UTC) and row 2 (the one bulk run, 2026-10-23 21:20–21:31
+UTC, 184 previewed, 184 landed, 0 stopped), read 2026-10-24.
+
+**NO CLUBHOUSE JOB WRITES RUNGS.** Searched every branch for a scheduled ladder job; there is none,
+and `vercel.json` has no ladder cron. The only automatic actor is the BACKEND reconciler,
+`TaskMatchesService.runFakeSpots`, `@Cron('*/5 * * * *')`
+(`backend apps/api/src/tasks/task-matches/task-matches.service.ts:70-146`, local checkout at 7698a52 —
+what is DEPLOYED is UNKNOWN). Per mark it selects matches whose rung is `> 0` and calls
+`addOrRemoveFakeSpotsToMatch(id, rung)`: it moves fake ROWS to match the rungs and does not write the
+rungs, so it cannot overwrite these values.
+
+**THE ONE-OFF BULK ACTION** is "Apply fixed ladder" on the Data page (`ApplyFixedLadderCard`), preview
+`GET /api/matchday/{env}/fixed-ladder`, writes `POST /api/matchday/{env}/fixed-ladder/{id}`. Scope:
+wall-clock `startDate` day ≥ `2026-11-02` (`FIXED_LADDER_FROM`; Oct 24 – Nov 1 were set by hand),
+more than 36h + 5 min out, not cancelled, not hand-edited (`isHandLadderEdit`; this action's and the
+retired action's own writes do not count). Every write through `recordWrite`, source
+`Apply fixed ladder`, `save_id fixed-ladder-<run>-<match>`; MatchDay requests at least 2s apart;
+stops at the first write that does not land; never retries.
+
+## THE NEW DEFAULT LADDER (shipped 2026-10-23) — SUPERSEDED 2026-10-24, see above
 
 **Rungs: capacity −2 / −2 / −3 / −2 / capacity at 36h / 24h / 12h / 6h / 3h** (`newDefaultLadder`,
 `src/lib/fakeLadder.ts`). On an empty match that is at most 2 / 2 / 3 / 2 / 0 fakes; real players
 replace them one for one; zero fakes from 3h whatever the real count. Applied by: Copy match (both
 the full editor's create mode and Master Schedule "copy to dates", `copyMatch.ts buildCopyBody`), a
 server fallback for any rung a create omits (`matches/create/route.ts`), a "Use new ladder" button
-that STAGES it in the match panel, and the bulk "Apply new ladder" at `/match-ops/fake-ladder`.
+that STAGES it in the match panel, and the bulk "Apply new ladder" at `/match-ops/fake-ladder` (removed 2026-10-24).
 
 **MEASURED ON STAGING 2026-10-23, match 2620, capacity 18, 0 real** (`scripts/stage-new-ladder-probe.mjs`),
 new ladder written, kickoff moved into each band, live roster sampled every ~19s:

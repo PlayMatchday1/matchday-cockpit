@@ -9,7 +9,7 @@
 import { readFileSync } from "node:fs";
 import {
   RUNG_MARKS, RUNG_KEYS, rungKey, fakesFor, rungFor, markInForce, marksFrom,
-  fakesWriteDiff, fakesWriteNote, newDefaultLadder, ladderDiff, planNewLadder, isHandLadderEdit, type ChangeLogRow,
+  fakesWriteDiff, fakesWriteNote, defaultLadder, ladderDiff, planFixedLadder, isHandLadderEdit, FIXED_LADDER_SOURCE, type ChangeLogRow,
 } from "../src/lib/fakeLadder";
 import { buildCopyBody } from "../src/lib/copyMatch";
 import { EDITABLE_KEYS } from "../src/lib/matchEditModel";
@@ -128,61 +128,66 @@ console.log("\nTHE RUNG FIELDS ARE EDITABLE, AND THE LADDER NEED NOT BE MONOTONI
   is("  the monotonic ladder check is gone from the editor", /ladderBreak/.test(panel), false);
 }
 
-console.log("\nTHE NEW DEFAULT LADDER (2026-10-23): capacity −2 / −2 / −3 / −2 / capacity");
+console.log("\nTHE DEFAULT LADDER (2026-10-24): fixed 12 / 8 / 8 / 6 / 6, each capped at capacity");
 {
   /* COMPUTED, NOT RESTATED: the fake count at each mark on an empty match comes out of fakesFor —
    * the formula reproduced on production 18360 above — fed the default rung. */
-  const L = newDefaultLadder(18)!;
-  is("  capacity 18 -> 16 / 16 / 15 / 16 / 18", RUNG_KEYS.map((k) => L[k]), [16, 16, 15, 16, 18]);
-  is("  fakes on an EMPTY match at 36 / 24 / 12 / 6 / 3h", RUNG_KEYS.map((k) => fakesFor(18, L[k], 0)), [2, 2, 3, 2, 0]);
-  is("  real players replace fakes one for one (2 real at 12h -> 1 fake)", fakesFor(18, L.fakeSpotLeft12h, 2), 1);
-  is("  …and never below zero (5 real at 12h)", fakesFor(18, L.fakeSpotLeft12h, 5), 0);
-  is("  ZERO fakes from 3h whatever the real count", [0, 1, 9, 17, 18].map((r) => fakesFor(18, L.fakeSpotLeft3h, r)), [0, 0, 0, 0, 0]);
-  is("  a tiny capacity floors at 0, never negative", RUNG_KEYS.map((k) => newDefaultLadder(2)![k]), [0, 0, 0, 0, 2]);
-  is("  no capacity -> no ladder (special event)", [newDefaultLadder(0), newDefaultLadder(null), newDefaultLadder("")], [null, null, null]);
-  // CONTROL: the old production ladder would NOT pass the zero-at-3h line.
-  is("  control: an old ladder (…/4 at 3h) leaves fakes at 3h", fakesFor(18, 4, 0), 14);
+  const L = defaultLadder(18)!;
+  is("  capacity 18 -> 12 / 8 / 8 / 6 / 6", RUNG_KEYS.map((k) => L[k]), [12, 8, 8, 6, 6]);
+  is("  fakes on an EMPTY 18 at 36 / 24 / 12 / 6 / 3h", RUNG_KEYS.map((k) => fakesFor(18, L[k], 0)), [6, 10, 10, 12, 12]);
+  is("  real players replace fakes one for one (4 real at 12h -> 6 fakes)", fakesFor(18, L.fakeSpotLeft12h, 4), 6);
+  is("  …and never below zero (12 real at 12h)", fakesFor(18, L.fakeSpotLeft12h, 12), 0);
+  is("  CAPPED AT CAPACITY: a 10 reads 10 / 8 / 8 / 6 / 6", RUNG_KEYS.map((k) => defaultLadder(10)![k]), [10, 8, 8, 6, 6]);
+  is("  …a 7 reads 7 / 7 / 7 / 6 / 6", RUNG_KEYS.map((k) => defaultLadder(7)![k]), [7, 7, 7, 6, 6]);
+  is("  …so a capped rung means zero fakes there", fakesFor(10, defaultLadder(10)!.fakeSpotLeft36h, 0), 0);
+  is("  a big match is not scaled up (capacity 28 -> 12 at 36h)", defaultLadder(28)!.fakeSpotLeft36h, 12);
+  is("  no capacity -> no ladder (special event)", [defaultLadder(0), defaultLadder(null), defaultLadder("")], [null, null, null]);
 }
 
-console.log("\nTHE BULK ACTION'S PLAN — what the preview counts and the write route re-checks");
+console.log("\nTHE ONE-OFF BULK ACTION'S PLAN — what the preview counts and the write route re-checks");
 {
-  const NOW = Date.parse("2026-10-23T18:00:00.000Z");
+  const NOW = Date.parse("2026-11-01T18:00:00.000Z");
   const at = (h: number) => new Date(NOW + h * 3_600_000).toISOString();
-  const OLD = { fakeSpotLeft36h: 16, fakeSpotLeft24h: 12, fakeSpotLeft12h: 6, fakeSpotLeft6h: 4, fakeSpotLeft3h: 2 };
-  const NEW = newDefaultLadder(18)!;
-  const M = (h: number, extra: Record<string, unknown> = {}) => ({ maxPlayerCount: 18, isCancelled: false, startDateUtc: at(h), ...OLD, ...extra });
-  is("  48h out, old ladder -> change", planNewLadder(M(48), NOW).status, "change");
-  /* THE 36H RULE (changed 2026-10-23, Ryan): the bulk action never removes a fake a player can
-   * already see. Fakes first appear at 36h, so only matches MORE than 36h (+5 min margin) out. */
-  is("  36.2h out -> change", planNewLadder(M(36.2), NOW).status, "change");
-  is("  EXACTLY 36h out -> skipped", planNewLadder(M(36), NOW).status, "inside36h");
-  is("  36h 04m out -> skipped (inside the 5-minute margin)", planNewLadder(M(36 + 4 / 60), NOW).status, "inside36h");
-  is("  10h out -> skipped, fakes may be showing", planNewLadder(M(10), NOW).status, "inside36h");
-  is("  already kicked off -> skipped", planNewLadder(M(-1), NOW).status, "inside36h");
-  is("  unreadable kickoff -> skipped, never assumed far enough away", planNewLadder(M(48, { startDateUtc: null }), NOW).status, "inside36h");
-  is("  cancelled -> skipped", planNewLadder(M(48, { isCancelled: true }), NOW).status, "cancelled");
-  is("  no capacity -> skipped", planNewLadder(M(48, { maxPlayerCount: 0 }), NOW).status, "nocap");
-  is("  already on the new ladder -> unchanged, nothing sent", planNewLadder(M(48, NEW), NOW).status, "unchanged");
-  is("  HAND-EDITED -> skipped and listed", planNewLadder(M(48), NOW, { handEdited: true }).status, "handEdited");
-  is("  control: the same match without the hand edit WOULD change", planNewLadder(M(48), NOW, { handEdited: false }).status, "change");
-  /* THE KICKOFF IS THE TRUE INSTANT. A wall-clock startDate 30h later than the instant must not
-   * move a match out of the skip set — startDate is not read. */
-  is("  startDate (wall clock) is ignored; startDateUtc decides", planNewLadder(M(10, { startDate: at(40) }), NOW).status, "inside36h");
+  /* startDate is WALL CLOCK; for a fixture the day it names is all that matters. */
+  const wall = (h: number) => at(h).slice(0, 10) + "T19:00:00.000Z";
+  const OLD = { fakeSpotLeft36h: 16, fakeSpotLeft24h: 16, fakeSpotLeft12h: 15, fakeSpotLeft6h: 16, fakeSpotLeft3h: 18 };
+  const FIX = defaultLadder(18)!;
+  const M = (h: number, extra: Record<string, unknown> = {}) => ({ maxPlayerCount: 18, isCancelled: false, startDateUtc: at(h), startDate: wall(h), ...OLD, ...extra });
+  is("  48h out (Nov 3), old ladder -> change", planFixedLadder(M(48), NOW).status, "change");
+  /* THE START DATE: Oct 24 – Nov 1 were set by hand. Compared on the WALL-CLOCK day. */
+  is("  Nov 1 wall-clock day -> before the start date", planFixedLadder(M(48, { startDate: "2026-11-01T21:00:00.000Z" }), NOW).status, "beforeFrom");
+  is("  Nov 2 wall-clock day -> in scope", planFixedLadder(M(48, { startDate: "2026-11-02T08:00:00.000Z" }), NOW).status, "change");
+  is("  unreadable startDate -> skipped, never assumed in scope", planFixedLadder(M(48, { startDate: null }), NOW).status, "beforeFrom");
+  is("  a later start date can be passed", planFixedLadder(M(48), NOW, { fromYmd: "2026-11-10" }).status, "beforeFrom");
+  /* THE 36H RULE (Ryan, 2026-10-23): never change a fake a player can already see. */
+  is("  36.2h out -> change", planFixedLadder(M(36.2), NOW).status, "change");
+  is("  EXACTLY 36h out -> skipped", planFixedLadder(M(36), NOW).status, "inside36h");
+  is("  36h 04m out -> skipped (inside the 5-minute margin)", planFixedLadder(M(36 + 4 / 60), NOW).status, "inside36h");
+  is("  10h out -> skipped, fakes may be showing", planFixedLadder(M(10, { startDate: "2026-11-02T08:00:00.000Z" }), NOW).status, "inside36h");
+  is("  unreadable kickoff -> skipped, never assumed far enough away", planFixedLadder(M(48, { startDateUtc: null }), NOW).status, "inside36h");
+  is("  cancelled -> skipped", planFixedLadder(M(48, { isCancelled: true }), NOW).status, "cancelled");
+  is("  no capacity -> skipped", planFixedLadder(M(48, { maxPlayerCount: 0 }), NOW).status, "nocap");
+  is("  already on the fixed ladder -> unchanged, nothing sent", planFixedLadder(M(48, FIX), NOW).status, "unchanged");
+  is("  HAND-EDITED -> skipped and listed", planFixedLadder(M(48), NOW, { handEdited: true }).status, "handEdited");
+  is("  control: the same match without the hand edit WOULD change", planFixedLadder(M(48), NOW, { handEdited: false }).status, "change");
 
-  /* THE DIFF IS THE BODY: only the rungs that differ. 36h is already 16 on the old ladder. */
-  is("  diff carries only the four rungs that differ", planNewLadder(M(48), NOW).diff,
-    { fakeSpotLeft24h: 16, fakeSpotLeft12h: 15, fakeSpotLeft6h: 16, fakeSpotLeft3h: 18 });
-  is("  a null stored rung is a difference, not zero", ladderDiff({ ...NEW, fakeSpotLeft6h: null }, NEW), { fakeSpotLeft6h: 16 });
+  /* THE DIFF IS THE BODY: only the rungs that differ. */
+  is("  diff carries the five rungs that differ", planFixedLadder(M(48), NOW).diff,
+    { fakeSpotLeft36h: 12, fakeSpotLeft24h: 8, fakeSpotLeft12h: 8, fakeSpotLeft6h: 6, fakeSpotLeft3h: 6 });
+  is("  …and only those (36h already 12)", planFixedLadder(M(48, { fakeSpotLeft36h: 12 }), NOW).diff,
+    { fakeSpotLeft24h: 8, fakeSpotLeft12h: 8, fakeSpotLeft6h: 6, fakeSpotLeft3h: 6 });
+  is("  a null stored rung is a difference, not zero", ladderDiff({ ...FIX, fakeSpotLeft6h: null }, FIX), { fakeSpotLeft6h: 6 });
 
-  /* THE PREVIEW COUNT, on a mixed fixture with a known answer: 3 change, 5 skipped. */
+  /* THE PREVIEW COUNT, on a mixed fixture with a known answer. */
   const fixture: [Record<string, unknown>, boolean][] = [
-    [M(48), false], [M(120), false], [M(37), false], [M(36), false], [M(30), false], [M(2), false],
-    [M(48, { isCancelled: true }), false], [M(48, { maxPlayerCount: null }), false], [M(72, NEW), false], [M(60), true],
+    [M(48), false], [M(120), false], [M(37), false], [M(36), false], [M(30), false],
+    [M(48, { startDate: "2026-10-31T19:00:00.000Z" }), false],
+    [M(48, { isCancelled: true }), false], [M(48, { maxPlayerCount: null }), false], [M(72, FIX), false], [M(60), true],
   ];
   const counts: Record<string, number> = {};
-  for (const [m, h] of fixture) { const st = planNewLadder(m, NOW, { handEdited: h }).status; counts[st] = (counts[st] ?? 0) + 1; }
-  is("  preview counts: 3 change · 3 inside 36h · 1 hand-edited · 1 cancelled · 1 no cap · 1 unchanged", counts,
-    { change: 3, inside36h: 3, cancelled: 1, nocap: 1, unchanged: 1, handEdited: 1 });
+  for (const [m, h] of fixture) { const st = planFixedLadder(m, NOW, { handEdited: h }).status; counts[st] = (counts[st] ?? 0) + 1; }
+  is("  preview counts: 3 change · 2 inside 36h · 1 before start · 1 hand-edited · 1 cancelled · 1 no cap · 1 unchanged", counts,
+    { change: 3, inside36h: 2, beforeFrom: 1, cancelled: 1, nocap: 1, unchanged: 1, handEdited: 1 });
 }
 
 console.log("\nWHAT COUNTS AS CHANGED BY HAND (change_log rows)");
@@ -194,24 +199,26 @@ console.log("\nWHAT COUNTS AS CHANGED BY HAND (change_log rows)");
   is("  …and its removal form", isHandLadderEdit(row({ source: "gameday-spots", method: "DELETE", endpoint: "/admin/matches/user-matches/{3 rows}", request_body: { removes: [1, 2, 3] } })), true);
   is("  NOT: a price edit with no rung", isHandLadderEdit(row({ request_body: { registrationPrice: 1500 } })), false);
   is("  NOT: a failed rung write", isHandLadderEdit(row({ outcome: "failed", request_body: { fakeSpotLeft12h: 6 } })), false);
-  is("  NOT: this action's own write", isHandLadderEdit(row({ source: "Apply new ladder", request_body: { fakeSpotLeft12h: 15 } })), false);
+  is("  NOT: this action's own write", isHandLadderEdit(row({ source: FIXED_LADDER_SOURCE, request_body: { fakeSpotLeft12h: 8 } })), false);
+  is("  NOT: the retired 2026-10-23 bulk action's write", isHandLadderEdit(row({ source: "Apply new ladder", request_body: { fakeSpotLeft12h: 15 } })), false);
   is("  NOT: a create (Copy match carries a ladder)", isHandLadderEdit(row({ method: "POST", endpoint: "/admin/matches", request_body: { fakeSpotLeft12h: 6 } })), false);
 }
 
-console.log("\nA NEW MATCH GETS THE NEW DEFAULTS");
+console.log("\nA NEW MATCH GETS THE DEFAULT LADDER");
 {
   const SRC = { name: "n", description: "d", type: "REGULAR", startDate: "2026-11-04T19:30:00.000Z", endDate: "2026-11-04T21:00:00.000Z",
     fieldId: 1, maxPlayerCount: 22, isFreeMember: false, teams: [{}, {}],
     fakeSpotLeft36h: 16, fakeSpotLeft24h: 12, fakeSpotLeft12h: 6, fakeSpotLeft6h: 4, fakeSpotLeft3h: 2 };
   const body = buildCopyBody(SRC, { iso: "2026-11-11" });
-  is("  a copy carries the new ladder for ITS capacity (22), not the source's rungs",
-    RUNG_KEYS.map((k) => body[k]), [20, 20, 19, 20, 22]);
+  is("  a copy carries the default ladder, not the source's rungs",
+    RUNG_KEYS.map((k) => body[k]), [12, 8, 8, 6, 6]);
+  is("  …capped at the copy's capacity (8)", RUNG_KEYS.map((k) => buildCopyBody({ ...SRC, maxPlayerCount: 8 }, { iso: "2026-11-11" })[k]), [8, 8, 8, 6, 6]);
   is("  control: the source's own rungs really were different", RUNG_KEYS.map((k) => (SRC as Record<string, unknown>)[k]), [16, 12, 6, 4, 2]);
   /* THE CREATE ROUTE FILLS ANY RUNG A CALLER LEAVES OUT. Source-level, because the route's fill sits
    * between an HTTP request and a MatchDay write — not reachable inside the gate. */
   const route = readFileSync("src/app/api/matchday/[env]/matches/create/route.ts", "utf8");
-  is("  the create route fills absent rungs from newDefaultLadder(payload.maxPlayerCount)",
-    /newDefaultLadder\(payload\.maxPlayerCount\)/.test(route), true);
+  is("  the create route fills absent rungs from defaultLadder(payload.maxPlayerCount)",
+    /defaultLadder\(payload\.maxPlayerCount\)/.test(route), true);
   // NEGATIVE: a rung the caller DID send is never overwritten wholesale.
   is("  …and never overwrites a rung the caller sent", /Object\.assign\(payload,\s*ladder\)/.test(route), false);
   /* STEP TWO OF A COPY MUST NOT PUT THE SOURCE'S LADDER BACK. */

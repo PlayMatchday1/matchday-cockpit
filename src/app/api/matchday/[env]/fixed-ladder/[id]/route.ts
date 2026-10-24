@@ -1,25 +1,27 @@
-/* APPLY THE NEW FAKE LADDER TO ONE MATCH — POST /api/matchday/{env}/fake-ladder/{id}
- *   body { switchId }   the fake_ladder_switches row this write belongs to (required)
+/* APPLY THE FIXED FAKE LADDER TO ONE MATCH — POST /api/matchday/{env}/fixed-ladder/{id}
+ *   body { runId }   one id per run, chosen by the card; it groups the run's change_log rows
  *
- * ONE MATCH PER CALL, ON PURPOSE. The page drives the run so it can stop at the first write that
+ * The one-off "Apply fixed ladder" (Data page, ApplyFixedLadderCard) calls this once per match.
+ *
+ * ONE MATCH PER CALL, ON PURPOSE. The card drives the run so it can stop at the first write that
  * does not land and never hit a function time limit.
  *
- * ONE MATCHDAY REQUEST PER SECOND, ENFORCED HERE. This call's own requests (read, write,
- * read-back) are spaced a second apart, and the page waits a second after each call before the
- * next, so the gap between any two requests of a run is at least one second.
+ * PACED HERE AND BY THE CARD. This call's own MatchDay requests (read, write, read-back) are two
+ * seconds apart, and the card waits two seconds after each call before the next, so no two
+ * requests of a run are closer than two seconds — under Ryan's "at most 1 per second" and inside
+ * the standing 1-per-2s rule for production sweeps.
  *
  * ── THE DECISION IS MADE AGAIN, ON A FRESH READ ──────────────────────────────────────────────────
- * The preview was a snapshot. Between it and this call a match can cross its 36h mark (from which
- * players can see fakes), be cancelled, or have its ladder changed by hand. So the match is read
- * here, change_log is read again for hand edits, and planNewLadder — the same function the preview
- * counted with — decides. Anything but "change" sends nothing.
+ * The preview was a snapshot. Between it and this call a match can cross its 36h mark, be
+ * cancelled, or have its ladder changed by hand. So the match is read here, change_log is read
+ * again for hand edits, and planFixedLadder — the same function the preview counted with —
+ * decides. Anything but "change" sends nothing.
  *
  * ── THE WRITE ─────────────────────────────────────────────────────────────────────────────────
  * PUT /admin/matches/{id} with ONLY the rungs that differ (the diff IS the body; PUT patches —
  * proven on production 17256). Through recordWrite: the read above is its before, then the write,
  * then a read-back that decides LANDED / NOT APPLIED / FAILED / UNKNOWN. Never retried — a run
  * that stops is restarted by a person, and the plan then finds the landed matches unchanged.
- * Three MatchDay requests when it writes, one when it does not.
  */
 import { authenticateCapability } from "@/lib/capabilityAuth";
 import { assertMatchInScope } from "@/lib/matchOpsAuth";
@@ -30,7 +32,7 @@ import {
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
 import { NO_EDIT_MATCHES } from "@/lib/matchEditAccess";
 import { refreshMatchMirror } from "@/lib/mirrorWriteThrough";
-import { planNewLadder } from "@/lib/fakeLadder";
+import { planFixedLadder, FIXED_LADDER_SOURCE } from "@/lib/fakeLadder";
 import { handEditsFor } from "@/lib/fakeLadderHandEdits";
 
 export const runtime = "nodejs";
@@ -39,7 +41,7 @@ export const maxDuration = 30;
 
 const isEnv = (x: string): x is MatchdayEnv => x === "staging" || x === "production";
 /** The pause before each MatchDay request after the first in a call. */
-const gap = () => new Promise<void>((r) => setTimeout(r, 1000));
+const gap = () => new Promise<void>((r) => setTimeout(r, 2000));
 
 export async function POST(req: Request, ctx: { params: Promise<{ env: string; id: string }> }) {
   const auth = await authenticateCapability(req, "editMatches");
@@ -53,22 +55,22 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
   if (!/^\d+$/.test(id)) return Response.json({ error: "Match id must be numeric" }, { status: 400 });
   // EDIT MATCHES before any MatchDay request, so a read-only account makes zero network calls.
   if (!auth.canEditMatches) {
-    console.warn(`[edit-matches] 403: ${auth.email} attempted the new fake ladder on ${id} without EDIT MATCHES`);
+    console.warn(`[edit-matches] 403: ${auth.email} attempted the fixed fake ladder on ${id} without EDIT MATCHES`);
     return Response.json({ error: NO_EDIT_MATCHES }, { status: 403 });
   }
-  const b = (await req.json().catch(() => null)) as { switchId?: unknown } | null;
-  const switchId = Number(b?.switchId);
-  /* EVERY BULK WRITE BELONGS TO A RECORDED SWITCH. Without one the before/after comparison loses
-   * the date this match crossed over. */
-  if (!Number.isInteger(switchId) || switchId <= 0) return Response.json({ error: "switchId required" }, { status: 400 });
+  const b = (await req.json().catch(() => null)) as { runId?: unknown } | null;
+  /* EVERY WRITE NAMES ITS RUN, so one run's change_log rows can be read back as a set
+   * (save_id LIKE 'fixed-ladder-<runId>-%'). */
+  const runId = typeof b?.runId === "string" && /^[a-z0-9-]{6,40}$/.test(b.runId) ? b.runId : null;
+  if (!runId) return Response.json({ error: "runId required" }, { status: 400 });
   const actor = { canEditMatches: auth.canEditMatches, email: auth.email, userId: auth.appUserId };
 
   try {
     const hand = await handEditsFor(auth.supabase, env, [Number(id)]);
     if (!hand.ok) return Response.json({ error: `Couldn't check for hand edits, so nothing was sent: ${hand.error}`, outcome: "failed", requests: 0 }, { status: 500 });
     let cached = await apiGet<Record<string, unknown>>(env, `/admin/matches/${id}`);
-    /* THE 36H RULE ON THE CLOCK AS IT IS NOW, right after the read and a second before the write. */
-    const plan = planNewLadder(cached, Date.now(), { handEdited: hand.byMatch.has(Number(id)) });
+    /* THE 36H RULE ON THE CLOCK AS IT IS NOW, right after the read and two seconds before the write. */
+    const plan = planFixedLadder(cached, Date.now(), { handEdited: hand.byMatch.has(Number(id)) });
     if (plan.status !== "change") {
       return Response.json({ ok: true, status: plan.status, outcome: null, requests: 1 });
     }
@@ -77,8 +79,8 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
     let reads = 0;
     const { outcome, error, logged } = await recordWrite(
       {
-        env, source: "Apply new ladder", actorName: auth.email, actorEmail: auth.email,
-        saveId: `ladder-${switchId}-${id}`, matchId: Number(id), matchName: (cached.name as string) ?? null,
+        env, source: FIXED_LADDER_SOURCE, actorName: auth.email, actorEmail: auth.email,
+        saveId: `fixed-ladder-${runId}-${id}`, matchId: Number(id), matchName: (cached.name as string) ?? null,
         method: "PUT", path: `/admin/matches/${id}`, body: changes, keys, label: (k) => k,
       },
       {

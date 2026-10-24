@@ -79,7 +79,6 @@ export const MATCH_OPS_SECTIONS: MatchOpsSection[] = [
   // BACK OFFICE — the weeks-long rhythm: 8 items in 4 groups.
   { key: "master", section: "back", group: "Scheduling", label: "Master Schedule", href: "/match-ops/master-schedule", desc: "Recurring weekly slots, by city", access: "matchops", icon: <I><rect x="3" y="4" width="18" height="17" rx="2.5" /><path d="M3 9h18M8 2v4M16 2v4" /></I> },
   { key: "slate-review", section: "back", group: "Scheduling", label: "Slate Review", href: "/match-ops/slate-review", desc: "Weekly per-city decision snapshot", access: "matchops", icon: <I><path d="M4 5h16v14H4z" /><path d="M8 9h8M8 13h8M8 17h5" /></I> },
-  { key: "fake-ladder", section: "back", group: "Scheduling", label: "Fake Ladder", href: "/match-ops/fake-ladder", desc: "The new fake ladder — preview it and apply it to upcoming matches", access: "matchops", icon: <I><path d="M7 3v18M17 3v18M7 7h10M7 12h10M7 17h10" /></I> },
   { key: "match-promotion", section: "back", group: "Scheduling", label: "Match Promotion", href: "/match-ops/match-promotion", desc: "Weekly push plan — channels, timing, coverage", access: "matchops", icon: <I><path d="M3 11v2a1 1 0 0 0 1 1h3l5 4V6L7 10H4a1 1 0 0 0-1 1Z" /><path d="M16 9a4 4 0 0 1 0 6" /></I> },
   // FIELD PIPELINE LEFT MATCH OPS for /growth/field-pipeline. It was the one item here gated on
   // `tech` rather than `matchops` — chasing venues is a Growth activity that had been parked in an

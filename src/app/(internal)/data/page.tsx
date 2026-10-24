@@ -5,6 +5,7 @@ import PagePermissionGuard from "@/components/PagePermissionGuard";
 import StripeUploader from "@/components/StripeUploader";
 import SyncCard from "@/components/SyncCard";
 import PlayerAreasSyncCard from "@/components/PlayerAreasSyncCard";
+import ApplyFixedLadderCard from "@/components/ApplyFixedLadderCard";
 import { canAccess, useAuth } from "@/lib/useAuth";
 
 export default function DataPage() {
@@ -167,6 +168,15 @@ export default function DataPage() {
           subtitle="Home areas players have shared in the app, for Growth › Locations."
         />
         <PlayerAreasSyncCard />
+      </section>
+
+      {/* 6c. One-off: the fixed fake ladder onto upcoming matches (2026-10-24). Remove once run. */}
+      <section className="mb-12">
+        <SectionHeader
+          title="Fake ladder"
+          subtitle="One-off: write the fixed default ladder onto upcoming matches."
+        />
+        <ApplyFixedLadderCard />
       </section>
 
       {/* 7a. Membership prices (finance-domain) */}

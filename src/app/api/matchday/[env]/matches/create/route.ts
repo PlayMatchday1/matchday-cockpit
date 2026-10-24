@@ -24,7 +24,7 @@ import { EDITABLE_KEYS } from "@/lib/matchEditModel";
 import { supabaseLogStore } from "@/lib/changeLog";
 import { NO_EDIT_MATCHES } from "@/lib/matchEditAccess";
 import { cityNameFor } from "@/lib/cityScope";
-import { newDefaultLadder, RUNG_KEYS } from "@/lib/fakeLadder";
+import { defaultLadder, RUNG_KEYS } from "@/lib/fakeLadder";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -203,11 +203,11 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string }>
      * explicit undefined — the diff IS the request body, here as everywhere. */
     const payload: Record<string, unknown> = {};
     for (const k of CREATE_FIELDS) if (k in match) payload[k] = match[k];
-    /* A RUNG THE CALLER DID NOT SEND GETS THE NEW DEFAULT, never the API's. Both create paths send
+    /* A RUNG THE CALLER DID NOT SEND GETS THE DEFAULT, never the API's. Both create paths send
      * all five (copyMatch.ts, MatchEditor create mode), so this only fires for a caller that does
      * not — and what the API does with an absent rung is UNKNOWN; a 0 rung would mean every open
      * spot shown as taken. A rung the caller DID send is theirs and is left alone. */
-    const ladder = newDefaultLadder(payload.maxPlayerCount);
+    const ladder = defaultLadder(payload.maxPlayerCount);
     if (ladder) for (const k of RUNG_KEYS) if (payload[k] === undefined || payload[k] === null || payload[k] === "") payload[k] = ladder[k];
 
     const saveId = body?.saveId || randomUUID();

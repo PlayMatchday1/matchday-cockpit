@@ -35,7 +35,7 @@ import MoneyInput from "@/components/MoneyInput";
  * there is nothing panel-specific in them and nothing to fork. Reimplementing either here would
  * bring back the stale-rung bug that put production match 18125 at 5.5 players a team. */
 import { rungKeyFor, teamCountWrites, teamShapeError } from "@/lib/rosterEditModel";
-import { newDefaultLadder, RUNG_KEYS } from "@/lib/fakeLadder";
+import { defaultLadder, RUNG_KEYS } from "@/lib/fakeLadder";
 import { noteLogResponse } from "@/lib/logHealth";
 import LogHealthBanner from "@/components/LogHealthBanner";
 import { useAuth, canEditMatches } from "@/lib/useAuth";
@@ -357,8 +357,8 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
     }
     if (mode === "create") {
       // THE COPY ARRIVES WITHOUT A DATE, ON PURPOSE. Everything else is the source's — except the
-      // fake ladder, which starts on the new default for the source's capacity and stays editable.
-      const ladder = newDefaultLadder(json.match?.maxPlayerCount);
+      // fake ladder, which starts on the default (fixed values, capped at capacity) and stays editable.
+      const ladder = defaultLadder(json.match?.maxPlayerCount);
       if (ladder) setState((cur) => (cur ? { ...cur, ...ladder } : cur));
       setStartAt(""); setEndAt("");
       setMeta((m) => ({ ...(m ?? {}), id: null, startDate: null, endDate: null }));
@@ -530,10 +530,10 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
   if (!state || !loaded || !meta) return <div style={{ padding: 24, fontFamily: "system-ui", color: "#5C6B62" }}>Loading match {id}…</div>;
 
   const groupCount = (g: Spec["group"]) => changedKeys.filter((k) => FIELDS.find((f) => f.key === k)?.group === g).length;
-  /* THE NEW DEFAULT FOR THIS MATCH'S CAPACITY, and whether the match is already on it. The old
-   * "these should descend" warning is gone: the new ladder RISES at 3h on purpose (capacity, zero
-   * fakes), and the match panel dropped the same check for the same reason. */
-  const defLadder = newDefaultLadder(state.maxPlayerCount);
+  /* THE DEFAULT FOR THIS MATCH'S CAPACITY, and whether the match is already on it. There is no
+   * "these should descend" warning: the ladder is not required to be monotonic (a 3h rung above
+   * the earlier ones strips fakes near kickoff), and the match panel has no such check either. */
+  const defLadder = defaultLadder(state.maxPlayerCount);
   const onDefault = !!defLadder && LADDER.every((k) => state[k] !== "" && state[k] != null && Number(state[k]) === defLadder[k]);
   /* THE STORED TEAM COUNT, not a guess between two. This read `>= 4 ? 4 : 2`, so every 3-team
    * match was reported as 2 — production 18136 is 3 × 6 and this panel said "18 total, 9 a side".
@@ -1069,14 +1069,14 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
               <div className="ladderNote" data-testid="ladder-note">
                 The most spots shown as left from each mark. Fakes fill the rest: capacity − this − real players.
               </div>
-              {/* STAGES the new default like any hand edit — nothing goes out until Save. */}
+              {/* STAGES the default like any hand edit — nothing goes out until Save. */}
               {defLadder && (
                 <div className="ladderNote" data-testid="ladder-default">
-                  {onDefault ? "On the new default ladder." : (
+                  {onDefault ? "On the default ladder." : (
                     <>
                       <button type="button" className="ladderBtn" data-testid="ladder-default-btn"
-                        onClick={() => { for (const k of LADDER) set(k, defLadder[k]); }}>Use new ladder</button>{" "}
-                      {LADDER.map((k) => defLadder[k]).join(" → ")} · at most 2–3 fakes early, none from 3h
+                        onClick={() => { for (const k of LADDER) set(k, defLadder[k]); }}>Use default ladder</button>{" "}
+                      {LADDER.map((k) => defLadder[k]).join(" → ")} · most spots shown as left
                     </>
                   )}
                 </div>

@@ -25,15 +25,15 @@
  * `starRatingCount`, `isCancelled`, `createdAt`, `updatedAt`. A copy is a new fixture, not a
  * clone of who turned up to the old one.
  *
- * ── THE FAKE LADDER IS NOT COPIED EITHER (2026-10-23) ─────────────────────────────────────────
- * A copy gets the NEW DEFAULT ladder for its capacity (fakeLadder.ts newDefaultLadder), not the
- * source's five rungs. Copying the source's would carry the old heavy ladder onto every new
- * fixture. Staff change it by hand afterwards if a match needs something else. A source with no
+ * ── THE FAKE LADDER IS NOT COPIED EITHER (2026-10-23; fixed values from 2026-10-24) ──────────
+ * A copy gets the DEFAULT ladder (fakeLadder.ts defaultLadder: 12 / 8 / 8 / 6 / 6, each capped at
+ * capacity), not the source's five rungs, so one odd ladder is not carried onto every new fixture.
+ * Staff change it by hand afterwards if a match needs something else. A source with no
  * capacity keeps whatever it carried, because there is no default to compute.
  */
 
 import { EDITABLE_KEYS } from "./matchEditModel";
-import { newDefaultLadder } from "./fakeLadder";
+import { defaultLadder } from "./fakeLadder";
 
 /** The 9 the API itself demands — measured on staging by omitting them. */
 export const COPY_REQUIRED = [
@@ -155,7 +155,7 @@ export function buildCopyBody(src: SourceMatch, target?: CopyTarget): Record<str
     if (k === "teamNumbers") continue;          // derived below, never read off the source
     if (k in src && src[k] !== undefined) out[k] = src[k];
   }
-  const ladder = newDefaultLadder(src.maxPlayerCount);
+  const ladder = defaultLadder(src.maxPlayerCount);
   if (ladder) Object.assign(out, ladder);
   /* RETARGETED, OR BYTE FOR BYTE. With no target this is the copy it has always built — the same
    * day, the same time, the same strings. With one, the start moves to the picked date and time

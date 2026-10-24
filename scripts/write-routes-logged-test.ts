@@ -61,7 +61,7 @@ bareOffenders.length === 0
   : bad("a route calls apiWrite OUTSIDE recordWrite (unlogged write!)", bareOffenders.join(", "));
 
 // 2) Every known write route routes through recordWrite (incl. the Phase 18 ban route).
-for (const f of ["src/app/api/matchday/[env]/matches/[id]/route.ts", "src/app/api/matchday/[env]/roster/[matchId]/route.ts", "src/app/api/lookup/[env]/ban/route.ts", "src/app/api/matchday/[env]/matches/[id]/fakes/route.ts", "src/app/api/matchday/[env]/fake-ladder/[id]/route.ts"]) {
+for (const f of ["src/app/api/matchday/[env]/matches/[id]/route.ts", "src/app/api/matchday/[env]/roster/[matchId]/route.ts", "src/app/api/lookup/[env]/ban/route.ts", "src/app/api/matchday/[env]/matches/[id]/fakes/route.ts", "src/app/api/matchday/[env]/fixed-ladder/[id]/route.ts"]) {
   const src = readFileSync(f, "utf8");
   src.includes("recordWrite(") ? ok(`${f.split("/").slice(-2)[0]} routes writes through recordWrite`) : bad(`${f} does NOT call recordWrite`);
 }
@@ -81,7 +81,7 @@ const WRITE_ROUTES = [
   "src/app/api/matchday/[env]/roster/[matchId]/route.ts",
   "src/app/api/matchday/[env]/matches/[id]/fakes/route.ts",
   "src/app/api/stage/matches/[id]/route.ts",
-  "src/app/api/matchday/[env]/fake-ladder/[id]/route.ts",
+  "src/app/api/matchday/[env]/fixed-ladder/[id]/route.ts",
 ];
 let cliOffenders: string[] = [];
 for (const f of files) if (readFileSync(f, "utf8").includes("CLI_WRITE_ACTOR")) cliOffenders.push(f);

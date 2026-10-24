@@ -145,31 +145,29 @@ export function spotsLeftWriteDiff(
 export const spotsLeftNow = (ladder: Ladder, hoursToKickoff: number): number =>
   Number(ladder[rungKey(markInForce(hoursToKickoff))] ?? 0);
 
-/* ── THE NEW DEFAULT LADDER (2026-10-23) ───────────────────────────────────────────────────────
- * Decided from 60 days of production (docs/matchday-api-facts.md, "THE LADDER ON PRODUCTION"):
- * more fakes did not bring more real joins, they made matches about to auto-cancel look healthy,
- * and they were still on the roster at kickoff. So the default shows a couple early and none from
- * 3 hours out:
+/* ── THE DEFAULT LADDER: FIXED VALUES (Ryan, 2026-10-24) ──────────────────────────────────────
+ * Back to fixed values, replacing the capacity-relative ladder of 2026-10-23 (capacity −2 / −2 /
+ * −3 / −2 / capacity), which ran for one day:
  *
- *     36h  capacity − 2      24h  capacity − 2      12h  capacity − 3
- *      6h  capacity − 2       3h  capacity          (zero fakes)
+ *     36h  12      24h  8      12h  8      6h  6      3h  6        (most spots shown as left)
  *
- * IN RUNG TERMS, because rungs are what the API stores (see the top of this file): "capacity − 2"
- * means at most 2 fakes, and real players replace them one for one. capacity is maxPlayerCount.
+ * EACH VALUE IS CAPPED AT THE MATCH'S CAPACITY (maxPlayerCount): a 10-player match shows at most 10
+ * spots left at 36h, which is zero fakes there. Used by every path that creates or schedules a
+ * match (copyMatch.ts buildCopyBody, the full editor's create mode, the create route's fallback for
+ * an omitted rung), offered as "Use default ladder" in the match panel and the full editor, and
+ * written to existing matches by the one-off "Apply fixed ladder" on Master Schedule.
  *
- * NOT PROOF AGAINST A LATER CAPACITY RISE. The rungs come from the capacity at the moment they are
- * written. If a match is bumped to a bigger format afterwards, a 3h rung equal to the OLD capacity
- * leaves `new − old − real` fakes. A bump usually happens once the match is full on real players,
- * which makes that zero; a hand edit of capacity is not covered. */
-export const NEW_LADDER_OFFSET: Record<RungMark, number> = { 36: 2, 24: 2, 12: 3, 6: 2, 3: 0 };
+ * NOT PROOF AGAINST A LATER CAPACITY CHANGE. The cap is taken from the capacity at the moment the
+ * rungs are written; a match bumped to a bigger format afterwards keeps the capped values. */
+export const FIXED_LADDER: Record<RungMark, number> = { 36: 12, 24: 8, 12: 8, 6: 6, 3: 6 };
 
-/** The five rungs for `capacity`. null when there is no capacity (a special event has no cap and
- *  no ladder to speak of). */
-export function newDefaultLadder(capacity: unknown): Ladder | null {
+/** The five rungs for `capacity`: the fixed values, each capped at capacity. null when there is no
+ *  capacity (a special event has no cap and no ladder to speak of). */
+export function defaultLadder(capacity: unknown): Ladder | null {
   const cap = Number(capacity);
   if (capacity == null || capacity === "" || !Number.isFinite(cap) || cap <= 0) return null;
   const out: Ladder = {};
-  for (const m of RUNG_MARKS) out[rungKey(m)] = Math.max(0, Math.round(cap) - NEW_LADDER_OFFSET[m]);
+  for (const m of RUNG_MARKS) out[rungKey(m)] = Math.min(FIXED_LADDER[m], Math.round(cap));
   return out;
 }
 
@@ -184,39 +182,49 @@ export function ladderDiff(current: Record<string, unknown>, target: Ladder): La
   return diff;
 }
 
-/* ── THE BULK ACTION'S PLAN, ONE MATCH AT A TIME ───────────────────────────────────────────────
- * Pure, so the preview count and the write decision are the SAME function: the page counts what
+/* ── THE ONE-OFF BULK ACTION'S PLAN, ONE MATCH AT A TIME ──────────────────────────────────────
+ * Pure, so the preview count and the write decision are the SAME function: the card counts what
  * this returns as "change", and the write route re-runs it on a fresh read immediately before
  * writing. A match that moved into a skip state between the two is skipped, not written. */
-export type NewLadderStatus = "change" | "unchanged" | "inside36h" | "handEdited" | "cancelled" | "nocap";
-export type NewLadderPlan = { status: NewLadderStatus; hoursToKickoff: number | null; target: Ladder | null; diff: Ladder };
+export type FixedLadderStatus = "change" | "unchanged" | "beforeFrom" | "inside36h" | "handEdited" | "cancelled" | "nocap";
+export type FixedLadderPlan = { status: FixedLadderStatus; hoursToKickoff: number | null; target: Ladder | null; diff: Ladder };
 
-export const NEW_LADDER_SKIP_LABEL: Record<Exclude<NewLadderStatus, "change">, string> = {
-  unchanged: "already on the new ladder",
+export const FIXED_LADDER_SKIP_LABEL: Record<Exclude<FixedLadderStatus, "change">, string> = {
+  unchanged: "already on the fixed ladder",
+  beforeFrom: "before the start date",
   inside36h: "36 hours or less to kickoff — fakes may already be showing",
   handEdited: "ladder or spots left changed by hand",
   cancelled: "cancelled",
   nocap: "no capacity (special event)",
 };
 
-/* ── THE BULK ACTION NEVER REMOVES A FAKE A PLAYER CAN ALREADY SEE (Ryan, 2026-10-23) ────────────
- * Fakes first appear at the 36h mark (13,050 fake rows in 60 days, all but 45 created at or after
- * 36.0h — docs/matchday-api-facts.md), so a match MORE than 36h out shows none and rewriting its
- * ladder changes nothing anyone has seen. Five minutes of margin on top: the reconciler adds at the
- * mark itself, and a run's clock is not the server's. Checked here for the preview and again by the
- * write route on a fresh read immediately before each write. */
-export const NEW_LADDER_MIN_HOURS = 36 + 5 / 60;
+/** Oct 24 – Nov 1 were set by hand (Ryan, 2026-10-24); the bulk action starts here. A LOCAL
+ *  calendar date, compared against the match's own wall-clock startDate (see planFixedLadder). */
+export const FIXED_LADDER_FROM = "2026-11-02";
 
-export function planNewLadder(m: Record<string, unknown>, nowMs: number, opts: { handEdited?: boolean } = {}): NewLadderPlan {
-  /* THE TRUE INSTANT. startDateUtc, never startDate: startDate is local wall clock wearing a Z it
-   * does not mean, and reading it as UTC puts a Central evening match hours off its 36h mark. */
+/* ── THE BULK ACTION NEVER CHANGES A FAKE A PLAYER CAN ALREADY SEE (Ryan, 2026-10-23) ──────────
+ * Fakes first appear at the 36h mark (docs/matchday-api-facts.md, "THE LADDER ON PRODUCTION"), so a
+ * match MORE than 36h out shows none and rewriting its ladder changes nothing anyone has seen. Five
+ * minutes of margin: the reconciler adds at the mark itself, and a run's clock is not the server's. */
+export const BULK_MIN_HOURS = 36 + 5 / 60;
+
+export function planFixedLadder(
+  m: Record<string, unknown>, nowMs: number, opts: { handEdited?: boolean; fromYmd?: string } = {},
+): FixedLadderPlan {
+  /* THE TRUE INSTANT for the 36h rule: startDateUtc, never startDate — startDate is local wall
+   * clock wearing a Z it does not mean. */
   const kick = Date.parse(String(m.startDateUtc ?? ""));
   const hoursToKickoff = Number.isFinite(kick) ? (kick - nowMs) / 3_600_000 : null;
-  const target = newDefaultLadder(m.maxPlayerCount);
+  const target = defaultLadder(m.maxPlayerCount);
   const none = { hoursToKickoff, target, diff: {} as Ladder };
   if (m.isCancelled === true) return { status: "cancelled", ...none };
+  /* THE START DATE IS THE MATCH'S OWN CALENDAR DAY: the first ten characters of the wall-clock
+   * startDate, compared as text and never parsed into a Date. An unreadable one is skipped. */
+  const from = opts.fromYmd ?? FIXED_LADDER_FROM;
+  const day = /^\d{4}-\d{2}-\d{2}/.test(String(m.startDate ?? "")) ? String(m.startDate).slice(0, 10) : null;
+  if (!day || day < from) return { status: "beforeFrom", ...none };
   /* AN UNREADABLE KICKOFF IS SKIPPED, never assumed to be far enough away. */
-  if (hoursToKickoff === null || hoursToKickoff <= NEW_LADDER_MIN_HOURS) return { status: "inside36h", ...none };
+  if (hoursToKickoff === null || hoursToKickoff <= BULK_MIN_HOURS) return { status: "inside36h", ...none };
   if (!target) return { status: "nocap", ...none };
   const diff = ladderDiff(m, target);
   if (Object.keys(diff).length === 0) return { status: "unchanged", ...none };
@@ -233,10 +241,13 @@ export function planNewLadder(m: Record<string, unknown>, nowMs: number, opts: {
  *
  * RETOOL IS INVISIBLE HERE. Retool writes straight to MatchDay and leaves no change_log row, so a
  * ladder changed in Retool cannot be told apart from one set at creation. */
+/** change_log `source` for the one-off bulk action's writes. */
+export const FIXED_LADDER_SOURCE = "Apply fixed ladder";
 export type ChangeLogRow = { match_id: number | null; source: string | null; method: string | null; endpoint: string | null; outcome: string | null; request_body: unknown };
 export function isHandLadderEdit(r: ChangeLogRow): boolean {
   if (r.outcome !== "landed" && r.outcome !== "unknown") return false;
-  if (r.source === "Apply new ladder") return false;
+  /* The bulk actions' own writes are not hand edits: the retired one of 2026-10-23 and this one. */
+  if (r.source === "Apply new ladder" || r.source === FIXED_LADDER_SOURCE) return false;
   if (r.method === "POST" && r.endpoint === "/admin/matches") return false;
   const body = (r.request_body && typeof r.request_body === "object" ? r.request_body : {}) as Record<string, unknown>;
   if (RUNG_KEYS.some((k) => k in body)) return true;

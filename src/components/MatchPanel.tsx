@@ -49,7 +49,7 @@ import {
   type Pending, type RosterOrigin, type EditRow, type PlannedWrite, type PlayerKind,
 } from "@/lib/rosterEditModel";
 import { TEMPLATE_LABELS, buildTemplateBody, smsSegments, unfilledTokens } from "@/lib/matchNotify";
-import { newDefaultLadder } from "@/lib/fakeLadder";
+import { defaultLadder } from "@/lib/fakeLadder";
 
 // Only these two `type` values are exposed. The known enum also has BRACKET and GROUP and the full
 // set is UNKNOWN (no spec in repo). A match whose current type is NOT one of these renders as
@@ -1454,22 +1454,22 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange,
                 );
               })}
             </div>
-            {/* THE NEW DEFAULT, ONE CLICK AWAY AND NOT APPLIED. It STAGES the five rungs for this
-                match's capacity (fakeLadder.ts newDefaultLadder) like any hand edit, so the diff shows
+            {/* THE DEFAULT, ONE CLICK AWAY AND NOT APPLIED. It STAGES the five rungs for this
+                match's capacity (fakeLadder.ts defaultLadder) like any hand edit, so the diff shows
                 them and nothing goes out until Save. Hidden when the match is already on it. */}
             {(() => {
-              const def = newDefaultLadder(capacity);
+              const def = defaultLadder(capacity);
               if (!def) return null;
               const same = MARKS.every((h) => Number(cur[`fakeSpotLeft${h}h`]) === def[`fakeSpotLeft${h}h`] && cur[`fakeSpotLeft${h}h`] !== "");
               return (
                 <div className="mp-ladderdef" data-testid="mp-ladder-default">
-                  {same ? <span>On the new default ladder.</span> : (
+                  {same ? <span>On the default ladder.</span> : (
                     <>
                       <button type="button" className="mp-btn" data-testid="mp-ladder-default-btn" disabled={!!opBusy}
                         onClick={() => { for (const h of MARKS) setField(`fakeSpotLeft${h}h`, def[`fakeSpotLeft${h}h`]); }}>
-                        Use new ladder
+                        Use default ladder
                       </button>
-                      <span>{MARKS.map((h) => def[`fakeSpotLeft${h}h`]).join(" / ")} · at most 2–3 fakes early, none from 3h</span>
+                      <span>{MARKS.map((h) => def[`fakeSpotLeft${h}h`]).join(" / ")} · most spots shown as left</span>
                     </>
                   )}
                 </div>
