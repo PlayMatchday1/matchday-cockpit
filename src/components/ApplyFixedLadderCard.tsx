@@ -143,7 +143,7 @@ export default function ApplyFixedLadderCard() {
           <h3 className="text-base font-bold text-deep-green">Apply fixed ladder (one-off)</h3>
           <p className="mt-1 text-xs text-deep-green/65">
             Most spots shown as left: {RUNG_MARKS.map((m) => `${m}h ${FIXED_LADDER[m]}`).join(" · ")}, each capped at the match&apos;s capacity.
-            Production, upcoming matches from {fromLabel(data?.from ?? "2026-11-02")} on. Skips matches 36 hours or less from kickoff, cancelled ones,
+            Production, {`upcoming matches from ${fromLabel(data?.from ?? "2026-11-02")} onward.`} Skips matches 36 hours or less from kickoff, cancelled ones,
             and any whose ladder or spots left was changed by hand in the Clubhouse (Retool edits can&apos;t be seen). One match at a time,
             two seconds between MatchDay requests, every write logged; it stops at the first write that doesn&apos;t land and never retries.
           </p>
