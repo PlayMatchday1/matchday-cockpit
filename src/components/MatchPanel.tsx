@@ -709,24 +709,33 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange,
    *
    * IT IS NOT THE SAME OPERATION MIRRORED. The write order is reversed and the state is kept
    * separately, so a future edit to one cannot quietly change the other. */
-  /* ONLY WHAT THE CONFIRMATION READS. The route's GET still describes the whole plan — counts,
-   * totals, the moves — but after the 2026-09-09 cut this screen renders a refusal, a shape and two
-   * buttons, so anything else typed here would be a field nobody looks at. */
+  /* ONLY WHAT THE CONFIRMATION READS. The route's GET describes the whole plan; this screen renders
+   * a refusal, the size picker, one question, one plain sentence about the roster, and two buttons.
+   * The counts below are what that sentence is built from. */
   type ReducePlanView = {
     refusal: string | null; capacityRefusal: string | null; capacityWhy: string[];
-    shapeError: string | null; perTeam: number;
+    shapeError: string | null; perTeam: number; total: number;
+    defaultPerTeam: number; minPerTeam: number; maxPerTeam: number;
+    realCount: number; fakeCount: number; fakeKeepCount: number; fakeRemoveCount: number;
+    realMoveCount: number; fakeMoveCount: number; shortfall: number;
+    twoTeamMax: { saved: number | null; written: number | null };
+    fieldFormat: { total: number; perSide: number | null } | null;
   };
   const [rd, setRd] = useState<ReducePlanView | null>(null);
   const [rdBusy, setRdBusy] = useState(false);
   const [rdResults, setRdResults] = useState<{ kind: string; label: string; verdict: string; detail?: string }[] | null>(null);
   const [rdMsg, setRdMsg] = useState<{ text: string; bad: boolean } | null>(null);
 
-  const openReduce = async () => {
+  /* ONE MATCH READ PER SIZE. Opening fetches the plan at the match's default size; picking another
+   * size fetches it again at that size, so the sentence always describes the plan that the POST
+   * will run. Nothing is computed from the roster on this side. */
+  const openReduce = async (perTeam?: number) => {
     if (rdBusy) return;
     const h = await authHeaders(); if (!h) { setRdMsg({ text: "No active session: sign in again.", bad: true }); return; }
     setRdBusy(true); setRdMsg(null); setRdResults(null);
     try {
-      const r = await fetch(`/api/matchday/${env}/matches/${matchId}/reduce-2`, { headers: h, cache: "no-store" });
+      const q = perTeam == null ? "" : `?perTeam=${perTeam}`;
+      const r = await fetch(`/api/matchday/${env}/matches/${matchId}/reduce-2${q}`, { headers: h, cache: "no-store" });
       const j = await r.json();
       if (!r.ok) { setRdMsg({ text: j.error ?? `HTTP ${r.status}`, bad: true }); return; }
       setRd(j);
@@ -736,12 +745,13 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange,
 
   const runReduce = async () => {
     /* NO RETRY. busy is set before the request and the confirmation closes on completion; a second
-     * press would move players someone may have moved in between. */
+     * press would move players someone may have moved in between. The size sent is the size the
+     * sentence on screen was computed for. */
     if (!rd || rdBusy) return;
     const h = await authHeaders(); if (!h) { setRdMsg({ text: "No active session: sign in again.", bad: true }); return; }
     setRdBusy(true); setRdMsg(null);
     try {
-      const r = await fetch(`/api/matchday/${env}/matches/${matchId}/reduce-2`, {
+      const r = await fetch(`/api/matchday/${env}/matches/${matchId}/reduce-2?perTeam=${rd.perTeam}`, {
         method: "POST", headers: { ...h, "Content-Type": "application/json" }, body: JSON.stringify({}),
       });
       const j = await r.json();
@@ -1622,35 +1632,62 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange,
                     {rd.refusal ?? rd.shapeError}
                     <button type="button" className="mp-btn" style={{ marginLeft: 10 }} onClick={() => setRd(null)}>Close</button>
                   </div>
-                ) : rd.capacityRefusal ? (
-                  /* THE ARITHMETIC, ON SCREEN. Both numbers and the shortfall, and an answer to the
-                     first thing anyone thinks of — that taking the fakes out would make room. */
-                  <div className="mp-note warn" data-testid="mp-reduce-nofit">
-                    {/* THE SENTENCE ALREADY NAMES BOTH NUMBERS. A bold lead saying "36 real
-                        players, 22 spots" above "36 real players will not fit into 22 spots" said
-                        it twice — measured on production match 18365. */}
-                    <b>Not reduced.</b> {rd.capacityRefusal}
-                    <ul style={{ margin: "6px 0 0 16px", padding: 0 }}>
-                      {rd.capacityWhy.map((w, i) => <li key={i} data-testid="mp-reduce-why">{w}</li>)}
-                    </ul>
-                    <button type="button" className="mp-btn" style={{ marginTop: 8 }} onClick={() => setRd(null)}>Close</button>
-                  </div>
                 ) : (
                   <div className="mp-cvconfirm" data-testid="mp-reduce-confirm">
-                    {/* ONE QUESTION, AND NOTHING ELSE. The consequence sentence, the numbered steps
-                        naming every player's destination, the fill line and the writes paragraph
-                        were all cut on 2026-09-09: "dont need all this text when I execute just say
-                        a confirmation are you sure". The target shape is named because "Are you
-                        sure?" on its own is a question about nothing.
+                    {/* THE SIZE, THE QUESTION, ONE SENTENCE ABOUT THE ROSTER, TWO BUTTONS.
+                        The numbered steps naming every destination and the writes paragraph were
+                        cut on 2026-09-09 ("dont need all this text when I execute just say a
+                        confirmation are you sure") and stay cut. The 2026-10-25 change added the
+                        size picker, because some pitches only hold 9 v 9, and the one roster
+                        sentence, because a reduce now keeps the fakes the ladder calls for rather
+                        than taking all of them out, and the operator has to see which.
 
-                        NO DETAILS TOGGLE. That is the same text with a click in front of it, which
-                        is not what was asked for. What the operation did is still reported in full
+                        NO DETAILS TOGGLE. What the operation did is still reported in full
                         afterwards, one row per write, in mp-reduce-results below. */}
-                    <b data-testid="mp-reduce-ask">Reduce to 2 teams of {rd.perTeam}?</b>
+                    <label className="mp-f" style={{ marginBottom: 6 }}><span className="mp-lb">TEAM SIZE</span>
+                      <select data-testid="mp-reduce-size" value={rd.perTeam} disabled={rdBusy}
+                        onChange={(e) => void openReduce(Number(e.target.value))}>
+                        {Array.from({ length: rd.maxPerTeam - rd.minPerTeam + 1 }, (_, i) => rd.minPerTeam + i).map((n) => (
+                          <option key={n} value={n}>{n} v {n} · {n * 2} spots</option>
+                        ))}
+                      </select></label>
+                    <b data-testid="mp-reduce-ask">Reduce to 2 teams of {rd.perTeam}? That's {rd.total} spots.</b>
+                    {rd.capacityRefusal ? (
+                      /* OVER CAPACITY: the button below is disabled and this says why. The route
+                         refuses the same plan on POST, so a stale panel cannot get past it either.
+                         Nobody is ever dropped to make a shape fit. */
+                      <div className="mp-note warn" data-testid="mp-reduce-nofit">
+                        {rd.realCount} real players booked, {rd.total} spots. {rd.shortfall} of them would have nowhere to stand, so nothing
+                        changes at this size. Pick a bigger size, or cancel spots one at a time first so each player is told.
+                      </div>
+                    ) : (
+                      <div className="mp-cvsub" data-testid="mp-reduce-roster">
+                        {rd.realCount} real player{rd.realCount === 1 ? "" : "s"} booked, {rd.total} spots.{" "}
+                        {rd.fakeCount === 0
+                          ? "No fake players on this match."
+                          : rd.fakeRemoveCount === 0
+                            ? `All ${rd.fakeCount} fake player${rd.fakeCount === 1 ? "" : "s"} stay.`
+                            : `${rd.fakeRemoveCount} fake player${rd.fakeRemoveCount === 1 ? "" : "s"} will be removed, ${rd.fakeKeepCount} stay${rd.fakeKeepCount === 1 ? "s" : ""}.`}
+                        {rd.realMoveCount > 0 && ` ${rd.realMoveCount} real player${rd.realMoveCount === 1 ? " moves" : "s move"} onto teams 1 and 2.`}
+                        {rd.fakeMoveCount > 0 && ` ${rd.fakeMoveCount} of the staying fakes move${rd.fakeMoveCount === 1 ? "s" : ""} onto teams 1 and 2.`}
+                      </div>
+                    )}
+                    {rd.twoTeamMax.written != null && (
+                      <div className="mp-cvsub" data-testid="mp-reduce-twomax">
+                        {rd.twoTeamMax.saved != null && rd.twoTeamMax.saved > 0
+                          ? `This raises the match's 2-team max from ${rd.twoTeamMax.saved} to ${rd.twoTeamMax.written}.`
+                          : `This sets the match's 2-team max to ${rd.twoTeamMax.written}. It was not set.`}
+                      </div>
+                    )}
+                    {rd.fieldFormat && rd.total > rd.fieldFormat.total && (
+                      <div className="mp-cvsub" data-testid="mp-reduce-fieldfmt">
+                        Above this field's recommended format ({rd.fieldFormat.perSide != null ? `${rd.fieldFormat.perSide} v ${rd.fieldFormat.perSide}` : `${rd.fieldFormat.total} players`}).
+                      </div>
+                    )}
                     <div className="mp-cv-acts">
                       <button type="button" className="mp-btn mp-nowrap" data-testid="mp-reduce-cancel" onClick={() => setRd(null)}>Keep {rosterTeamCount} teams</button>
-                      <button type="button" className="mp-btn mp-pri mp-nowrap" data-testid="mp-reduce-go" disabled={rdBusy}
-                        onClick={() => void runReduce()}>{rdBusy ? "Reducing…" : "Reduce it"}</button>
+                      <button type="button" className="mp-btn mp-pri mp-nowrap" data-testid="mp-reduce-go" disabled={rdBusy || !!rd.capacityRefusal}
+                        onClick={() => void runReduce()}>{rdBusy ? "Working…" : "Reduce it"}</button>
                     </div>
                   </div>
                 )}

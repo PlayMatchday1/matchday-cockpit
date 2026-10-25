@@ -13,8 +13,8 @@
 
 import { readFileSync } from "node:fs";
 import {
-  buildReducePlan, reduceRefusal, capacityRefusal, capacityRefusalWhy,
-  livePlayers, isFakeRow, REDUCE_PER_TEAM, type ReducePlayer,
+  buildReducePlan, reduceRefusal, capacityRefusal, capacityRefusalWhy, fakePolicyFor, defaultPerTeam, perTeamError,
+  livePlayers, isFakeRow, REDUCE_PER_TEAM, REDUCE_MIN_PER_TEAM, REDUCE_MAX_PER_TEAM, type ReducePlayer,
 } from "../src/lib/reduceTwoTeams";
 import { teamCountWrites } from "../src/lib/rosterEditModel";
 
@@ -58,11 +58,18 @@ console.log("\nthe mock's WestLake roster: 5 movers, 8 fakes, 2 x 11");
   ];
   const plan = buildReducePlan(M(4, 36), roster);
   is("14 real players, 8 fakes", [plan.realCount, plan.fakeCount], [14, 8]);
-  is("the 5 on teams 3 and 4 move", plan.moves.length, 5);
+  const realMoves = plan.moves.filter((m) => !m.fake);
+  is("the 5 on teams 3 and 4 move", [plan.realMoveCount, realMoves.length], [5, 5]);
   is("…and they are exactly the ones who were on 3 or 4",
-    plan.moves.map((m) => m.fromTeam), [3, 3, 3, 4, 4]);
+    realMoves.map((m) => m.fromTeam), [3, 3, 3, 4, 4]);
   is("…the 9 already on teams 1 and 2 stay put", plan.stayerCount, 9);
-  is("every fake comes out, including the ones on teams 1 and 2", plan.removes.length, 8);
+  /* THE FAKE RULE (2026-10-25). No ladder setting on this fixture, so only the fakes that do not
+   * fit come out. 14 real players leave 8 spots and there are 8 fakes: every one stays. The 3 on
+   * teams 3 and 4 are moved across AFTER the reals, into whatever is left. */
+  is("no fake comes out: all 8 fit, so all 8 stay", [plan.removes.length, plan.fakeKeepCount], [0, 8]);
+  is("…and the 3 on teams 3 and 4 move across", plan.fakeMoveCount, 3);
+  is("…after every real player, so the list is reals first", plan.moves.map((m) => m.fake), [false, false, false, false, false, true, true, true]);
+  is("the policy says why", [plan.fakePolicy.mode, plan.fakePolicy.fit, plan.fakePolicy.keep], ["none", 8, 8]);
   is("the shape is 2 teams of 11", plan.shape, teamCountWrites(2, 11));
   is("…which is maxPlayerCount 22 AND maxTeamSize2Team 22 — both TOTALS, never 11",
     [plan.shape.maxPlayerCount, plan.shape.maxTeamSize2Team], [22, 22]);
@@ -73,9 +80,18 @@ console.log("\nthe mock's WestLake roster: 5 movers, 8 fakes, 2 x 11");
   const after = [
     ...roster.filter((x) => !isFakeRow(x) && (x.team ?? 0) <= 2 && !plan.moves.some((m) => m.userMatchId === x.userMatchId))
       .map((x) => `${x.team}:${x.playerNumber}`),
-    ...plan.moves.map((m) => `${m.toTeam}:${m.playerNumber}`),
+    ...realMoves.map((m) => `${m.toTeam}:${m.playerNumber}`),
   ];
   is("every real player ends on a distinct team+spot", new Set(after).size, after.length);
+  /* AND THE WHOLE ROSTER, FAKES INCLUDED, ends on distinct spots: a staying fake never takes a
+   * real player's spot, and never another fake's. */
+  const everyone = [
+    ...roster.filter((x) => (x.team ?? 0) <= 2 && !plan.moves.some((m) => m.userMatchId === x.userMatchId) && !plan.removes.some((r) => r.userMatchId === x.userMatchId))
+      .map((x) => `${x.team}:${x.playerNumber}`),
+    ...plan.moves.map((m) => `${m.toTeam}:${m.playerNumber}`),
+  ];
+  is("every row, real or fake, ends on a distinct team+spot", new Set(everyone).size, everyone.length);
+  is("…and that is all 22 of them", everyone.length, 22);
   is("…and nobody is on a team above 2", plan.moves.every((m) => m.toTeam <= 2), true);
   is("…nor in a spot above 11", plan.moves.every((m) => m.playerNumber <= 11), true);
   yes("control: there were 14 real players to place, not zero", after.length === 14, String(after.length));
@@ -87,7 +103,7 @@ console.log("\nthe mock's WestLake roster: 5 movers, 8 fakes, 2 x 11");
   /* IT MUST NOT STACK. Filling team 1 and then team 2 put 6 of 8 reals on team 1 on the staging
    * fixture — auto-bump's own output, from a control whose confirmation says it is not auto-bump. */
   const endOn = (t: number) => roster.filter((x) => !isFakeRow(x) && x.team === t && !plan.moves.some((m) => m.userMatchId === x.userMatchId)).length
-    + plan.moves.filter((m) => m.toTeam === t).length;
+    + realMoves.filter((m) => m.toTeam === t).length;
   is("the two teams come out even, or as even as an odd count allows",
     Math.abs(endOn(1) - endOn(2)) <= 1, true);
   is("…which on this roster is 7 and 7", [endOn(1), endOn(2)], [7, 7]);
@@ -98,8 +114,8 @@ console.log("\nthe mock's WestLake roster: 5 movers, 8 fakes, 2 x 11");
    * on 2026-09-09 along with the helpers that built them, so these assertions went with the copy
    * rather than being kept alive against functions nothing calls. The FIGURES they quoted are still
    * pinned, on the plan itself: realCount/fakeCount above, and shownBefore/shownAfter below. */
-  is("the numbers those sentences quoted are still on the plan",
-    [plan.shownBefore, plan.capBefore, plan.shownAfter, plan.total], [22, 36, 14, 22]);
+  is("the numbers those sentences quoted are still on the plan (shownAfter now counts the staying fakes)",
+    [plan.shownBefore, plan.capBefore, plan.shownAfter, plan.total], [22, 36, 22, 22]);
 }
 
 console.log("\nthe refusal: 33 real players do not fit into 22 spots");
@@ -114,6 +130,7 @@ console.log("\nthe refusal: 33 real players do not fit into 22 spots");
   yes("…naming both numbers", /33 real players/.test(why) && /22 spots/.test(why), why);
   yes("…and the shortfall", /11 of them with nowhere to stand/.test(why), why);
   is("A REFUSED PLAN CARRIES NO WRITES AT ALL", [plan.moves.length, plan.removes.length], [0, 0]);
+  is("…and keeps no fakes either, because nothing is going to happen", [plan.fakeKeepCount, plan.fakePolicy.keep, plan.fakeMoveCount], [0, 0, 0]);
   /* AND IT SAYS NOTHING ELSE — NOW BY CONSTRUCTION RATHER THAN BY SUPPRESSION. Staging once
    * returned "0 fakes come out, 0 real players move" and a fill line reading "24 of 22 after"
    * beside this refusal: arithmetic that is right about a plan with no writes in it and wrong as a
@@ -184,8 +201,14 @@ console.log("\nTHE ATH KATY REGRESSION: a fake in the way is no longer a refusal
   /* AND NOW IT PLANS IT. */
   is("the reals fit — this was never the capacity refusal", plan.shortfall <= 0, true);
   is("IT NO LONGER REFUSES", capacityRefusal(plan), null);
-  is("…and it writes: 4 moves, 17 removals", [plan.moves.length, plan.removes.length], [4, 17]);
-  is("…every one of the 8 reals is placed", plan.moves.length + plan.stayerCount, 8);
+  /* 8 reals leave 14 spots and there is no ladder on the fixture, so 14 fakes stay and only the 3
+   * that do not fit come out: off the team holding the most, highest spot first, then the tie goes
+   * to team 1. */
+  is("…and it writes: 4 moves, 3 removals, 14 fakes kept", [plan.moves.length, plan.removes.length, plan.fakeKeepCount], [4, 3, 14]);
+  is("…the removals walk the surplus toward even: 1:11 and 1:10 off the fuller team, then 2:10",
+    plan.removes.map((r) => `${r.team}:${r.playerNumber}`).sort(), ["1:10", "1:11", "2:10"]);
+  is("…no fake has to move, every staying one already fits", plan.fakeMoveCount, 0);
+  is("…every one of the 8 reals is placed", plan.moves.filter((m) => !m.fake).length + plan.stayerCount, 8);
 
   /* THE MECHANISM, ASSERTED DIRECTLY. Movers land on spots the fakes are vacating — impossible
    * under the old ordering, and the only reason this roster fits at all. */
@@ -227,7 +250,8 @@ console.log("\ncancelled rows are not counted and not moved");
   SEQ = 0;
   const roster = [p(3, 1), p(3, 2, { isCancelled: true }), fake(4, 1)];
   const plan = buildReducePlan(M(4, 36), roster);
-  is("a cancelled row is neither real nor fake nor moved", [plan.realCount, plan.fakeCount, plan.moves.length], [1, 1, 1]);
+  is("a cancelled row is neither real nor fake nor moved", [plan.realCount, plan.fakeCount, plan.realMoveCount], [1, 1, 1]);
+  is("…the live fake on team 4 fits, so it stays and is moved across rather than removed", [plan.fakeMoveCount, plan.removes.length], [1, 0]);
   is("livePlayers drops it", livePlayers(roster).length, 2);
   is("…and the before-map holds only live rows", plan.beforeMap.length, 2);
   is("the before-map records team AND spot for every one of them",
@@ -259,7 +283,8 @@ console.log("\nthe lifecycle refusals, mirroring convertRefusal");
 console.log("\nthe write order, which is the reverse of convert-4's");
 {
   SEQ = 0;
-  const plan = buildReducePlan(M(4, 36), [p(3, 1), p(4, 1), fake(1, 5)]);
+  // Rung 19 on 22 spots with 2 reals leaves 1 fake, so one of the two fakes comes out.
+  const plan = buildReducePlan({ ...M(4, 36), rungInForce: 19 }, [p(3, 1), p(4, 1), fake(1, 5), fake(2, 5)]);
   is("the plan still has all three phases in it", [plan.removes.length, plan.moves.length, plan.shape.maxPlayerCount], [1, 2, 22]);
 
   /* THE ROUTE ITSELF, AND NOW IT IS THE ONLY PLACE THE ORDER IS ASSERTED. reduceSteps() used to
@@ -318,8 +343,18 @@ console.log("\nthe control, in the panel");
   /* THE CONFIRMATION IS ONE QUESTION AND TWO BUTTONS (2026-09-09). "dont need all this text when I
    * execute just say a confirmation are you sure — REMOVE ALL OF IT". */
   const confirm = view.slice(view.indexOf('data-testid="mp-reduce-confirm"'), view.indexOf('data-testid="mp-reduce-cancel"'));
-  yes("control: the confirmation block was found", confirm.length > 0 && confirm.length < 1400, `${confirm.length} chars`);
-  yes("it asks one question, naming the shape", /data-testid="mp-reduce-ask">Reduce to 2 teams of \{rd\.perTeam\}\?/.test(confirm), confirm.slice(-200));
+  yes("control: the confirmation block was found", confirm.length > 0 && confirm.length < 7000, `${confirm.length} chars`);
+  yes("it asks one question, naming the shape and the spots", /data-testid="mp-reduce-ask">Reduce to 2 teams of \{rd\.perTeam\}\? That's \{rd\.total\} spots\./.test(confirm), confirm.slice(-200));
+  /* THE PICKER (2026-10-25). It renders the route's range, never a list typed into the panel, and
+   * a change refetches the plan at that size rather than recomputing anything on this side. */
+  yes("there is a size picker and it is built from the route's range", /data-testid="mp-reduce-size"/.test(confirm) && /rd\.maxPerTeam - rd\.minPerTeam \+ 1/.test(confirm));
+  yes("…and picking a size fetches the plan again at that size", /onChange=\{\(e\) => void openReduce\(Number\(e\.target\.value\)\)\}/.test(confirm));
+  yes("…and the POST sends the size the sentence was computed for", /reduce-2\?perTeam=\$\{rd\.perTeam\}`, \{\s*method: "POST"/.test(view));
+  yes("the roster sentence is built from the plan's counts", /data-testid="mp-reduce-roster"/.test(confirm) && /rd\.fakeRemoveCount/.test(confirm) && /rd\.fakeKeepCount/.test(confirm) && /rd\.realMoveCount/.test(confirm));
+  yes("over capacity disables Reduce it and says why, in the same block", /disabled=\{rdBusy \|\| !!rd\.capacityRefusal\}/.test(view) && /would have nowhere to stand, so nothing\s+changes at this size/.test(confirm));
+  yes("…and the operator is told the way out", /cancel spots one at a time first so each player is told/.test(confirm));
+  yes("it says when the write raises the match's 2-team max", /raises the match's 2-team max from/.test(confirm));
+  yes("…and when the choice is above the field's recommended format", /Above this field's recommended format/.test(confirm));
   is("…and the copy that stood there is gone: no steps, no fill line, no consequence, no writes paragraph",
     ["mp-reduce-steps", "mp-reduce-step", "mp-reduce-fill", "mp-reduce-consequence", "rd.steps", "rd.fillLine", "rd.consequence", "rd.writeCount"]
       .filter((t) => view.includes(t)), []);
@@ -328,10 +363,100 @@ console.log("\nthe control, in the panel");
     /data-testid="mp-reduce-cancel"[\s\S]*?>Keep \{rosterTeamCount\} teams/.test(view) && /data-testid="mp-reduce-go"/.test(view) && /"Reduce it"/.test(view));
   /* WHAT SURVIVES. The refusals still explain themselves, and the outcome is still one row per
    * write — the confirmation got shorter, not the reporting. */
-  yes("the refusal screens are untouched", /mp-reduce-refusal/.test(view) && /mp-reduce-nofit/.test(view) && /mp-reduce-why/.test(view));
+  yes("the refusal screens are still there", /mp-reduce-refusal/.test(view) && /mp-reduce-nofit/.test(view));
   yes("the closed control still says what it does", /Takes the fakes out[^<]*not auto-bump/.test(view));
   yes("one row per write in the results", /mp-reduce-result"/.test(view));
   yes("the refusal renders its own arithmetic", /mp-reduce-nofit/.test(view));
+}
+
+console.log("\nTHE FAKE LADDER RULE (2026-10-25): fakes = new capacity minus the rung in force minus real, never below 0");
+{
+  /* PRODUCTION 19730, Soccer Central Field 4, read 2026-10-25 at 4.3 hours to kickoff: 4 teams,
+   * 32 spots, 7 real, 19 fake, ladder 12/8/8/6/6. The 6h rung was in force and 32 - 6 - 7 = 19
+   * is exactly the fake count on the roster, which is the check that the rule is the API's own.
+   * At 2 x 9 the same rung gives 18 - 6 - 7 = 5. */
+  is("the 6h rung reproduces the live fake count on 19730", fakePolicyFor(32, 7, 19, 6).ladderFakes, 19);
+  is("at 2 x 9 the ladder wants 5, so 5 stay", fakePolicyFor(18, 7, 19, 6), { mode: "ladder", rung: 6, ladderFakes: 5, fit: 11, keep: 5 });
+  is("never more than fit: a low rung cannot keep more fakes than the reals leave room for", fakePolicyFor(18, 7, 19, 0).keep, 11);
+  is("…and never more than there are: fakes are never ADDED by a reduce", fakePolicyFor(22, 2, 3, 2).keep, 3);
+  is("no ladder setting keeps every fake that fits", fakePolicyFor(18, 7, 19, null), { mode: "none", rung: null, ladderFakes: null, fit: 11, keep: 11 });
+  is("…so does the step where the ladder shows zero fakes", fakePolicyFor(18, 7, 19, 12), { mode: "zero", rung: 12, ladderFakes: 0, fit: 11, keep: 11 });
+  is("a rung above capacity floors at zero rather than going negative", fakePolicyFor(12, 7, 3, 40).ladderFakes, 0);
+  is("no reals and no fakes is a plan that keeps nothing", fakePolicyFor(18, 0, 0, 6).keep, 0);
+
+  /* THE 19730 ROSTER ITSELF, position for position. */
+  SEQ = 0;
+  const roster = [
+    p(2,5), p(2,2), p(4,8), p(2,7), p(2,1), p(2,3), p(3,4),
+    fake(4,6), fake(1,4), fake(4,7), fake(4,4), fake(3,2), fake(1,7), fake(1,8), fake(4,2), fake(3,8), fake(4,1),
+    fake(2,4), fake(1,5), fake(2,6), fake(4,5), fake(2,8), fake(1,1), fake(3,7), fake(1,6), fake(3,3),
+  ];
+  const plan = buildReducePlan({ maxPlayerCount: 32, maxTeamSize2Team: 18, teamCount: 4, rungInForce: 6 }, roster, 9);
+  is("7 real, 19 fake, 18 spots", [plan.realCount, plan.fakeCount, plan.total], [7, 19, 18]);
+  is("14 fakes come out and 5 stay", [plan.removes.length, plan.fakeKeepCount], [14, 5]);
+  is("the 2 reals on teams 3 and 4 move; the 5 on team 2 stay", [plan.realMoveCount, plan.stayerCount], [2, 5]);
+  is("the 5 staying fakes were already on teams 1 and 2, so none has to move", plan.fakeMoveCount, 0);
+  is("every fake on teams 3 and 4 is on the removal list", plan.removes.filter((r) => (r.team ?? 0) > 2).length, 10);
+  is("…and the 4 that come off teams 1 and 2 walk the surplus toward even: team 1 held 6, team 2 held 3, so all 4 are team 1's highest",
+    plan.removes.filter((r) => (r.team ?? 0) <= 2).map((r) => `${r.team}:${r.playerNumber}`).sort(), ["1:5", "1:6", "1:7", "1:8"]);
+  const kept = roster.filter((x) => isFakeRow(x) && !plan.removes.some((r) => r.userMatchId === x.userMatchId));
+  is("the 5 that stay are 1:1, 1:4, 2:4, 2:6, 2:8", kept.map((x) => `${x.team}:${x.playerNumber}`).sort(), ["1:1", "1:4", "2:4", "2:6", "2:8"]);
+  yes("no real mover lands on a staying fake's spot",
+    plan.moves.every((m) => !kept.some((k) => k.team === m.toTeam && k.playerNumber === m.playerNumber)), JSON.stringify(plan.moves.map((m) => `${m.toTeam}:${m.playerNumber}`)));
+  is("the shape writes 18 spots and leaves the 2-team max alone, since it is already 18", plan.shape, { maxPlayerCount: 18 });
+  is("…and shows 12 after: 7 real and 5 fake", plan.shownAfter, 12);
+  is("nothing is refused", capacityRefusal(plan), null);
+
+  /* THE SAME MATCH AT 11 A SIDE, which is what the old fixed number did: 22 spots raises the
+   * 2-team max from 18 to 22. The picker exists so that this is a choice, not the default. */
+  SEQ = 0;
+  const at11 = buildReducePlan({ maxPlayerCount: 32, maxTeamSize2Team: 18, teamCount: 4, rungInForce: 6 }, roster, 11);
+  is("at 11 the shape raises the 2-team max to 22", at11.shape, { maxPlayerCount: 22, maxTeamSize2Team: 22 });
+  is("…and the ladder keeps 9: 22 - 6 - 7", at11.fakeKeepCount, 9);
+}
+
+console.log("\na staying fake never takes a real player's spot, and the surplus comes off the fuller team");
+{
+  SEQ = 0;
+  // 4 reals on teams 3 and 4 need spots; 6 fakes sit on teams 1 and 2, rung says keep 4.
+  const roster = [p(3,1), p(3,2), p(4,1), p(4,2), fake(1,1), fake(1,2), fake(1,3), fake(1,4), fake(2,1), fake(2,2)];
+  const plan = buildReducePlan({ maxPlayerCount: 36, teamCount: 4, rungInForce: 14 }, roster, 11);
+  is("22 - 14 - 4 = 4 fakes stay", [plan.fakePolicy.keep, plan.fakeKeepCount], [4, 4]);
+  is("the 2 that come out are team 1's highest spots, since team 1 holds 4 and team 2 holds 2", plan.removes.map((r) => `${r.team}:${r.playerNumber}`).sort(), ["1:3", "1:4"]);
+  const keptSpots = new Set(["1:1", "1:2", "2:1", "2:2"]);
+  is("the reals land on free spots, not on a staying fake", plan.moves.filter((m) => keptSpots.has(`${m.toTeam}:${m.playerNumber}`)), []);
+  is("…balanced two and two, by real players", [1, 2].map((t) => plan.moves.filter((m) => m.toTeam === t).length), [2, 2]);
+
+  /* WHEN THE TARGET NEEDS FAKES FROM THE DOOMED TEAMS, they are moved after the reals and land on
+   * spots nobody holds. */
+  SEQ = 0;
+  const roster2 = [p(1,1), p(3,1), fake(3,2), fake(4,1), fake(4,2)];
+  const plan2 = buildReducePlan({ maxPlayerCount: 36, teamCount: 4, rungInForce: 17 }, roster2, 11);
+  is("22 - 17 - 2 = 3 fakes stay, all of them from teams 3 and 4", [plan2.fakeKeepCount, plan2.removes.length, plan2.fakeMoveCount], [3, 0, 3]);
+  is("the real mover goes first, to the emptier team", [plan2.moves[0].fake, plan2.moves[0].toTeam], [false, 2]);
+  const spots = plan2.moves.map((m) => `${m.toTeam}:${m.playerNumber}`);
+  is("every destination is distinct and none is 1:1, the real stayer's spot", [new Set(spots).size, spots.includes("1:1")], [4, false]);
+  is("the fake moves carry a fake reason, so the route's row says what moved", plan2.moves.filter((m) => m.fake).map((m) => m.reason), Array(3).fill("a staying fake, off a team being removed"));
+}
+
+console.log("\nthe default size and the picker's range");
+{
+  is("the match's 2-team total halved: 18 is 9 a side", defaultPerTeam(18), 9);
+  is("22 is 11", defaultPerTeam(22), 11);
+  is("12 is 6, the smallest the picker offers", defaultPerTeam(12), 6);
+  is("24 is 12, the largest", defaultPerTeam(24), 12);
+  is("0 means the 2-team format is not set, so 11", defaultPerTeam(0), 11);
+  is("null is 11", defaultPerTeam(null), 11);
+  is("an odd total has no whole side, so 11", defaultPerTeam(25), 11);
+  is("a total above the range is 11, not clamped to 12", defaultPerTeam(40), 11);
+  is("a string the API might send still reads", defaultPerTeam("18"), 9);
+  is("the range is 6 to 12", [REDUCE_MIN_PER_TEAM, REDUCE_MAX_PER_TEAM], [6, 12]);
+  is("6 and 12 are allowed", [perTeamError(6), perTeamError(12)], [null, null]);
+  yes("5 is not", perTeamError(5) != null);
+  yes("13 is not", perTeamError(13) != null);
+  yes("9.5 is not", perTeamError(9.5) != null);
+  yes("text is not", perTeamError("nine") != null);
+  is("the fallback is still 11", REDUCE_PER_TEAM, 11);
 }
 
 console.log(`\nreduce-two: ${pass} passed, ${fails.length} failed`);
