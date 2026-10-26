@@ -41,7 +41,7 @@ import { buildCopyBody, copyConfirmLine, type SourceMatch } from "@/lib/copyMatc
 import {
   buildMonthGrid, applyFilters, fieldsAvailable, reconcileFields, fieldCountLabel,
   defaultRange, rangeTitle, priceLabel, shiftRangeMonth, countLabel, fillTone,
-  fieldCounts, busiestDay, isoDow,
+  fieldCounts, busiestDay, isoDow, visibleSpan, inRangeMatches, fieldsByCity,
   type GridDay, type GridMatch,
 } from "@/lib/monthGrid";
 /* THE SAME PANEL GAMEDAY OPS AND VEO OPEN. Not a copy and not a variant — the same import, so the
@@ -379,8 +379,14 @@ export default function VeoMasterSchedule() {
   /* ── THE MONTH RANGE ────────────────────────────────────────────────────────────────────────
    * Its own fetch, its own state. The week view keeps its own payload untouched, so switching to
    * Month and back leaves the week exactly as it was — no shared cache to invalidate. */
-  const loadRange = useCallback(async (r: { from: string; to: string }, repull = false) => {
+  const loadRange = useCallback(async (range0: { from: string; to: string }, repull = false) => {
     setMonthBusy(true); setMonthErr(null);
+    /* THE FETCH COVERS WHAT THE GRID DRAWS, not just the calendar month. The grid pads the range
+     * out to whole weeks, so on the October view the Nov 1 cell is on screen. Fetching only
+     * Oct 1 to Oct 31 left that cell empty while Nov 1 had matches (2026-10-25). The padded span
+     * is what is asked for; the header count and the chips still read the operator's own range
+     * (inRangeMatches below). */
+    const r = visibleSpan(range0, WS);
     try {
       const { data: sess } = await supabase.auth.getSession();
       const token = sess.session?.access_token;
@@ -443,8 +449,16 @@ export default function VeoMasterSchedule() {
    * which is how a two-city selection turned into "all cities" without saying so. There is only
    * ever one city now, so this is the city. */
   const monthCity = city;
+  /* THE MONTH'S OWN MATCHES. monthData holds the padded span (see loadRange); this is the subset
+   * inside the operator's range. The count, the chips, the field counts and the reconcile all read
+   * it, so none of them describe a padding day. */
+  const monthInRange = useMemo(() => inRangeMatches(monthData?.matches ?? [], range), [monthData, range]);
   const monthFields = useMemo(
-    () => fieldsAvailable(monthData?.matches ?? [], monthCity), [monthData, monthCity]);
+    () => fieldsAvailable(monthInRange, monthCity), [monthInRange, monthCity]);
+  /* GROUPED BY CITY when no city is selected. One flat list across every city did not say which
+   * city a field was in. Empty when a city IS selected; the flat city-scoped list is used then. */
+  const monthFieldGroups = useMemo(
+    () => (monthCity ? [] : fieldsByCity(monthInRange)), [monthInRange, monthCity]);
   useEffect(() => {
     if (view !== "month" || !monthData) return;
     const { kept, dropped } = reconcileFields(fieldSel, monthFields);
@@ -454,11 +468,13 @@ export default function VeoMasterSchedule() {
 
   const monthAll = useMemo(
     () => applyFilters(monthData?.matches ?? [], monthCity, fieldSel), [monthData, monthCity, fieldSel]);
-  // WHAT THE GRID DRAWS. The header count is computed from this same list, so "165 matches" always
-  // describes the grid underneath it rather than a set that includes rows nobody can see.
+  // WHAT THE GRID DRAWS: the whole padded span, filtered. The header COUNT is the in-range part of
+  // this same list, so "October 2026, 165 matches" describes the month the title names, while the
+  // muted padding cells still show their matches.
   const monthVisible = useMemo(
     () => (showCx ? monthAll : monthAll.filter((m) => !m.cancelled)), [monthAll, showCx]);
-  const monthCxCount = useMemo(() => monthAll.filter((m) => m.cancelled).length, [monthAll]);
+  const monthCount = useMemo(() => inRangeMatches(monthVisible, range).length, [monthVisible, range]);
+  const monthCxCount = useMemo(() => inRangeMatches(monthAll, range).filter((m) => m.cancelled).length, [monthAll, range]);
   const monthWeeks = useMemo(
     () => (range ? buildMonthGrid(range.from, range.to, monthVisible,
       new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" }), WS) : []),
@@ -957,18 +973,21 @@ export default function VeoMasterSchedule() {
    * All cities on purpose. Returning early also means no state changes, so the field reset below
    * cannot fire and throw away a field filter on a click that asked for nothing.
    *
-   * THE FIELD FILTER RESETS WHEN THE CITY CHANGES, because the old city's fields do not exist in
-   * the new one: keeping "Bicentennial Park" selected while switching to Houston would filter the
-   * grid down to nothing and read as an empty week. The Month view has a reconcile effect that
-   * drops absent fields, but it runs only in Month and only after a render, so the grid would
-   * flash the wrong thing first. Resetting in the same setState is what makes the chips, the
-   * count and the grid land in ONE render.
+   * THE FIELD FILTER IS TRIMMED TO THE NEW CITY WHEN THE CITY CHANGES. A selected field that has
+   * no matches in the new city goes; one that does stays (2026-10-25, was a full reset). Keeping
+   * "Bicentennial Park" selected while switching to Houston would filter the grid down to nothing
+   * and read as an empty week; dropping an Austin field when going from All cities to Austin threw
+   * away a choice that was still valid. The Month view has a reconcile effect that drops absent
+   * fields, but it runs only in Month and only after a render, so the grid would flash the wrong
+   * thing first. Trimming in the same setState is what makes the chips, the count and the grid
+   * land in ONE render. Outside Month (monthInRange empty) this still clears everything.
    *
-   * IF THE OPEN DRAWER'S CITY DROPS OUT OF VIEW, the drawer closes — unchanged. */
+   * IF THE OPEN DRAWER'S CITY DROPS OUT OF VIEW, the drawer closes, unchanged. */
   const pickCity = useCallback((next: string | null) => {
+    const inNext = fieldsAvailable(monthInRange, next);
     setCity((prev) => {
       if (prev === next) return prev; // already there: no change, and no field reset
-      setFieldSel(new Set());          // the old city's fields are not the new city's
+      setFieldSel((sel) => reconcileFields(sel, inNext).kept); // only fields the new city has
       const visible = next === null || (drawerCity != null && drawerCity === next);
       if (drawerId != null && drawerCity != null && !visible) {
         if (drawerDirty) showToast(`Discarded unsaved changes to match ${drawerId}.`, true);
@@ -976,7 +995,7 @@ export default function VeoMasterSchedule() {
       }
       return next;
     });
-  }, [drawerCity, drawerId, drawerDirty, showToast]);
+  }, [monthInRange, drawerCity, drawerId, drawerDirty, showToast]);
 
   /* THE EMOJI RECONCILE WORKLIST STOOD HERE (removed 2026-09-10): needEmoji / needClubhouse were
    * the two disjoint halves of the drift between Clubhouse intent and the camera emoji in the
@@ -1192,7 +1211,7 @@ export default function VeoMasterSchedule() {
             </div>
             <div className="vms-mobsum">
               <span className="txt" data-testid="mob-summary">
-                <b>{monthBusy ? "…" : `${monthVisible.length} match${monthVisible.length === 1 ? "" : "es"}`}</b>
+                <b>{monthBusy ? "…" : `${monthCount} match${monthCount === 1 ? "" : "es"}`}</b>
                 {" · "}{monthCity ?? "all cities"}{" · "}{fieldCountLabel(fieldSel, monthFields)}
               </span>
               {monthCxCount > 0 && (
@@ -1206,7 +1225,7 @@ export default function VeoMasterSchedule() {
                 not on screen at this width. */}
             {droppedFields.length > 0 && (
               <div className="vms-mobdrop" data-testid="mob-dropped">
-                {droppedFields.join(", ")} {droppedFields.length === 1 ? "has" : "have"} no matches in this range — removed from the filter
+                {droppedFields.join(", ")} {droppedFields.length === 1 ? "has" : "have"} no matches in this range and {droppedFields.length === 1 ? "was" : "were"} removed from the filter
               </div>
             )}
           </div>
@@ -1233,7 +1252,7 @@ export default function VeoMasterSchedule() {
               </label>
               <span className="vms-mtitle" data-testid="month-title">{range ? rangeTitle(range.from, range.to) : ""}</span>
               <span className="vms-mstat" data-testid="month-count">
-                {monthBusy ? "Loading…" : `${monthVisible.length} match${monthVisible.length === 1 ? "" : "es"}`}
+                {monthBusy ? "Loading…" : `${monthCount} match${monthCount === 1 ? "" : "es"}`}
                 {" · "}{fieldCountLabel(fieldSel, monthFields)}
               </span>
             </div>
@@ -1256,12 +1275,27 @@ export default function VeoMasterSchedule() {
                   <button type="button" data-testid="month-allfields"
                     className={"vms-chip" + (fieldSel.size === 0 ? " vms-chip-on" : "")}
                     onClick={() => setFieldSel(new Set())}>All fields</button>
-                  {monthFields.map((f) => (
+                  {/* ONE LIST WHEN A CITY IS SELECTED, GROUPS BY CITY WHEN NONE IS. The list is
+                      already scoped to the selected city (fieldsAvailable); with All cities the
+                      same chips sit under a city label each, so an operator can tell which city a
+                      field is in. */}
+                  {monthCity ? monthFields.map((f) => (
                     <button type="button" key={f} data-testid="month-field" data-field={f}
                       className={"vms-chip" + (fieldSel.has(f) ? " vms-chip-on" : "")}
                       onClick={() => setFieldSel((prev) => {
                         const n = new Set(prev); if (n.has(f)) n.delete(f); else n.add(f); return n;
                       })}>{f}</button>
+                  )) : monthFieldGroups.map((g) => (
+                    <span className="vms-mgrp" key={g.city} data-testid="month-fieldgroup" data-city={g.city}>
+                      <span className="vms-mgrp-lbl">{g.city}</span>
+                      {g.fields.map((f) => (
+                        <button type="button" key={f} data-testid="month-field" data-field={f} data-city={g.city}
+                          className={"vms-chip" + (fieldSel.has(f) ? " vms-chip-on" : "")}
+                          onClick={() => setFieldSel((prev) => {
+                            const n = new Set(prev); if (n.has(f)) n.delete(f); else n.add(f); return n;
+                          })}>{f}</button>
+                      ))}
+                    </span>
                   ))}
                   <button type="button" data-testid="month-fold" className="vms-fdisc"
                     onClick={() => setFieldsOpen(false)}>Collapse <span aria-hidden>▴</span></button>
@@ -1297,7 +1331,7 @@ export default function VeoMasterSchedule() {
                   WHILE THE ROW IS FOLDED, which is the default state. */}
               {droppedFields.length > 0 && (
                 <span className="vms-mdrop" data-testid="month-dropped">
-                  {droppedFields.join(", ")} {droppedFields.length === 1 ? "has" : "have"} no matches in this range — removed from the filter
+                  {droppedFields.join(", ")} {droppedFields.length === 1 ? "has" : "have"} no matches in this range and {droppedFields.length === 1 ? "was" : "were"} removed from the filter
                 </span>
               )}
             </div>
@@ -1345,11 +1379,12 @@ export default function VeoMasterSchedule() {
               city={monthCity}
               onPickCity={(c) => { pickCity(c); setSheet(null); }}
               fields={monthFields}
+              groups={monthFieldGroups}
               /* THE UNFILTERED RANGE, city-scoped only. `monthAll` has the FIELD filter already
                  applied, so counting from it made every unselected field read 0 — which is the
                  opposite of what this count is for: it exists so an empty filter is visibly empty
                  BEFORE you apply it. fieldCounts applies the city scope itself. */
-              counts={fieldCounts(monthData?.matches ?? [], monthCity)}
+              counts={fieldCounts(monthInRange, monthCity)}
               selected={fieldSel}
               onToggleField={(f) => setFieldSel((prev) => {
                 const n = new Set(prev); if (n.has(f)) n.delete(f); else n.add(f); return n;
@@ -1684,15 +1719,17 @@ const CSS = `
  * be raised. */
 .vms-mcell{min-height:126px;display:flex;flex-direction:column;min-width:0;background:#fff;border-right:1px solid #EFF3EF;border-bottom:1px solid #EFF3EF}
 .vms-mcell:nth-child(7n){border-right:0}
-/* THE OUT-OF-RANGE PADDING DAY DOES NOT STRETCH. It holds nothing by definition, so under a
-   14-row week it became 14 rows of dimmed nothing - the largest block of whitespace on the page
-   and the only one carrying no information at all. align-self:start stops it inflating; the tint
-   still marks it as outside the range, and IN-RANGE cells keep stretching so the grid stays a
-   grid. */
+/* THE OUT-OF-RANGE PADDING DAY IS A DAY LIKE THE OTHERS, with a tint and a lighter number to say
+   it belongs to the neighbouring month. It used to be held short (align-self:start) because it was
+   emptied of matches; it holds them now (monthGrid.buildMonthGrid, 2026-10-25), so it stretches
+   with its row and its chips, count badge and tooltips are the same as any other cell's. */
 .vms-fdisc{border:1px dashed #cfdad3;background:#fff;border-radius:999px;padding:4px 11px;font:inherit;font-size:12px;font-weight:700;color:#42513f;cursor:pointer;white-space:nowrap}
 .vms-fdisc:hover{background:#f4f7f3;border-color:#b7c8bd}
 .vms-fx{opacity:.6;font-weight:800}
-.vms-mout{background:#FAFCFA;align-self:start;min-height:86px}
+.vms-mout{background:#FAFCFA}
+/* A CITY GROUP IN THE FIELD CHIP ROW, shown only with All cities selected. */
+.vms-mgrp{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap;padding-left:6px;border-left:2px solid #DCE5E0}
+.vms-mgrp-lbl{font-size:10px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:#6d7b74;white-space:nowrap}
 /* ── COPY-TO-DATES: the grid as a picker ── */
 .vms-mpickable{cursor:pointer}
 .vms-mpickable:hover{background:#F4FBF7}
@@ -2055,6 +2092,10 @@ span.vms-cam:focus-visible{outline:2px solid var(--mintInk);outline-offset:2px}
   .vms-agdh .n{margin-left:auto;font-size:11px;font-weight:700;color:#6d7b74;
     font-variant-numeric:tabular-nums;text-align:right}
   .vms-agdh.past b,.vms-agdh.past .n{color:#93A49A}
+  .vms-agdh.out b{color:#C3CFC7}
+  /* A CITY HEADING IN THE FIELD SHEET, shown only with All cities selected. */
+  .vms-sgrp{padding:9px 14px 4px;font-size:10px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;
+    color:#6d7b74;background:#F7FAF8;border-bottom:1px solid #EFF3EF}
   .vms-agi{display:flex;align-items:center;gap:9px;width:100%;padding:9px 12px;border:0;
     border-bottom:1px solid #EFF3EF;background:#fff;font:inherit;text-align:left;min-height:44px}
   .vms-agi:last-child{border-bottom:0}
@@ -2190,7 +2231,7 @@ function MonthMap({ weeks, picked, onPick }: {
       {weeks.map((wk, wi) => (
         <div className="vms-mapwk" data-testid="mob-mapweek" key={wi}>
           {wk.map((d) => {
-            const n = d.inRange ? d.matches.length : 0;
+            const n = d.matches.length; // padding days count too: they are on screen
             // FLOOR 5px so a single match is a visible mark rather than a hairline nobody sees;
             // hidden outright on a genuinely empty day, so "none" and "one" are not the same width.
             const w = peak > 0 && n > 0 ? Math.max(5, Math.round((n / peak) * 30)) : 5;
@@ -2273,7 +2314,8 @@ function MonthAgenda({ weeks, allMatches, showCx, picked, onOpen }: {
   const hiddenCx = new Map<string, number>();
   if (!showCx) for (const m of allMatches) if (m.cancelled) hiddenCx.set(m.date, (hiddenCx.get(m.date) ?? 0) + 1);
 
-  const days = weeks.flat().filter((d) => d.inRange && d.matches.length > 0);
+  // Padding days are listed too, muted, so a day the map shows a bar for has somewhere to scroll to.
+  const days = weeks.flat().filter((d) => d.matches.length > 0);
   return (
     <div className="vms-card vms-ag" data-testid="month-agenda">
       {days.length === 0 ? (
@@ -2282,7 +2324,7 @@ function MonthAgenda({ weeks, allMatches, showCx, picked, onOpen }: {
         const cx = hiddenCx.get(d.iso) ?? 0;
         return (
           <div key={d.iso}>
-            <div className={"vms-agdh" + (d.isPast ? " past" : "")} data-testid="mob-day" data-iso={d.iso}
+            <div className={"vms-agdh" + (d.isPast ? " past" : "") + (d.inRange ? "" : " out")} data-testid="mob-day" data-iso={d.iso} data-inrange={d.inRange ? "1" : "0"}
               style={picked === d.iso ? { background: "#E9FAF0" } : undefined}>
               <b>{agendaDate(d.iso)}</b>
               {d.isToday && <span className="td">Today</span>}
@@ -2327,16 +2369,25 @@ function MonthAgenda({ weeks, allMatches, showCx, picked, onOpen }: {
  * states what is filtered without listing what is not.
  *
  * SELECTING NOTHING STILL MEANS ALL — applyFilters is untouched, only its control changed. */
-function PickerSheet({ kind, onClose, cities, city, onPickCity, fields, counts, selected, onToggleField, onAllFields, dropped }: {
+function PickerSheet({ kind, onClose, cities, city, onPickCity, fields, groups, counts, selected, onToggleField, onAllFields, dropped }: {
   kind: "city" | "field"; onClose: () => void;
   cities: string[]; city: string | null; onPickCity: (c: string | null) => void;
-  fields: string[]; counts: Map<string, number>; selected: ReadonlySet<string>;
+  fields: string[];
+  /** The field list grouped by city. Non-empty only when no city is selected; the sheet then
+   *  shows a city heading above each group instead of one flat list. */
+  groups: { city: string; fields: string[] }[];
+  counts: Map<string, number>; selected: ReadonlySet<string>;
   onToggleField: (f: string) => void; onAllFields: () => void; dropped: string[];
 }) {
   const [q, setQ] = useState("");
   const isCity = kind === "city";
   // 23 fields is already past scanning and the board grows, which is what the search is for.
-  const list = (isCity ? cities : fields).filter((x) => x.toLowerCase().includes(q.trim().toLowerCase()));
+  const hit = (x: string) => x.toLowerCase().includes(q.trim().toLowerCase());
+  const list = (isCity ? cities : fields).filter(hit);
+  // The grouped list, searched the same way; a city with no hit left in it is not shown.
+  const grouped = !isCity && !city
+    ? groups.map((g) => ({ city: g.city, fields: g.fields.filter(hit) })).filter((g) => g.fields.length > 0)
+    : null;
   return (
     <>
       <div className="vms-scrim" data-testid="mob-scrim" onClick={onClose} />
@@ -2361,13 +2412,29 @@ function PickerSheet({ kind, onClose, cities, city, onPickCity, fields, counts, 
         </div>
         {dropped.length > 0 && !isCity && (
           <div className="vms-sdrop" data-testid="mob-sheet-dropped">
-            {dropped.join(", ")} {dropped.length === 1 ? "has" : "have"} no matches in this range — removed from the filter
+            {dropped.join(", ")} {dropped.length === 1 ? "has" : "have"} no matches in this range and {dropped.length === 1 ? "was" : "were"} removed from the filter
           </div>
         )}
         <div className="vms-slist">
           {list.length === 0 ? (
             <div className="vms-sempty">Nothing matches &ldquo;{q}&rdquo;.</div>
-          ) : list.map((x) => {
+          ) : grouped ? grouped.map((g) => (
+            <div key={g.city} data-testid="mob-sheet-group" data-city={g.city}>
+              <div className="vms-sgrp">{g.city}</div>
+              {g.fields.map((x) => {
+                const on = selected.has(x);
+                return (
+                  <button type="button" key={x} className={"vms-sit" + (on ? " on" : "")}
+                    data-testid="mob-sheet-item" data-name={x} data-on={on ? "1" : "0"} data-city={g.city}
+                    onClick={() => onToggleField(x)}>
+                    <span className="bx" aria-hidden />
+                    <span className="nm">{x}</span>
+                    <span className="ct">{counts.get(x) ?? 0}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )) : list.map((x) => {
             const on = isCity ? city === x : selected.has(x);
             return (
               <button type="button" key={x} className={"vms-sit" + (on ? " on" : "")}

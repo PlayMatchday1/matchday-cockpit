@@ -1183,6 +1183,29 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange,
     () => pickerOptions(managers, managersAll, false,
       cur.secondManagerId == null ? null : { id: Number(cur.secondManagerId), name: managerNameIn([...managers, ...managersAll], cur.secondManagerId) }),
     [managers, managersAll, cur.secondManagerId]);
+  /* THE FIELD LIST IS THIS MATCH'S CITY ONLY (2026-10-25). The detail route returns every field in
+   * every city and the select rendered all of them, so an Austin match offered Dallas fields. The
+   * match's city is its field's city (pickMatch flattens field.city.name onto cityName), so the
+   * list is the fields that share that city name. The CURRENT field is kept even when it is not in
+   * that list, labelled with its city, so the select never shows a value that is not an option.
+   * With no city known the full list is shown, grouped by city. */
+  const fieldChoice = useMemo(() => {
+    const cityName = orig?.cityName ?? null;
+    const curId = Number(cur.fieldId ?? 0);
+    const byTitle = (a: FieldRow, b: FieldRow) => a.title.localeCompare(b.title);
+    if (!cityName) {
+      const groups = new Map<string, FieldRow[]>();
+      for (const f of fields) {
+        const k = f.city ?? "No city";
+        groups.set(k, [...(groups.get(k) ?? []), f]);
+      }
+      return { inCity: [] as FieldRow[], offCity: null as FieldRow | null,
+        groups: [...groups.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([city, rows]) => ({ city, rows: rows.sort(byTitle) })) };
+    }
+    const inCity = fields.filter((f) => f.city === cityName).sort(byTitle);
+    const offCity = inCity.some((f) => f.id === curId) ? null : (fields.find((f) => f.id === curId) ?? null);
+    return { inCity, offCity, groups: null };
+  }, [fields, orig?.cityName, cur.fieldId]);
 
   if (loadErr) return <div className="mp"><style>{CSS}</style><div className="mp-panel" data-testid="mp-panel"><div className="mp-err" data-testid="mp-load-error">{loadErr}</div></div></div>;
   if (!orig) return <div className="mp"><style>{CSS}</style><div className="mp-panel" data-testid="mp-panel"><div className="mp-loading">Loading match…</div></div></div>;
@@ -1232,7 +1255,20 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange,
                 </select></label>
               <label className="mp-f"><span className="mp-lb">FIELD</span>
                 <select data-testid="mp-field" value={Number(cur.fieldId ?? 0)} className={isDirty("fieldId") ? "mp-chg" : ""} onChange={(e) => setField("fieldId", Number(e.target.value))}>
-                  {fields.map((f) => <option key={f.id} value={f.id}>{f.title}</option>)}
+                  {fieldChoice.groups ? fieldChoice.groups.map((g) => (
+                    <optgroup key={g.city} label={g.city}>
+                      {g.rows.map((f) => <option key={f.id} value={f.id}>{f.title}</option>)}
+                    </optgroup>
+                  )) : (
+                    <>
+                      {fieldChoice.offCity && (
+                        <option value={fieldChoice.offCity.id} data-testid="mp-field-offcity">
+                          {fieldChoice.offCity.title} ({fieldChoice.offCity.city ?? "no city"})
+                        </option>
+                      )}
+                      {fieldChoice.inCity.map((f) => <option key={f.id} value={f.id}>{f.title}</option>)}
+                    </>
+                  )}
                 </select></label>
               <label className="mp-f"><span className="mp-lb">TYPE</span>
                 {typeExposed ? (

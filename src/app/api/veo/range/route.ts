@@ -7,7 +7,9 @@
  *
  * THE BOUND IS CAPPED. A range is operator-chosen and an unbounded one is a full-table scan on a
  * mirror with years of history in it. 92 days is a calendar quarter, which is more than the month
- * view ever shows and leaves room for a range dragged across a boundary.
+ * view ever shows and leaves room for a range dragged across a boundary. The grid pads the
+ * operator's range out to whole weeks and fetches that padded span (monthGrid.visibleSpan), up to
+ * six days on each side, so the cap carries those twelve: 104.
  */
 
 import { authenticateCrm } from "@/lib/crmAuth";
@@ -18,7 +20,7 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 30;
 
 const ISO = /^\d{4}-\d{2}-\d{2}$/;
-const MAX_DAYS = 92;
+const MAX_DAYS = 104;
 
 /** Days between two YYYY-MM-DD strings. Parsed at UTC MIDNIGHT and only ever subtracted — this is
  *  arithmetic on calendar bounds, not a wall-clock instant, so there is nothing to re-shift. */

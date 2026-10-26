@@ -13,7 +13,8 @@ import { readFileSync } from "node:fs";
 import { buildCopyBody, droppedByCopy, copyConfirmLine, wallClockLabel, COPY_FIELDS } from "../src/lib/copyMatch";
 import {
   buildMonthGrid, applyFilters, fieldsAvailable, reconcileFields, fieldCountLabel,
-  defaultRange, rangeTitle, isoDow, priceLabel, type GridMatch,
+  defaultRange, rangeTitle, isoDow, priceLabel, visibleSpan, inRangeMatches, fieldsByCity,
+  dayMatchCounts, type GridMatch,
 } from "../src/lib/monthGrid";
 import { MASTER_SCHEDULE_WEEK_START, WEEK_START, weekEndOnOrAfter, weekStartOnOrBefore } from "../src/lib/weekStart";
 import { EDITABLE_KEYS } from "../src/lib/matchEditModel";
@@ -188,7 +189,7 @@ console.log("\nEXPORT WORKLIST IS GONE FROM THE TOOLBAR");
     [/exportWorklist/.test(VIEW), /needEmoji/.test(VIEW)], [true, true]);
 }
 
-console.log("\nTHE MONTH GRID: whole weeks, Monday first (MASTER_SCHEDULE_WEEK_START), padding empty");
+console.log("\nTHE MONTH GRID: whole weeks, Monday first (MASTER_SCHEDULE_WEEK_START), padding days show their matches");
 {
   const M = (id: number, date: string, minutes: number, venue: string, city = "Austin"): GridMatch =>
     ({ apiId: id, city, date, time: "7:00 PM", minutes, venue, name: `m${id}`, veo: false });
@@ -210,12 +211,23 @@ console.log("\nTHE MONTH GRID: whole weeks, Monday first (MASTER_SCHEDULE_WEEK_S
   const first = g[0][0];
   // MONDAY START: the first pad is Monday 31 Aug.
   is("  the leading pad is out of range", [first.iso, first.inRange], ["2026-08-31", false]);
-  /* AN OUT-OF-RANGE DAY HOLDS NO MATCHES even when one falls on it — a padding cell must be
-   * genuinely empty, not merely styled as though it were. Match 4 is on 31 Aug, the first pad cell
-   * on a Monday start, so that is the cell checked. */
+  /* AN OUT-OF-RANGE DAY SHOWS ITS MATCHES (2026-10-25). It used to be emptied, and the visible
+   * Nov 1 cell on the October view read as a day with no matches. It stays out of range (muted)
+   * and keeps what falls on it. Match 4 is on 31 Aug, the first pad cell on a Monday start. This
+   * assertion body was changed on purpose for that behaviour change; it is not a refactor. */
   const aug31 = g[0][0];
-  is("  …and the 31 Aug pad holds no matches, though match 4 is on that date", [aug31.iso, aug31.inRange, aug31.matches.length], ["2026-08-31", false, 0]);
+  is("  …and the 31 Aug pad is out of range but holds match 4, which is on that date",
+    [aug31.iso, aug31.inRange, aug31.matches.map((m) => m.apiId)], ["2026-08-31", false, [4]]);
   is("  control: match 4 IS in the input on that date", MS.some((m) => m.date === "2026-08-31"), true);
+  is("  the phone map counts the padding day too", dayMatchCounts(g).get("2026-08-31"), 1);
+
+  /* THE FETCH COVERS THE WHOLE VISIBLE SPAN, and the count covers the month. */
+  is("  the visible span is the month padded to whole Monday weeks", visibleSpan(r), { from: "2026-08-31", to: "2026-10-04" });
+  is("  …never more than six days a side: a 92-day range pads to at most 104",
+    (() => { const v = visibleSpan({ from: "2026-07-01", to: "2026-09-30" });
+      return Math.round((Date.parse(`${v.to}T00:00:00Z`) - Date.parse(`${v.from}T00:00:00Z`)) / 86400000) <= 104; })(), true);
+  is("  the in-range set leaves the padding-day match out", inRangeMatches(MS, r).map((m) => m.apiId), [1, 2, 3, 5]);
+  is("  control: no range, no matches", inRangeMatches(MS, null), []);
   const sep1 = g.flat().find((d) => d.iso === "2026-09-01")!;
   is("  a day's matches sort by time", sep1.matches.map((m) => m.minutes), [1110, 1140]);
   is("  today is marked", g.flat().find((d) => d.iso === "2026-09-15")!.isToday, true);
@@ -258,6 +270,15 @@ console.log("\nTHE FILTERS: city single, field MULTI, count always honest");
   /* THE CHIP ROW IS BUILT FROM WHAT IS THERE, so it can never offer an empty filter. */
   is("  the field list comes from the matches present", fieldsAvailable(MS, null), ["Hattrick", "NEMP", "Parmer"]);
   is("  …scoped by city", fieldsAvailable(MS, "Houston"), ["NEMP"]);
+  /* WITH NO CITY SELECTED THE LIST IS GROUPED BY CITY, cities and fields each in name order. */
+  is("  …and grouped by city when none is selected", fieldsByCity(MS),
+    [{ city: "Austin", fields: ["Hattrick", "NEMP", "Parmer"] }, { city: "Houston", fields: ["NEMP"] }]);
+  is("  control: an empty board has no groups", fieldsByCity([]), []);
+  /* CHANGING CITY KEEPS ONLY THE FIELDS THE NEW CITY HAS (pickCity in VeoMasterSchedule). */
+  is("  switching to Houston keeps NEMP and drops Hattrick",
+    [...reconcileFields(new Set(["NEMP", "Hattrick"]), fieldsAvailable(MS, "Houston")).kept], ["NEMP"]);
+  is("  …and switching to All cities keeps both",
+    [...reconcileFields(new Set(["NEMP", "Hattrick"]), fieldsAvailable(MS, null)).kept], ["NEMP", "Hattrick"]);
 
   /* A SELECTION THAT NO LONGER HAS MATCHES IS DROPPED AND SAID. */
   const rec = reconcileFields(new Set(["NEMP", "Gone", "Also Gone"]), ["NEMP", "Parmer"]);

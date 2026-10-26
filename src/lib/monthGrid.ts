@@ -6,11 +6,14 @@
  * into Monday. The grid therefore does its arithmetic on UTC-midnight Dates — which are calendar
  * bounds, not instants, and cannot shift — and compares everything else as text.
  *
- * ── WHOLE WEEKS, MONDAY FIRST ─────────────────────────────────────────────────────────────────
+ * ── WHOLE WEEKS, STARTING ON WEEK_START (Sunday, src/lib/weekStart.ts) ────────────────────────
  * The grid is padded out to whole weeks at both ends, so a range starting on a Thursday still
- * renders a full row. Padding days are OUT OF RANGE: dimmed, and they hold no matches even if a
- * match falls on them, because showing a match on a day the operator did not ask for is showing
- * them something outside the range they set.
+ * renders a full row. Padding days are OUT OF RANGE: dimmed, so the eye can tell them from the
+ * month being shown. THEY STILL HOLD THEIR MATCHES (2026-10-25). They used to be emptied on the
+ * theory that a match outside the asked-for range should not be shown, and the result was a
+ * visible Nov 1 cell with nothing in it while Nov 1 had matches, which read as a day with no
+ * matches. A cell that is on screen shows what is on that day. The caller fetches the whole
+ * visible span (visibleSpan) so those cells have data to show.
  */
 
 import { MASTER_SCHEDULE_WEEK_START, weekEndOnOrAfter, weekStartOnOrBefore } from "./weekStart";
@@ -116,7 +119,7 @@ export type GridDay = {
   iso: string;
   /** Day of the month, 1-31 — what the cell shows. */
   day: number;
-  /** False for the padding days at either end: dimmed, and never given matches. */
+  /** False for the padding days at either end: dimmed. They still carry their matches. */
   inRange: boolean;
   isToday: boolean;
   /** Strictly before today. A day that has run has nothing left to decide, so the grid lets it
@@ -145,9 +148,8 @@ export function buildMonthGrid(
 ): GridDay[][] {
   const byDate = new Map<string, GridMatch[]>();
   for (const m of matches) {
-    // OUT-OF-RANGE MATCHES ARE DROPPED HERE, not hidden at render time — a padding cell must be
-    // genuinely empty, not merely styled as though it were.
-    if (m.date < from || m.date > to) continue;
+    // EVERY MATCH IS BUCKETED, in range or not. A padding day that is on screen shows its matches;
+    // the caller decides what to fetch (visibleSpan) and what to count (inRangeMatches).
     byDate.set(m.date, [...(byDate.get(m.date) ?? []), m]);
   }
   for (const list of byDate.values()) {
@@ -170,7 +172,7 @@ export function buildMonthGrid(
         inRange,
         isToday: dIso === todayIso,
         isPast: dIso < todayIso,
-        matches: inRange ? (byDate.get(dIso) ?? []) : [],
+        matches: byDate.get(dIso) ?? [],
       });
     }
     weeks.push(week);
@@ -178,6 +180,21 @@ export function buildMonthGrid(
   }
   return weeks;
 }
+
+/** The span the grid actually draws: the operator's range padded out to whole weeks at both ends.
+ *  This is what the range fetch asks for, so every visible cell has its matches. At most six days
+ *  are added on each side. */
+export function visibleSpan(
+  r: { from: string; to: string }, ws: number = MASTER_SCHEDULE_WEEK_START,
+): { from: string; to: string } {
+  return { from: weekStartOnOrBefore(r.from, ws), to: weekEndOnOrAfter(r.to, ws) };
+}
+
+/** The matches inside the operator's own range, as text comparison on YYYY-MM-DD. The header
+ *  count, the field chips and the reconcile all read THIS, so "October 2026, 165 matches" and
+ *  "Choose from 23 fields" describe the month named in the title and not the padding days. */
+export const inRangeMatches = (matches: readonly GridMatch[], r: { from: string; to: string } | null): GridMatch[] =>
+  r ? matches.filter((m) => m.date >= r.from && m.date <= r.to) : [];
 
 /* ── THE FILTERS ───────────────────────────────────────────────────────────────────────────────
  * City is single-select, as it already is on the week view. Field is MULTI-select, and an empty
@@ -192,6 +209,21 @@ export function applyFilters(
  *  so it can never offer a filter with nothing behind it. */
 export const fieldsAvailable = (matches: readonly GridMatch[], city: string | null): string[] =>
   [...new Set(matches.filter((m) => !city || m.city === city).map((m) => m.venue))].sort();
+
+/** The same list, grouped by city, for when NO city is selected: one flat list across four cities
+ *  does not say which "Memorial Park" is which. Cities sort by name, fields sort within each city.
+ *  The filter key is still the field NAME (applyFilters), so a name shared by two cities is one
+ *  chip that lights in both groups. */
+export function fieldsByCity(matches: readonly GridMatch[]): { city: string; fields: string[] }[] {
+  const byCity = new Map<string, Set<string>>();
+  for (const m of matches) {
+    const set = byCity.get(m.city) ?? new Set<string>();
+    set.add(m.venue);
+    byCity.set(m.city, set);
+  }
+  return [...byCity.entries()].sort(([a], [b]) => a.localeCompare(b))
+    .map(([city, set]) => ({ city, fields: [...set].sort() }));
+}
 
 /* ── WHAT THE PHONE'S CONTROLS NEED ───────────────────────────────────────────────────────────
  * All three are derivations of what is ALREADY on screen, so the phone layout cannot disagree
@@ -212,10 +244,10 @@ export function fieldCounts(
   return out;
 }
 
-/** iso -> how many matches that day holds, over the days actually in range. */
+/** iso -> how many matches that day holds, over every day the grid draws, padding included. */
 export function dayMatchCounts(weeks: readonly (readonly GridDay[])[]): Map<string, number> {
   const out = new Map<string, number>();
-  for (const w of weeks) for (const d of w) if (d.inRange) out.set(d.iso, d.matches.length);
+  for (const w of weeks) for (const d of w) out.set(d.iso, d.matches.length);
   return out;
 }
 
