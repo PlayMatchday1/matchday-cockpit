@@ -29,6 +29,10 @@ export type LocationScope = {
   cityName: string;
   /** The country suffix MatchDay writes on area labels: "Warsaw, Poland". */
   country: string;
+  /** EVERY MatchDay city in this market, by abbr (= city_identifier) and name. The Fields page
+   *  scopes a confined account to these (src/lib/fieldScope.ts). One today; a second Polish city
+   *  is a line here, not a code change. */
+  cities: readonly { abbr: string; name: string }[];
   unit: DistanceUnit;
   coverageRadiusMiles: number;
   /** Where the map opens before it has fitted to the players. */
@@ -37,6 +41,7 @@ export type LocationScope = {
 
 export const POLAND: LocationScope = {
   key: "PL", name: "Poland", cityAbbr: "WAW", cityName: "Warsaw", country: "Poland",
+  cities: [{ abbr: "WAW", name: "Warsaw" }],
   unit: "km", coverageRadiusMiles: 100, center: [52.07, 19.48],
 };
 

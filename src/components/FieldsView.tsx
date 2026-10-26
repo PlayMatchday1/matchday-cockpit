@@ -18,6 +18,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useAuth, canAccess } from "@/lib/useAuth";
+import { isConfined } from "@/lib/cityConfinement";
 import {
   FORMATS, PITCH_OPTIONS, formatShort, recommendationReadout, missingRequired,
   updateBody, deleteBlock, validPhone,
@@ -34,6 +35,8 @@ type Field = {
 type Payload = {
   fields: Field[]; links: { fieldId: number; venueId: number | null }[];
   activeFieldIds: number[]; cities: { id: number; name: string }[]; deleteEnabled: boolean;
+  /** Set when the server scoped the list to the account's market ("Poland"). */
+  scope?: { marketName: string } | null;
 };
 type Phone = { id: number; phoneNumber: string; isEnabled: boolean };
 type Draft = Record<string, unknown>;
@@ -111,6 +114,12 @@ export default function FieldsView() {
    * confined account before the is_admin term. */
   const { appUser } = useAuth();
   const canFinance = canAccess(appUser, "finance");
+  /* A CONFINED ACCOUNT (Warsaw) SEES ITS MARKET'S FIELDS AND NONE OF THE US MONEY. The server does
+   * the scoping (/api/fields filters the list and the cities, and sends no venue links); this flag
+   * only decides what the page DRAWS: no Venue column, no Unmapped chip, no Venue and cost section,
+   * and /api/venues is never requested. fin_venues is US finance data (rates, costs, revenue
+   * mapping) and is off this page for them, by ruling (2026-10-25). */
+  const confined = isConfined(appUser);
   type VenueRow = { id: number; venue_name: string; city: string } & Record<string, unknown>;
   const [venueList, setVenueList] = useState<VenueRow[]>([]);
   const [venueCounts, setVenueCounts] = useState<Record<number, number>>({});
@@ -305,6 +314,7 @@ export default function FieldsView() {
   /* LOAD THE VENUE PICTURE FOR THE OPEN FIELD. One GET, matchops-gated, so the section renders
    * with real values for a city manager who cannot change them. */
   const loadVenue = useCallback(async (fieldId: number | null) => {
+    if (confined) return; // the venue half is not drawn and its data is not requested
     const h = await headers(); if (!h) return;
     setVenueMsg(null); setVenuePick(null); setVenueMode("new");
     const r = await fetch(`/api/venues${fieldId ? `?fieldId=${fieldId}` : ""}`, { headers: h, cache: "no-store" });
@@ -324,7 +334,7 @@ export default function FieldsView() {
       ?? {}) as Record<string, unknown>;
     const seed = seedOf(row);
     setVd(seed); setVdOrig(seed);
-  }, [headers]);
+  }, [headers, confined]);
 
   /* SHOW WHAT YOU ARE LINKING TO. Picking an existing venue seeds the boxes from THAT venue's row
    * (read-only, see `linking`), and switching back to "Create a new venue" clears them — a new
@@ -456,16 +466,23 @@ export default function FieldsView() {
   const fmtTotal = Number(draft.recommendedPlayerCount) || null;
 
   return (
-    <div className="fv">
+    <div className={"fv" + (confined ? " fv-noven" : "")}>
       <div className="fv-head">
         <div>
           <h1>Fields</h1>
-          <p className="fv-sub">Every pitch MatchDay plays on. Create one, edit one, or map it to a venue so its cost and revenue land somewhere.</p>
+          <p className="fv-sub">
+            {confined
+              ? `Every pitch MatchDay plays on in ${data?.scope?.marketName ?? "your market"}. Create one or edit one.`
+              : "Every pitch MatchDay plays on. Create one, edit one, or map it to a venue so its cost and revenue land somewhere."}
+          </p>
         </div>
         <span className="fv-live"><i />PRODUCTION · LIVE EDITS</span>
       </div>
 
       {err && <div className="fv-err" data-testid="fv-error">Couldn’t load fields: {err}</div>}
+      {confined && data?.scope && (
+        <div className="fv-scoped" data-testid="fv-scoped">Showing {data.scope.marketName} fields only.</div>
+      )}
 
       <div className="fv-card">
         <div className="fv-bar">
@@ -480,7 +497,7 @@ export default function FieldsView() {
           ))}
           {/* THE UNMAPPED FILTER. Offered only when there ARE unmapped fields, and it carries the
               count — so on a clean estate the control is absent rather than a chip reading 0. */}
-          {unmappedCount > 0 && (
+          {!confined && unmappedCount > 0 && (
             <button className={"fv-chip" + (unmappedOnly ? " on" : "")} data-testid="fv-unmapped-filter"
               aria-pressed={unmappedOnly} title="Fields with no fin_venue_fields row — no cost or revenue path can attribute their matches"
               onClick={() => setUnmappedOnly((v) => !v)}>Unmapped <span className="n">{unmappedCount}</span></button>
@@ -497,7 +514,7 @@ export default function FieldsView() {
             The blue one is discussed at orphanLinks in fieldsModel.ts. */}
 
         <div className="fv-thead">
-          <div>ID</div><div>Field</div><div>Abbr</div><div>City</div><div>Address</div><div>Format</div><div>Venue</div>
+          <div>ID</div><div>Field</div><div>Abbr</div><div>City</div><div>Address</div><div>Format</div>{!confined && <div>Venue</div>}
         </div>
         <div data-testid="fv-rows">
           {!data ? <div className="fv-empty" data-testid="fv-loading">Loading fields…</div>
@@ -511,9 +528,11 @@ export default function FieldsView() {
                   <div className="fv-addr">{f.cityName ?? "—"}</div>
                   <div className="fv-addr" title={f.address}>{f.address || "—"}</div>
                   <div className="fv-fmt">{formatShort(f.recommendedPlayerCount)}</div>
-                  <div className={"fv-map " + (mappedIds.has(f.id) ? "ok" : "no")}
-                    data-testid={mappedIds.has(f.id) ? "fv-mapped" : "fv-unmapped-cell"}>
-                    {mappedIds.has(f.id) ? "Mapped" : "Unmapped"}</div>
+                  {!confined && (
+                    <div className={"fv-map " + (mappedIds.has(f.id) ? "ok" : "no")}
+                      data-testid={mappedIds.has(f.id) ? "fv-mapped" : "fv-unmapped-cell"}>
+                      {mappedIds.has(f.id) ? "Mapped" : "Unmapped"}</div>
+                  )}
                 </div>
               ))}
         </div>
@@ -616,6 +635,8 @@ export default function FieldsView() {
               THE REAL GATE IS THE ROUTE: /api/venues refuses POST and PATCH without
               can_access_finance, and capabilities.can() refuses a confined account before the
               is_admin term. A disabled input is a courtesy. */}
+          {/* THE VENUE HALF, TWO SECTIONS, hidden for a confined account: both write fin_venues. */}
+          {!confined && (<>
           <Sect title="Venue & cost" tag="Clubhouse only">
             {!canFinance && (
               <p className="fv-lock" data-testid="fv-venue-locked">
@@ -772,6 +793,7 @@ export default function FieldsView() {
             {venueMsg && <p className={"fv-hint" + (venueMsg.bad ? " fv-bad" : "")} data-testid="fv-venue-msg">{venueMsg.text}</p>}
           </Sect>
           )}
+          </>)}
 
           {/* "NOTES", NOT "DESCRIPTION". The section held Description AND Parking note, so naming
               it after one of its two fields was wrong on its own — and it stacked the same word
@@ -1108,6 +1130,9 @@ const CSS = `
 .fv-add:disabled{background:#DCE5DF;color:#A9B8AF;cursor:not-allowed}
 .fv-thead,.fv-row{display:grid;grid-template-columns:64px minmax(190px,1.6fr) 92px 128px minmax(170px,1.3fr) 96px 108px;align-items:center;padding:0 18px}
 .fv-thead{background:#F7FAF8;border-bottom:1px solid #E4EAE5;margin-top:12px}
+/* NO VENUE COLUMN for a confined account: six columns, the address takes the width back. */
+.fv-noven .fv-thead,.fv-noven .fv-row{grid-template-columns:64px minmax(190px,1.6fr) 92px 128px minmax(170px,1.6fr) 96px}
+.fv-scoped{margin:0 0 10px;font-size:12.5px;font-weight:700;color:#3d5245;background:#EEF6F1;border:1px solid #CFE5D8;border-radius:10px;padding:8px 12px}
 .fv-thead div{font-size:10.5px;font-weight:700;letter-spacing:.09em;color:#8C9E93;text-transform:uppercase;padding:10px 8px}
 .fv-row{border-bottom:1px solid #EFF3EF;cursor:pointer}
 .fv-row:hover{background:#FBFDFB}

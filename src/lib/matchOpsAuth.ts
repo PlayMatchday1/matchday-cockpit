@@ -12,7 +12,7 @@
 
 import { type SupabaseClient } from "@supabase/supabase-js";
 import { resolveSessionUser, deriveMatchOpsFlags, isCityManagerConfined, CITY_MANAGER_CONFINED_ERROR, type AppUserRow } from "./adminAuth";
-import { confinedCity, assertConfinedRoute, CONFINED_CITY_ERROR } from "./cityConfinement";
+import { confinedCity, isConfined, assertConfinedRoute, CONFINED_CITY_ERROR } from "./cityConfinement";
 
 export type MatchOpsAuthResult =
   | { ok: true; supabase: SupabaseClient; appUserId: string; email: string; isAdmin: boolean;
@@ -23,7 +23,12 @@ export type MatchOpsAuthResult =
       // filters on nothing. Non-null = the route MUST add .eq() before fetching — filtering after
       // the fetch leaks through pagination counts, which is the whole reason this is returned by
       // the gate rather than left for each route to look up.
-      confinedCity: string | null }
+      confinedCity: string | null;
+      // IS THE ACCOUNT BOUNDED AT ALL. confinedCity is null BOTH for an unconfined account and for
+      // one confined to a value the allowlist cannot resolve, and a route reading confinedCity alone
+      // treats the second as the first. The field routes read this pair (fieldScope.Bound) so an
+      // unresolvable confinement is in scope for nothing rather than for everything.
+      confined: boolean }
   | { ok: false; status: number; error: string };
 
 // The E2E service account is blocked here EXPLICITLY, keyed on EMAIL (not full_name) — belt-and-
@@ -69,6 +74,7 @@ export async function authenticateMatchOpsRead(req: Request): Promise<MatchOpsAu
     email: r.email,
     isAdmin: r.row.is_admin === true,
     confinedCity: confinedCity(r.row),
+    confined: isConfined(r.row),
     ...deriveMatchOpsFlags(r.row),
   };
 }

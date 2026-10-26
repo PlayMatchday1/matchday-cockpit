@@ -27,6 +27,7 @@ import { randomUUID } from "node:crypto";
 import { apiGet, apiWrite } from "@/lib/matchdayStageApi";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
 import { validPhone, type PhoneRow } from "@/lib/fieldsModel";
+import { assertFieldInScope } from "@/lib/fieldScopeServer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -46,6 +47,9 @@ export async function GET(req: Request) {
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   const fieldId = fieldIdOf(req);
   if (fieldId === null) return Response.json({ error: "fieldId required" }, { status: 400 });
+  // THE MARKET BOUNDARY: a confined account reads the numbers of its own market's fields only.
+  const inScope = await assertFieldInScope({ confined: auth.confined, confinedCity: auth.confinedCity }, fieldId);
+  if (!inScope.ok) return Response.json({ error: inScope.error }, { status: inScope.status });
   try {
     const rows = await list(fieldId);
     return Response.json({
@@ -61,6 +65,9 @@ export async function POST(req: Request) {
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   const fieldId = fieldIdOf(req);
   if (fieldId === null) return Response.json({ error: "fieldId required" }, { status: 400 });
+  // THE MARKET BOUNDARY, before the body is read and before any write.
+  const inScope = await assertFieldInScope({ confined: auth.confined, confinedCity: auth.confinedCity }, fieldId);
+  if (!inScope.ok) return Response.json({ error: inScope.error }, { status: inScope.status });
 
   const body = (await req.json().catch(() => null)) as { phoneNumber?: unknown } | null;
   const phoneNumber = String(body?.phoneNumber ?? "").trim();
@@ -106,6 +113,9 @@ export async function DELETE(req: Request) {
   const phoneId = Number(url.searchParams.get("phoneId"));
   if (fieldId === null) return Response.json({ error: "fieldId required" }, { status: 400 });
   if (!Number.isInteger(phoneId) || phoneId <= 0) return Response.json({ error: "phoneId required" }, { status: 400 });
+  // THE MARKET BOUNDARY, before any write.
+  const inScope = await assertFieldInScope({ confined: auth.confined, confinedCity: auth.confinedCity }, fieldId);
+  if (!inScope.ok) return Response.json({ error: inScope.error }, { status: inScope.status });
 
   const saveId = randomUUID();
   const { outcome, error } = await recordWrite(

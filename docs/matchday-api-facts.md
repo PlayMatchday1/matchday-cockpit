@@ -7765,3 +7765,29 @@ Evidence: read-only Supabase reads on 2026-10-23 ~13:00 UTC (`mdapi_matches`, `p
   and `startPass`/`runIncremental` already skip each other), for 10 minutes after the last run of
   either kind started (429), and in the evening block 22:00–04:00 UTC (409). Sync now is unchanged
   and still runs the incremental pass, which reuses the last full run's `cities`.
+
+## Fields for the Warsaw (confined) tier, 2026-10-25
+
+- **A MatchDay city object carries `abbr`, and `abbr` IS `city_identifier`.** Evidence: `mdapi_matches.raw`
+  for 20454 → `field.city = { id: 10, abbr: "WAW", name: "Warsaw", country: "Europe", stripeAccountId: 2,
+  radiusMiles: 1000, timeZone: { name: "Europe/Warsaw" }, ... }`. `country` is **"Europe"**, not Poland,
+  so country is never used to scope anything; the abbr is the primary key and the name the fallback.
+- **The field list's city object is `{ id, name }`** (`/api/fields` route reads `f.city?.name`; the
+  fields payload was measured 2026-08-28). The scope test therefore falls back to the NAME when no abbr
+  is present (`src/lib/fieldScope.ts`, asserted in `scripts/city-confinement-test.ts`).
+- **Fields are scoped per MARKET, matches per CITY** (Ryan, 2026-10-25). `locationScopes.POLAND.cities`
+  lists every MatchDay city in the market (Warsaw today); a second Polish city is one line there. The
+  routes `/api/fields`, `/api/fields/phones`, `/api/fields/photos` filter the list and refuse a field or
+  city id outside the market with 403 `CONFINED_CITY_ERROR` before any read-back or write
+  (`src/lib/fieldScopeServer.ts`, one `/admin/fields` or `/cities` read per check, none for an
+  unconfined account). `/api/venues` (fin_venues: rates, costs, revenue mapping) stays off the
+  confined allowlist and the page does not request it for them.
+- **`confinedCity` null is ambiguous on the gate**: it is null for an unconfined account AND for one
+  confined to a value the allowlist does not resolve. `authenticateMatchOpsRead` now also returns
+  `confined: boolean`; the field routes read the pair. Other routes that read `confinedCity` alone
+  still treat an unresolvable confinement as unconfined (not changed here; stated).
+- **Gameday Ops for WAW on 2026-10-25 shows 0 because Warsaw had no match that day**, not because of
+  scoping: mirror rows for WAW since 2026-10-15 are 20355 (19th, cancelled), 20356 (20th), 20357
+  (21st), 20454 (26th 21:30), 20455 (27th), 20456 (28th). The gameday route keeps a row when
+  `field.city.name === cityNameFor("WAW")` = "Warsaw", which is what the payload carries. The board's
+  date is the BROWSER's local date (`localYMD(new Date())`), so a Warsaw operator sees Warsaw's day.

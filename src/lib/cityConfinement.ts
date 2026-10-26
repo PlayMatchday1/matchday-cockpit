@@ -92,6 +92,11 @@ export const CONFINED_RAIL_KEYS: readonly string[] = [
    * it was added — six items rendered, not seven. verify-confined-rail now asserts every entry in
    * this list resolves to a real section key, which is what would have caught it. */
   "master",
+  /* FIELDS (2026-10-25): the field records a new market builds its schedule on. The boundary is NOT
+   * this list: /api/fields, /api/fields/phones and /api/fields/photos scope every read and write
+   * to the account's market (fieldScope.ts, fieldScopeServer.ts), and the venue and cost half of
+   * the page (fin_venues, US finance data) is not requested for a confined account at all. */
+  "fields",
   /* LOCATIONS, scoped to the account's market (2026-10-23): where its players say they live, against
    * its fields. The boundary is NOT this list — /api/matchops/market-locations* take the scope from
    * the SESSION (marketLocationsAuth.ts) and filter player_area_seen and mdapi_matches in SQL. The
@@ -324,16 +329,20 @@ const CONFINED_ROUTE_EXACT: readonly string[] = [
   "/api/matchops/market-locations",
   "/api/matchops/market-locations/map",
   "/api/matchops/market-locations/open-next",
-  /* "/api/venues" WAS ADDED HERE AND TAKEN BACK OUT, same day. The idea was that a confined city
-   * manager should SEE whether a pitch has a cost mapping. It was never reachable: /api/fields
-   * already refuses those accounts, so the Fields list never renders for them and the drawer never
-   * opens.
-   *
-   * AND THAT IS THE REASON TO REMOVE IT RATHER THAN LEAVE IT. An allowlist entry with no reachable
-   * subject is not harmless — it grants the read silently on the day /api/fields opens up, with
-   * nobody reviewing it. Four confinement bugs this session came from this list being wrong; none
-   * of them came from it being too short. The writes were always refused by the finance capability
-   * and still are. */
+  /* FIELDS (2026-10-25), three EXACT routes. Safe because every handler scopes on the session's
+   * market before it reads or writes: the list is filtered to the market's cities, and a field id
+   * or city id outside it is refused (fieldScopeServer.ts) before the API is written. Exact, not
+   * "/api/fields/", so a route added beneath later is refused until it is listed on purpose. */
+  "/api/fields",
+  "/api/fields/phones",
+  "/api/fields/photos",
+  /* "/api/venues" STAYS OFF THIS LIST, on purpose, now that /api/fields is on it. It was added and
+   * taken back out on the day it was first considered, with the note that an allowlist entry with
+   * no reachable subject grants the read silently on the day /api/fields opens up. That day is
+   * today, and the decision is the opposite: fin_venues is US finance data (rates, costs, the
+   * mapping to revenue), so the Fields page does not request it for a confined account and hides
+   * the Venue and cost section and the Venue column. The writes were always refused by the finance
+   * capability and still are. */
 ];
 
 /**

@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { isConfined, confinedCity, confinedCityName, assertConfinedScope, CONFINED_CAPABILITIES, CONFINED_RAIL_KEYS, confinementSummary, assertConfinedRoute, isConfinedRouteAllowed, playerInConfinedScope, playerCityAllowed } from "../src/lib/cityConfinement";
 import { can } from "../src/lib/capabilities";
+import { fieldScopeFor, fieldCityInScope } from "../src/lib/fieldScope";
 
 let n = 0;
 const t = (name: string, fn: () => void) => { fn(); n++; console.log(`  ✓ ${name}`); };
@@ -76,6 +77,9 @@ console.log("\n── the route allowlist ──");
     "/api/promos/create",
     "/api/reviews",
     "/api/match-chats/active", "/api/match-chats/18215/reply", "/api/crm/threads",
+    /* FIELDS (2026-10-25): the three EXACT routes behind /match-ops/fields. Open only because every
+     * handler scopes on the session's market first (fieldScopeServer.ts). */
+    "/api/fields", "/api/fields/phones", "/api/fields/photos",
   ];
   const REFUSED = [
     "/api/community/cities", "/api/community/settings", "/api/manager-pay/aliases",
@@ -91,6 +95,9 @@ console.log("\n── the route allowlist ──");
      * expressed and opening delete would let one city's operator remove another city's code. */
     "/api/admin/users/permissions", "/api/promos/edit", "/api/promos/delete/12",
     "/api/promos/uses/12",
+    /* THE VENUE HALF OF THE FIELDS PAGE STAYS SHUT: fin_venues is US finance data. And the fields
+     * entries are EXACT, so a sibling added later is refused until listed. */
+    "/api/venues", "/api/fields/other", "/api/admin/fields",
   ];
   /* ── THE DOOR, NOT JUST THE ROOMS ────────────────────────────────────────────────────────────
    * /api/match-chats/ was allowed and the chat LIST rendered perfectly for a Warsaw account — two
@@ -305,9 +312,10 @@ console.log("\n── the sentence on the User access screen ──");
   // session's city, which is the boundary — this list only decides what appears in the rail.
   // Nine since 2026-10-23: Locations, scoped to the account's market (Poland for WAW). The routes
   // take the scope from the session; this list only decides what appears in the rail.
-  t("the confined rail is exactly these nine, in order", () =>
+  // Ten since 2026-10-25: Fields, scoped to the account's market the same way (fieldScope.ts).
+  t("the confined rail is exactly these ten, in order", () =>
     assert.deepEqual([...CONFINED_RAIL_KEYS],
-      ["gameday", "player-lookup", "veo", "promos", "reviews", "match-chats", "player-chats", "master", "market-locations"]));
+      ["gameday", "player-lookup", "veo", "promos", "reviews", "match-chats", "player-chats", "master", "fields", "market-locations"]));
 
   const waw = confinementSummary({ cityName: "Warsaw", isCityManager: false, pageCount: CONFINED_RAIL_KEYS.length });
   t("a city manager is told about city manager pages", () => assert.match(cm, /city manager pages only$/));
@@ -331,6 +339,31 @@ console.log("\n── the sentence on the User access screen ──");
   // Both sides already read the same list; this says which check proves it.
   console.log(`     manager: ${cm}`);
   console.log(`     confined: ${waw}`);
+}
+
+console.log("\n── the field scope (fieldScope.ts) ──");
+{
+  const WAW = { confined: true, confinedCity: "WAW" };
+  const US = { confined: true, confinedCity: "ATX" };
+  const JUNKB = { confined: true, confinedCity: null };
+  const OPEN = { confined: false, confinedCity: null };
+  const warsaw = { id: 10, abbr: "WAW", name: "Warsaw" };   // mdapi_matches.raw 20454 field.city
+  const austin = { id: 1, abbr: "ATX", name: "Austin" };
+  t("Warsaw's scope is the Poland market", () => assert.equal(fieldScopeFor(WAW)?.marketName, "Poland"));
+  t("  a Warsaw field is in it", () => assert.equal(fieldCityInScope(WAW, warsaw), true));
+  t("  an Austin field is not", () => assert.equal(fieldCityInScope(WAW, austin), false));
+  t("  the name alone decides when the payload has no abbr (the field list's city object)", () =>
+    assert.equal(fieldCityInScope(WAW, { name: "Warsaw" }), true));
+  t("  and a US name alone is refused", () => assert.equal(fieldCityInScope(WAW, { name: "Austin" }), false));
+  t("  a field with no city is refused", () => assert.equal(fieldCityInScope(WAW, null), false));
+  t("  abbr wins over name: a US abbr with a Polish name is refused", () =>
+    assert.equal(fieldCityInScope(WAW, { abbr: "ATX", name: "Warsaw" }), false));
+  t("a US-confined account with no market falls back to its own city", () =>
+    assert.deepEqual([fieldScopeFor(US)?.marketName, fieldCityInScope(US, austin), fieldCityInScope(US, warsaw)], ["Austin", true, false]));
+  t("an unresolvable confinement is in scope for NOTHING, not for everything", () =>
+    assert.deepEqual([fieldCityInScope(JUNKB, warsaw), fieldCityInScope(JUNKB, austin)], [false, false]));
+  t("CONTROL: an unconfined account sees every field", () =>
+    assert.deepEqual([fieldScopeFor(OPEN), fieldCityInScope(OPEN, austin), fieldCityInScope(OPEN, warsaw)], [null, true, true]));
 }
 
 console.log(`\n${n} passed, 0 failed`);

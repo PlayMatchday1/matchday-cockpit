@@ -32,6 +32,12 @@ const yes = (m: string, c: boolean, d = "") => (c ? ok(m) : bad(m, d));
  * Each needs a REASON, not just a name. Adding a line here is a decision to leave a control broken
  * for a confined operator, and the reason is where that decision is recorded. */
 const KNOWN_REFUSED: Record<string, string> = {
+  /* ── FIELDS: the venue and cost half. fin_venues is US finance data (rates, costs, the mapping to
+   * revenue). FieldsView does not request it for a confined account (loadVenue returns at once) and
+   * does not draw the Venue and cost section, the Venue column or the Unmapped chip. */
+  "/api/venues":
+    "Venue and cost (fin_venues): US finance data. Not requested and not drawn for a confined "
+    + "account; the field record itself is scoped and served by /api/fields.",
   "/api/veo/resync":
     "Refresh. Builds a SERVICE-ROLE client and syncs the whole fleet for the week with NO city "
     + "scope, so a bounded account would trigger an unscoped shared-table write. Left refused on "

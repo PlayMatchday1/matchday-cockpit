@@ -36,6 +36,7 @@ import { randomUUID } from "node:crypto";
 import { authenticateMatchOpsRead } from "@/lib/matchOpsAuth";
 import { apiGet, apiWrite } from "@/lib/matchdayStageApi";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
+import { assertFieldInScope } from "@/lib/fieldScopeServer";
 import {
   assertUploadHost, objectKeyOf, filesRequestBody, attachedNow,
   ATTACH_POLL_MS, ATTACH_POLL_INTERVAL_MS, UploadHostError, type PhotoKind, type PhotoVerdict,
@@ -74,6 +75,9 @@ export async function POST(req: Request) {
   const kind = url.searchParams.get("kind") as PhotoKind | null;
   if (!Number.isInteger(id) || id <= 0) return Response.json({ error: "A numeric field id is required." }, { status: 400 });
   if (kind !== "cover" && kind !== "gallery") return Response.json({ error: 'kind must be "cover" or "gallery".' }, { status: 400 });
+  // THE MARKET BOUNDARY, before the bytes are read and long before they reach S3.
+  const inScope = await assertFieldInScope({ confined: auth.confined, confinedCity: auth.confinedCity }, id);
+  if (!inScope.ok) return Response.json({ error: inScope.error }, { status: inScope.status });
 
   let file: File | null = null;
   try {
@@ -189,6 +193,9 @@ export async function DELETE(req: Request) {
   if (!Number.isInteger(id) || !Number.isInteger(imageId)) {
     return Response.json({ error: "Numeric id and imageId are required." }, { status: 400 });
   }
+  // THE MARKET BOUNDARY, before the read-back and the write.
+  const inScope = await assertFieldInScope({ confined: auth.confined, confinedCity: auth.confinedCity }, id);
+  if (!inScope.ok) return Response.json({ error: inScope.error }, { status: inScope.status });
   const before = await readField(id).catch(() => null);
   if (!before) return Response.json({ error: `Field ${id} was not found.` }, { status: 404 });
   if (!(before.images ?? []).some((i) => Number(i.id) === imageId)) {

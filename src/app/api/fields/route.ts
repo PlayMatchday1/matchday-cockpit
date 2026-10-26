@@ -26,6 +26,8 @@ import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
 import {
   createBody, updateBody, CREATE_KEYS, UPDATE_KEYS, deleteBlock, type Link,
 } from "@/lib/fieldsModel";
+import { fieldScopeFor, fieldCityInScope, type Bound } from "@/lib/fieldScope";
+import { assertFieldInScope, assertCityInScope } from "@/lib/fieldScopeServer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -44,8 +46,12 @@ type ApiField = {
   lat: number | null; lng: number | null; cityId: number | null;
   recommendedPlayerCount: number | null; orderPosition: number | null;
   cover: string | null; images?: { id: number; url: string }[] | null;
-  city?: { id?: number; name?: string | null } | null;
+  city?: { id?: number; abbr?: string | null; name?: string | null } | null;
 };
+
+/** The pair the scope helpers read. See matchOpsAuth on why `confined` travels with the city. */
+const boundOf = (auth: { confined: boolean; confinedCity: string | null }): Bound =>
+  ({ confined: auth.confined, confinedCity: auth.confinedCity });
 
 const listFields = (env: "production" | "staging") => apiGet<ApiField[]>(env, "/admin/fields");
 
@@ -63,13 +69,23 @@ export async function GET(req: Request) {
 
   try {
     const sb = makeServerClient();
-    const [fields, linkRes, cities] = await Promise.all([
+    /* THE MARKET SCOPE (2026-10-25). A confined account gets the fields and cities of its market
+     * only, filtered HERE before anything is returned. It also gets NO fin_venue_fields links: the
+     * venue mapping is US finance data and is not read at all on its behalf. */
+    const bound = boundOf(auth);
+    const scope = fieldScopeFor(bound);
+    const [allFields, linkRes, allCities] = await Promise.all([
       listFields(ENV),
-      sb.from("fin_venue_fields").select("mdapi_field_id,fin_venue_id"),
-      apiGet<{ id: number; name: string }[]>(ENV, "/cities").catch(() => [] as { id: number; name: string }[]),
+      scope
+        ? Promise.resolve({ data: [] as Link[], error: null as { message: string } | null })
+        : sb.from("fin_venue_fields").select("mdapi_field_id,fin_venue_id")
+          .then((r) => ({ data: (r.data ?? []) as Link[], error: r.error as { message: string } | null })),
+      apiGet<{ id: number; name: string; abbr?: string | null }[]>(ENV, "/cities").catch(() => [] as { id: number; name: string; abbr?: string | null }[]),
     ]);
     if (linkRes.error) throw new Error(`fin_venue_fields read failed: ${linkRes.error.message}`);
-    const links = (linkRes.data ?? []) as Link[];
+    const links = linkRes.data;
+    const fields = scope ? allFields.filter((f) => fieldCityInScope(bound, f.city)) : allFields;
+    const cities = scope ? allCities.filter((c) => fieldCityInScope(bound, c)) : allCities;
 
     /* PER-FIELD MATCH COUNTS drive the Delete block, so they must be COMPLETE — every match ever,
      * not a window and not a page. An undercount here is a field that looks deletable and is not.
@@ -128,6 +144,8 @@ export async function GET(req: Request) {
       activeFieldIds: [...active],
       cities: cities.map((c) => ({ id: Number(c.id), name: c.name })),
       deleteEnabled: DELETE_ENABLED,
+      // Named so the page can say "Showing Poland fields only" and hide the venue half.
+      scope: scope ? { marketName: scope.marketName } : null,
     });
   } catch (e) {
     return Response.json({ error: e instanceof Error ? e.message.slice(0, 200) : "read failed" }, { status: 500 });
@@ -152,6 +170,9 @@ export async function POST(req: Request) {
   if (body.cityId == null || !Number.isInteger(body.cityId)) {
     return Response.json({ error: "cityId must be an integer" }, { status: 400 });
   }
+  // THE MARKET BOUNDARY ON CREATE: a confined account creates fields in its own market's cities only.
+  const cityOk = await assertCityInScope(boundOf(auth), Number(body.cityId));
+  if (!cityOk.ok) return Response.json({ error: cityOk.error }, { status: cityOk.status });
 
   const saveId = randomUUID();
   let newId: number | null = null;
@@ -200,11 +221,19 @@ export async function PUT(req: Request) {
 
   const id = Number(new URL(req.url).searchParams.get("id"));
   if (!Number.isInteger(id) || id <= 0) return Response.json({ error: "id required" }, { status: 400 });
+  // THE MARKET BOUNDARY ON UPDATE, before the body is even read: a US field id is refused.
+  const inScope = await assertFieldInScope(boundOf(auth), id);
+  if (!inScope.ok) return Response.json({ error: inScope.error }, { status: inScope.status });
   const payload = (await req.json().catch(() => null)) as { orig?: Record<string, unknown>; draft?: Record<string, unknown> } | null;
   if (!payload?.orig || !payload?.draft) return Response.json({ error: "orig and draft required" }, { status: 400 });
 
   const body = updateBody(payload.orig, payload.draft);
   const keys = Object.keys(body);
+  // A field cannot be moved OUT of the market either: a changed cityId must still be in it.
+  if (body.cityId != null) {
+    const cityOk = await assertCityInScope(boundOf(auth), Number(body.cityId));
+    if (!cityOk.ok) return Response.json({ error: cityOk.error }, { status: cityOk.status });
+  }
   // NOT APPLIED, said plainly. An empty diff means nothing changed; sending it would be a write
   // with no content and a 2xx that means nothing.
   if (keys.length === 0) return Response.json({ verdict: "NOT APPLIED", reason: "nothing changed", id }, { status: 200 });
@@ -251,6 +280,9 @@ export async function DELETE(req: Request) {
   const id = Number(url.searchParams.get("id"));
   const confirm = (url.searchParams.get("confirm") ?? "").trim();
   if (!Number.isInteger(id) || id <= 0) return Response.json({ error: "id required" }, { status: 400 });
+  // THE MARKET BOUNDARY, ahead of the bolt, so a US id is refused for the right reason.
+  const inScope = await assertFieldInScope(boundOf(auth), id);
+  if (!inScope.ok) return Response.json({ error: inScope.error }, { status: inScope.status });
 
   if (!DELETE_ENABLED) {
     return Response.json({
