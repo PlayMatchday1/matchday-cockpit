@@ -102,8 +102,8 @@ export function useTestFields(enabled: boolean) {
       const outcome = String(body?.outcome ?? `HTTP ${res.status}`);
       if (outcome === "LANDED") {
         setDrafts((x) => x.filter((y) => y.key !== key));
+        // A landed save says nothing: the pin moving from "Not saved." to "Added by" is the confirmation.
         if (typeof body.id === "string") setSelected(body.id);
-        setMsg({ text: `Saved "${d.name.trim()}". The team can see it now.`, bad: false });
       } else {
         setMsg({ text: `${outcome}${body?.error ? `: ${body.error}` : ""}`, bad: true });
       }
@@ -118,7 +118,8 @@ export function useTestFields(enabled: boolean) {
     try {
       const { res, body } = await authed(`/api/growth/locations/test-fields?id=${encodeURIComponent(id)}`, { method: "DELETE" });
       const outcome = String(body?.outcome ?? `HTTP ${res.status}`);
-      setMsg(outcome === "LANDED" ? { text: "Removed.", bad: false } : { text: `${outcome}${body?.error ? `: ${body.error}` : ""}`, bad: true });
+      // A landed remove says nothing (the pin disappears); only a failure leaves a line in the box.
+      if (outcome !== "LANDED") setMsg({ text: `${outcome}${body?.error ? `: ${body.error}` : ""}`, bad: true });
       if (outcome === "LANDED") setSelected((s) => (s === id ? null : s));
     } catch (e) {
       setMsg({ text: `UNKNOWN: ${e instanceof Error ? e.message : String(e)}. Reload to see whether it was removed.`, bad: true });

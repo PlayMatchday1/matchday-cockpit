@@ -39,6 +39,14 @@ const GAP = "#eb6834";
 const int = (n: number) => n.toLocaleString("en-US");
 const pct = (n: number, d: number) => (d > 0 ? `${Math.round((n / d) * 100)}%` : "—");
 const NO_PLAYERS = "No players have set a location here yet.";
+const TOP_N = 5;
+/** "Show all (N)" under a list cut to its top 5, "Show less" once open. Nothing when the list is short. */
+const ShowMore = ({ total, open, onToggle, testId }: { total: number; open: boolean; onToggle: () => void; testId: string }) =>
+  total > TOP_N ? (
+    <button type="button" className="lm-more" data-testid={testId} aria-expanded={open} onClick={onToggle}>
+      {open ? "Show less" : `Show all (${total.toLocaleString("en-US")})`}
+    </button>
+  ) : null;
 const NAT_FILTERS: { key: NatFilter; label: string }[] = [
   { key: "all", label: "All players" }, { key: "in_market", label: "In market" }, { key: "waitlist", label: "Outside coverage" },
 ];
@@ -75,6 +83,10 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin, ap
   const [colourBy, setColourBy] = useState<"coverage" | "activity">("coverage");
   const [actFilter, setActFilter] = useState<Activity | "all">("all");
   const [bounds, setBounds] = useState<ViewBounds | null>(null);
+  // Collapsed on every page load; the Fields list collapses again when the city changes.
+  const [showAllOutside, setShowAllOutside] = useState(false);
+  const [showAllFields, setShowAllFields] = useState(false);
+  useEffect(() => { setShowAllFields(false); }, [cityId]);
   /* TEST FIELDS (2026-10-27): Growth's US map only, never a scoped one. LocationsTestFields.tsx. */
   const tf = useTestFields(apiBase === "/api/growth/locations");
   // One selection at a time: a field or bubble clears the test pin, and a test pin clears the field or bubble.
@@ -199,6 +211,9 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin, ap
 
   const fieldsSorted = [...fields].sort((a, b) => b.reach[reach] - a.reach[reach] || a.title.localeCompare(b.title));
   const gaps = zips.filter((z) => !z.inReach[reach]).slice(0, 4);
+  // LONG LISTS SHOW THEIR TOP 5 (Ryan, 2026-10-27): New markets by players, Fields by players within reach.
+  const outsideSorted = [...data.outside].sort((a, b) => b.players - a.players || a.place.localeCompare(b.place));
+  const outsideShown = showAllOutside ? outsideSorted : outsideSorted.slice(0, TOP_N);
   const covered = city ? city.coverage[reach] : 0;
   const selField: MapField | null = selected?.kind === "field" ? fieldById.get(selected.id) ?? null : null;
   const selZip: MapZip | null = selected?.kind === "zip" ? zips.find((z) => z.key === selected.key) ?? null : null;
@@ -544,7 +559,7 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin, ap
                 <table className="lm-list" data-testid="map-outside">
                   <thead><tr><th>Place</th><th className="loc-num">Players</th><th>Nearest city</th></tr></thead>
                   <tbody>
-                    {data.outside.map((o) => (
+                    {outsideShown.map((o) => (
                       <tr key={`${o.place}|${o.zipKeys[0]}`} className={"lm-row" + (selNational && o.zipKeys.includes(selNational.key) ? " lm-row-on" : "")} tabIndex={0}
                         onClick={() => {
                           if (natFilter === "in_market") setNatFilter("all");
@@ -559,6 +574,7 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin, ap
                   </tbody>
                 </table>
               )}
+              <ShowMore total={outsideSorted.length} open={showAllOutside} onToggle={() => setShowAllOutside((o) => !o)} testId="map-outside-more" />
             </div>
             </>
           ) : (
@@ -632,7 +648,7 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin, ap
                   <table className="lm-list" data-testid="map-fields">
                     <thead><tr><th>Field</th><th className="loc-num">Players within {reach} {U}</th></tr></thead>
                     <tbody>
-                      {fieldsSorted.map((f) => (
+                      {(showAllFields ? fieldsSorted : fieldsSorted.slice(0, TOP_N)).map((f) => (
                         <tr key={f.id} className={"lm-row" + (highlight === f.id ? " lm-row-on" : "")} tabIndex={0}
                           onClick={() => setHighlight(highlight === f.id ? null : f.id)}
                           onKeyDown={(e) => { if (e.key === "Enter") setHighlight(highlight === f.id ? null : f.id); }}>
@@ -642,6 +658,7 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin, ap
                     </tbody>
                   </table>
                 )}
+                <ShowMore total={fieldsSorted.length} open={showAllFields} onToggle={() => setShowAllFields((o) => !o)} testId="map-fields-more" />
               </div>
 
               <div className="lm-pcard">
@@ -740,6 +757,7 @@ const CSS = `
 .lm-big{font-size:28px;font-weight:900;color:var(--forest);letter-spacing:-.5px;font-variant-numeric:tabular-nums}
 .lm-sub{font-size:12.5px;color:var(--ink);margin-top:4px}
 .lm-empty{font-size:12.5px;color:var(--muted)}
+.lm-more{display:inline-block;margin-top:8px;padding:0;background:none;border:0;font:inherit;font-size:12.5px;font-weight:700;color:var(--forest);text-decoration:underline;cursor:pointer}
 .lm-note{font-size:11.5px;color:var(--muted);margin-top:8px}
 .lm-list{width:100%;border-collapse:collapse;font-size:12.5px}
 .lm-list th{text-align:left;font-size:9.5px;font-weight:900;letter-spacing:.6px;text-transform:uppercase;color:var(--muted);padding:6px 6px;border-bottom:1px solid var(--line)}
