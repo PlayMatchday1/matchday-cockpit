@@ -21,6 +21,10 @@
       "schedule": "20 * * * *"
     },
     {
+      "path": "/api/sync/stripe-people/recent",
+      "schedule": "50 * * * *"
+    },
+    {
       "path": "/api/sync/fin-txn/catchup/1",
       "schedule": "30 12 * * *"
     },

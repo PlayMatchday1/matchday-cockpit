@@ -110,7 +110,7 @@ export function allocateCity(maps: CityMaps, a: { type: string; cityIdentifier: 
  * answers do not — so `maxNetworkRetries` alone did nothing for them (2023-12 and 2024-01 still
  * failed on the re-run). Every call wrapped here is a GET, so trying again cannot duplicate
  * anything: back off 1, 2, 4, 8, 16 s (plus jitter) and give up after the sixth attempt. */
-async function readWithBackoff<T>(call: () => Promise<T>): Promise<T> {
+export async function readWithBackoff<T>(call: () => Promise<T>): Promise<T> {
   for (let attempt = 1; ; attempt++) {
     try { return await call(); }
     catch (e) {
@@ -246,14 +246,14 @@ export async function syncFinTxn(
    * fin_txn (a refund usually lands days or weeks after its charge). Not found → it keeps what it
    * has, Unassigned, and is counted. The exclusion flags come with it: a refund of an internal
    * account's charge is internal too. */
-  const chargeRow = new Map<string, Pick<FinTxnRow, "city" | "type" | "field_id" | "is_test" | "is_internal" | "exclude_reason"> & { fin_venue_id: number | null }>();
+  const chargeRow = new Map<string, Pick<FinTxnRow, "city" | "type" | "field_id" | "is_test" | "is_internal" | "exclude_reason" | "customer_id"> & { fin_venue_id: number | null }>();
   for (const r of rows) if (r.kind === "charge" && r.charge_id) chargeRow.set(r.charge_id, r);
   const isReversal = (k: string) => k === "refund" || k === "dispute" || k === "failed";
   const reversals = rows.filter((r) => isReversal(r.kind) && r.charge_id);
   const missing = [...new Set(reversals.map((r) => r.charge_id!).filter((id) => !chargeRow.has(id)))];
   for (let i = 0; i < missing.length; i += 200) {
     const { data, error } = await sb.from("fin_txn")
-      .select("charge_id,city,type,field_id,fin_venue_id,is_test,is_internal,exclude_reason")
+      .select("charge_id,city,type,field_id,fin_venue_id,is_test,is_internal,exclude_reason,customer_id")
       .eq("kind", "charge").in("charge_id", missing.slice(i, i + 200));
     if (error) throw new Error(`fin_txn charge lookup failed: ${error.message}`);
     for (const c of data ?? []) chargeRow.set(String(c.charge_id), c as never);
@@ -264,7 +264,9 @@ export async function syncFinTxn(
     const c = r.charge_id ? chargeRow.get(r.charge_id) : undefined;
     if (!c) { reversalsUnlinked++; continue; }
     Object.assign(r, { city: c.city, type: c.type, field_id: c.field_id, fin_venue_id: c.fin_venue_id,
-      is_test: c.is_test, is_internal: c.is_internal, exclude_reason: c.exclude_reason });
+      is_test: c.is_test, is_internal: c.is_internal, exclude_reason: c.exclude_reason,
+      // The customer too (0236): a refund or dispute is the same person's money coming back.
+      customer_id: r.customer_id ?? c.customer_id ?? null });
   }
 
   /* ── THE UPSERT, AND WHAT SETS updated_at ───────────────────────────────────────────────────
@@ -279,14 +281,14 @@ export async function syncFinTxn(
   const existing = new Map<string, Record<string, unknown>>();
   for (let i = 0; i < ids.length; i += 500) {
     const { data, error } = await sb.from("fin_txn")
-      .select("balance_txn_id,gross_cents,fee_cents,net_cents,city,type,field_id,fin_venue_id,is_test,is_internal,dispute_reason,charge_id,updated_at")
+      .select("balance_txn_id,gross_cents,fee_cents,net_cents,city,type,field_id,fin_venue_id,is_test,is_internal,dispute_reason,charge_id,customer_id,updated_at")
       .in("balance_txn_id", ids.slice(i, i + 500));
     if (error) throw new Error(`fin_txn read-before failed: ${error.message}`);
     for (const r of data ?? []) existing.set(String(r.balance_txn_id), r);
   }
 
   const AMOUNTS = ["gross_cents","fee_cents","net_cents","is_test","is_internal"] as const;
-  const ATTRIBUTION = ["city","type","field_id","fin_venue_id","dispute_reason","charge_id"] as const;
+  const ATTRIBUTION = ["city","type","field_id","fin_venue_id","dispute_reason","charge_id","customer_id"] as const;
   const differs = (was: Record<string, unknown>, r: Record<string, unknown>, keys: readonly string[]) =>
     keys.some((k) => (was[k] ?? null) !== (r[k] ?? null));
   let inserted = 0, updated = 0, attributed = 0;
@@ -294,6 +296,8 @@ export async function syncFinTxn(
   const nowMs = Date.parse(stamp);
   const payload = rows.map((r) => {
     const was = existing.get(r.balance_txn_id);
+    // A customer already stored is never blanked by a run that could not find one (an unlinked reversal).
+    if (r.customer_id == null && was?.customer_id) r.customer_id = String(was.customer_id);
     // A NEW ROW IN A MONTH ALREADY FINAL changes that month's total, so it is stamped like an
     // amount change. A new row in a month still updating is ordinary and is not.
     if (!was) { inserted++; return { ...r, updated_at: isAfterFinal(r.created_at_utc, nowMs, toCentralMidnight) ? stamp : null }; }

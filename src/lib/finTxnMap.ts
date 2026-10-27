@@ -29,6 +29,8 @@ export type FinTxnRow = {
   balance_txn_id: string;
   charge_id: string | null;
   payment_intent_id: string | null;
+  /** The Stripe customer on the charge (cus_...); a reversal takes its charge's (finTxnSync). 0236. */
+  customer_id: string | null;
   subscription_id: string | null;
   invoice_id: string | null;
   source_id: string | null;
@@ -143,7 +145,7 @@ export function mapBalanceTxn(
    * metadata.email → the customer's. Membership charges are invoice charges and usually carry only
    * the customer. Used for the membership city. */
   const chargeEmail = charge?.billing_details?.email ?? charge?.receipt_email ?? null;
-  const customerId = charge && typeof charge.customer === "string" ? charge.customer : null;
+  const customerId = !charge?.customer ? null : typeof charge.customer === "string" ? charge.customer : charge.customer.id;
   const email = chargeEmail
     ?? (typeof meta.email === "string" && meta.email.trim() ? meta.email : null)
     ?? (customerId && opts.customerEmail ? opts.customerEmail(customerId) : null);
@@ -174,6 +176,7 @@ export function mapBalanceTxn(
     balance_txn_id: bt.id,
     charge_id: charge?.id ?? reversedChargeId,
     payment_intent_id: (charge?.payment_intent as string | null) ?? null,
+    customer_id: customerId,
     subscription_id: null,
     /* INVOICE AND SUBSCRIPTION COME FROM THE INVOICE, NOT THE CHARGE. The Stripe types do not put
      * `invoice` on Charge in this API version, and `charge.invoice` has been unreliable here before
