@@ -18,7 +18,7 @@
 import { authenticateCapability } from "@/lib/capabilityAuth";
 import { includedLinks } from "@/lib/venueLinkFilter";
 import { assertScope } from "@/lib/cityConfinement";
-import { countActiveMembers, isLegacyLowPlan } from "@/lib/membershipStats";
+import { countActiveMembers } from "@/lib/membershipStats";
 import { makeServerClient } from "@/lib/supabaseServer";
 import { fetchLegacyMatchRegistrations, loadMembershipWindowsByUserId } from "@/lib/mdapiMatchesRead";
 import { classify, CHURN_DAYS, type SpotRow, type MonthKey, monthsFrom, buildMemberShare, MONTHS_SHORT } from "@/lib/membershipModel";
@@ -240,12 +240,6 @@ export async function GET(req: Request) {
      * The monthly BARS still read the snapshot series; those are history and should not move. */
     const activeMembers = subs.filter((s) => s.status === "ACTIVE").length;
     const activeMembersPaid = countActiveMembers(subs, new Date());
-    /* THE LEGACY $1 PLANS' HOLDERS (Ryan, 2026-10-21), so Avg price per member spot can be shown with
-     * and without them. Members on an ACTIVE paying plan priced under $15 (membershipStats
-     * .isLegacyLowPlan). Ids only; the page divides by matches with and without these people. */
-    const legacyLowPlanUserIds = [...new Set(subs
-      .filter((s) => s.status === "ACTIVE" && s.user_id != null && isLegacyLowPlan(s))
-      .map((s) => String(s.user_id)))];
     /* THE FIELD FILTER CANNOT REACH THIS NUMBER, and that is a property of the data, not a bug to
      * fix here: mdapi_subscriptions has city_identifier and NO field column. A membership is
      * bought from a city, not from a pitch. `fieldId` is applied to the match/spot rows above
@@ -402,7 +396,7 @@ export async function GET(req: Request) {
       byCity: groupBy((r) => r.city),
       byField: groupBy((r) => (r.fieldId != null ? (fieldName.get(r.fieldId) ?? String(r.fieldId)) : null)),
       activeMembers,
-      activeMembersPaid, membersScope, fieldScoped: fieldId != null, legacyLowPlanUserIds,
+      activeMembersPaid, membersScope, fieldScoped: fieldId != null,
       /* RENAMED FROM revenueByMonth, deliberately. It changed BASIS from net to gross, and a key
        * that keeps its name through a change of meaning is how a consumer keeps reading the old
        * thing. The name now says which of the three bases it is. */

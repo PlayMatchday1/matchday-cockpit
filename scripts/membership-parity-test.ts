@@ -120,10 +120,10 @@ console.log("\nprice is DOLLARS in the table and CENTS in the predicate");
   is("a 0.50 price survives as 50 cents, not 0",
     memberLikeFromSubscription({ status: "ACTIVE", price: 0.5, member_email: "a@gmail.com", activation_date: "2026-01-01", canceled_at: null, city_identifier: "ATX" })!.price_cents, 50);
   /* RULING CHANGED 2026-10-14 ($15 floor: $0.50 not counted) AND BACK 2026-10-21 (above $0: counted
-   * again, as it was before 10-14). What the pair guards is the conversion: a price in DOLLARS must
-   * survive the x100, and $0.50 read as 0 cents would fail the above-$0 rule. */
-  is("…and, being above $0, is a member",
-    isActiveAsOf(memberLikeFromSubscription({ status: "ACTIVE", price: 0.5, member_email: "a@gmail.com", activation_date: "2026-01-01", canceled_at: null, city_identifier: "ATX" })!, ASOF), true);
+   * again, as it was before 10-14) AND AGAIN 2026-10-27 (above $5: not counted). The conversion is
+   * still guarded by the 50-cent read above and the at-the-floor case below. */
+  is("…and, being under $5, is not a member",
+    isActiveAsOf(memberLikeFromSubscription({ status: "ACTIVE", price: 0.5, member_email: "a@gmail.com", activation_date: "2026-01-01", canceled_at: null, city_identifier: "ATX" })!, ASOF), false);
   is("a plan AT the floor, in dollars, survives the x100 and is counted",
     isActiveAsOf(memberLikeFromSubscription({ status: "ACTIVE", price: PAID_MEMBER_MIN_PRICE_CENTS / 100, member_email: "a@gmail.com", activation_date: "2026-01-01", canceled_at: null, city_identifier: "ATX" })!, ASOF), true);
 }

@@ -4,7 +4,7 @@
  * It answers one question: WHO PAYS on the 1st of next month — and marks, beside it, who is on
  * that charge for the last time. Everything below exists to keep those numbers honest.
  *
- *     Total active        status ACTIVE today, plan above $0 (PAID_MEMBER_MIN_PRICE_CENTS), internal addresses excluded
+ *     Total active        status ACTIVE today, plan above $5 (PAID_MEMBER_MIN_PRICE_CENTS), internal addresses excluded
  *     Cancelled before    of those, canceled_at earlier than the cutoff
  *     Paying members      Total active − Cancelled before
  *     Billing             Σ each paying member's own price
@@ -195,7 +195,7 @@ export const isCancelledOnOrAfter = (canceledAt: string | null | undefined, cuto
 type Person = { userId: string; code: string; mapped: boolean; priceCents: number; canceledAt: string | null };
 
 /* THE BASE, AND EVERY EXCLUSION IT APPLIES, IN ONE PLACE:
- *   paying, external      isPaidExternalMember — a plan above $0 (PAID_MEMBER_MIN_PRICE_CENTS:
+ *   paying, external      isPaidExternalMember: a plan above $5 (PAID_MEMBER_MIN_PRICE_CENTS:
  *                         comps are not paying members; $1 legacy plans are, 2026-10-21) and the
  *                         @matchday. / @playmatchday. staff rule. The shared predicate, not a copy.
  *   status ACTIVE today   the report is about who is on the next charge, which is a live question.

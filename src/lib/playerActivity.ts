@@ -32,7 +32,7 @@ export function isActiveByLastPlay(lastStartMs: number | null, now: Date): boole
 }
 
 /* A MEMBER, for the Users lens and Locations: status ACTIVE and the shared paying-member rule
- * (membershipStats.isPaidMemberSubscription — plan above $0, staff emails, INCOMPLETE). This was
+ * (membershipStats.isPaidMemberSubscription: plan above $5, staff emails, INCOMPLETE). This was
  * `price > 0` with no email test, so staff read as members here and
  * not on the Membership page. member_email is REQUIRED so a caller cannot forget to select it. */
 export type SubLike = { status: string | null; price: number | string | null; member_email: string | null };

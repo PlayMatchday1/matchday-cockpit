@@ -7840,3 +7840,24 @@ Evidence: read-only Supabase reads on 2026-10-23 ~13:00 UTC (`mdapi_matches`, `p
 - **Freshness:** the refresh runs at the end of every hourly location sync (:35, the 08:00 UTC hour
   included); a play counts once its match has started as of the refresh, so a just-started match
   appears within the hour. The single-player detail and the test-field numbers still read live.
+
+## A member is a plan above $5 (2026-10-27)
+
+**The rule (Ryan, 2026-10-27, to match the investor deck):** `PAID_MEMBER_MIN_PRICE_CENTS = 501` in
+`src/lib/membershipStats.ts`; SQL mirror `paid_member_subscription`, migration 0235. Replaces 0229's
+"above $0". `mdapi_subscriptions.price` is whole dollars, so this admits plans of $6 and up.
+
+- **What leaves:** the 9 ACTIVE $1 a month plans. Active paying subscriptions go from 344 to 335
+  (`mdapi_subscriptions`, all 2,951 rows paged, 2026-10-27, synced 11:00Z). Over all history 97 users
+  held a paying plan between $0.01 and $5, and 68 of them never held one above $5.
+- **The deck's rule is a charge above $5, not a plan.** A member on the $1 first-month offer carries
+  the $66 plan from signup. On 2026-10-27, 122 ACTIVE plans above $5 had started since 2026-09-27, so
+  some of those are still on the $1 month. The pages say so (`PAID_MEMBER_PROMO_NOTE`). Tying Stripe
+  charges to members is the next step; `fin_txn` cannot do it yet (customer and invoice are blank).
+- **Partner payouts:** same data, both rules, run together: only Hattrick's open October period moves,
+  146 to 145 member spots, owed $2,508.00 to $2,504.00. Every paid period is identical. Evidence:
+  `partnerPaymentFor` over every `partner_dashboards` row, periods ending on or after 2026-06-01,
+  this code against 506d08b, 2026-10-27.
+- **Jaimee's Stripe total ties to fin_txn.** Charges + refunds + disputes, Central dates 2025-10-01 to
+  2026-09-30, tax included: $797,013.80 (her $797,014). Failed payments ($542.64) are not in her total.
+  No row in the window is flagged test or internal. Evidence: `fin_txn_sums` (month grain), 2026-10-27.

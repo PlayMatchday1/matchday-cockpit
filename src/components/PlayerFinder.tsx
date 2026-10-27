@@ -50,7 +50,7 @@ type Payload = {
   stats: Stats; scope: string | null; scopeName: string | null; confined: boolean;
   syncedAt: string | null; error?: string;
   /* WHICH RULE "member" FOLLOWS: "paying" once migration 0223 is applied (the paying-member rule,
-   * plan above $0, PAID_MEMBER_MIN_PRICE_CENTS), "any_active" before it (any ACTIVE subscription, comps
+   * plan above $5, PAID_MEMBER_MIN_PRICE_CENTS), "any_active" before it (any ACTIVE subscription, comps
    * included). The labels below say "Paying members" ONLY on "paying" — never before it is true. */
   memberRule?: "paying" | "any_active" | "unknown";
   /* THE AGE OF THE PRECOMPUTED SET, not of the mirror (migration 0147). `stale` means a sync

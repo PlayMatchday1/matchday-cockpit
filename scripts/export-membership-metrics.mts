@@ -70,7 +70,7 @@ import {
 } from "../src/lib/mdapiMatchesRead";
 import { classify, totalsByMonth, type SpotRow } from "../src/lib/membershipModel";
 import { includedLinks } from "../src/lib/venueLinkFilter";
-import { INTERNAL_EMAIL_RX, parseMemberDate } from "../src/lib/membershipStats";
+import { isPaidMemberSubscription, parseMemberDate } from "../src/lib/membershipStats";
 
 /* ── ENV ──────────────────────────────────────────────────────────────────────────────────────*/
 const ROOT = "/Users/ryanmancuso/Code/matchday-cockpit";
@@ -345,13 +345,8 @@ for (let off = 0; ; off += 1000) {
   subs.push(...(data as SubRow[]));
   if (data.length < 1000) break;
 }
-// isPaidExternalMember, on the raw row. price is DOLLARS here; the predicate only needs "> 0".
-const paidExternal = (s: SubRow): boolean => {
-  if ((s.price ?? 0) <= 0) return false;
-  if (s.member_email && INTERNAL_EMAIL_RX.test(s.member_email)) return false;
-  if (String(s.status ?? "").toUpperCase().startsWith("INCOMPLETE")) return false;
-  return true;
-};
+// THE SHARED RULE, imported (it was an inline `price > 0` copy, which drifted when the floor moved).
+const paidExternal = (s: SubRow): boolean => isPaidMemberSubscription(s);
 const years = [...new Set(months.map((m) => m.slice(0, 4)))].sort();
 const distinctMembersIn = (year: string, unknownEndOpen: boolean): number => {
   const ys = new Date(Number(year), 0, 1);

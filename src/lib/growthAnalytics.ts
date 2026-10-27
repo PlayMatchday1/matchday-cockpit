@@ -167,7 +167,7 @@ export type RawSubscription = {
 /* THE MONTHS A SUBSCRIPTION MAKES SOMEONE A MEMBER, for the ARPP denominators — or null when it
  * never does. Two rules, both 2026-10-14:
  *
- *   PAYING ONLY. membershipStats.isPaidMemberSubscription — a plan above $0
+ *   PAYING ONLY. membershipStats.isPaidMemberSubscription: a plan above $5
  *   (PAID_MEMBER_MIN_PRICE_CENTS), staff emails, INCOMPLETE. ARPP counted every row, so $0 comps
  *   and staff sat in the "members" half of the denominator.
  *

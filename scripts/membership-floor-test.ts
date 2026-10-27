@@ -1,8 +1,8 @@
-/* THE PAYING-MEMBER RULE — the guard on who counts as a member (2026-10-14; "above $0" since 2026-10-21).
+/* THE PAYING-MEMBER RULE: the guard on who counts as a member (2026-10-14; "above $5" since 2026-10-27).
  *
  * Member classification decides which FREE spots are member spots, and member spots are what a
  * partner payout values. So this rule moves money, and it lives in TWO places the gate can reach
- * only one of: membershipStats.ts (TypeScript, asserted at runtime below) and migration 0229's
+ * only one of: membershipStats.ts (TypeScript, asserted at runtime below) and migration 0235's
  * paid_member_subscription view (SQL, which no node suite can execute).
  *
  * THE SQL HALF IS A SOURCE ASSERTION, and that is deliberate — a database boundary makes it
@@ -12,7 +12,7 @@
  */
 import { readFileSync } from "node:fs";
 import {
-  PAID_MEMBER_MIN_PRICE_CENTS, PAID_MEMBER_RULE_LABEL, isPaidMemberSubscription, isPaidExternalMember, isLegacyLowPlan,
+  PAID_MEMBER_MIN_PRICE_CENTS, PAID_MEMBER_RULE_LABEL, isPaidMemberSubscription, isPaidExternalMember,
 } from "../src/lib/membershipStats";
 
 let pass = 0; const fails: string[] = [];
@@ -31,16 +31,15 @@ console.log("\nthe price floor is the plan's monthly price, in dollars on the ro
   is("a $66 plan is a member", sub({ price: 66 }), true);
   is("the floor itself is a member", sub({ price: floorDollars }), true);
   is("one cent under the floor is not", sub({ price: floorDollars - 0.01 }), false);
-  is("a legacy $1 plan is a member", sub({ price: 1 }), true);
-  is("the rule is above $0", PAID_MEMBER_MIN_PRICE_CENTS, 1);
-  is("a legacy $1 plan is labelled legacy", isLegacyLowPlan({ status: "ACTIVE", price: 1, member_email: "p@gmail.com" }), true);
-  is("a $66 plan is not legacy", isLegacyLowPlan({ status: "ACTIVE", price: 66, member_email: "p@gmail.com" }), false);
-  is("a $0 comp is not legacy (not a member at all)", isLegacyLowPlan({ status: "ACTIVE", price: 0, member_email: "p@gmail.com" }), false);
+  is("a $1 a month plan is not a member", sub({ price: 1 }), false);
+  is("a $5 plan is not a member", sub({ price: 5 }), false);
+  is("a $6 plan is a member", sub({ price: 6 }), true);
+  is("the rule is above $5", PAID_MEMBER_MIN_PRICE_CENTS, 501);
   is("a $0 comp is not a member", sub({ price: 0 }), false);
   is("a null price is not a member", sub({ price: null }), false);
   is("a numeric(10,2) string price converts", sub({ price: "18.00" }), true);
   is("an unparseable price is not a member", sub({ price: "n/a" }), false);
-  is("the label says the rule", PAID_MEMBER_RULE_LABEL, "plan above $0");
+  is("the label says the rule", PAID_MEMBER_RULE_LABEL, "plan above $5");
 }
 
 console.log("\nstaff and unfinished checkouts are out at any price");
@@ -61,9 +60,9 @@ console.log("\nthe raw-row helper and the MemberLike predicate are one rule");
   is("MemberLike one cent under", like(PAID_MEMBER_MIN_PRICE_CENTS - 1), false);
 }
 
-console.log("\nthe SQL mirror (0229) carries the same floor, and no other");
+console.log("\nthe SQL mirror (0235) carries the same floor, and no other");
 {
-  const sql = readFileSync("supabase/migrations/0229_paid_member_above_zero.sql", "utf8");
+  const sql = readFileSync("supabase/migrations/0235_paid_member_above_five.sql", "utf8");
   const sql0223 = readFileSync("supabase/migrations/0223_paid_member_subscription.sql", "utf8");
   const view = sql.match(/CREATE OR REPLACE VIEW public\.paid_member_subscription[\s\S]*?;/)?.[0] ?? "";
   is("the view body was found (positive control)", view.length > 0, true);

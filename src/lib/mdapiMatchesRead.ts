@@ -326,7 +326,7 @@ export type MembershipWindowsByUserId = Map<string, MembershipWindow[]>;
 //
 // ONLY A PAYING MEMBERSHIP OPENS A WINDOW (2026-10-14). A subscription that fails the shared rule
 // — membershipStats.isPaidMemberSubscription: a $0 plan, a staff email, an INCOMPLETE checkout —
-// creates no window, so a $0 comp's FREE spot reads FREE_NON_MEMBER, not MEMBER. (A legacy $1 plan
+// creates no window, so a $0 comp's FREE spot reads FREE_NON_MEMBER, not MEMBER. (A $1 a month plan
 // opens a window again since 2026-10-21.) Status is still NOT filtered, for reason 1 above: the rule
 // tests price, email and INCOMPLETE, never ACTIVE vs CANCELED.
 // Partner payouts read these windows too (approved 2026-10-14), so there is no unfiltered variant.
