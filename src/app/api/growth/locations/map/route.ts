@@ -13,6 +13,7 @@
 import { authenticateCapability } from "@/lib/capabilityAuth";
 import { buildLocationsMap } from "@/lib/locationsMap";
 import { loadLocationsInputs } from "@/lib/locationsInputs";
+import { cityParam, sliceLocationsMap } from "@/lib/locationsMapSlice";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -24,9 +25,10 @@ export async function GET(req: Request) {
   const sb = auth.supabase;
 
   try {
-    const { players, cities, citiesAsOf, fieldSnapshots, history, venueLinks, now } = await loadLocationsInputs(sb);
+    const { players, cities, citiesAsOf, fieldSnapshots, history, venueLinks, now, playsAsOf } = await loadLocationsInputs(sb);
     const map = buildLocationsMap({ players, cities, fieldSnapshots, history, venueLinks, now });
-    return Response.json({ ...map, citiesAsOf }, { headers: { "Cache-Control": "no-store" } });
+    // ?city=<id> sends that city's share, no city the All cities share (locationsMapSlice.ts).
+    return Response.json({ ...sliceLocationsMap(map, cityParam(req.url)), citiesAsOf, playsAsOf }, { headers: { "Cache-Control": "no-store" } });
   } catch (e) {
     return Response.json({ error: e instanceof Error ? e.message : String(e) }, { status: 502 });
   }

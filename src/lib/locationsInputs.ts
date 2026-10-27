@@ -8,6 +8,7 @@ import { selectAll } from "./supabasePagination";
 import { activeFields, type MapPlayerRow } from "./locationsMap";
 import { fetchFieldSnapshots, fetchLatestCities, fetchVenueLinks } from "./locationsData";
 import { fetchPlayHistory } from "./playHistory";
+import { fetchPlayStatsRaw, historyFromStats } from "./playStats";
 import { milesBetween } from "./playerAreaModel";
 import { areaLabelPattern, type LocationScope } from "./locationScopes";
 
@@ -16,7 +17,7 @@ import { areaLabelPattern, type LocationScope } from "./locationScopes";
  * payload names no field outside the market. */
 export async function loadLocationsInputs(sb: SupabaseClient, scope?: LocationScope | null) {
   const now = new Date();
-  const [players, fieldSnapshots, latest, venueLinks] = await Promise.all([
+  const [players, fieldSnapshots, latest, venueLinks, stats] = await Promise.all([
     selectAll<MapPlayerRow>(() => {
       const q = sb.from("player_area_seen")
         .select("player_id,zip,area_label,state,lat,lng,verdict,verdict_city_id,location_source")
@@ -26,9 +27,16 @@ export async function loadLocationsInputs(sb: SupabaseClient, scope?: LocationSc
     fetchFieldSnapshots(sb, now, scope),
     fetchLatestCities(sb, scope),
     fetchVenueLinks(sb),
+    fetchPlayStatsRaw(sb),
   ]);
   const { fields: live } = activeFields(fieldSnapshots, latest.cities);
-  const history = await fetchPlayHistory(sb, players.map((p) => p.player_id!).filter((x) => x != null), new Set(live.map((f) => f.id)), now);
+  const ids = players.map((p) => p.player_id!).filter((x) => x != null);
+  const activeIds = new Set(live.map((f) => f.id));
+  /* PLAY HISTORY from the hourly precompute (playStats.ts, migration 0233); read live only when it is
+   * not there yet. playsAsOf says which: the refresh instant, or now for a live read. */
+  const stored = stats ? historyFromStats(stats, ids, activeIds) : null;
+  const history = stored ?? await fetchPlayHistory(sb, ids, activeIds, now);
+  const playsAsOf = stored?.asOf ?? now.toISOString();
   if (scope) {
     const inScope = new Set(latest.cities.map((c) => c.id));
     for (const [id, f] of history.fields) if (f.cityId == null || !inScope.has(f.cityId)) history.fields.delete(id);
@@ -40,5 +48,5 @@ export async function loadLocationsInputs(sb: SupabaseClient, scope?: LocationSc
     const c = f.cityId != null ? latest.cities.find((x) => x.id === f.cityId) : undefined;
     if (c && f.lat != null && f.lng != null && milesBetween(f.lat, f.lng, c.lat, c.lng) > c.radiusMiles) { f.lat = null; f.lng = null; }
   }
-  return { players, cities: latest.cities, citiesAsOf: latest.asOf, fieldSnapshots, history, venueLinks, now };
+  return { players, cities: latest.cities, citiesAsOf: latest.asOf, fieldSnapshots, history, venueLinks, now, playsAsOf, playsStored: stored != null };
 }

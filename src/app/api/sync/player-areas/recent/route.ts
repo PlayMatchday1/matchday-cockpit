@@ -13,7 +13,8 @@
 // minutes after the last run started (playerAreaSyncStatus.ts).
 
 import { timingSafeEqual } from "node:crypto";
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { refreshPlayStats } from "@/lib/playStats";
 import { authenticateCapability } from "@/lib/capabilityAuth";
 import { runIncremental } from "@/lib/playerAreaSync";
 import { readSyncStatus, SYNC_PAUSED } from "@/lib/playerAreaSyncStatus";
@@ -50,12 +51,19 @@ export async function POST(req: Request) {
   }
   const triggeredBy = isCron ? "cron" as const : "manual" as const;
   // In the 08:00 UTC hour the night's full pass has just read every player (lib/nightPass.ts).
-  if (isCron && inNightPassHour()) return Response.json({ triggeredBy, ok: true, skipped: NIGHT_PASS_SKIP });
+  if (isCron && inNightPassHour()) return Response.json({ triggeredBy, ok: true, skipped: NIGHT_PASS_SKIP, playStats: await refreshStats(sb) });
   try {
     const r = await runIncremental(sb, triggeredBy);
-    return Response.json({ triggeredBy, ...r }, { status: r.ok ? 200 : 502 });
+    return Response.json({ triggeredBy, ...r, playStats: await refreshStats(sb) }, { status: r.ok ? 200 : 502 });
   } catch (e) {
-    return Response.json({ triggeredBy, ok: false, error: e instanceof Error ? e.message : String(e) }, { status: 500 });
+    return Response.json({ triggeredBy, ok: false, error: e instanceof Error ? e.message : String(e), playStats: await refreshStats(sb) }, { status: 500 });
   }
+}
+
+/* THE MAP'S PLAY HISTORY (playStats.ts, migration 0233), refreshed every hour after the location sync,
+ * night-pass hour included: Supabase only, no MatchDay call. Its own outcome; it never fails the sync. */
+async function refreshStats(sb: SupabaseClient) {
+  try { return await refreshPlayStats(sb); }
+  catch (e) { return { ok: false as const, error: e instanceof Error ? e.message : String(e) }; }
 }
 export const GET = POST;

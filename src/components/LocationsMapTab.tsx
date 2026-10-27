@@ -66,7 +66,11 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin, ap
 }) {
   const mi = (n: number | null) => fmtDistance(n, unit);
   const U = unit, UL = unit === "km" ? "km" : "miles";
-  const [data, setData] = useState<LocationsMap | null>(null);
+  /* ONE REQUEST PER VIEW (2026-10-27): All cities and each city fetch only their own share of the map
+   * (locationsMapSlice.ts), kept for the visit so going back is instant; Refresh (reloadKey) drops them. */
+  const viewKey = cityId == null ? "all" : `c${cityId}`;
+  const [maps, setMaps] = useState<{ reload: number; byKey: Record<string, LocationsMap> }>({ reload: reloadKey, byKey: {} });
+  const data: LocationsMap | null = (maps.reload === reloadKey ? maps.byKey[viewKey] : undefined) ?? null;
   const [error, setError] = useState<string | null>(null);
   const [reach, setReach] = useState<Reach>(10); // default reach is 10 (miles; km on the Poland tab) (Ryan, 2026-10-08)
   const [selected, setSelected] = useState<Selection>(null);
@@ -95,21 +99,25 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin, ap
   useEffect(() => { if (tf.selected) { setSelected(null); setHighlight(null); } }, [tf.selected]);
 
   const load = useCallback(async () => {
+    const key = viewKey, rk = reloadKey;
+    setError(null);
     try {
       const { data: sess } = await supabase.auth.getSession();
       const token = sess.session?.access_token;
-      const res = await fetch(`${apiBase}/map`, {
+      const res = await fetch(`${apiBase}/map${cityId != null ? `?city=${cityId}` : ""}`, {
         cache: "no-store", headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body?.error ?? `HTTP ${res.status}`);
-      setData(body as LocationsMap);
-      setError(null);
+      setMaps((m) => ({ reload: rk, byKey: { ...(m.reload === rk ? m.byKey : {}), [key]: body as LocationsMap } }));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
-  }, [apiBase]);
-  useEffect(() => { void load(); }, [load, reloadKey]);
+  }, [apiBase, cityId, viewKey, reloadKey]);
+  const haveView = data != null;
+  useEffect(() => { if (!haveView) void load(); }, [load, haveView]);
+  // A city id the map does not know (a stale link) opens All cities, as it always did.
+  useEffect(() => { if (data && cityId != null && data.cities.length > 0 && !data.cities.some((c) => c.id === cityId)) onCity(null); }, [data, cityId, onCity]);
 
   /* COMPETITORS (Ryan, 2026-10-09): venues from competitor_venues, what they sell from the
    * Competitors page's capture. Read for anyone with Growth; "Show competitors" is off by default. */
@@ -156,18 +164,20 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin, ap
     }
   }, [loadComp]);
 
-  /* PLAYERS IN THIS AREA — admin only, fetched only for an admin. One request for every placed
-   * player; the selection below picks who is shown, so clicking around never refetches. */
+  /* PLAYERS IN THIS AREA: admin only, fetched only for an admin. One request per view: a city's own
+   * players (and anyone within reach of its venues), or everyone on All cities. The selection below
+   * picks who is shown, so clicking around never refetches. */
   const [people, setPeople] = useState<AreaPlayer[] | null>(null);
   const [peopleErr, setPeopleErr] = useState<string | null>(null);
   useEffect(() => {
     if (!isAdmin) return;
     let live = true;
+    setPeople(null); setPeopleErr(null);
     (async () => {
       try {
         const { data: sess } = await supabase.auth.getSession();
         const token = sess.session?.access_token;
-        const res = await fetch("/api/growth/locations/players", { cache: "no-store", headers: token ? { Authorization: `Bearer ${token}` } : {} });
+        const res = await fetch(`/api/growth/locations/players${cityId != null ? `?city=${cityId}` : ""}`, { cache: "no-store", headers: token ? { Authorization: `Bearer ${token}` } : {} });
         const body = await res.json();
         if (!res.ok) throw new Error(body?.error ?? `HTTP ${res.status}`);
         if (live) { setPeople(body.players as AreaPlayer[]); setPeopleErr(null); }
@@ -176,7 +186,34 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin, ap
       }
     })();
     return () => { live = false; };
-  }, [isAdmin, reloadKey]);
+  }, [isAdmin, reloadKey, cityId]);
+
+  /* A SELECTED TEST PIN'S PLAYERS can live anywhere (another city, outside coverage), so they come by id:
+   * everyone within the largest reach of the pin, once per pin; the reach then filters them here. */
+  const pinKey = tf.enabled ? tf.selected : null;
+  const pinAll = pinKey ? tf.impact?.pins.find((p) => p.key === pinKey)?.members ?? null : null;
+  const pinSig = pinKey && pinAll ? `${pinKey}|${pinAll.length}|${pinAll.reduce((s, m) => s + m.id, 0)}` : null;
+  const [pinPeople, setPinPeople] = useState<{ sig: string; rows: AreaPlayer[] } | null>(null);
+  useEffect(() => {
+    if (!isAdmin || !pinSig || !pinAll) return;
+    let live = true;
+    (async () => {
+      try {
+        const { data: sess } = await supabase.auth.getSession();
+        const token = sess.session?.access_token;
+        const res = await fetch("/api/growth/locations/players", { method: "POST", cache: "no-store",
+          headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+          body: JSON.stringify({ ids: pinAll.map((m) => m.id) }) });
+        const body = await res.json();
+        if (!res.ok) throw new Error(body?.error ?? `HTTP ${res.status}`);
+        if (live) { setPinPeople({ sig: pinSig, rows: body.players as AreaPlayer[] }); setPeopleErr(null); }
+      } catch (e) {
+        if (live) setPeopleErr(e instanceof Error ? e.message : String(e));
+      }
+    })();
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAdmin, pinSig, reloadKey]);
 
   // A new city starts with nothing selected; so does a new colouring (its bubbles are a different set).
   useEffect(() => { setSelected(null); setHighlight(null); setSelNat(null); setFocus(null); setSelComp(null); setSelShared(null); setMoving(null); setCompMsg(null); setPlacing(null); }, [cityId]);
@@ -244,10 +281,11 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin, ap
     if (selPin) {
       const near = (pinMembers ?? []).filter((m) => m.reach <= reach);
       const byId = new Map(near.map((m) => [m.id, m]));
-      return { title: `${selPin.name} test`, within: ` within ${reach} ${U}`, rows: all.filter((p) => byId.has(p.id)),
+      const pinRows = pinPeople && pinPeople.sig === pinSig ? pinPeople.rows : null;
+      return { title: `${selPin.name} test`, within: ` within ${reach} ${U}`, rows: (pinRows ?? []).filter((p) => byId.has(p.id)),
         distance: new Map(near.map((m) => [m.id, m.mi])),
         newCover: new Set(near.filter((m) => m.fieldReach == null || m.fieldReach > reach).map((m) => m.id)),
-        waiting: pinMembers == null, onClear: () => tf.setSelected(null) };
+        waiting: pinMembers == null || pinRows == null, onClear: () => tf.setSelected(null) };
     }
     if (city && selZip) return { title: selZip.zip ? `Zip ${selZip.zip}` : selZip.area, rows: all.filter((p) => (act ? p.keys.cityAct : p.keys.city) === selZip.key) };
     if (city && areaField) {

@@ -7818,3 +7818,25 @@ Evidence: read-only Supabase reads on 2026-10-23 ~13:00 UTC (`mdapi_matches`, `p
 - **Richardson pin (32.9482, -96.7297), DFW, 2026-10-27 mirror:** coverage at 10 mi 240 of 591 (41%) now,
   309 (52%) with the pin; 119 players within 10 mi, 69 of them new coverage, 48 played in the last 90
   days. Nearest real venues: Crossbar Rowlett 11.3 mi, Lowell H. Strike M.S. 15.7 mi, Bob Jones Park 24.9 mi.
+
+## Locations map: precomputed play history and per-view requests (2026-10-27)
+
+- **`player_play_stats` is Player Finder's VIEW (migration 0133), not a free name.** A first draft of
+  0233 used it; `create table if not exists` skipped silently and the index then failed with 42809.
+  The map's tables are `locations_play_stats` and `locations_played_fields`.
+- **`double precision` comes back through the Supabase API at 15 significant digits**
+  (38.62820231288918 read back as 38.6282023128892, field 1915, 2026-10-27). Store a coordinate that
+  must round-trip exactly as `numeric` (0234), which returns exactly what was written.
+- **Where the old load went (laptop, mirror, 2026-10-27):** play history 19.3 s (71,886 plays, 3,462
+  players, 25 sequential chunks), players 1.0 s, field snapshots 0.45 s, venue links 0.15 s, cities
+  0.08 s, build 0.12 s. Payload 4,593 KB: city bubbles 898 + 1,454 (activity), national 876 + 1,328.
+- **Per-field totals reproduce every map number.** Expanding (field, n, latest ms, latest day) to n
+  copies at the latest start gives the identical build, IF fields keep their first-met order: a
+  favourite-field tie (player 94908, equal plays and equal latest start at PARMER Stadium and LBJ Early
+  College High School) goes to the venue met first. Sorting by field id flipped it.
+- **Before vs after, same instant, stored rows (refresh at 16:42:22 UTC):** 12 map parts, 40 city x
+  reach coverage pairs, 10 city views, 10 table scopes, 5,046 table rows and the Klaviyo CSV:
+  0 differences. Script kept outside the repo (a one-off). Server work from the laptop: 0.8 to 1.0 s.
+- **Freshness:** the refresh runs at the end of every hourly location sync (:35, the 08:00 UTC hour
+  included); a play counts once its match has started as of the refresh, so a just-started match
+  appears within the hour. The single-player detail and the test-field numbers still read live.

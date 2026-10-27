@@ -8,7 +8,9 @@
 
 import { authenticateCapability } from "@/lib/capabilityAuth";
 import { selectAll } from "@/lib/supabasePagination";
-import { locatePlayers } from "@/lib/locationsMap";
+import { activeFields, locatePlayers } from "@/lib/locationsMap";
+import { cityParam } from "@/lib/locationsMapSlice";
+import { groupIntoUnits } from "@/lib/venueUnits";
 import { loadLocationsInputs } from "@/lib/locationsInputs";
 import { isScrubbed, toE164, type AreaPlayer } from "@/lib/areaPlayers";
 import { isPaidActiveSub, type SubLike } from "@/lib/playerActivity";
@@ -19,7 +21,24 @@ export const maxDuration = 60;
 
 type UserRow = { id: number; email: string | null; first_name: string | null; last_name: string | null; phone_number: string | null };
 
+/* WHO IS IN THE ANSWER (2026-10-27). Every row is built by the same locatePlayers over every placed
+ * player, so a row reads the same whichever answer carries it; the scope only picks rows.
+ *   GET            every placed player (the All cities table).
+ *   GET ?city=<id> that city's in-market players, plus anyone whose bubble is within reach of one of its
+ *                  venues (a field's "within N mi" list can cross a city line).
+ *   POST { ids }   exactly these players: a selected test pin's, which can sit anywhere. */
 export async function GET(req: Request) {
+  return answer(req, { city: cityParam(req.url) });
+}
+export async function POST(req: Request) {
+  let body: { ids?: unknown };
+  try { body = await req.json(); } catch { return Response.json({ error: "Body is not JSON." }, { status: 400 }); }
+  const ids = Array.isArray(body.ids) ? body.ids.map(Number).filter((n) => Number.isInteger(n) && n > 0) : [];
+  if (ids.length > 5000) return Response.json({ error: "At most 5,000 ids." }, { status: 400 });
+  return answer(req, { ids: new Set(ids) });
+}
+
+async function answer(req: Request, scope: { city?: number | null; ids?: Set<number> }) {
   const auth = await authenticateCapability(req, "growth");
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   if (!auth.isAdmin) return Response.json({ error: "Players in this area is admin only." }, { status: 403 });
@@ -27,22 +46,31 @@ export async function GET(req: Request) {
 
   try {
     const input = await loadLocationsInputs(sb);
-    const places = locatePlayers(input);
+    let places = locatePlayers(input);
+    if (scope.ids) places = places.filter((p) => scope.ids!.has(p.playerId));
+    else if (scope.city != null) {
+      const c = scope.city;
+      const units = new Set(groupIntoUnits(activeFields(input.fieldSnapshots, input.cities).fields, input.venueLinks).filter((u) => u.cityId === c).map((u) => u.id));
+      places = places.filter((p) => (p.verdict === "in_market" && p.cityId === c) || Object.keys(p.fieldReach).some((f) => units.has(Number(f))));
+    }
     const ids = places.map((p) => p.playerId);
     const users = new Map<number, UserRow>();
     /* MEMBER IS THE SHARED RULE (isPaidActiveSub), as on the single-player route beside this one —
      * not mdapi_users.is_member, which is true for any ACTIVE subscription, $0 comps included. */
     const paying = new Set<number>();
-    for (let i = 0; i < ids.length; i += 200) {
-      const chunk = ids.slice(i, i + 200);
-      const [us, subs] = await Promise.all([
-        selectAll<UserRow>(() => sb.from("mdapi_users")
-          .select("id,email,first_name,last_name,phone_number").in("id", chunk).order("id")),
-        selectAll<SubLike & { membership_id: number; user_id: number }>(() => sb.from("mdapi_subscriptions")
-          .select("membership_id,user_id,status,price,member_email").eq("status", "ACTIVE").in("user_id", chunk).order("membership_id")),
-      ]);
-      for (const u of us) users.set(Number(u.id), u);
-      for (const r of subs) if (isPaidActiveSub(r)) paying.add(Number(r.user_id));
+    // Chunks of 200 ids, four at a time (they were one at a time: 25 rounds for All cities).
+    const chunks = Array.from({ length: Math.ceil(ids.length / 200) }, (_, i) => ids.slice(i * 200, i * 200 + 200));
+    for (let i = 0; i < chunks.length; i += 4) {
+      await Promise.all(chunks.slice(i, i + 4).map(async (chunk) => {
+        const [us, subs] = await Promise.all([
+          selectAll<UserRow>(() => sb.from("mdapi_users")
+            .select("id,email,first_name,last_name,phone_number").in("id", chunk).order("id")),
+          selectAll<SubLike & { membership_id: number; user_id: number }>(() => sb.from("mdapi_subscriptions")
+            .select("membership_id,user_id,status,price,member_email").eq("status", "ACTIVE").in("user_id", chunk).order("membership_id")),
+        ]);
+        for (const u of us) users.set(Number(u.id), u);
+        for (const r of subs) if (isPaidActiveSub(r)) paying.add(Number(r.user_id));
+      }));
     }
     const cityName = new Map(input.cities.map((c) => [c.id, c.name]));
     const rows: AreaPlayer[] = places.map((p) => {
