@@ -42,6 +42,10 @@ export function bubbleHtml(n: number, tone: "in" | "gap", selected = false, pain
 }
 
 export const pinHtml = (on: boolean) => `<div class="loc-fpin${on ? " loc-fpin-on" : ""}"><span class="loc-fpin-head">${PITCH_SVG(16)}</span></div>`;
+/** A TEST FIELD (growth_test_fields): the pin's shape, but hollow with a dashed purple edge and a
+ *  "Test" label, so it never reads as a real field. `draft` = not saved yet (fainter). */
+export const testPinHtml = (draft = false, selected = false) =>
+  `<div class="loc-tpin${draft ? " loc-tpin-draft" : ""}${selected ? " loc-tpin-sel" : ""}"><span class="loc-tpin-tag">Test</span><span class="loc-fpin-head">${PITCH_SVG(16)}</span></div>`;
 export type Dir = "right" | "left" | "top" | "bottom";
 /** `split`: in Activity mode, the city's players by bucket as a small proportional bar under the count
  *  (colours in bucket order). Values are integers built from constants — nothing user-supplied. */
@@ -97,6 +101,14 @@ export const MARKS_CSS = `
 .loc-tip-zip::before{display:none}
 .loc-pin-wrap{background:transparent;border:0}
 .loc-pin-closed .loc-fpin::before{background:#8a948f}
+/* TEST FIELD PIN: hollow teardrop, dashed purple edge, "Test" tag above. Never a real field. */
+.loc-tpin{position:relative;width:26px;height:34px;cursor:pointer}
+.loc-tpin::before{content:"";position:absolute;left:2px;top:1px;width:22px;height:22px;background:#fff;border:2.5px dashed #6b3fd4;
+  border-radius:50% 50% 50% 0;transform:rotate(-45deg);box-shadow:0 1px 3px rgba(0,0,0,.3)}
+.loc-tpin-draft{opacity:.75}
+.loc-tpin-sel::before{box-shadow:0 0 0 4px rgba(107,63,212,.35)}
+.loc-tpin-tag{position:absolute;left:50%;top:-15px;transform:translateX(-50%);background:#6b3fd4;color:#fff;border-radius:4px;padding:1px 5px;
+  font:800 9.5px/1.2 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif;letter-spacing:.03em;text-transform:uppercase;white-space:nowrap}
 .loc-pl-wrap{background:transparent;border:0}
 .loc-pl-n{position:absolute;transform:translate(-50%,-50%);background:#fff;color:#1d2b25;border:1.5px solid #1d2b25;border-radius:99px;
   padding:1px 6px;font:800 10.5px/1.3 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif;white-space:nowrap;box-shadow:0 1px 2px rgba(0,0,0,.2)}

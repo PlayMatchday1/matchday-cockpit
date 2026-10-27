@@ -7791,3 +7791,30 @@ Evidence: read-only Supabase reads on 2026-10-23 ~13:00 UTC (`mdapi_matches`, `p
   (21st), 20454 (26th 21:30), 20455 (27th), 20456 (28th). The gameday route keeps a row when
   `field.city.name === cityNameFor("WAW")` = "Warsaw", which is what the payload carries. The board's
   date is the BROWSER's local date (`localYMD(new Date())`), so a Warsaw operator sees Warsaw's day.
+
+## Locations map: city ids, load time, test fields (2026-10-27)
+
+- **City ids on `?tab=map&city=<id>`:** 1 Austin, **2 Houston**, 3 San Antonio, 4 Atlanta, 5 St. Louis,
+  6 New York City (no field), **7 Dallas / Fort Worth**, 8 Oklahoma City, 9 El Paso (no field), 10 Warsaw.
+  Evidence: `player_area_sync_runs.cities` of the latest full run, read through `loadLocationsInputs`
+  from a local script, 2026-10-27. `city=2` is Houston, not DFW.
+- **The Map tab makes ONE request for every city** (`LocationsMapTab.tsx` `load()`, no city in the URL,
+  `cityId` not a dependency); the city only filters the answer. So "Loading map..." on any city means
+  `GET /api/growth/locations/map` has not answered. Measured from a laptop against the mirror,
+  2026-10-27: `loadLocationsInputs` 24.5 s, `buildLocationsMap` 0.4 s, response 4.7 MB, 5,032 players,
+  3,460 with play history. The slow part is `fetchPlayHistory`'s sequential 200-id chunks. The route's
+  `maxDuration` is 60 s. Production timing is NOT measured here.
+- **No mapped player is city-level only.** `player_area_seen`, has_area and not internal, 2026-10-27:
+  2,853 `area_source` "gps" with no zip, 8 "gps" with a zip, 2,171 "zip"; every one has lat/lng; 0 sit
+  exactly on a city centre. `testFieldImpact.hasPreciseLocation` still leaves out any row with neither a
+  zip nor a set source, and the panel says how many (0 today).
+- **Geocoder:** the Clubhouse had none (the only lookup was `zip_centroids`, migration 0221). Test fields
+  use `zip_centroids` for a bare 5-digit zip and OpenStreetMap Nominatim otherwise
+  (`/api/growth/locations/geocode`, one request per Find, 1.1 s apart per instance, no retry). One probe
+  for "Richardson, TX": HTTP 200, "Richardson, Dallas County, Texas, United States" at 32.9481789, -96.7297206.
+- **Test fields never count as fields.** `growth_test_fields` (migration 0232) is read only by
+  `/api/growth/locations/test-fields` and its `/impact`. Control: `testFieldImpact` "before" equals the
+  Map tab's `city.coverage` for all 8 markets x 4 reaches (32 pairs, 0 mismatches, 2026-10-27).
+- **Richardson pin (32.9482, -96.7297), DFW, 2026-10-27 mirror:** coverage at 10 mi 240 of 591 (41%) now,
+  309 (52%) with the pin; 119 players within 10 mi, 69 of them new coverage, 48 played in the last 90
+  days. Nearest real venues: Crossbar Rowlett 11.3 mi, Lowell H. Strike M.S. 15.7 mi, Bob Jones Park 24.9 mi.

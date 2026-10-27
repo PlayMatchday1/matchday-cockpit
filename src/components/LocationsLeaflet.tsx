@@ -17,7 +17,7 @@ import L from "leaflet";
 import { useEffect, useMemo, useState } from "react";
 import { Circle, MapContainer, Marker, TileLayer, Tooltip, useMap, useMapEvents } from "react-leaflet";
 import type { MapCity, MapField, MapZip, NationalZip, Reach } from "@/lib/locationsMap";
-import { bubbleD, bubbleHtml, cityTagHtml, pinHtml, type Dir } from "@/components/locationsMarks";
+import { bubbleD, bubbleHtml, cityTagHtml, pinHtml, testPinHtml, type Dir } from "@/components/locationsMarks";
 import { ACTIVITIES, ACTIVITY_FILL, ACTIVITY_INK, type Activity } from "@/lib/wherePlayed";
 import { compHtml, compSide, sharedHtml, SHARED_SIDE, SOURCE_NAME, type CompetitorVenue, type SharedVenue } from "@/lib/competitorVenues";
 
@@ -265,6 +265,20 @@ function SharedSquares({ items, selectedId, onSelect }: { items: SharedVenue[]; 
   );
 }
 
+/* TEST FIELDS (2026-10-27): what-if pins, saved or not. Hollow dashed purple pins with a "Test" tag,
+ * and a dashed purple ring at the current reach in a city view. Never drawn as, or counted as, a field. */
+export type TestPinMark = { key: string; lat: number; lng: number; name: string; draft: boolean };
+const TEST_INK = "#6b3fd4";
+const testPinIcon = (draft: boolean, selected: boolean) => L.divIcon({
+  className: "loc-pin-wrap", html: testPinHtml(draft, selected), iconSize: [26, 34], iconAnchor: [13, 33], tooltipAnchor: [0, -44],
+});
+/** While "Click the map" is on, one click drops a pin there; the crosshair says the mode is on. */
+function ClickDrop({ on, onDrop }: { on: boolean; onDrop: (lat: number, lng: number) => void }) {
+  const map = useMapEvents({ click: (e) => { if (on) onDrop(e.latlng.lat, e.latlng.lng); } });
+  useEffect(() => { map.getContainer().style.cursor = on ? "crosshair" : ""; }, [map, on]);
+  return null;
+}
+
 function Focus({ focus }: { focus: { lat: number; lng: number; zoom: number; n: number } | null }) {
   const map = useMap();
   useEffect(() => { if (focus) map.setView([focus.lat, focus.lng], focus.zoom); }, [map, focus]);
@@ -336,6 +350,13 @@ export default function LocationsLeaflet(props: {
   selectedShared: number | null;
   onSelectShared: (supplyId: number) => void;
   onBounds: (b: ViewBounds) => void;
+  /** Test fields to draw; empty on a scoped map. */
+  testPins?: TestPinMark[];
+  selectedTestPin?: string | null;
+  onSelectTestPin?: (key: string) => void;
+  /** "Click the map to drop a pin" is on. */
+  dropping?: boolean;
+  onDrop?: (lat: number, lng: number) => void;
 }) {
   const { cities, city, fields, zips, reach, selected, highlightFieldId, onCity, onSelect,
     national, nationalAll, selectedNational, onSelectNational, focus, natFilter, showRadius,
@@ -374,6 +395,7 @@ export default function LocationsLeaflet(props: {
       <Fit points={points} fallback={city ? [city.lat, city.lng] : props.home ?? [33, -92]} zoom={city ? 10 : props.home ? 6 : 5} onZoom={setZoom} />
       <ZoomWatch onZoom={setZoom} />
       <BoundsWatch onBounds={onBounds} />
+      <ClickDrop on={props.dropping === true} onDrop={(lat, lng) => props.onDrop?.(lat, lng)} />
       {!city && <CityTagLayout cities={cities} showCount={showCount} obstacles={bubbles} onLayout={setDirs} />}
       <Focus focus={focus} />
 
@@ -429,6 +451,18 @@ export default function LocationsLeaflet(props: {
           </Marker>
         );
       })}
+
+      {city && (props.testPins ?? []).map((t) => (
+        <Circle key={`tring-${t.key}-${reach}`} center={[t.lat, t.lng]} radius={reach * MI_TO_M} interactive={false}
+          pathOptions={{ color: TEST_INK, weight: t.key === props.selectedTestPin ? 2.5 : 1.5, opacity: 0.8, dashArray: "6 6", fillColor: TEST_INK, fillOpacity: 0.04 }} />
+      ))}
+      {(props.testPins ?? []).map((t) => (
+        <Marker key={`tpin-${t.key}-${t.draft ? "d" : "s"}-${t.key === props.selectedTestPin ? "on" : "off"}`} position={[t.lat, t.lng]}
+          icon={testPinIcon(t.draft, t.key === props.selectedTestPin)} zIndexOffset={900}
+          eventHandlers={{ click: () => props.onSelectTestPin?.(t.key) }}>
+          <Tooltip direction="top" className="loc-tip">Test field: {t.name}{t.draft ? " (not saved)" : ""}</Tooltip>
+        </Marker>
+      ))}
     </MapContainer>
   );
 }

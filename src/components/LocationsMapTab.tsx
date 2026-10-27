@@ -12,13 +12,14 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { REACHES, type LocationsMap, type MapField, type MapZip, type NationalZip, type Reach } from "@/lib/locationsMap";
 import type { NatFilter, PlayedClosed, Selection, ViewBounds } from "@/components/LocationsLeaflet";
-import { MARKS_CSS, bubbleHtml, cityTagHtml, pinHtml } from "@/components/locationsMarks";
+import { MARKS_CSS, bubbleHtml, cityTagHtml, pinHtml, testPinHtml } from "@/components/locationsMarks";
 import LocationsWherePlay from "@/components/LocationsWherePlay";
 import LocationsPlayersPanel from "@/components/LocationsPlayersPanel";
 import type { AreaPlayer } from "@/lib/areaPlayers";
 import LocationsCompetitorCard, { PlaceVenueCard, SharedVenueCard, type Placing } from "@/components/LocationsCompetitorCard";
 import { COMP_CSS, SOURCE_FILL, SOURCE_NAME, compHtml, sharedHtml, type CompetitorPayload, type CompetitorVenue, type SharedVenue } from "@/lib/competitorVenues";
 import { fmtDistance, type DistanceUnit } from "@/lib/locationScopes";
+import LocationsTestFields, { TEST_FIELDS_CSS, useTestFields } from "@/components/LocationsTestFields";
 import { ACTIVITIES, ACTIVITY_FILL, ACTIVITY_INK, ACTIVITY_LABEL, ACTIVITY_SHORT, type Activity, type BubblePlays, type PlayField } from "@/lib/wherePlayed";
 
 // Legend samples: the SAME HTML the map draws (locationsMarks), shrunk — so the legend cannot drift
@@ -74,6 +75,8 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin, ap
   const [colourBy, setColourBy] = useState<"coverage" | "activity">("coverage");
   const [actFilter, setActFilter] = useState<Activity | "all">("all");
   const [bounds, setBounds] = useState<ViewBounds | null>(null);
+  /* TEST FIELDS (2026-10-27): Growth's US map only, never a scoped one. LocationsTestFields.tsx. */
+  const tf = useTestFields(apiBase === "/api/growth/locations");
 
   const load = useCallback(async () => {
     try {
@@ -258,6 +261,7 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin, ap
       <style>{CSS}</style>
       <style>{MARKS_CSS}</style>
       <style>{COMP_CSS}</style>
+      {tf.enabled && <style>{TEST_FIELDS_CSS}</style>}
       {error && <div className="loc-warn">Couldn&apos;t refresh the map: {error}. Showing the last data loaded.</div>}
 
       <div className="loc-filter" role="group" aria-label="Map city">
@@ -356,7 +360,10 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin, ap
               onMoveCompetitor={(id, lat, lng) => {
                 if (placing && id === placing.venueId) { setPlacing({ ...placing, lat, lng, moved: true }); return; }
                 void saveComp(id, { lat, lng }).then((ok) => { if (ok) setMoving(null); });
-              }} />
+              }}
+              testPins={tf.enabled ? tf.pins : []} selectedTestPin={tf.selected} onSelectTestPin={(k) => tf.setSelected(k)}
+              dropping={tf.enabled && tf.dropping}
+              onDrop={(lat, lng) => { tf.addDraft(lat, lng, `Pin at ${lat.toFixed(4)}, ${lng.toFixed(4)}`, null); tf.setDropping(false); }} />
           </div>
           <div className="lm-legend" data-testid="map-legend">
             {act ? (
@@ -382,6 +389,12 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin, ap
               <>
                 <span><Sample html={cityTagHtml("City", null, "top")} scale={0.85} />City</span>
                 {showRadius && <span><i className="lm-ring lm-ring-line" />Coverage radius</span>}
+              </>
+            )}
+            {tf.enabled && tf.pins.length > 0 && (
+              <>
+                <span data-testid="legend-test-field"><Sample html={testPinHtml()} scale={0.8} />Test field, not a real field</span>
+                {city && <span><i className="lm-ring lm-ring-test" />Test field reach, {reach} {U}</span>}
               </>
             )}
             {showComp && (
@@ -414,6 +427,10 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin, ap
         </div>
 
         <div className="lm-panel">
+          {tf.enabled && (
+            <LocationsTestFields tf={tf} city={city} reach={reach} onReach={setReach} cityName={cityLabel}
+              onFocus={(lat, lng) => setFocus({ lat, lng, zoom: 11, n: Date.now() })} />
+          )}
           {/* The missing-field warning: every one on All cities, only the city's own inside a city. */}
           {(() => {
             const bad = city ? data.badFields.filter((f) => f.cityId === city.id) : data.badFields;
@@ -673,6 +690,7 @@ const CSS = `
 .lm-place{margin-top:5px;padding:4px 10px;font-size:11px}
 .lm-off-why{color:var(--muted);font-size:11.5px;margin-top:2px}
 .lm-ring-line{background:transparent}
+.lm-ring-test{border:1.5px dashed #6b3fd4;background:rgba(107,63,212,.06)}
 .lm-seg-wrap{flex-wrap:wrap}
 .lm-swatch{display:inline-block;width:10px;height:10px;border-radius:50%;border:1px solid #1d2b25;margin-right:5px;vertical-align:-1px}
 .lm-within-title{font-size:10px;font-weight:900;letter-spacing:.7px;text-transform:uppercase;color:var(--muted);margin:12px 0 0}

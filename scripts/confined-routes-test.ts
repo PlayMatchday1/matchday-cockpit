@@ -75,6 +75,13 @@ const KNOWN_REFUSED: Record<string, string> = {
   "/api/growth/locations/player":
     "The expandable player detail on Recent activity. Not offered in market mode: rows are plain "
     + "(no click, no detail row); the name still links to Player Lookup, which is allowed.",
+  "/api/growth/locations/test-fields":
+    "Test fields (growth_test_fields): Growth's US map only. useTestFields is enabled only when "
+    + "apiBase is /api/growth/locations, so in market mode nothing is fetched and the panel is not rendered.",
+  "/api/growth/locations/test-fields/impact":
+    "Test field numbers, estate-wide players. Same gate as /api/growth/locations/test-fields: off in market mode.",
+  "/api/growth/locations/geocode":
+    "Address search for test fields. Same gate as /api/growth/locations/test-fields: off in market mode.",
 
   /* ── WHAT THIS CHECK SURFACED ON ITS FIRST RUN. None is the reported bug; all four are real, and
    * each is left refused with the reason rather than opened quietly or left unnamed. */
