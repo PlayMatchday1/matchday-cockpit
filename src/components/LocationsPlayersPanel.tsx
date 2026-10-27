@@ -15,21 +15,33 @@ const fmtDay = (ymd: string | null) => (ymd ? new Intl.DateTimeFormat("en-US", {
 const players = (n: number) => `${n.toLocaleString("en-US")} ${n === 1 ? "player" : "players"}`;
 const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "area";
 
-export default function LocationsPlayersPanel({ title, rows, loading, error }: {
-  /** The area's name: "Zip 78738", "Within 10 mi of PARMER Stadium", "Austin", "All cities". */
+export default function LocationsPlayersPanel({ title, within, rows, loading, error, onClear, distance, newCover }: {
+  /** The area's name: "Zip 78738", "PARMER Stadium", "Richardson test", "Austin", "All cities". */
   title: string;
+  /** After the count, for a field or test pin: " within 10 mi". */
+  within?: string;
   /** Everyone in the area, before this panel's own filters. */
   rows: AreaPlayer[];
   loading: boolean;
   error: string | null;
+  /** A field or test pin is selected: Clear goes back to the whole city. */
+  onClear?: () => void;
+  /** Miles to the selected field or test pin, per player id: a Distance column, nearest first. */
+  distance?: ReadonlyMap<number, number>;
+  /** TEST PIN ONLY: the players it would newly cover, behind the "No field nearby today" toggle. */
+  newCover?: ReadonlySet<number>;
 }) {
   const [act, setAct] = useState<Activity | "all">("all");
   const [member, setMember] = useState<"all" | "yes" | "no">("all");
+  const [onlyNew, setOnlyNew] = useState(false);
+  const newOn = onlyNew && newCover != null;
+  const newCount = useMemo(() => (newCover ? rows.filter((r) => newCover.has(r.id)).length : 0), [rows, newCover]);
   const shown = useMemo(() => rows
-    .filter((r) => (act === "all" || r.activity === act) && (member === "all" || r.member === (member === "yes")))
-    .sort((a, b) => (b.lastPlayed ?? "").localeCompare(a.lastPlayed ?? "") || b.matches - a.matches
-      || `${a.lastName ?? ""} ${a.firstName ?? ""}`.localeCompare(`${b.lastName ?? ""} ${b.firstName ?? ""}`)), [rows, act, member]);
-  const filtered = act !== "all" || member !== "all";
+    .filter((r) => (act === "all" || r.activity === act) && (member === "all" || r.member === (member === "yes")) && (!newOn || newCover!.has(r.id)))
+    .sort((a, b) => (distance ? (distance.get(a.id) ?? Infinity) - (distance.get(b.id) ?? Infinity) : 0)
+      || (b.lastPlayed ?? "").localeCompare(a.lastPlayed ?? "") || b.matches - a.matches
+      || `${a.lastName ?? ""} ${a.firstName ?? ""}`.localeCompare(`${b.lastName ?? ""} ${b.firstName ?? ""}`)), [rows, act, member, newOn, newCover, distance]);
+  const filtered = act !== "all" || member !== "all" || newOn;
 
   return (
     <div className="lp" data-testid="area-players">
@@ -37,7 +49,10 @@ export default function LocationsPlayersPanel({ title, rows, loading, error }: {
       <div className="lp-head">
         <div>
           <div className="lp-kicker">Players in this area</div>
-          <div className="lp-title" data-testid="area-players-title">{title}, {loading ? "loading…" : players(rows.length)}</div>
+          <div className="lp-title" data-testid="area-players-title">
+            {title}, {loading ? "loading…" : `${players(rows.length)}${within ?? ""}`}
+            {onClear && <button type="button" className="loc-btn lp-clear" data-testid="area-players-clear" onClick={onClear}>Clear</button>}
+          </div>
           {filtered && !loading && <div className="lp-sub" data-testid="area-players-shown">{players(shown.length)} match the filters</div>}
         </div>
         <button type="button" className="loc-btn lp-export" data-testid="area-players-export" disabled={loading || shown.length === 0}
@@ -62,6 +77,12 @@ export default function LocationsPlayersPanel({ title, rows, loading, error }: {
               className={"lm-seg-btn" + (member === k ? " lm-seg-on" : "")} onClick={() => setMember(k)}>{l}</button>
           ))}
         </div>
+        {newCover && (
+          <div className="lm-seg" role="group" aria-label="No field nearby today">
+            <button type="button" aria-pressed={newOn} data-testid="ap-new-only"
+              className={"lm-seg-btn" + (newOn ? " lm-seg-on" : "")} onClick={() => setOnlyNew(!onlyNew)}>No field nearby today ({newCount.toLocaleString("en-US")})</button>
+          </div>
+        )}
       </div>
 
       {error ? (
@@ -75,7 +96,7 @@ export default function LocationsPlayersPanel({ title, rows, loading, error }: {
           <table className="lp-table" data-testid="area-players-table">
             <thead>
               <tr>
-                <th>Name</th><th>Email</th><th>Phone</th><th>Area</th><th>Zip</th><th>City</th>
+                <th>Name</th>{distance && <th className="loc-num">Distance</th>}<th>Email</th><th>Phone</th><th>Area</th><th>Zip</th><th>City</th>
                 <th>Last played</th><th>Activity</th><th className="loc-num">Matches</th><th>Favourite field</th><th>Member</th>
               </tr>
             </thead>
@@ -83,6 +104,7 @@ export default function LocationsPlayersPanel({ title, rows, loading, error }: {
               {shown.map((r) => (
                 <tr key={r.id} data-testid="area-player-row">
                   <td className="lp-name">{[r.firstName, r.lastName].filter(Boolean).join(" ") || "—"}</td>
+                  {distance && <td className="loc-num">{distance.has(r.id) ? `${distance.get(r.id)!.toFixed(1)} mi` : ""}</td>}
                   <td>{r.email ?? "—"}</td>
                   <td className="lp-nowrap">{r.phoneE164 ?? r.phone ?? "—"}</td>
                   <td>{r.area || "—"}{r.fromZip && <span className="lp-fromzip" title="MatchDay sent no coordinates; placed at the zip's Census centre">located from zip</span>}</td>
@@ -115,7 +137,9 @@ const CSS = `
 .lp-scroll{overflow-x:auto;max-height:460px;overflow-y:auto;border:1px solid var(--line);border-radius:10px}
 .lp-table{width:100%;border-collapse:collapse;font-size:12.5px}
 .lp-table th{position:sticky;top:0;background:#FAFCFA;text-align:left;font-size:9.5px;font-weight:900;letter-spacing:.6px;text-transform:uppercase;color:var(--muted);padding:7px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
-.lp-table td{padding:7px 8px;border-bottom:1px solid #EEF2EC;vertical-align:top}
+/* ONE LINE PER ROW (2026-10-27): "Dallas / Fort Worth, TX" wrapped to four lines; the table scrolls sideways instead. */
+.lp-table td{padding:7px 8px;border-bottom:1px solid #EEF2EC;vertical-align:top;white-space:nowrap}
+.lp-clear{margin-left:10px;padding:2px 10px;font-size:12px;vertical-align:1px}
 .lp-name{font-weight:700;color:var(--forest);white-space:nowrap}
 .lp-nowrap{white-space:nowrap}
 .lp-fromzip{display:inline-block;margin-left:6px;padding:0 6px;border-radius:99px;font-size:10.5px;font-weight:800;color:#6a4d00;background:#FFF4D6;border:1px solid #EBD9A0;white-space:nowrap}

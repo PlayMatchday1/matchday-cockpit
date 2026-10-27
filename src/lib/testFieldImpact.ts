@@ -83,12 +83,19 @@ export function playersNearPins(bubbles: Bubble[], pins: PinPoint[]): number[] {
 }
 
 export type PinReach = { players: number; newCoverage: number; outsideMarket: number; activeRecent: number };
+/** ONE PLAYER NEAR A PIN, for the admin-only "Players in this area" table. `reach` = the smallest reach
+ *  that holds their bubble on the EXACT distance; `fieldReach` = the same for the nearest real venue
+ *  (null: none within the largest reach). Within r = reach <= r; new coverage at r = also
+ *  (fieldReach null or > r). The SAME tests byReach counts by, so the table matches the pin. */
+export type PinMember = { id: number; mi: number; reach: Reach; fieldReach: Reach | null };
 export type PinImpact = {
   key: string;
   /** The market the pin sits in: the nearest city with an active venue whose radius contains it. */
   cityId: number | null;
   byReach: Record<Reach, PinReach>;
   nearestFields: { id: number; title: string; cityId: number; mi: number }[];
+  /** Admin only: the route drops this for anyone else. */
+  members?: PinMember[];
 };
 export type CityImpact = { cityId: number; players: number; leftOut: number; before: Record<Reach, number>; after: Record<Reach, number> };
 export type TestFieldImpact = { pins: PinImpact[]; cities: CityImpact[]; leftOut: number; activeRecentDays: number };
@@ -112,9 +119,13 @@ export function testFieldImpact(input: {
       if (d <= c.radiusMiles && (!home || d < home.mi)) home = { id: c.id, mi: d };
     }
     const byReach = Object.fromEntries(REACHES.map((r) => [r, zero()])) as Record<Reach, PinReach>;
+    const members: PinMember[] = [];
     for (const b of bubbles) {
       const d = milesBetween(b.lat, b.lng, pin.lat, pin.lng);
       if (d > MAX_REACH) continue;
+      const reach = REACHES.find((r) => d <= r)!;
+      const fieldReach = b.existingMi == null ? null : REACHES.find((r) => b.existingMi! <= r) ?? null;
+      for (const id of b.members) members.push({ id, mi: r1(d), reach, fieldReach });
       const recent = b.members.filter(isRecent).length;
       for (const r of REACHES) {
         if (d > r) continue;
@@ -128,7 +139,7 @@ export function testFieldImpact(input: {
     const nearestFields = venues
       .map((v) => ({ id: v.id, title: v.title, cityId: v.cityId, mi: milesBetween(pin.lat, pin.lng, v.lat, v.lng) }))
       .sort((a, b) => a.mi - b.mi).slice(0, 3).map((v) => ({ ...v, mi: r1(v.mi) }));
-    return { key: pin.key, cityId: home?.id ?? null, byReach, nearestFields };
+    return { key: pin.key, cityId: home?.id ?? null, byReach, nearestFields, members };
   });
 
   // Every city a pin sits in, and any other whose coverage a pin changes.

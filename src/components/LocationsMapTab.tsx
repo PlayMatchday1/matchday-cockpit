@@ -77,6 +77,10 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin, ap
   const [bounds, setBounds] = useState<ViewBounds | null>(null);
   /* TEST FIELDS (2026-10-27): Growth's US map only, never a scoped one. LocationsTestFields.tsx. */
   const tf = useTestFields(apiBase === "/api/growth/locations");
+  // One selection at a time: a field or bubble clears the test pin, and a test pin clears the field or bubble.
+  const tfSelect = tf.setSelected;
+  useEffect(() => { if (selected) tfSelect(null); }, [selected, tfSelect]);
+  useEffect(() => { if (tf.selected) { setSelected(null); setHighlight(null); } }, [tf.selected]);
 
   const load = useCallback(async () => {
     try {
@@ -215,10 +219,28 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin, ap
   /* WHO "PLAYERS IN THIS AREA" LISTS — the same keys the map's bubbles are built on, so the count in
    * the heading is the bubble's, the field card's or the city's own number. */
   const areaField: MapField | null = city ? selField ?? (highlight != null ? fieldById.get(highlight) ?? null : null) : null;
-  const area: { title: string; rows: AreaPlayer[] } = (() => {
+  /* A SELECTED TEST PIN lists the players within the current reach of it: the impact route's own
+   * per-player reach (testFieldImpact PinMember), so the count is the pin's "Players within" number and
+   * "No field nearby today" is its "New coverage". It wins over a field or bubble selection. */
+  const selPin = tf.enabled && tf.selected ? tf.pins.find((p) => p.key === tf.selected) ?? null : null;
+  const pinMembers = selPin ? tf.impact?.pins.find((p) => p.key === selPin.key)?.members ?? null : null;
+  const area: { title: string; rows: AreaPlayer[]; within?: string; distance?: Map<number, number>; newCover?: Set<number>; waiting?: boolean; onClear?: () => void } = (() => {
     const all = people ?? [];
+    if (selPin) {
+      const near = (pinMembers ?? []).filter((m) => m.reach <= reach);
+      const byId = new Map(near.map((m) => [m.id, m]));
+      return { title: `${selPin.name} test`, within: ` within ${reach} ${U}`, rows: all.filter((p) => byId.has(p.id)),
+        distance: new Map(near.map((m) => [m.id, m.mi])),
+        newCover: new Set(near.filter((m) => m.fieldReach == null || m.fieldReach > reach).map((m) => m.id)),
+        waiting: pinMembers == null, onClear: () => tf.setSelected(null) };
+    }
     if (city && selZip) return { title: selZip.zip ? `Zip ${selZip.zip}` : selZip.area, rows: all.filter((p) => (act ? p.keys.cityAct : p.keys.city) === selZip.key) };
-    if (city && areaField) return { title: `Within ${reach} ${U} of ${areaField.title}`, rows: all.filter((p) => (p.fieldReach[areaField.id] ?? Infinity) <= reach) };
+    if (city && areaField) {
+      const rows = all.filter((p) => (p.fieldReach[areaField.id] ?? Infinity) <= reach);
+      return { title: areaField.title, within: ` within ${reach} ${U}`, rows,
+        distance: new Map(rows.flatMap((p) => (p.fieldMi?.[areaField.id] != null ? [[p.id, p.fieldMi[areaField.id]] as [number, number]] : []))),
+        onClear: () => { setSelected(null); setHighlight(null); } };
+    }
     if (city) return { title: city.name, rows: all.filter((p) => p.verdict === "in_market" && p.cityId === city.id && p.keys.city != null) };
     if (selNational) return { title: selNational.zip ? `Zip ${selNational.zip}` : selNational.area, rows: all.filter((p) => (act ? p.keys.natAct : p.keys.nat) === selNational.key) };
     return { title: "All cities", rows: all };
@@ -349,7 +371,7 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin, ap
           <div className="lm-map" data-testid="loc-map">
             <LocationsLeaflet cities={data.cities} city={city} fields={fields} zips={zips} reach={reach} reachUnit={unit} home={home}
               selected={selected} highlightFieldId={highlight}
-              onCity={(id) => onCity(id)} onSelect={(s) => { setSelected(s); setHighlight(null); setSelComp(null); setSelShared(null); setMoving(null); }}
+              onCity={(id) => onCity(id)} onSelect={(s) => { setSelected(s); setHighlight(null); setSelComp(null); setSelShared(null); setMoving(null); tf.setSelected(null); }}
               national={national} nationalAll={data.national} selectedNational={selNat}
               onSelectNational={(k) => { setSelNat(k); setSelComp(null); setSelShared(null); setMoving(null); }} focus={focus} natFilter={natFilter} showRadius={showRadius}
               colourBy={colourBy} playedClosed={playedClosed} playedFieldIds={playedFieldIds} showReach={showReach} onBounds={setBounds}
@@ -361,7 +383,7 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin, ap
                 if (placing && id === placing.venueId) { setPlacing({ ...placing, lat, lng, moved: true }); return; }
                 void saveComp(id, { lat, lng }).then((ok) => { if (ok) setMoving(null); });
               }}
-              testPins={tf.enabled ? tf.pins : []} selectedTestPin={tf.selected} onSelectTestPin={(k) => tf.setSelected(k)}
+              testPins={tf.enabled ? tf.pins : []} selectedTestPin={tf.selected} onSelectTestPin={(k) => { tf.setSelected(k); setSelected(null); setHighlight(null); }}
               dropping={tf.enabled && tf.dropping}
               onDrop={(lat, lng) => { tf.addDraft(lat, lng, `Pin at ${lat.toFixed(4)}, ${lng.toFixed(4)}`, null); tf.setDropping(false); }} />
           </div>
@@ -650,7 +672,8 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin, ap
         </div>
       </div>
 
-      {isAdmin && <LocationsPlayersPanel title={area.title} rows={area.rows} loading={people == null && !peopleErr} error={peopleErr} />}
+      {isAdmin && <LocationsPlayersPanel title={area.title} within={area.within} rows={area.rows} loading={(people == null || area.waiting === true) && !peopleErr} error={peopleErr}
+        onClear={area.onClear} distance={area.distance} newCover={area.newCover} />}
     </div>
   );
 }

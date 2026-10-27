@@ -55,7 +55,9 @@ export async function POST(req: Request) {
     const lastPlayMs = new Map<number, number>();
     for (const [id, plays] of history?.playsByPlayer ?? []) if (plays.length) lastPlayMs.set(id, Math.max(...plays.map((p) => p.ms)));
     const impact = testFieldImpact({ bubbles, leftOutByCity, markets, cities: latest.cities, venues, pins, lastPlayMs, nowMs: now.getTime() });
-    return Response.json({ ...impact, citiesAsOf: latest.asOf }, { headers: { "Cache-Control": "no-store" } });
+    // Player ids near a pin feed the admin-only "Players in this area" table; nobody else gets them.
+    const pinsOut = auth.isAdmin ? impact.pins : impact.pins.map(({ members: _m, ...p }) => p);
+    return Response.json({ ...impact, pins: pinsOut, citiesAsOf: latest.asOf }, { headers: { "Cache-Control": "no-store" } });
   } catch (e) {
     return Response.json({ error: e instanceof Error ? e.message : String(e) }, { status: 502 });
   }

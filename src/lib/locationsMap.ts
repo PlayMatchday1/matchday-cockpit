@@ -202,7 +202,7 @@ export function playFieldsWithVenues(input: { history?: { fields: Map<number, Pl
 /* WHICH BUBBLE EACH PLAYER IS IN — the admin-only "Players in this area" table (locate() below).
  * Recorded by the SAME loops that build the bubbles, so a bubble's player list cannot disagree with
  * its count. Never part of the map payload. */
-type KeySink = Map<number, { nat?: string; city?: string; fieldReach?: Record<number, Reach>; verdict?: "in_market" | "waitlist"; cityId?: number | null; label?: string | null }>;
+type KeySink = Map<number, { nat?: string; city?: string; fieldReach?: Record<number, Reach>; fieldMi?: Record<number, number>; verdict?: "in_market" | "waitlist"; cityId?: number | null; label?: string | null }>;
 const sinkOf = (sink: KeySink, id: number) => { const e = sink.get(id) ?? {}; sink.set(id, e); return e; };
 
 function buildCore(input: Parameters<typeof buildLocationsMap>[0], split: "activity" | null, sink?: KeySink): Omit<LocationsMap, "zipsActivity" | "nationalActivity" | "playFields"> {
@@ -330,11 +330,14 @@ function buildCore(input: Parameters<typeof buildLocationsMap>[0], split: "activ
    * counts by just below — so "within 10 mi of X" lists exactly the field card's number. */
   if (sink) for (const z of zipsExact) {
     const fr: Record<number, Reach> = {};
+    // The same exact distance, rounded for the table's Distance column only (2026-10-27).
+    const fm: Record<number, number> = {};
     for (const f of fieldsRaw) {
-      const r = REACHES.find((x) => dist(z.lat, z.lng, f.lat, f.lng) <= x);
-      if (r != null) fr[f.id] = r;
+      const d = dist(z.lat, z.lng, f.lat, f.lng);
+      const r = REACHES.find((x) => d <= x);
+      if (r != null) { fr[f.id] = r; fm[f.id] = r1(d); }
     }
-    for (const m of z.members) if (m.player_id != null) sinkOf(sink, m.player_id).fieldReach = fr;
+    for (const m of z.members) if (m.player_id != null) Object.assign(sinkOf(sink, m.player_id), { fieldReach: fr, fieldMi: fm });
   }
 
   const fields: MapField[] = fieldsRaw.map((f) => {
@@ -395,6 +398,8 @@ export type PlayerPlace = {
   keys: { nat: string; natAct: string; city: string | null; cityAct: string | null };
   /** Field id -> the smallest reach that contains this player's bubble. */
   fieldReach: Record<number, Reach>;
+  /** Field id -> miles from this player's bubble centre (rounded to 0.1), for the fields in fieldReach. */
+  fieldMi: Record<number, number>;
   /** Placed at their zip's Census centre because MatchDay sent no coordinates. */
   fromZip: boolean;
 };
@@ -434,6 +439,7 @@ export function locatePlayers(input: Parameters<typeof buildLocationsMap>[0]): P
       favouriteFieldId: fav, favouriteTitle: fav == null ? null : unitTitle.get(fav) ?? `Field ${fav}`,
       keys: { nat: e.nat, natAct: a.nat ?? e.nat, city: e.city ?? null, cityAct: a.city ?? null },
       fieldReach: e.fieldReach ?? {},
+      fieldMi: e.fieldMi ?? {},
       fromZip: srcOf.get(id) === "zip_centroid",
     });
   }

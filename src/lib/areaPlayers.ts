@@ -33,6 +33,8 @@ export type AreaPlayer = {
   member: boolean;
   keys: { nat: string; natAct: string; city: string | null; cityAct: string | null };
   fieldReach: Record<number, Reach>;
+  /** Field id -> miles from the player's bubble centre, rounded to 0.1 (the table's Distance column). */
+  fieldMi: Record<number, number>;
   /** Placed at their zip's Census centre because MatchDay sent no coordinates. */
   fromZip: boolean;
 };
