@@ -97,6 +97,8 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin, ap
   const tfSelect = tf.setSelected;
   useEffect(() => { if (selected) tfSelect(null); }, [selected, tfSelect]);
   useEffect(() => { if (tf.selected) { setSelected(null); setHighlight(null); } }, [tf.selected]);
+  // Fetch Leaflet's code NOW, alongside the data, not after it: it was a second wait of 0.5 to 2 s.
+  useEffect(() => { void import("@/components/LocationsLeaflet"); }, []);
 
   const load = useCallback(async () => {
     const key = viewKey, rk = reloadKey;

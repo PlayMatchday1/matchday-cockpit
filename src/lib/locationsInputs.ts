@@ -4,7 +4,7 @@
 
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { selectAll } from "./supabasePagination";
+import { selectAllParallel } from "./supabasePagination";
 import { activeFields, type MapPlayerRow } from "./locationsMap";
 import { fetchFieldSnapshots, fetchLatestCities, fetchVenueLinks } from "./locationsData";
 import { fetchPlayHistory } from "./playHistory";
@@ -17,13 +17,16 @@ import { areaLabelPattern, type LocationScope } from "./locationScopes";
  * payload names no field outside the market. */
 export async function loadLocationsInputs(sb: SupabaseClient, scope?: LocationScope | null) {
   const now = new Date();
+  // Pages fetched together, not one after another (selectAllParallel: read-only use, stable order).
+  const placed = (cols: string, head = false) => {
+    const q = sb.from("player_area_seen").select(cols, head ? { count: "exact", head: true } : undefined)
+      .eq("has_area", true).eq("is_internal", false);
+    return scope ? q.ilike("area_label", areaLabelPattern(scope)) : q;
+  };
   const [players, fieldSnapshots, latest, venueLinks, stats] = await Promise.all([
-    selectAll<MapPlayerRow>(() => {
-      const q = sb.from("player_area_seen")
-        .select("player_id,zip,area_label,state,lat,lng,verdict,verdict_city_id,location_source")
-        .eq("has_area", true).eq("is_internal", false);
-      return (scope ? q.ilike("area_label", areaLabelPattern(scope)) : q).order("player_id");
-    }),
+    selectAllParallel<MapPlayerRow>(
+      () => placed("player_id,zip,area_label,state,lat,lng,verdict,verdict_city_id,location_source").order("player_id") as never,
+      () => placed("player_id", true) as never),
     fetchFieldSnapshots(sb, now, scope),
     fetchLatestCities(sb, scope),
     fetchVenueLinks(sb),

@@ -20,15 +20,22 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 export async function GET(req: Request) {
+  // SERVER-TIMING (2026-10-27): where the request's time went, read in the browser's network panel.
+  const t0 = Date.now();
   const auth = await authenticateCapability(req, "growth");
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   const sb = auth.supabase;
+  const t1 = Date.now();
 
   try {
-    const { players, cities, citiesAsOf, fieldSnapshots, history, venueLinks, now, playsAsOf } = await loadLocationsInputs(sb);
+    const { players, cities, citiesAsOf, fieldSnapshots, history, venueLinks, now, playsAsOf, playsStored } = await loadLocationsInputs(sb);
+    const t2 = Date.now();
     const map = buildLocationsMap({ players, cities, fieldSnapshots, history, venueLinks, now });
     // ?city=<id> sends that city's share, no city the All cities share (locationsMapSlice.ts).
-    return Response.json({ ...sliceLocationsMap(map, cityParam(req.url)), citiesAsOf, playsAsOf }, { headers: { "Cache-Control": "no-store" } });
+    const body = JSON.stringify({ ...sliceLocationsMap(map, cityParam(req.url)), citiesAsOf, playsAsOf });
+    const t3 = Date.now();
+    return new Response(body, { headers: { "Content-Type": "application/json", "Cache-Control": "no-store",
+      "Server-Timing": `auth;dur=${t1 - t0}, inputs;dur=${t2 - t1};desc="${playsStored ? "stored plays" : "live plays"}", build;dur=${t3 - t2}` } });
   } catch (e) {
     return Response.json({ error: e instanceof Error ? e.message : String(e) }, { status: 502 });
   }

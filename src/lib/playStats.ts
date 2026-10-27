@@ -18,7 +18,7 @@
 
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { selectAll } from "./supabasePagination";
+import { selectAll, selectAllParallel } from "./supabasePagination";
 import { fetchPlayHistory, type PlayHistory } from "./playHistory";
 import type { Play, PlayField } from "./wherePlayed";
 
@@ -84,7 +84,8 @@ export type PlayStatsRaw = { rows: StatRow[]; fieldRows: FieldRow[] };
 export async function fetchPlayStatsRaw(sb: SupabaseClient): Promise<PlayStatsRaw | null> {
   try {
     const [rows, fieldRows] = await Promise.all([
-      selectAll<StatRow>(() => sb.from("locations_play_stats").select("player_id,plays,refreshed_at").order("player_id")),
+      selectAllParallel<StatRow>(() => sb.from("locations_play_stats").select("player_id,plays,refreshed_at").order("player_id"),
+        () => sb.from("locations_play_stats").select("player_id", { count: "exact", head: true })),
       selectAll<FieldRow>(() => sb.from("locations_played_fields").select("field_id,ord,title,city_id,lat,lng").order("field_id")),
     ]);
     // First-met order, as the live read kept it; a row without one (none after a refresh) goes last.
