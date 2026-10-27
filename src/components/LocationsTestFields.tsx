@@ -173,22 +173,20 @@ export default function LocationsTestFields({ tf, city, reach, onReach, cityName
   return (
     <div className="lm-pcard lm-tf" data-testid="test-fields">
       <div className="lm-ptitle">Add a test field</div>
-      <div className="lm-sub">Try a possible new field. Find an address or place, or click the map. Test fields are not real fields and are not counted anywhere else in the Clubhouse.</div>
       <form className="lm-tf-find" onSubmit={(e) => { e.preventDefault(); void find(); }}>
-        <input className="lm-tf-input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Address, place or zip, e.g. Richardson, TX" aria-label="Address or place" data-testid="tf-query" />
+        <input className="lm-tf-input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Address or place" aria-label="Address or place" data-testid="tf-query" />
         <button type="submit" className="loc-btn" disabled={searching} data-testid="tf-find">{searching ? "Finding..." : "Find"}</button>
       </form>
       <button type="button" className={"loc-btn lm-tf-drop" + (tf.dropping ? " lm-tf-drop-on" : "")} aria-pressed={tf.dropping} data-testid="tf-drop"
-        onClick={() => tf.setDropping(!tf.dropping)}>{tf.dropping ? "Click the map to drop a pin (on). Click here to stop." : "Or click the map to drop a pin"}</button>
+        onClick={() => tf.setDropping(!tf.dropping)}>{tf.dropping ? "Cancel pin drop" : "Drop a pin on the map"}</button>
       {searchErr && <div className="lm-tf-msg lm-tf-bad">{searchErr}</div>}
       {hits && (hits.length === 0
-        ? <div className="lm-tf-msg">Nothing found for that. Try adding the city and state, or click the map instead.</div>
+        ? <div className="lm-tf-msg">Nothing found.</div>
         : (
           <ul className="lm-tf-hits" data-testid="tf-hits">
             {hits.map((h, i) => (
               <li key={i}><button type="button" className="lm-tf-hit" onClick={() => pick(h)}>{h.label}</button></li>
             ))}
-            <li className="lm-tf-src">{hits[0].source === "zip" ? "From our zip code table." : "Search by OpenStreetMap."}</li>
           </ul>
         ))}
 
@@ -205,19 +203,15 @@ export default function LocationsTestFields({ tf, city, reach, onReach, cityName
             </div>
           )}
           {tf.impactErr && <div className="lm-tf-msg lm-tf-bad">Could not work out the numbers: {tf.impactErr}</div>}
-          {!tf.impact && !tf.impactErr && <div className="lm-tf-msg">Working out the numbers...</div>}
+          {!tf.impact && !tf.impactErr && <div className="lm-tf-msg">Loading...</div>}
           {coverage.map((c) => (
             <div key={c.cityId} className="lm-tf-cov" data-testid="tf-coverage">
               Coverage at {reach} mi{city ? "" : ` in ${cityName(c.cityId)}`}: <b>{pct(c.before[reach], c.players)}</b> now, <b>{pct(c.after[reach], c.players)}</b> with test fields.
               <span className="lm-tf-covsub"> {int(c.after[reach] - c.before[reach])} more of {players(c.players)}.</span>
             </div>
           ))}
-          {city && tf.impact && coverage.length === 0 && <div className="lm-tf-msg">No test field changes coverage in {city.name}.</div>}
-          {leftOut != null && (
-            <div className="lm-note" data-testid="tf-left-out">
-              {leftOut === 0 ? "Every player counted here has a zip or a GPS location." : `${players(leftOut)} with only a city-level location (no zip or GPS) ${leftOut === 1 ? "is" : "are"} left out of these numbers.`}
-            </div>
-          )}
+          {city && tf.impact && coverage.length === 0 && <div className="lm-tf-msg">No change to coverage in {city.name}.</div>}
+          {leftOut != null && <div className="lm-note" data-testid="tf-left-out">City-level only, left out: {int(leftOut)}</div>}
           {tf.impactBusy && tf.impact && <div className="lm-note">Updating...</div>}
 
           <ul className="lm-tf-pins">
@@ -235,19 +229,19 @@ export default function LocationsTestFields({ tf, city, reach, onReach, cityName
                     <button type="button" className="loc-btn lm-tf-small" onClick={() => { tf.setSelected(p.key); onFocus(p.lat, p.lng); }}>Show</button>
                   </div>
                   <div className="lm-tf-meta">
-                    {p.draft ? "Not saved yet. Only you can see it." : `Added by ${p.savedBy} on ${dayOf(p.savedAt!)}.`}
+                    {p.draft ? "Not saved." : `Added by ${p.savedBy} on ${dayOf(p.savedAt!)}.`}
                     {im && ` ${im.cityId != null ? cityName(im.cityId) : "Outside every market"}.`}
                   </div>
                   {x ? (
                     <table className="lm-tf-nums">
                       <tbody>
                         <tr><td>Players within {reach} mi</td><td className="loc-num">{int(x.players)}</td></tr>
-                        <tr><td>New coverage (no field within {reach} mi today)</td><td className="loc-num"><b>{int(x.newCoverage)}</b></td></tr>
+                        <tr><td>New coverage</td><td className="loc-num"><b>{int(x.newCoverage)}</b></td></tr>
                         <tr><td>Played in the last {days} days</td><td className="loc-num">{int(x.activeRecent)}</td></tr>
-                        {x.outsideMarket > 0 && <tr><td>Outside every market today</td><td className="loc-num">{int(x.outsideMarket)}</td></tr>}
+                        {x.outsideMarket > 0 && <tr><td>Outside every market</td><td className="loc-num">{int(x.outsideMarket)}</td></tr>}
                       </tbody>
                     </table>
-                  ) : !tf.impactErr && <div className="lm-note">Working out the numbers...</div>}
+                  ) : !tf.impactErr && <div className="lm-note">Loading...</div>}
                   {im && im.nearestFields.length > 0 && (
                     <div className="lm-tf-near">Nearest fields: {im.nearestFields.map((f) => `${f.title} (${f.mi} mi)`).join(", ")}</div>
                   )}
@@ -257,7 +251,6 @@ export default function LocationsTestFields({ tf, city, reach, onReach, cityName
                         <button type="button" className="loc-btn" disabled={saveBlock != null || !p.name.trim()} title={saveBlock ?? (p.name.trim() ? "" : "Give it a name first.")}
                           onClick={() => void tf.saveDraft(p.key)} data-testid="tf-save">Save for the team</button>
                         <button type="button" className="loc-btn" onClick={() => tf.discardDraft(p.key)}>Discard</button>
-                        {saveBlock && <span className="lm-note">{saveBlock}</span>}
                       </>
                     ) : tf.canEdit ? (
                       confirmRemove === p.key ? (
@@ -276,8 +269,8 @@ export default function LocationsTestFields({ tf, city, reach, onReach, cityName
       )}
       {tf.msg && <div className={"lm-tf-msg" + (tf.msg.bad ? " lm-tf-bad" : "")} data-testid="tf-msg">{tf.msg.text}</div>}
       {tf.loadErr && tf.ready !== false && <div className="lm-tf-msg lm-tf-bad">Could not load saved test fields: {tf.loadErr}</div>}
-      {tf.ready === false && <div className="lm-note">Saved test fields are not set up yet (migration 0232). You can still try pins; they are not saved.</div>}
-      <div className="lm-note">Distances are in a straight line. Players are counted where the map counts them: each zip or square-mile bubble, from its centre.</div>
+      {tf.ready === false && <div className="lm-note">Saving is not set up yet.</div>}
+      <div className="lm-note">Distances in a straight line.</div>
     </div>
   );
 }
@@ -291,7 +284,6 @@ export const TEST_FIELDS_CSS = `
 .lm-tf-hits{list-style:none;margin:6px 0 0;padding:0;display:flex;flex-direction:column;gap:4px}
 .lm-tf-hit{width:100%;text-align:left;background:#fff;border:1px solid #d8dfdb;border-radius:7px;padding:6px 8px;font:inherit;font-size:12.5px;cursor:pointer}
 .lm-tf-hit:hover{border-color:#6b3fd4}
-.lm-tf-src{font-size:11px;color:#6a7a72}
 .lm-tf-reach{margin:10px 0 4px}
 .lm-tf-cov{margin:8px 0 2px;font-size:13.5px}
 .lm-tf-covsub{color:#4f5f57;font-size:12.5px}

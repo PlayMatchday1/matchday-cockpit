@@ -690,7 +690,7 @@ const CSS = `
 .lm-place{margin-top:5px;padding:4px 10px;font-size:11px}
 .lm-off-why{color:var(--muted);font-size:11.5px;margin-top:2px}
 .lm-ring-line{background:transparent}
-.lm-ring-test{border:1.5px dashed #6b3fd4;background:rgba(107,63,212,.06)}
+.lm-ring.lm-ring-test{border:1.5px dashed #6b3fd4;background:rgba(107,63,212,.06)}
 .lm-seg-wrap{flex-wrap:wrap}
 .lm-swatch{display:inline-block;width:10px;height:10px;border-radius:50%;border:1px solid #1d2b25;margin-right:5px;vertical-align:-1px}
 .lm-within-title{font-size:10px;font-weight:900;letter-spacing:.7px;text-transform:uppercase;color:var(--muted);margin:12px 0 0}
