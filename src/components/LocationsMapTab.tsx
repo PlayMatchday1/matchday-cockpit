@@ -175,6 +175,9 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin, ap
     if (!isAdmin) return;
     let live = true;
     setPeople(null); setPeopleErr(null);
+    /* AFTER THE MAP (2026-10-27): asked for once this view's map data is in. All cities' table is 5,000
+     * rows, and drawing it in the same moment as the map held the map back about 4 seconds. */
+    if (!haveView) return;
     (async () => {
       try {
         const { data: sess } = await supabase.auth.getSession();
@@ -188,7 +191,7 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin, ap
       }
     })();
     return () => { live = false; };
-  }, [isAdmin, reloadKey, cityId]);
+  }, [isAdmin, reloadKey, cityId, haveView]);
 
   /* A SELECTED TEST PIN'S PLAYERS can live anywhere (another city, outside coverage), so they come by id:
    * everyone within the largest reach of the pin, once per pin; the reach then filters them here. */

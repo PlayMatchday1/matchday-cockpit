@@ -12,10 +12,39 @@ import { fetchPlayStatsRaw, historyFromStats } from "./playStats";
 import { milesBetween } from "./playerAreaModel";
 import { areaLabelPattern, type LocationScope } from "./locationScopes";
 
+export type LocationsInputs = Awaited<ReturnType<typeof readLocationsInputs>>;
+
+/* REUSED WHILE NOTHING HAS CHANGED (2026-10-27). The unscoped inputs are kept in this server instance
+ * and handed out again while the last location sync run and the last play-history refresh are the
+ * same ones (two one-row reads), for at most 10 minutes: that cap is what bounds a field's 60-day
+ * active window or a match sync landing in between. Concurrent requests share one read. A failed
+ * read is never kept. Scoped (Poland) reads are not cached. Callers must not mutate what they get. */
+const KEEP_MS = 10 * 60_000;
+let kept: { key: string; at: number; value: Promise<LocationsInputs> } | null = null;
+
+async function freshnessKey(sb: SupabaseClient): Promise<string> {
+  const [run, stats] = await Promise.all([
+    sb.from("player_area_sync_runs").select("finished_at").not("finished_at", "is", null).order("finished_at", { ascending: false }).limit(1).maybeSingle(),
+    sb.from("locations_play_stats").select("refreshed_at").order("refreshed_at", { ascending: false }).limit(1).maybeSingle(),
+  ]);
+  // A failed check never matches a kept entry, so it reads fresh.
+  return `${run.error ? `x${Date.now()}` : run.data?.finished_at ?? ""}|${stats.error ? "none" : stats.data?.refreshed_at ?? ""}`;
+}
+
+export async function loadLocationsInputs(sb: SupabaseClient, scope?: LocationScope | null): Promise<LocationsInputs & { reused: boolean }> {
+  if (scope) return { ...(await readLocationsInputs(sb, scope)), reused: false };
+  const key = await freshnessKey(sb);
+  if (kept && kept.key === key && Date.now() - kept.at < KEEP_MS) return { ...(await kept.value), reused: true };
+  const entry = { key, at: Date.now(), value: readLocationsInputs(sb, null) };
+  kept = entry;
+  try { return { ...(await entry.value), reused: false }; }
+  catch (e) { if (kept === entry) kept = null; throw e; }
+}
+
 /* A SCOPE (locationScopes.ts) filters IN THE QUERIES: players by area label, fields by the match's
  * city, cities to the scope's own. Play history is then cut to that city's fields, so a scoped
  * payload names no field outside the market. */
-export async function loadLocationsInputs(sb: SupabaseClient, scope?: LocationScope | null) {
+async function readLocationsInputs(sb: SupabaseClient, scope: LocationScope | null) {
   const now = new Date();
   // Pages fetched together, not one after another (selectAllParallel: read-only use, stable order).
   const placed = (cols: string, head = false) => {

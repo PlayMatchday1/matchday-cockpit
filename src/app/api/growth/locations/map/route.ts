@@ -11,13 +11,15 @@
 // on the server — the browser still never receives a player row or a player id.
 
 import { authenticateCapability } from "@/lib/capabilityAuth";
-import { buildLocationsMap } from "@/lib/locationsMap";
+import { buildLocationsMap, type LocationsMap } from "@/lib/locationsMap";
 import { loadLocationsInputs } from "@/lib/locationsInputs";
 import { cityParam, sliceLocationsMap } from "@/lib/locationsMapSlice";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
+
+const builds = new WeakMap<object, LocationsMap>();
 
 export async function GET(req: Request) {
   // SERVER-TIMING (2026-10-27): where the request's time went, read in the browser's network panel.
@@ -28,14 +30,16 @@ export async function GET(req: Request) {
   const t1 = Date.now();
 
   try {
-    const { players, cities, citiesAsOf, fieldSnapshots, history, venueLinks, now, playsAsOf, playsStored } = await loadLocationsInputs(sb);
+    const { players, cities, citiesAsOf, fieldSnapshots, history, venueLinks, now, playsAsOf, playsStored, reused } = await loadLocationsInputs(sb);
     const t2 = Date.now();
-    const map = buildLocationsMap({ players, cities, fieldSnapshots, history, venueLinks, now });
+    // The same inputs (reused, locationsInputs.ts) give the same map: build it once per input set.
+    let map = builds.get(history);
+    if (!map) { map = buildLocationsMap({ players, cities, fieldSnapshots, history, venueLinks, now }); builds.set(history, map); }
     // ?city=<id> sends that city's share, no city the All cities share (locationsMapSlice.ts).
     const body = JSON.stringify({ ...sliceLocationsMap(map, cityParam(req.url)), citiesAsOf, playsAsOf });
     const t3 = Date.now();
     return new Response(body, { headers: { "Content-Type": "application/json", "Cache-Control": "no-store",
-      "Server-Timing": `auth;dur=${t1 - t0}, inputs;dur=${t2 - t1};desc="${playsStored ? "stored plays" : "live plays"}", build;dur=${t3 - t2}` } });
+      "Server-Timing": `auth;dur=${t1 - t0}, inputs;dur=${t2 - t1};desc="${playsStored ? "stored plays" : "live plays"}${reused ? ", reused" : ""}", build;dur=${t3 - t2}` } });
   } catch (e) {
     return Response.json({ error: e instanceof Error ? e.message : String(e) }, { status: 502 });
   }
