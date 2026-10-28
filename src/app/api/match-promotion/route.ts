@@ -47,6 +47,8 @@ type PushIn = {
   at?: string | null;
   topic?: string | null;
   promoCode?: string | null;
+  /** 0238. Only send if the match is still low. Absent = false, a regular push. */
+  checkFirst?: boolean;
 };
 
 type SaveBody = {
@@ -65,7 +67,7 @@ type SaveBody = {
   general?: {
     id?: number; scope?: "city" | "field"; channel?: string; at?: string | null;
     topic?: string | null; promoCode?: string | null; city?: string;
-    fieldId?: number | null; audience?: string | null; remove?: boolean;
+    fieldId?: number | null; audience?: string | null; remove?: boolean; checkFirst?: boolean;
   };
   /* ── A FIELD TAG, TOGGLED ─────────────────────────────────────────────────────────────────
    * Keyed on the FIELD. `on` false removes it; the unique constraint makes the toggle safe. */
@@ -158,7 +160,7 @@ export async function POST(req: Request) {
     }, { status: 409 });
   }
   const incoming = body.pushes;
-  const parsed: { id: number | null; channel: ChannelKey; push_at: string | null; topic: string | null; promo_code: string | null }[] = [];
+  const parsed: { id: number | null; channel: ChannelKey; push_at: string | null; topic: string | null; promo_code: string | null; check_first: boolean }[] = [];
   for (const raw of incoming) {
     const channel = String(raw?.channel ?? "");
     if (!(CHANNEL_KEYS as readonly string[]).includes(channel)) {
@@ -180,6 +182,9 @@ export async function POST(req: Request) {
        * code only works if it exists in MatchDay, and this planner does not create them, so a
        * generated string would render on the tile, go to players and redeem nothing. */
       promo_code: normalizePromoCode(raw.promoCode ?? null),
+      /* === true, so a tab still running the pre-0238 bundle (no key) saves regular pushes, which
+       * is what every push was before. */
+      check_first: raw.checkFirst === true,
     });
   }
 
@@ -250,10 +255,11 @@ export async function POST(req: Request) {
       if (p.id == null) continue;
       const wasRow = existing.get(p.id)!;
       const same = (wasRow.push_at ?? null) === p.push_at && (wasRow.topic ?? null) === p.topic
-        && (wasRow.promo_code ?? null) === p.promo_code && wasRow.channel === p.channel;
+        && (wasRow.promo_code ?? null) === p.promo_code && wasRow.channel === p.channel
+        && (wasRow.check_first === true) === p.check_first;
       if (same) continue;
       const { data: after, error } = await sb.from("match_promotion_push")
-        .update({ channel: p.channel, push_at: p.push_at, topic: p.topic, promo_code: p.promo_code, ...stamp })
+        .update({ channel: p.channel, push_at: p.push_at, topic: p.topic, promo_code: p.promo_code, check_first: p.check_first, ...stamp })
         .eq("id", p.id).select("*").maybeSingle();
       if (error) {
         const named = missingTableError(error.message);
@@ -268,7 +274,7 @@ export async function POST(req: Request) {
       const { data: added, error } = await sb.from("match_promotion_push")
         .insert(fresh.map((p) => ({
           match_api_id: id, channel: p.channel, push_at: p.push_at,
-          topic: p.topic, promo_code: p.promo_code, ...stamp,
+          topic: p.topic, promo_code: p.promo_code, check_first: p.check_first, ...stamp,
         })))
         .select("*");
       if (error) {
@@ -552,10 +558,19 @@ async function saveGeneral(
   g: NonNullable<SaveBody["general"]>,
 ): Promise<Response> {
   const sb = auth.supabase;
+  /* ── LOGGED LIKE A MATCH PUSH (Ryan, 2026-10-28) ─────────────────────────────────────────────
+   * General pushes were written with no fin_change_log row at all. They now go through the same
+   * recordPushes as a match save, whole row before and after, so check_first is in the log too.
+   * Same contract as the match save: the write has already landed, so a logging failure is
+   * reported in `audit` and never turned into an error the operator would retry. */
   if (g.remove && Number.isInteger(Number(g.id))) {
-    const { error } = await sb.from("match_promotion_push").delete().eq("id", Number(g.id)).neq("scope", "match");
+    const { data: gone, error } = await sb.from("match_promotion_push").delete()
+      .eq("id", Number(g.id)).neq("scope", "match").select("*");
     if (error) return Response.json({ outcome: "FAILED", error: error.message }, { status: 500 });
-    return Response.json({ outcome: "LANDED", removed: Number(g.id) });
+    const audit = await recordPushes(sb, auth.email ?? null,
+      (gone ?? []).map((r) => ({ row_id: r.id as number, action: "delete" as const, before: r, after: null })),
+      "general push deleted");
+    return Response.json({ outcome: "LANDED", removed: Number(g.id), audit });
   }
   const scope = g.scope === "field" ? "field" : "city";
   const channel = String(g.channel ?? "");
@@ -577,18 +592,44 @@ async function saveGeneral(
     scope, channel, push_at: at, topic: nullable(g.topic),
     promo_code: normalizePromoCode(g.promoCode ?? null),
     scope_city: city, scope_field_id: fieldId, audience: nullable(g.audience),
+    check_first: g.checkFirst === true,
     match_api_id: null,
     updated_by: auth.email ?? null, updated_at: new Date().toISOString(),
   };
+  const editId = Number.isInteger(Number(g.id)) && Number(g.id) > 0 ? Number(g.id) : null;
   try {
-    const res = Number.isInteger(Number(g.id)) && Number(g.id) > 0
-      ? await sb.from("match_promotion_push").update(row).eq("id", Number(g.id)).neq("scope", "match").select("id").maybeSingle()
-      : await sb.from("match_promotion_push").insert(row).select("id").maybeSingle();
+    // BEFORE, for the audit, read the same way the match save reads it.
+    let before: Record<string, unknown> | null = null;
+    if (editId != null) {
+      const { data, error } = await sb.from("match_promotion_push").select("*")
+        .eq("id", editId).neq("scope", "match").maybeSingle();
+      if (error) {
+        const named = missingTableError(error.message);
+        return Response.json({ outcome: "FAILED", error: named ?? error.message }, { status: named ? 503 : 500 });
+      }
+      if (!data) {
+        return Response.json({ outcome: "NOT APPLIED", error: "That general push no longer exists. Reload the week." }, { status: 409 });
+      }
+      before = data;
+    }
+    const res = editId != null
+      ? await sb.from("match_promotion_push").update(row).eq("id", editId).neq("scope", "match").select("*").maybeSingle()
+      : await sb.from("match_promotion_push").insert(row).select("*").maybeSingle();
     if (res.error) {
       const named = missingTableError(res.error.message);
       return Response.json({ outcome: "FAILED", error: named ?? res.error.message }, { status: named ? 503 : 500 });
     }
-    return Response.json({ outcome: "LANDED", id: res.data?.id ?? null });
+    const after = res.data as Record<string, unknown> | null;
+    if (!after || (after.check_first === true) !== row.check_first) {
+      return Response.json({
+        outcome: "NOT APPLIED",
+        error: "The save reported success but read back different. Nothing was retried.",
+      }, { status: 409 });
+    }
+    const audit = await recordPushes(sb, auth.email ?? null,
+      [{ row_id: after.id as number, action: editId != null ? "update" : "insert", before, after }],
+      editId != null ? "general push saved" : "general push added");
+    return Response.json({ outcome: "LANDED", id: after.id ?? null, audit });
   } catch (e) {
     return Response.json({ outcome: "FAILED", error: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }

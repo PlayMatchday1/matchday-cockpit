@@ -25,16 +25,16 @@ import { useFinanceData } from "@/lib/useFinanceData";
 import { getCancelPatterns, rollUpSlotRisk, clustersForField, slotRiskKey, type SlotRisk } from "@/lib/cancelPatterns";
 import { normalizeMatchName } from "@/lib/venueNormalization";
 import { TAG_KEYS, TAG_KEY_ORDER, TAG_META, splitTags, tagTitle, tagTitleWithDates, tagLiveOn, tagRangeLabel, tagsAtScope, tagsInUse, isTagKey, type TagDates, type TagKey } from "@/lib/promoTags";
-import { weekQueueEntries, weekQueues, isPastWeek, defaultDayIdx, tabCounts, type QueueEntry } from "@/lib/promoDayQueue";
+import { weekQueueEntries, weekQueues, isPastWeek, defaultDayIdx, tabCounts, checkFirstFill, generalReachMatches, type QueueEntry } from "@/lib/promoDayQueue";
 import {
   CHANNELS, NEW_FLAG_LABEL, channelsOn, coverageCaption, coverageStateOf, coverageSummary, matchCodes,
-  coverageOf, coverLabel, generalsCovering, generalPushDayIdx, type GeneralPush,
+  coverageOf, coverLabel, generalsCovering, generalPushDayIdx, pushReach, type GeneralPush,
   datedPushes, draftFromPlan, draftToPushes, fmtPushIn, fromInputValue, isPushOverdue, isPushSent, leadToKickoff,
   sentStamp, toInputValue, venueOffsetMs,
   type PromoMatch, type PromoPush, type PromoWeek, type PushDraft, type ZoneMode,
 } from "@/lib/matchPromotion";
 import MarkPushSent from "@/components/MarkPushSent";
-import PushPlanEditor from "@/components/PushPlanEditor";
+import PushPlanEditor, { CheckFirstToggle, CHECK_FIRST_BOX } from "@/components/PushPlanEditor";
 import Starting11Control from "@/components/Starting11Control";
 
 /* ── THE FOUR VIEWS, AND WHY THE TAG ONES ARE NOT THEIR OWN COMPONENT ────────────────────────
@@ -358,7 +358,7 @@ export default function MatchPromotionView() {
    * introduced to avoid in the first place. */
   const withPush = week?.matches.filter((m) => {
     const c = coverage.get(m.apiId);
-    return c === "planned" || c === "needs-decision" || c === "covered";
+    return c === "planned" || c === "needs-decision" || c === "covered" || c === "check";
   }).length ?? 0;
 
   // THE PHONE'S CANCEL RANKING — the desktop matrix's own numbers, flattened and ordered. 1-of-4
@@ -603,6 +603,10 @@ Which matches get promoted, on which channels, and when the push goes out.
 function tileBorderFor(cover: ReturnType<typeof coverageOf>, _r: number): string {
   if (cover === "cancelled") return "border-dashed border-cream-line bg-[#f7f8f7]";
   if (cover === "needs-decision") return "border-amber-300 bg-amber-50";
+  /* CHECK FIRST (0238): only check-first pushes reach it. Yellow-400 on yellow-100, a clearly
+   * brighter yellow than needs-decision's amber-50, so "no date yet" and "send only if low" never
+   * read as one state. */
+  if (cover === "check") return "border-yellow-400 bg-yellow-100";
   if (cover === "covered") return "border-cream-line border-l-[3px] border-l-mint bg-white";
   if (cover === "none") return "border-dashed border-cream-line bg-white";
   return "border-mint bg-mint-soft/50";
@@ -621,6 +625,7 @@ const tileDotted = (cover: ReturnType<typeof coverageOf>): boolean => cover === 
 const TILE_STATE_KEY: readonly [ReturnType<typeof coverageOf>, string, string][] = [
   ["planned", "Match push", "Promoted individually."],
   ["covered", "Group push", "Included in a city or field push."],
+  ["check", "Check first:", "send only if low"],
   ["none", "No push planned", "No promotion scheduled."],
   ["cancelled", "Cancelled", "Match called off."],
 ];
@@ -838,8 +843,12 @@ function DayQueue({ week, zone, onMarked, onError, withPush, liveCount }: {
               <span className={`flex gap-1.5 text-[9.5px] font-bold ${on ? "text-white/75" : "text-deep-green/45"}`}>
                 {c.late > 0 && <i data-testid="pip-late" className="not-italic text-coral">{c.late} past due</i>}
                 {c.late === 0 && c.todo > 0 && <i data-testid="pip-todo" className="not-italic">{c.todo} to send</i>}
-                {c.late === 0 && c.todo === 0 && c.done > 0 && <i data-testid="pip-done" className="not-italic">{c.done} sent</i>}
-                {c.late === 0 && c.todo === 0 && c.done === 0 && <i className="not-italic opacity-60">none</i>}
+                {/* CHECK FIRST (0238): "3 to send · 2 to check". Shown beside past due too, since a
+                    check is a decision still to make, not something already late. */}
+                {c.check > 0 && <i data-testid="pip-check" className={`not-italic ${on ? "text-yellow-200" : "text-yellow-700"}`}>
+                  {c.late > 0 || c.todo > 0 ? "· " : ""}{c.check} to check</i>}
+                {c.late === 0 && c.todo === 0 && c.check === 0 && c.done > 0 && <i data-testid="pip-done" className="not-italic">{c.done} sent</i>}
+                {c.late === 0 && c.todo === 0 && c.check === 0 && c.done === 0 && <i className="not-italic opacity-60">none</i>}
                 {c.cancelled > 0 && <i data-testid="pip-cx" className="not-italic text-coral">{c.cancelled} cancelled</i>}
               </span>
             </button>
@@ -854,7 +863,8 @@ function DayQueue({ week, zone, onMarked, onError, withPush, liveCount }: {
           </span>
           <span className="text-[12px] font-bold text-deep-green/55" data-testid="queue-count">
             {total} push{total === 1 ? "" : "es"} · {q.done.length} sent
-            {q.late.length > 0 ? ` · ${q.late.length} past due` : q.todo.length > 0 ? ` · ${q.todo.length} to send` : ""}
+            {q.late.length > 0 ? ` · ${q.late.length} past due` : tabCounts(q).todo > 0 ? ` · ${tabCounts(q).todo} to send` : ""}
+            {tabCounts(q).check > 0 ? ` · ${tabCounts(q).check} to check` : ""}
           </span>
         </div>
         {/* PAST DUE FIRST, IN ITS OWN GROUP. A push whose moment has gone is late; one whose moment
@@ -905,12 +915,18 @@ function QueueRow({ e, zone, late, past, week, onMarked, onError }: {
    * push with no code shows its channel bare; nothing is invented. */
   const code = p.promoCode?.trim() || null;
   /* THE REACH A GENERAL PUSH ACTUALLY HAS, counted from the week rather than claimed. */
-  const reach = general && week ? generalReach(general, week) : 0;
+  const reach = general && week ? generalReachMatches(general, week).length : 0;
+  /* CHECK FIRST (0238): the real fill is printed on the row so whoever is sending can decide
+   * without opening the match. Real players only, from the mirror, as of its last sync. Once the
+   * push is sent the check is done and the row goes quiet like any sent row. */
+  const check = p.checkFirst && !sent;
+  const fill = check ? checkFirstFill(e, week) : null;
   return (
     <div data-testid="queue-row" data-push-id={p.id} data-channel={p.channel}
-      data-sent={sent ? "1" : "0"} data-late={late ? "1" : "0"}
+      data-sent={sent ? "1" : "0"} data-late={late ? "1" : "0"} data-check-first={p.checkFirst ? "1" : "0"}
       className={`mb-1.5 flex flex-wrap items-center gap-2.5 rounded-[9px] border px-2.5 py-[7px] text-[12.5px] ${
-        sent ? "border-cream-line bg-[#f4f7f5]" : late ? "border-coral/40 bg-coral-soft/40" : "border-cream-line bg-white"}`}>
+        sent ? "border-cream-line bg-[#f4f7f5]" : late ? "border-coral/40 bg-coral-soft/40"
+          : check ? "border-yellow-400 bg-yellow-50" : "border-cream-line bg-white"}`}>
       <span className={`whitespace-nowrap text-[12.5px] font-extrabold ${sent ? "text-deep-green/45 line-through" : late ? "text-coral" : ""}`}>
         {t.time}
       </span>
@@ -929,9 +945,11 @@ function QueueRow({ e, zone, late, past, week, onMarked, onError }: {
               {general.audience}
             </span>
           )}
-          <span data-testid="queue-reach" className="text-[11.5px] font-bold text-deep-green/45">
-            {reach} match{reach === 1 ? "" : "es"}
-          </span>
+          {!check && (
+            <span data-testid="queue-reach" className="text-[11.5px] font-bold text-deep-green/45">
+              {reach} match{reach === 1 ? "" : "es"}
+            </span>
+          )}
         </>
       ) : (
         <span className={sent ? "text-deep-green/45" : "text-deep-green/65"}>{m!.venue} · {m!.city} · {m!.time}</span>
@@ -942,6 +960,14 @@ function QueueRow({ e, zone, late, past, week, onMarked, onError }: {
         <i className="not-italic">{chan?.short ?? p.channel}</i>
         {code && <i data-testid="queue-code" className="not-italic tracking-[0.03em] opacity-80">{code}</i>}
       </span>
+      {check && (
+        <>
+          <i data-testid="queue-check" className="rounded-[5px] border border-yellow-400 bg-yellow-100 px-[5px] py-px text-[9px] font-extrabold not-italic tracking-[0.05em] text-yellow-800">
+            CHECK FIRST
+          </i>
+          <span data-testid="queue-fill" className="text-[12px] font-extrabold text-yellow-800">{fill}</span>
+        </>
+      )}
       {p.topic && <span data-testid="queue-topic" className={`min-w-0 truncate text-[12px] ${sent ? "text-deep-green/40" : "text-deep-green/55"}`}>{p.topic}</span>}
       {late && <span data-testid="queue-late" className="rounded-[5px] bg-coral px-[5px] py-px text-[9.5px] font-extrabold text-white">past due</span>}
       {sent && <span data-testid="queue-stamp" className="text-[11.5px] text-deep-green/45">{sentStamp(p)}</span>}
@@ -950,12 +976,6 @@ function QueueRow({ e, zone, late, past, week, onMarked, onError }: {
       {!sent && <MarkPushSent push={p} onDone={onMarked} onError={onError} />}
     </div>
   );
-}
-
-/** How many of the week's matches this general push actually reaches, on its own day. */
-function generalReach(g: GeneralPush, week: PromoWeek): number {
-  return week.matches.filter((m) =>
-    m.state !== "cancelled" && generalsCovering(m, [g], week.days).length > 0).length;
 }
 
 /** The field's name, from the week rather than from a second lookup. */
@@ -1004,16 +1024,17 @@ function GeneralPushes({ city, week, onOpen }: {
           /* TOPIC FIRST, AUDIENCE AS THE FALLBACK. A push saved with no topic is not nameless — the
              operator typed who it was going to, and "all registered in Atlanta" identifies it. */
           const title = g.topic?.trim() || g.audience?.trim() || "General push";
-          const status = g.pushedAt ? "SENT" : g.pushAt ? "SCHEDULED" : "NO DATE";
+          const status = g.pushedAt ? "SENT" : g.pushAt ? (g.checkFirst ? "CHECK FIRST" : "SCHEDULED") : "NO DATE";
           return (
             <button key={g.id} type="button" data-testid="general-push-card" data-id={g.id}
-              data-scope={g.scope} data-dated={g.pushAt ? "1" : "0"}
+              data-scope={g.scope} data-dated={g.pushAt ? "1" : "0"} data-check-first={g.checkFirst ? "1" : "0"}
               onClick={() => onOpen(g)}
-              className="min-w-[220px] max-w-[280px] rounded-[10px] border border-[#a5e4ee] border-l-4 border-l-[#0e7490] bg-white px-2.5 py-2 text-left hover:shadow-[0_1px_4px_rgba(0,0,0,0.08)]">
+              className={`min-w-[220px] max-w-[280px] rounded-[10px] border border-l-4 px-2.5 py-2 text-left hover:shadow-[0_1px_4px_rgba(0,0,0,0.08)] ${
+                g.checkFirst ? "border-yellow-400 border-l-yellow-500 bg-yellow-50" : "border-[#a5e4ee] border-l-[#0e7490] bg-white"}`}>
               <div className="text-[12.5px] font-extrabold" data-testid="general-push-title">
                 {title}
                 <span data-testid="general-push-status"
-                  className={`ml-1.5 text-[9.5px] font-extrabold tracking-[0.06em] ${g.pushAt ? "text-[#0e7490]" : "text-amber-700"}`}>
+                  className={`ml-1.5 text-[9.5px] font-extrabold tracking-[0.06em] ${!g.pushAt ? "text-amber-700" : g.checkFirst && !g.pushedAt ? "text-yellow-800" : "text-[#0e7490]"}`}>
                   {status}
                 </span>
               </div>
@@ -1076,7 +1097,7 @@ function GeneralPushSheet({ city, push, week, saving, onClose, onSave, onRemove 
   push: GeneralPush | null;
   week: PromoWeek; saving: boolean; onClose: () => void;
   onSave: (p: { scope: "city" | "field"; channel: string; at: string | null; topic: string | null;
-                promoCode: string | null; fieldId: number | null; audience: string | null }) => Promise<boolean>;
+                promoCode: string | null; fieldId: number | null; audience: string | null; checkFirst: boolean }) => Promise<boolean>;
   onRemove: () => Promise<boolean>;
 }) {
   const [scope, setScope] = useState<"city" | "field">(push?.scope ?? "city");
@@ -1094,6 +1115,7 @@ function GeneralPushSheet({ city, push, week, saving, onClose, onSave, onRemove 
   const [code, setCode] = useState(push?.promoCode ?? "");
   const [audience, setAudience] = useState(push?.audience ?? `all registered in ${city}`);
   const [fieldId, setFieldId] = useState<number | "">(push?.fieldId ?? "");
+  const [checkFirst, setCheckFirst] = useState<boolean>(push?.checkFirst ?? false);
 
   /* THE FIELDS THIS CITY ACTUALLY RUNS THIS WEEK, from the week on screen. A picker listing every
    * field in the estate would offer pitches this city does not use. */
@@ -1146,6 +1168,10 @@ function GeneralPushSheet({ city, push, week, saving, onClose, onSave, onRemove 
               className="mt-0.5 block h-8 w-full rounded-lg border border-cream-line bg-white px-2 text-[12.5px]" />
           </label>
         </div>
+        {/* THE SAME CONTROL AND THE SAME YELLOW AS A MATCH PUSH (0238), under the date and time. */}
+        <div data-testid="gen-check-first" className={`mb-2 rounded-lg border px-2.5 pb-2 ${CHECK_FIRST_BOX[checkFirst ? "on" : "off"]}`}>
+          <CheckFirstToggle on={checkFirst} onChange={setCheckFirst} />
+        </div>
         <label className="mb-2 block">
           <span className="text-[10px] font-extrabold uppercase tracking-[0.08em] text-deep-green/45">Audience</span>
           <input data-testid="gen-audience" value={audience} onChange={(e) => setAudience(e.target.value)}
@@ -1173,7 +1199,7 @@ function GeneralPushSheet({ city, push, week, saving, onClose, onSave, onRemove 
                * landing hours off. "" → null, which is a real value: undated. */
               scope, channel, at: fromInputValue(at, "me", null), topic: topic.trim() || null,
               promoCode: code.trim() || null, fieldId: scope === "field" ? Number(fieldId) : null,
-              audience: audience.trim() || null,
+              audience: audience.trim() || null, checkFirst,
             })}
             className="min-h-[32px] rounded-full bg-deep-green px-[15px] text-[12.5px] font-extrabold text-white disabled:opacity-50">
             {saving ? "Saving…" : "Save push"}
@@ -1262,8 +1288,8 @@ function Plan({ week, byCity, openId, onOpen, zone, editing, riskOf, coverage, c
                   style={tileDotted(state) ? { borderLeftStyle: "dotted" } : undefined}
                   className={`mt-[2px] inline-block h-[13px] w-[26px] flex-none rounded-[4px] border ${tileBorderFor(state, 0)} ${
                     state === "cancelled" ? "opacity-60" : ""}`} />
-                <b data-testid="keylab" className="whitespace-nowrap font-extrabold text-deep-green/80">{label}</b>
-                <span data-testid="keysent">{sentence}</span>
+                <b data-testid="keylab" className={`whitespace-nowrap font-extrabold ${state === "check" ? "text-yellow-700" : "text-deep-green/80"}`}>{label}</b>
+                <span data-testid="keysent" className={state === "check" ? "font-bold text-yellow-700" : undefined}>{sentence}</span>
               </span>
             ))}
           </div>
@@ -1369,8 +1395,11 @@ function Plan({ week, byCity, openId, onOpen, zone, editing, riskOf, coverage, c
            COVERED IS OMITTED WHEN IT IS ZERO, so a city nobody has blasted does not grow a
            permanent "0 covered" - the same rule the sent count on the queue strip follows. */
         const live = matches.filter((m) => m.state !== "cancelled");
-        const own = live.filter((m) => { const c = coverage.get(m.apiId); return c === "planned" || c === "needs-decision"; }).length;
-        const covered = live.filter((m) => coverage.get(m.apiId) === "covered").length;
+        /* OWN = HAS ITS OWN PUSHES; COVERED = NONE OF ITS OWN, AND A GENERAL PUSH CARRIES IT. Read
+           off the pushes rather than the tile colour, so check-first (0238) moves neither count:
+           the colour now says regular against check-first, which is a different question. */
+        const own = live.filter((m) => (m.plan?.pushes.length ?? 0) > 0).length;
+        const covered = live.filter((m) => (m.plan?.pushes.length ?? 0) === 0 && coversOf(m).length > 0).length;
         /* CANCELLED IS COUNTED SEPARATELY, as count AND players. It is excluded from "no plan"
            above by being its own state: nothing was missed, the match was called off. */
         const cx = matches.filter((m) => m.state === "cancelled");
@@ -1418,7 +1447,8 @@ function Plan({ week, byCity, openId, onOpen, zone, editing, riskOf, coverage, c
                     {dayMatches.length === 0 && <div className="pt-1.5 text-[11.5px] text-deep-green/30">No sessions</div>}
                     {dayMatches.map((m) => <Tile key={m.apiId} m={m} open={m.apiId === openId} onOpen={onOpen} zone={zone}
                       priorLabel={priorLabel} priorWeeks={week.priorWeeks} risk={riskOf(m)} cover={coverage.get(m.apiId) ?? "none"}
-                      covers={coversOf(m)} tags={tagsOf(m)} tagTitle={(t) => tagTitleFor(m, t)} shifted={m.shiftedFrom} />)}
+                      covers={coversOf(m)} tags={tagsOf(m)} tagTitle={(t) => tagTitleFor(m, t)} shifted={m.shiftedFrom}
+                      checkCount={pushReach(m, week.generals, week.days).check} />)}
                   </div>
                 );
               })}
@@ -1464,7 +1494,7 @@ const AGE_CLASS: Record<1 | 2 | 3 | 4, string> = {
   4: "border-[#e4dbd8] bg-transparent text-[#a9a09c]",
 };
 
-function Tile({ m, open, onOpen, zone, priorLabel, priorWeeks, risk, cover, shifted, covers, tags, tagTitle: titleOf }: {
+function Tile({ m, open, onOpen, zone, priorLabel, priorWeeks, risk, cover, shifted, covers, tags, tagTitle: titleOf, checkCount = 0 }: {
   m: PromoMatch; open: boolean; onOpen: (m: PromoMatch, el: HTMLElement) => void; zone: ZoneMode;
   /** The tag's tooltip on THIS match, dates included (0207). */
   tagTitle?: (t: TagKey) => string;
@@ -1476,6 +1506,8 @@ function Tile({ m, open, onOpen, zone, priorLabel, priorWeeks, risk, cover, shif
   /** The general pushes that carried it, for the label. Empty unless `cover` is "covered". */
   covers: GeneralPush[];
   tags: TagKey[];
+  /** Dated check-first pushes reaching it, own and general (0238). "+N check" on a green tile. */
+  checkCount?: number;
 }) {
   /* A CHIP PER CHANNEL THAT HAS A PUSH, or is on with none — which is what "on" is now. */
   const lit = CHANNELS.filter((c) => channelsOn(m.plan).includes(c.key));
@@ -1581,10 +1613,18 @@ function Tile({ m, open, onOpen, zone, priorLabel, priorWeeks, risk, cover, shif
       <div className={`mt-px text-[11px] leading-[1.25] ${cancelled ? "text-deep-green/40" : "text-deep-green/65"}`}>{m.venue}</div>
       {/* EVERY COVERED TILE NAMES WHAT CARRIED IT. A dotted rail with no explanation is a mystery,
           and the operator cannot judge a blast they cannot see. */}
-      {cover === "covered" && covers.length > 0 && (
-        <div data-testid="cover-tag" className="mt-[3px] text-[10px] font-bold text-emerald-700">
+      {(cover === "covered" || (cover === "check" && datedPushes(m.plan).length === 0)) && covers.length > 0 && (
+        <div data-testid="cover-tag" className={`mt-[3px] text-[10px] font-bold ${cover === "check" ? "text-yellow-800" : "text-emerald-700"}`}>
           {coverLabel(covers[0], m.venue)}{covers.length > 1 ? ` +${covers.length - 1}` : ""}
         </div>
+      )}
+      {/* CHECK FIRST ON A GREEN TILE (0238). Something regular is going out; this says how many
+          more pushes are waiting on a fill check. A yellow tile needs no chip: its colour says it. */}
+      {(cover === "planned" || cover === "covered") && checkCount > 0 && (
+        <i data-testid="check-chip" data-n={checkCount}
+          className="mt-[4px] inline-block rounded-[4px] border border-yellow-400 bg-yellow-100 px-[5px] py-px text-[9px] font-extrabold not-italic text-yellow-800">
+          +{checkCount} check
+        </i>
       )}
       {/* TAGS: OUTLINED, NEVER FILLED. The tile already spends filled pills on the cancel ratio and
           the NEW badge; a filled tag would read as a 4/4 cancel at a glance. Three render and the

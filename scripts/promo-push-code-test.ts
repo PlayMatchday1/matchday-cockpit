@@ -33,7 +33,7 @@ const ok = (name: string, cond: boolean, d = "") => { cond ? (pass++, console.lo
 let seq = 0;
 const push = (o: Partial<PromoPush>): PromoPush => ({
   id: ++seq, matchApiId: 17516, channel: "wa", pushAt: null, topic: null,
-  promoCode: null, pushedAt: null, pushedBy: null, ...o,
+  promoCode: null, pushedAt: null, pushedBy: null, checkFirst: false, ...o,
 });
 const plan = (pushes: PromoPush[]): PromoPlan => ({
   matchApiId: 17516, pushes, comment: null, updatedBy: null, updatedAt: null,

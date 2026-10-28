@@ -183,8 +183,8 @@ export default function PushPlanEditor({
                      * things stack: the time and the ✕ share one line because both are small and
                      * fixed, and the code and the message each get the full width beneath them.
                      * Nothing competes with the message for horizontal space any more. */
-                    <div key={r.key} data-testid="push" data-key={c.key}
-                      className="mt-2.5 min-w-0 rounded-xl border border-cream-line bg-cream-soft/30 p-3 first:mt-1">
+                    <div key={r.key} data-testid="push" data-key={c.key} data-check-first={r.checkFirst ? "1" : "0"}
+                      className={`mt-2.5 min-w-0 rounded-xl border p-3 first:mt-1 ${CHECK_FIRST_BOX[r.checkFirst ? "on" : "off"]}`}>
                       {/* LINE 1: WHEN. flex, not grid — the ✕ is flex-none and the input takes the
                           rest, so there is no column for the message to be squeezed out of. */}
                       <div className="flex min-w-0 items-center gap-2.5">
@@ -214,6 +214,9 @@ export default function PushPlanEditor({
                           ×
                         </button>
                       </div>
+
+                      <CheckFirstToggle on={r.checkFirst} disabled={cancelled}
+                        onChange={(v) => set(c.key, { rows: rows.map((x) => (x.key === r.key ? { ...x, checkFirst: v } : x)) })} />
 
                       {/* LINE 2: THIS PUSH'S CODE. Blank is a real answer and the hint says so —
                           it is not "inherit the channel's", because there is no longer one. */}
@@ -273,7 +276,7 @@ export default function PushPlanEditor({
                     e.stopPropagation();
                     /* 8h BEFORE KICK-OFF, AS AN INSTANT, so it is right in every zone at once —
                        and it sorts into place by time rather than landing at the end. */
-                    const row: DraftRow = { key: newDraftKey(), pushAt: defaultPushAt(kickoff), topic: "", code: "" };
+                    const row: DraftRow = { key: newDraftKey(), pushAt: defaultPushAt(kickoff), topic: "", code: "", checkFirst: false };
                     set(c.key, { rows: sortRows([...rows, row]) });
                   }}
                   className="mt-1.5 min-h-[32px] rounded-lg border border-dashed border-[#cfdbd4] bg-white px-3 text-[11.5px] font-bold text-deep-green/65 hover:border-mint hover:bg-mint-soft/30 hover:text-emerald-700">
@@ -291,6 +294,35 @@ export default function PushPlanEditor({
         {sum.codes > 0 && <> · <b className="text-deep-green/70">{sum.codes}</b> with a code</>}
         {sum.undated > 0 && <> · <b className="text-amber-700">{sum.undated}</b> still needs a date</>}
       </div>
+    </div>
+  );
+}
+
+/* ── CHECK FIRST (0238) ───────────────────────────────────────────────────────────────────────
+ * Per push, off by default. A regular push always goes out; a check-first one is sent only if the
+ * match is still low a couple of hours before. The box turns yellow so a channel mixing both kinds
+ * reads at a glance. Exported because the general push sheet uses the same control and the same
+ * box colours, so the two cannot look different. */
+export const CHECK_FIRST_BOX = {
+  on: "border-yellow-400 bg-yellow-50",
+  off: "border-cream-line bg-cream-soft/30",
+} as const;
+
+export function CheckFirstToggle({ on, disabled = false, onChange }: {
+  on: boolean; disabled?: boolean; onChange: (v: boolean) => void;
+}) {
+  return (
+    <div className="mt-2.5 flex min-w-0 items-center gap-2.5" data-testid="check-first">
+      <button type="button" role="switch" aria-checked={on} aria-label="Check first" disabled={disabled}
+        data-testid="check-first-toggle" data-on={on ? "1" : "0"}
+        onClick={(e) => { e.stopPropagation(); onChange(!on); }}
+        className={`relative h-[20px] w-[34px] flex-none rounded-full transition disabled:opacity-40 ${on ? "bg-yellow-400" : "bg-[#dfe6e2]"}`}>
+        <span className={`absolute top-[3px] h-[14px] w-[14px] rounded-full bg-white shadow-sm transition-all ${on ? "left-[17px]" : "left-[3px]"}`} />
+      </button>
+      <span className="min-w-0">
+        <b className={`block text-[12px] font-extrabold ${on ? "text-yellow-800" : "text-deep-green/70"}`}>Check first</b>
+        <span className="block text-[11px] text-deep-green/50">Only send if the match is still low.</span>
+      </span>
     </div>
   );
 }

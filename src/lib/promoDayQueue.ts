@@ -9,7 +9,7 @@
  * tile that disagree is the one failure this page cannot afford, so the queue is a projection of
  * `week.matches` and never a second list. It creates nothing: the plans are made on the week below.
  */
-import { datedPushes, generalPushDayIdx, isPushOverdue, isPushSent,
+import { datedPushes, generalPushDayIdx, generalsCovering, isPushOverdue, isPushSent, realFillLabel,
   type GeneralPush, type PromoMatch, type PromoWeek, type PromoPush } from "./matchPromotion";
 
 /* ONE ROW SHAPE FOR BOTH. A general push sits in the same queue with the same Mark sent, and the
@@ -41,8 +41,8 @@ export function weekQueueEntries(week: PromoWeek): QueueEntry[] {
       m: null, general: g, at: Date.parse(g.pushAt as string),
       p: {
         id: g.id, matchApiId: 0, channel: g.channel, pushAt: g.pushAt, topic: g.topic,
-        promoCode: g.promoCode, pushedAt: g.pushedAt, pushedBy: g.pushedBy,
-      } as PromoPush,
+        promoCode: g.promoCode, pushedAt: g.pushedAt, pushedBy: g.pushedBy, checkFirst: g.checkFirst,
+      } satisfies PromoPush,
     }));
   return [...own, ...general];
 }
@@ -89,9 +89,16 @@ export function defaultDayIdx(week: PromoWeek, now: Date = new Date()): number {
   return i >= 0 ? i : 0;
 }
 
-/** The count the tab carries, so the operator can choose a day without opening any. */
-export function tabCounts(q: DayQueue): { late: number; todo: number; done: number; cancelled: number } {
-  return { late: q.late.length, todo: q.todo.length, done: q.done.length, cancelled: q.cancelled.length };
+/** The count the tab carries, so the operator can choose a day without opening any.
+ *  CHECK FIRST (0238) IS SPLIT OUT OF TO-SEND: "3 to send · 2 to check". `todo` is regular only. */
+export function tabCounts(q: DayQueue): { late: number; todo: number; check: number; done: number; cancelled: number } {
+  return {
+    late: q.late.length,
+    todo: q.todo.filter((e) => !e.p.checkFirst).length,
+    check: q.todo.filter((e) => e.p.checkFirst).length,
+    done: q.done.length,
+    cancelled: q.cancelled.length,
+  };
 }
 
 /* ── THE ARITHMETIC THE WHOLE SPLIT RESTS ON ─────────────────────────────────────────────────
@@ -100,4 +107,23 @@ export function tabCounts(q: DayQueue): { late: number; todo: number; done: numb
  * strip still looks right, and only the total disagrees. */
 export function queueTotal(week: PromoWeek, now: number = Date.now()): number {
   return weekQueues(week, now).reduce((s, q) => s + q.late.length + q.todo.length + q.done.length, 0);
+}
+
+/** The week's matches a general push actually reaches, on its own day, cancelled excluded. */
+export function generalReachMatches(g: GeneralPush, week: PromoWeek): PromoMatch[] {
+  return week.matches.filter((m) =>
+    m.state !== "cancelled" && generalsCovering(m, [g], week.days).length > 0);
+}
+
+/* ── THE FILL A CHECK-FIRST PUSH IS DECIDED ON (0238) ─────────────────────────────────────────
+ * "11/18 booked" for a match push; "3 matches: 11/18, 14/18, 9/18" for a general one. Real players
+ * only (realFillLabel), from the mirror as of its last sync. One function so the desktop row and
+ * the phone card cannot print different numbers. "?" where the mirror has no count. */
+export function checkFirstFill(e: QueueEntry, week: PromoWeek): string {
+  if (e.general) {
+    const ms = generalReachMatches(e.general, week);
+    const n = `${ms.length} match${ms.length === 1 ? "" : "es"}`;
+    return ms.length === 0 ? n : `${n}: ${ms.map((m) => realFillLabel(m) ?? "?").join(", ")}`;
+  }
+  return e.m ? `${realFillLabel(e.m) ?? "?"} booked` : "";
 }

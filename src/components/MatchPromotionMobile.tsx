@@ -18,13 +18,13 @@
 // SAME DATA, SAME ROUTES, SAME WRITES. Every figure here is computed by the desktop's own helpers
 // and passed in; nothing is re-derived and no count is redefined.
 
-import { CHANNELS, NEW_FLAG_LABEL, channelsOn, coverLabel, coverageCaption, coverageOf, coverageStateOf, coverageSummary, datedPushes, fmtPushIn, isPushOverdue, isPushSent, leadToKickoff, matchCodes, sentStamp, venueOffsetMs, type GeneralPush, type PromoMatch, type PromoPush, type PromoWeek, type PushDraft, type ZoneMode } from "@/lib/matchPromotion";
+import { CHANNELS, NEW_FLAG_LABEL, channelsOn, coverLabel, pushReach, coverageCaption, coverageOf, coverageStateOf, coverageSummary, datedPushes, fmtPushIn, isPushOverdue, isPushSent, leadToKickoff, matchCodes, sentStamp, venueOffsetMs, type GeneralPush, type PromoMatch, type PromoPush, type PromoWeek, type PushDraft, type ZoneMode } from "@/lib/matchPromotion";
 import { TAG_META, splitTags, tagTitle, tagsAtScope, type TagDates, type TagKey } from "@/lib/promoTags";
 import Starting11Control from "@/components/Starting11Control";
 /* THE VIEW LIST AND ITS LABELS COME FROM THE DESKTOP. Not a second list to keep in step — a
  * phone tab the desktop does not have is how the two surfaces end up offering different views. */
 import { MOBILE_VIEWS, VIEW_LABEL, type MobileView } from "@/components/MatchPromotionView";
-import type { QueueEntry } from "@/lib/promoDayQueue";
+import { checkFirstFill, type QueueEntry } from "@/lib/promoDayQueue";
 import MarkPushSent from "@/components/MarkPushSent";
 import PushPlanEditor from "@/components/PushPlanEditor";
 import PageComments from "@/components/PageComments";
@@ -118,8 +118,8 @@ function Chips({ m, litOnly = false }: { m: PromoMatch; litOnly?: boolean }) {
 
 /* ── DUE ─────────────────────────────────────────────────────────────────────────────────────── */
 
-function Due({ jobs, overdue, now, zone, onOpen, onReload, onError }: {
-  jobs: MobileProps["jobs"]; overdue: number; now: number; zone: ZoneMode;
+function Due({ week, jobs, overdue, now, zone, onOpen, onReload, onError }: {
+  week: PromoWeek; jobs: MobileProps["jobs"]; overdue: number; now: number; zone: ZoneMode;
   onOpen: MobileProps["onOpen"];
   onReload: () => void | Promise<void>; onError?: (msg: string) => void;
 }) {
@@ -137,9 +137,12 @@ function Due({ jobs, overdue, now, zone, onOpen, onReload, onError }: {
         </div>
       </div>
       {jobs.length === 0 && <p className="px-3 pb-4 text-[12.5px] text-deep-green/40">Nothing scheduled this week.</p>}
-      {jobs.map(({ m, p, at, general }) => {
+      {jobs.map((e) => {
+        const { m, p, at, general } = e;
         /* SENT GOES QUIET, NOT AWAY — the row stays on the list so everyone can see it was done. */
         const sent = isPushSent(p);
+        /* CHECK FIRST (0238), same label and same fill text as the desktop day list. */
+        const check = p.checkFirst && !sent;
         const late = isPushOverdue(p, now);
         const soon = !sent && !late && at - now < 12 * 3600_000;
         /* A GENERAL PUSH HAS NO MATCH TO TAKE A VENUE OFFSET FROM, so its time renders in the
@@ -151,10 +154,11 @@ function Due({ jobs, overdue, now, zone, onOpen, onReload, onError }: {
         const code = p.promoCode?.trim() || null;
         return (
           <div key={p.id} data-testid="m-due-card" data-push-id={p.id} data-channel={p.channel}
-            data-sent={sent ? "1" : "0"} data-late={late ? "1" : "0"}
+            data-sent={sent ? "1" : "0"} data-late={late ? "1" : "0"} data-check-first={p.checkFirst ? "1" : "0"}
             className={`mx-3 mb-2 rounded-[11px] border px-3 py-2.5 ${
               sent ? "border-cream-line bg-[#f4f7f5]"
-                : late ? "border-coral/45 bg-coral-soft/40" : soon ? "border-amber-300 bg-amber-50" : "border-cream-line bg-white"}`}>
+                : late ? "border-coral/45 bg-coral-soft/40" : check ? "border-yellow-400 bg-yellow-50"
+                : soon ? "border-amber-300 bg-amber-50" : "border-cream-line bg-white"}`}>
             <div className="flex flex-wrap items-baseline gap-2">
               <span className={`text-[13px] font-extrabold ${
                 sent ? "text-deep-green/45 line-through" : late ? "text-coral" : soon ? "text-amber-700" : ""}`}>
@@ -172,6 +176,12 @@ function Due({ jobs, overdue, now, zone, onOpen, onReload, onError }: {
                   {general.scope === "city" ? "CITY" : "FIELD"}
                 </i>
               )}
+              {check && (
+                <i data-testid="m-due-check" className="rounded-[5px] border border-yellow-400 bg-yellow-100 px-[5px] py-px text-[9px] font-extrabold not-italic tracking-[0.05em] text-yellow-800">
+                  CHECK FIRST
+                </i>
+              )}
+              {check && <span data-testid="m-due-fill" className="text-[12px] font-extrabold text-yellow-800">{checkFirstFill(e, week)}</span>}
               {sent && <span data-testid="m-due-stamp" className="text-[11px] text-deep-green/45">{sentStamp(p)}</span>}
               {/* THE SAME CONTROL THE DESKTOP STRIP USES, not a second implementation of one. */}
               <MarkPushSent push={p} onDone={onReload} onError={onError} />
@@ -269,6 +279,7 @@ function WeekByDay(p: MobileProps & { panel: React.ReactNode; viewTag?: TagKey |
                   className={`mb-2 rounded-[11px] border px-3 py-[11px] ${
                     m.state === "cancelled" ? "border-dashed border-cream-line bg-[#f7f8f7]"
                     : cover === "needs-decision" ? "border-amber-300 bg-amber-50"
+                    : cover === "check" ? "border-yellow-400 bg-yellow-100"
                     : cover === "none" ? "border-dashed border-cream-line bg-white"
                     : cover === "covered" ? "border-cream-line border-l-[3px] border-l-mint bg-white"
                     : "border-mint bg-mint-soft/50"} ${
@@ -310,10 +321,15 @@ function WeekByDay(p: MobileProps & { panel: React.ReactNode; viewTag?: TagKey |
                   )}
                   {/* EVERY COVERED ROW NAMES WHAT CARRIED IT. A dotted rail with no explanation is
                       a mystery, and on a phone there is no tooltip to fall back on. */}
-                  {cover === "covered" && covers.length > 0 && (
-                    <div data-testid="m-cover-tag" className="mt-[3px] text-[11px] font-bold text-emerald-700">
+                  {(cover === "covered" || (cover === "check" && datedPushes(m.plan).length === 0)) && covers.length > 0 && (
+                    <div data-testid="m-cover-tag" className={`mt-[3px] text-[11px] font-bold ${cover === "check" ? "text-yellow-800" : "text-emerald-700"}`}>
                       {coverLabel(covers[0], m.venue)}{covers.length > 1 ? ` +${covers.length - 1}` : ""}
                     </div>
+                  )}
+                  {(cover === "planned" || cover === "covered") && pushReach(m, week.generals, week.days).check > 0 && (
+                    <i data-testid="m-check-chip" className="mt-[4px] inline-block rounded-[4px] border border-yellow-400 bg-yellow-100 px-[5px] py-px text-[9.5px] font-extrabold not-italic text-yellow-800">
+                      +{pushReach(m, week.generals, week.days).check} check
+                    </i>
                   )}
                   {/* TAGS: OUTLINED, NEVER FILLED, three then a count — the row already spends
                       filled pills on the cancel ratio and the NEW badge. */}
@@ -579,7 +595,7 @@ export default function MatchPromotionMobile(p: MobileProps) {
         </div>
       )}
 
-      {tab === "due" && <Due jobs={p.jobs} overdue={p.overdue} now={now} zone={p.zone} onOpen={p.onOpen}
+      {tab === "due" && <Due week={week} jobs={p.jobs} overdue={p.overdue} now={now} zone={p.zone} onOpen={p.onOpen}
         onReload={p.onReload} onError={(msg) => p.onError?.(msg)} />}
       {/* THE SAME LIST AS THE DESKTOP, from the same table and the same route. */}
       <PageComments weekStart={week.weekStart} placeholder="Suggestion about this week" />

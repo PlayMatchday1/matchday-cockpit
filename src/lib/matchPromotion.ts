@@ -31,6 +31,7 @@ import { clusterMinutes, slotRiskKey } from "./cancelPatterns";
  * same canonical venue the slate does. A second vocabulary here would mean the two never meet. */
 import { CITY_CODE_TO_DISPLAY } from "./scheduleReconcile";
 import { canonicalVenueName } from "./venueResolver";
+import { realCount } from "./monthGrid";
 
 /** The six channels, fixed, and always rendered in this order. */
 export const CHANNELS = [
@@ -69,6 +70,8 @@ export type PromoPush = {
   pushedAt: string | null;
   /** Who said so. The same identity updatedBy takes: a person, not a delivery receipt. */
   pushedBy: string | null;
+  /** 0238. True = only send if the match is still low a couple of hours before. False = regular. */
+  checkFirst: boolean;
 };
 
 export type PromoPlan = {
@@ -333,7 +336,7 @@ export function defaultPushAt(kickoffUtc: string | null): string | null {
  * differing codes — exactly what a channel-level write produces. Every existing row therefore
  * already carries its channel's code, so the backfill this change would have needed had already
  * happened, continuously, as a side effect of how saving worked. */
-export type DraftRow = { key: string; id?: number; pushAt: string | null; topic: string; code: string };
+export type DraftRow = { key: string; id?: number; pushAt: string | null; topic: string; code: string; checkFirst: boolean };
 /* `code` IS GONE FROM THE CHANNEL. It is deliberately not left in place unread: a field nothing
  * reads and something still writes is the drift this change exists to end. */
 export type DraftChannel = { on: boolean; rows: DraftRow[] };
@@ -352,6 +355,7 @@ export function draftFromPlan(plan: PromoPlan | null): PushDraft {
       // EACH ROW CARRIES ITS OWN. No channel-wide read, so a saved per-push code survives a load.
       rows: rows.map((p) => ({
         key: `p-${p.id}`, id: p.id, pushAt: p.pushAt, topic: p.topic ?? "", code: p.promoCode ?? "",
+        checkFirst: p.checkFirst,
       })),
     };
   }
@@ -360,17 +364,17 @@ export function draftFromPlan(plan: PromoPlan | null): PushDraft {
 
 /** What the route is sent: every row of every ON channel, flattened. An OFF channel contributes
  *  nothing, which is how its rows get deleted. */
-export function draftToPushes(draft: PushDraft): { id?: number; channel: ChannelKey; at: string | null; topic: string; promoCode: string }[] {
-  const out: { id?: number; channel: ChannelKey; at: string | null; topic: string; promoCode: string }[] = [];
+export function draftToPushes(draft: PushDraft): { id?: number; channel: ChannelKey; at: string | null; topic: string; promoCode: string; checkFirst: boolean }[] {
+  const out: { id?: number; channel: ChannelKey; at: string | null; topic: string; promoCode: string; checkFirst: boolean }[] = [];
   for (const k of CHANNEL_KEYS) {
     const c = draft[k];
     if (!c?.on) continue;
     /* AN ON CHANNEL WITH NO ROWS IS ONE ROW WITH NO DATE. That is how "chosen, not scheduled"
      * survives at all now that there is no boolean to carry it. */
-    const rows = c.rows.length > 0 ? c.rows : [{ key: "implicit", pushAt: null, topic: "", code: "" } as DraftRow];
+    const rows = c.rows.length > 0 ? c.rows : [{ key: "implicit", pushAt: null, topic: "", code: "", checkFirst: false } as DraftRow];
     for (const r of rows) {
       // EACH PUSH SENDS ITS OWN CODE. This was `c.code` — the channel's — written onto every row.
-      out.push({ id: r.id, channel: k, at: r.pushAt, topic: r.topic, promoCode: r.code });
+      out.push({ id: r.id, channel: k, at: r.pushAt, topic: r.topic, promoCode: r.code, checkFirst: r.checkFirst });
     }
   }
   return out;
@@ -745,6 +749,12 @@ export type PromoMatch = VeoMatch & {
    * has not moved, or when the slot is genuinely new. The badge is gone for this case — the cancel
    * ramp already calls it one slot — and this is where the information went instead. */
   shiftedFrom: { times: string[]; weeks: number } | null;
+  /* FAKES AND CAPACITY, for a check-first push's real fill (0238). Read here, NOT added to
+   * fetchVeoWeek's select: that select is Master Schedule's spec, and mirror-writethrough-test
+   * requires every column in it to be write-through-able. fake_player_count never can be (the
+   * single-match GET does not carry fakePlayers), so it stays out of that query. */
+  fakePlayerCount: number | null;
+  capacity: number | null;
 };
 
 export type PromoWeek = {
@@ -831,6 +841,8 @@ async function fetchPlans(
         promoCode: r.promo_code ?? null,
         pushedAt: r.pushed_at ?? null,
         pushedBy: r.pushed_by ?? null,
+        /* === true, so a row read before 0238 existed (no column) is a regular push. */
+        checkFirst: r.check_first === true,
       });
     }
   }
@@ -963,16 +975,23 @@ export async function fetchPromoWeek(
       /** The time a move left behind, so NEW TIME can say what makes it a move. */
       movedFrom: movedFromTime(m, slate, current),
       shiftedFrom: priorTimesFor(m, slate),
+      fakePlayerCount: null, capacity: null,   // filled from fetchFill below
     };
   });
   // City, then day, then time. The grid renders in this order and so does the worklist fallback.
   matches.sort((a, b) => a.city.localeCompare(b.city) || a.dayIdx - b.dayIdx || a.minutes - b.minutes);
 
   const fieldIds = matches.map((m) => m.fieldId).filter((x): x is number => x != null);
-  const [generals, tags] = await Promise.all([
+  const [generals, tags, fill] = await Promise.all([
     fetchGeneralPushes(sb, week.days),
     fetchPromoTags(sb, fieldIds, matches.map((m) => m.apiId)),
+    fetchFill(sb, matches.map((m) => m.apiId)),
   ]);
+  for (const m of matches) {
+    const f = fill.get(m.apiId);
+    m.fakePlayerCount = f?.fake ?? null;
+    m.capacity = f?.cap ?? null;
+  }
 
   return {
     weekStart: week.weekStart,
@@ -1085,6 +1104,8 @@ export type GeneralPush = {
   fieldId: number | null;
   /** Who it went to, in the operator's own words. Never derived. */
   audience: string | null;
+  /** 0238. Same meaning as on a match push: only send if the matches it reaches are still low. */
+  checkFirst: boolean;
 };
 
 /** The day column a general push falls in, or null when it carries no date. */
@@ -1115,14 +1136,55 @@ export function generalsCovering(
 /* THE THREE COVERAGE STATES, AND THE MIDDLE ONE IS THE FEATURE. A general push is real promotion,
  * so a match it carried must not read as forgotten; it is not a push written for that match, so it
  * must not read the same either. Cancelled still wins over all three: nothing was missed. */
+/* ── CHECK FIRST (0238): ONE RULE FOR OWN AND GENERAL PUSHES ─────────────────────────────────
+ * Ryan: "a match is green if any regular push reaches it (its own or a general one), yellow if
+ * only check-first pushes reach it". "Reaches" means a DATED push: an own push with a time, or a
+ * general push covering this match's day. An undated push reaches nothing, as before.
+ *
+ *   own dated regular push           planned          green
+ *   regular general push, no own     covered          green, dotted rail
+ *   only check-first pushes reach    check            yellow
+ *   own pushes, none dated           needs-decision   amber
+ *
+ * A REGULAR GENERAL PUSH NOW BEATS AN OWN UNDATED ONE. Before 0238 an undated own push made the
+ * tile amber even when a city push carried the match; under the one rule something regular is
+ * going out, so it is green, and the panel still shows the undated channel in amber. */
 export function coverageOf(
   m: PromoMatch,
   generals: readonly GeneralPush[],
   days: { iso: string }[],
-): "planned" | "covered" | "none" | "needs-decision" | "cancelled" {
+): "planned" | "covered" | "check" | "none" | "needs-decision" | "cancelled" {
   if (m.state === "cancelled") return "cancelled";
-  if (m.state === "planned" || m.state === "needs-decision") return m.state;
-  return generalsCovering(m, generals, days).length > 0 ? "covered" : "none";
+  const reach = pushReach(m, generals, days);
+  if (reach.ownRegular > 0) return "planned";
+  if (reach.generalRegular > 0) return "covered";
+  if (reach.check > 0) return "check";
+  if (m.state === "needs-decision") return "needs-decision";
+  return "none";
+}
+
+/** The dated pushes reaching this match, split regular against check-first. The tile's colour and
+ *  its "+N check" chip both read this, so they cannot disagree. */
+export function pushReach(
+  m: PromoMatch,
+  generals: readonly GeneralPush[],
+  days: { iso: string }[],
+): { ownRegular: number; generalRegular: number; check: number } {
+  const own = datedPushes(m.plan);
+  const gens = generalsCovering(m, generals, days);
+  return {
+    ownRegular: own.filter((p) => !p.checkFirst).length,
+    generalRegular: gens.filter((g) => !g.checkFirst).length,
+    check: own.filter((p) => p.checkFirst).length + gens.filter((g) => g.checkFirst).length,
+  };
+}
+
+/* REAL PLAYERS ONLY. player_count is `_count.players`, which counts fakes too; monthGrid.realCount
+ * is the one place the subtraction lives. "11/18 booked", or null when the mirror has no count. */
+export function realFillLabel(m: Pick<PromoMatch, "playerCount" | "fakePlayerCount" | "capacity">): string | null {
+  const real = realCount({ players: m.playerCount, fakePlayers: m.fakePlayerCount });
+  if (real == null) return null;
+  return m.capacity != null ? `${real}/${m.capacity}` : `${real}`;
 }
 
 /** "in city slate" / "in Hattrick slate" — a dotted rail with no explanation is a mystery. */
@@ -1211,6 +1273,24 @@ export function listChannels(labels: readonly string[]): string {
  *
  * THIS IS FIXED IN THE READ, NOT ON THE PAGE. A page that special-cased nulls it had asked the
  * database to exclude would be a page holding a workaround for a query defect one file away. */
+/* FAKE COUNT AND CAPACITY PER MATCH, off the same mirror rows fetchVeoWeek read. A failed read
+ * leaves both null, which prints "?" on a check-first row rather than a wrong number. */
+async function fetchFill(sb: SupabaseClient, ids: number[]): Promise<Map<number, { fake: number | null; cap: number | null }>> {
+  const out = new Map<number, { fake: number | null; cap: number | null }>();
+  for (let i = 0; i < ids.length; i += 1000) {
+    const { data, error } = await sb.from("mdapi_matches")
+      .select("api_id, fake_player_count, max_player_count").in("api_id", ids.slice(i, i + 1000));
+    if (error) return out;
+    for (const r of data ?? []) {
+      out.set(r.api_id as number, {
+        fake: (r.fake_player_count as number | null) ?? null,
+        cap: (r.max_player_count as number | null) ?? null,
+      });
+    }
+  }
+  return out;
+}
+
 async function fetchGeneralPushes(sb: SupabaseClient, days: { iso: string }[]): Promise<GeneralPush[]> {
   if (days.length === 0) return [];
   const from = `${days[0].iso}T00:00:00`;
@@ -1231,6 +1311,7 @@ async function fetchGeneralPushes(sb: SupabaseClient, days: { iso: string }[]): 
       pushedAt: (r.pushed_at as string | null) ?? null, pushedBy: (r.pushed_by as string | null) ?? null,
       city: String(r.scope_city ?? ""), fieldId: (r.scope_field_id as number | null) ?? null,
       audience: (r.audience as string | null) ?? null,
+      checkFirst: r.check_first === true,
     });
   }
   return out.sort(byPushTime);
