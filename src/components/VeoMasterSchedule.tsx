@@ -431,6 +431,55 @@ export default function VeoMasterSchedule() {
   }, [view, range]);
   useEffect(() => { if (view === "month" && range) void loadRange(range); }, [view, range, loadRange]);
 
+  /* ── LIVE COUNTS FOR TODAY ONWARD (2026-10-28) ─────────────────────────────────────────────────
+   * On open and every 5 minutes while Month is on screen, ask the server to re-pull the upcoming
+   * days of the visible span from MatchDay. The server does nothing if the mirror is under 5
+   * minutes old, so several staff with the page open share one pull. When it did pull, the range
+   * is re-read quietly so the counts move without the grid blanking. Past days are never pulled.
+   *
+   * SKIPPED WHILE THE DRAWER HAS UNSAVED EDITS and while the tab is hidden: a re-read must not move
+   * a match out from under an edit, and nobody needs live counts on a tab they are not looking at. */
+  const [liveAsOf, setLiveAsOf] = useState<string | null>(null);
+  const [liveFail, setLiveFail] = useState(false);
+  const [liveUpcoming, setLiveUpcoming] = useState(false);
+  const liveKey = useRef("");
+  const dirtyRef = useRef(false);
+  dirtyRef.current = drawerDirty;
+  useEffect(() => {
+    if (view !== "month" || !range) return;
+    const r = visibleSpan(range, WS);
+    const key = `${r.from}|${r.to}`;
+    liveKey.current = key;
+    setLiveAsOf(null); setLiveFail(false); setLiveUpcoming(false);
+    const tick = async () => {
+      if (dirtyRef.current || document.hidden) return;
+      try {
+        const { data: sess } = await supabase.auth.getSession();
+        const token = sess.session?.access_token;
+        const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+        const res = await fetch(`/api/veo/live-counts?from=${r.from}&to=${r.to}`, { method: "POST", headers, cache: "no-store" });
+        const j = await res.json().catch(() => ({}));
+        if (liveKey.current !== key) return;
+        if (!res.ok) { setLiveFail(true); return; }
+        setLiveFail(false);
+        setLiveUpcoming(!!j.upcoming);
+        setLiveAsOf(j.asOf ?? null);
+        if (j.pulled && !dirtyRef.current) {
+          const rr = await fetch(`/api/veo/range?from=${r.from}&to=${r.to}`, { headers, cache: "no-store" });
+          const jj = await rr.json().catch(() => null);
+          if (rr.ok && jj && liveKey.current === key) setMonthData({ matches: jj.matches as GridMatch[], dataAsOf: jj.dataAsOf ?? null });
+        }
+      } catch {
+        if (liveKey.current === key) setLiveFail(true);
+      }
+    };
+    void tick();
+    const t = setInterval(() => void tick(), 5 * 60_000);
+    return () => clearInterval(t);
+  }, [view, range]);
+  const liveMs = liveAsOf ? Date.parse(liveAsOf) : NaN;
+  const liveMins = Number.isFinite(liveMs) ? Math.max(0, Math.floor((nowMs - liveMs) / 60000)) : null;
+
   useEffect(() => {
     if (!hydrated) return;   // see the note on `hydrated` — never write over a blob not yet read
     try {
@@ -1123,6 +1172,18 @@ export default function VeoMasterSchedule() {
                       : staleMins >= 2 ? `Data as of ${updatedLabel} · ${staleLabel}`
                       : `Data as of ${updatedLabel}`}
                   </span>
+                  {/* LIVE COUNTS NOTE. Month only, and only when the range reaches today or later. */}
+                  {view === "month" && (liveUpcoming || liveFail) && (
+                    <span className={"vms-stamp vms-live" + (liveFail || (liveMins ?? 0) >= 10 ? " vms-stamp-failed" : "")}
+                      data-testid="live-counts"
+                      title="Player counts for today and later are re-pulled from MatchDay every 5 minutes while this page is open, the same numbers Gameday Ops shows. Past days don't change, so they are not re-pulled.">
+                      {liveFail ? "Counts not live right now"
+                        : liveMins == null ? "Checking live counts"
+                        : liveMins < 1 ? "Live counts · updated just now"
+                        : liveMins >= 120 ? `Live counts · updated ${Math.floor(liveMins / 60)} h ago`
+                        : `Live counts · updated ${liveMins} min ago`}
+                    </span>
+                  )}
                 </span>
             <span className="vms-control-label">View</span>
             <div className="vms-segmented" role="tablist" aria-label="View">

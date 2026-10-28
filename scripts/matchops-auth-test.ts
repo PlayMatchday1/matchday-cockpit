@@ -401,6 +401,9 @@ for (const r of ["list", "detail/[id]", "fields", "matches", "check"]) {
     "veo/day/route.ts": "crm",
     "veo/inbound/route.ts": "shared-secret", // machine-to-machine from the Gmail forwarder, no session
     "veo/intent/route.ts": "crm",
+    /* ADDED 2026-10-28. Month view's live counts: re-pulls today onward into the mirror only when
+     * it is over 5 minutes old. Same gate as /api/veo/range, the read it refreshes. */
+    "veo/live-counts/route.ts": "crm",
     /* ADDED 2026-09-01. Re-pulls one week of matches from MatchDay into the mirror for Master
      * Schedule's Refresh. It writes the MIRROR, never MatchDay, so it is gated as a Match Ops
      * action (capability "matchops") rather than as a match write. */

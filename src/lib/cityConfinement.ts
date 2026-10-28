@@ -273,6 +273,12 @@ const CONFINED_ROUTE_EXACT: readonly string[] = [
    * assertion in city-confinement-test that keeps all four refused is what caught that the first
    * time and it still passes unchanged. */
   "/api/veo/range",
+  /* MONTH VIEW'S LIVE COUNTS (2026-10-28), exact. Unlike /api/veo/resync (refused: a caller-driven
+   * fleet re-pull of any week, on demand), this one re-pulls only TODAY ONWARD inside a capped
+   * window and only when the mirror is over 5 minutes old, so calling it again changes nothing.
+   * It returns timestamps, never a match; the counts themselves still arrive through the scoped
+   * /api/veo/range above. Ryan asked for confined staff to see live counts too. */
+  "/api/veo/live-counts",
   /* THE DOOR TO THE CHATS PAGE, and it was shut while every room behind it was open.
    *
    * /api/match-chats/ is on the prefix list, so a confined account's chat LIST rendered perfectly —
