@@ -475,7 +475,12 @@ export default function VeoMasterSchedule() {
     };
     void tick();
     const t = setInterval(() => void tick(), 5 * 60_000);
-    return () => clearInterval(t);
+    /* COMING BACK TO THE TAB CHECKS AT ONCE. A tab opened in the background skipped its first
+     * check, and without this would wait up to 5 minutes after being looked at. The server's own
+     * 5-minute gate makes an extra check free when the counts are already fresh. */
+    const onVis = () => { if (!document.hidden) void tick(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => { clearInterval(t); document.removeEventListener("visibilitychange", onVis); };
   }, [view, range]);
   const liveMs = liveAsOf ? Date.parse(liveAsOf) : NaN;
   const liveMins = Number.isFinite(liveMs) ? Math.max(0, Math.floor((nowMs - liveMs) / 60000)) : null;
