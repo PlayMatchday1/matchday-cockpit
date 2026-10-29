@@ -37,6 +37,14 @@ export type AreaPlayer = {
   fieldMi: Record<number, number>;
   /** Placed at their zip's Census centre because MatchDay sent no coordinates. */
   fromZip: boolean;
+  /** Venue (map field id) -> [matches there, latest local day], from the same plays as `matches`. */
+  playsAt: Record<number, [number, string]>;
+};
+
+/** Matches at one map field (all of its MatchDay field ids) and the latest one's local day. */
+export const playsHere = (r: AreaPlayer, fieldId: number): { matches: number; last: string | null } => {
+  const c = r.playsAt?.[fieldId];
+  return c ? { matches: c[0], last: c[1] || null } : { matches: 0, last: null };
 };
 
 /* A DELETED ACCOUNT IS SCRUBBED IN PLACE: "Deleted" / "Account", phone null, email a tombstone at
@@ -66,12 +74,19 @@ export const KLAVIYO_HEADER = [
  * with a leading apostrophe; the phone is NOT, because E.164 starts with + and Klaviyo needs it as is. */
 const safe = (s: string | null) => (s == null ? "" : /^[=+\-@]/.test(s) ? `'${s}` : s);
 
-export function klaviyoRows(rows: AreaPlayer[]): string[][] {
+/** With a field selected (`hereFieldId`), two columns follow: matches_here and last_here at that field.
+ *  matches_played stays every match, wherever it was played. */
+export function klaviyoRows(rows: AreaPlayer[], hereFieldId?: number | null): string[][] {
+  const here = hereFieldId != null;
   return [
-    [...KLAVIYO_HEADER],
-    ...rows.map((r) => [
-      safe(r.firstName), safe(r.lastName), r.email ?? "", r.phoneE164 ?? "", r.zip ?? "", safe(r.city), r.state ?? "",
-      r.lastPlayed ?? "", ACTIVITY_LABEL[r.activity], String(r.matches), safe(r.favouriteField), r.member ? "true" : "false",
-    ]),
+    [...KLAVIYO_HEADER, ...(here ? ["matches_here", "last_here"] : [])],
+    ...rows.map((r) => {
+      const h = here ? playsHere(r, hereFieldId) : null;
+      return [
+        safe(r.firstName), safe(r.lastName), r.email ?? "", r.phoneE164 ?? "", r.zip ?? "", safe(r.city), r.state ?? "",
+        r.lastPlayed ?? "", ACTIVITY_LABEL[r.activity], String(r.matches), safe(r.favouriteField), r.member ? "true" : "false",
+        ...(h ? [String(h.matches), h.last ?? ""] : []),
+      ];
+    }),
   ];
 }

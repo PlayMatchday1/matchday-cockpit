@@ -7,7 +7,7 @@
 
 import { useMemo, useState } from "react";
 import { downloadCsv } from "@/components/growth/format";
-import { klaviyoRows, type AreaPlayer } from "@/lib/areaPlayers";
+import { klaviyoRows, playsHere, type AreaPlayer } from "@/lib/areaPlayers";
 import { ACTIVITIES, ACTIVITY_FILL, ACTIVITY_LABEL, ACTIVITY_SHORT, type Activity } from "@/lib/wherePlayed";
 
 // A match day is its LOCAL calendar day, formatted at UTC noon so no time zone can move it.
@@ -15,7 +15,7 @@ const fmtDay = (ymd: string | null) => (ymd ? new Intl.DateTimeFormat("en-US", {
 const players = (n: number) => `${n.toLocaleString("en-US")} ${n === 1 ? "player" : "players"}`;
 const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "area";
 
-export default function LocationsPlayersPanel({ title, within, rows, loading, error, onClear, distance, newCover }: {
+export default function LocationsPlayersPanel({ title, within, rows, loading, error, onClear, distance, newCover, fieldId }: {
   /** The area's name: "Zip 78738", "PARMER Stadium", "Richardson test", "Austin", "All cities". */
   title: string;
   /** After the count, for a field or test pin: " within 10 mi". */
@@ -30,18 +30,33 @@ export default function LocationsPlayersPanel({ title, within, rows, loading, er
   distance?: ReadonlyMap<number, number>;
   /** TEST PIN ONLY: the players it would newly cover, behind the "No field nearby today" toggle. */
   newCover?: ReadonlySet<number>;
+  /** A REAL FIELD is selected (its map id, so every MatchDay field id at the venue): the Played here
+   *  filter, Matches here and Last here. Never set for a test pin, a bubble or the city view. */
+  fieldId?: number;
 }) {
   const [act, setAct] = useState<Activity | "all">("all");
   const [member, setMember] = useState<"all" | "yes" | "no">("all");
   const [onlyNew, setOnlyNew] = useState(false);
   const newOn = onlyNew && newCover != null;
+  const [played, setPlayed] = useState<"all" | "yes" | "no">("all");
+  const here = fieldId != null;
+  const playedOn = here && played !== "all";
   const newCount = useMemo(() => (newCover ? rows.filter((r) => newCover.has(r.id)).length : 0), [rows, newCover]);
-  const shown = useMemo(() => rows
-    .filter((r) => (act === "all" || r.activity === act) && (member === "all" || r.member === (member === "yes")) && (!newOn || newCover!.has(r.id)))
+  // Each Played here option counts the rows the OTHER filters leave, so its number is what clicking it shows.
+  const otherFiltered = useMemo(() => rows
+    .filter((r) => (act === "all" || r.activity === act) && (member === "all" || r.member === (member === "yes")) && (!newOn || newCover!.has(r.id))),
+  [rows, act, member, newOn, newCover]);
+  const playedCount = useMemo(() => {
+    if (!here) return { all: 0, yes: 0, no: 0 };
+    const yes = otherFiltered.filter((r) => playsHere(r, fieldId).matches > 0).length;
+    return { all: otherFiltered.length, yes, no: otherFiltered.length - yes };
+  }, [otherFiltered, here, fieldId]);
+  const shown = useMemo(() => otherFiltered
+    .filter((r) => !playedOn || (playsHere(r, fieldId!).matches > 0) === (played === "yes"))
     .sort((a, b) => (distance ? (distance.get(a.id) ?? Infinity) - (distance.get(b.id) ?? Infinity) : 0)
       || (b.lastPlayed ?? "").localeCompare(a.lastPlayed ?? "") || b.matches - a.matches
-      || `${a.lastName ?? ""} ${a.firstName ?? ""}`.localeCompare(`${b.lastName ?? ""} ${b.firstName ?? ""}`)), [rows, act, member, newOn, newCover, distance]);
-  const filtered = act !== "all" || member !== "all" || newOn;
+      || `${a.lastName ?? ""} ${a.firstName ?? ""}`.localeCompare(`${b.lastName ?? ""} ${b.firstName ?? ""}`)), [otherFiltered, playedOn, played, fieldId, distance]);
+  const filtered = act !== "all" || member !== "all" || newOn || playedOn;
 
   return (
     <div className="lp" data-testid="area-players">
@@ -56,8 +71,8 @@ export default function LocationsPlayersPanel({ title, within, rows, loading, er
           {filtered && !loading && <div className="lp-sub" data-testid="area-players-shown">{players(shown.length)} match the filters</div>}
         </div>
         <button type="button" className="loc-btn lp-export" data-testid="area-players-export" disabled={loading || shown.length === 0}
-          title={shown.length === 0 ? "No players to export" : "CSV for a Klaviyo list import: first_name, last_name, email, phone_number (E.164), zip, city, state, last_played, activity_bucket, matches_played, favourite_field, member"}
-          onClick={() => downloadCsv(`players-${slug(title)}-${new Date().toISOString().slice(0, 10)}.csv`, klaviyoRows(shown))}>
+          title={shown.length === 0 ? "No players to export" : `CSV for a Klaviyo list import: first_name, last_name, email, phone_number (E.164), zip, city, state, last_played, activity_bucket, matches_played (all fields), favourite_field, member${here ? ", matches_here, last_here (this field)" : ""}`}
+          onClick={() => downloadCsv(`players-${slug(title)}-${new Date().toISOString().slice(0, 10)}.csv`, klaviyoRows(shown, fieldId))}>
           Export CSV for Klaviyo ({shown.length.toLocaleString("en-US")})
         </button>
       </div>
@@ -77,6 +92,15 @@ export default function LocationsPlayersPanel({ title, within, rows, loading, er
               className={"lm-seg-btn" + (member === k ? " lm-seg-on" : "")} onClick={() => setMember(k)}>{l}</button>
           ))}
         </div>
+        {here && (
+          <div className="lm-seg" role="group" aria-label="Played at this field">
+            {([["all", "Anyone"], ["yes", "Played here"], ["no", "Never played here"]] as const).map(([k, l]) => (
+              <button type="button" key={k} aria-pressed={played === k} data-testid={`ap-here-${k}`}
+                title={k === "yes" ? `At least one match at ${title}` : k === "no" ? `No match at ${title} yet` : undefined}
+                className={"lm-seg-btn" + (played === k ? " lm-seg-on" : "")} onClick={() => setPlayed(k)}>{l} ({playedCount[k].toLocaleString("en-US")})</button>
+            ))}
+          </div>
+        )}
         {newCover && (
           <div className="lm-seg" role="group" aria-label="No field nearby today">
             <button type="button" aria-pressed={newOn} data-testid="ap-new-only"
@@ -97,11 +121,13 @@ export default function LocationsPlayersPanel({ title, within, rows, loading, er
             <thead>
               <tr>
                 <th>Name</th>{distance && <th className="loc-num">Distance</th>}<th>Email</th><th>Phone</th><th>Area</th><th>Zip</th><th>City</th>
-                <th>Last played</th><th>Activity</th><th className="loc-num">Matches</th><th>Favourite field</th><th>Member</th>
+                <th>Last played</th>{here && <th>Last here</th>}<th>Activity</th>
+                <th className="loc-num" title={here ? `Matches at ${title}. The CSV also has every match, as matches_played.` : undefined}>{here ? "Matches here" : "Matches"}</th>
+                <th>Favourite field</th><th>Member</th>
               </tr>
             </thead>
             <tbody>
-              {shown.map((r) => (
+              {shown.map((r) => { const h = here ? playsHere(r, fieldId) : null; return (
                 <tr key={r.id} data-testid="area-player-row">
                   <td className="lp-name">{[r.firstName, r.lastName].filter(Boolean).join(" ") || "—"}</td>
                   {distance && <td className="loc-num">{distance.has(r.id) ? `${distance.get(r.id)!.toFixed(1)} mi` : ""}</td>}
@@ -111,12 +137,13 @@ export default function LocationsPlayersPanel({ title, within, rows, loading, er
                   <td>{r.zip ?? "—"}</td>
                   <td>{r.city ? `${r.city}${r.state ? `, ${r.state}` : ""}` : "—"}</td>
                   <td className="lp-nowrap">{fmtDay(r.lastPlayed)}</td>
+                  {h && <td className="lp-nowrap" data-testid="area-player-last-here">{h.last ? fmtDay(h.last) : "Never"}</td>}
                   <td className="lp-nowrap"><i className="lm-swatch" style={{ background: ACTIVITY_FILL[r.activity] }} />{ACTIVITY_SHORT[r.activity]}</td>
-                  <td className="loc-num">{r.matches}</td>
+                  <td className="loc-num" data-testid="area-player-matches">{h ? h.matches : r.matches}</td>
                   <td>{r.favouriteField ?? "—"}</td>
                   <td>{r.member ? "Member" : "—"}</td>
                 </tr>
-              ))}
+              ); })}
             </tbody>
           </table>
         </div>

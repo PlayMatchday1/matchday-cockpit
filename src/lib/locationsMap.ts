@@ -402,6 +402,9 @@ export type PlayerPlace = {
   fieldMi: Record<number, number>;
   /** Placed at their zip's Census centre because MatchDay sent no coordinates. */
   fromZip: boolean;
+  /** Venue (unit id) -> [matches there, the latest one's local day]: every MatchDay field id of the
+   *  venue counts, as the map's pins and "Where they play" group them. */
+  playsAt: Record<number, [number, string]>;
 };
 
 export function locatePlayers(input: Parameters<typeof buildLocationsMap>[0]): PlayerPlace[] {
@@ -421,12 +424,13 @@ export function locatePlayers(input: Parameters<typeof buildLocationsMap>[0]): P
     const a = actS.get(id) ?? {};
     const plays = input.history?.playsByPlayer.get(id) ?? [];
     let last: (typeof plays)[number] | null = null;
-    const byField = new Map<number, { n: number; ms: number }>();
+    const byField = new Map<number, { n: number; ms: number; day: string }>();
     for (const p of plays) {
       if (!last || p.ms > last.ms) last = p;
       const u = unitIdOf(p.fieldId, links);
-      const g = byField.get(u) ?? { n: 0, ms: 0 };
-      g.n++; g.ms = Math.max(g.ms, p.ms);
+      const g = byField.get(u) ?? { n: 0, ms: -Infinity, day: "" };
+      g.n++;
+      if (p.ms > g.ms) { g.ms = p.ms; g.day = p.day; }
       byField.set(u, g);
     }
     // FAVOURITE = the most matches; a tie goes to the one played most recently.
@@ -441,6 +445,7 @@ export function locatePlayers(input: Parameters<typeof buildLocationsMap>[0]): P
       fieldReach: e.fieldReach ?? {},
       fieldMi: e.fieldMi ?? {},
       fromZip: srcOf.get(id) === "zip_centroid",
+      playsAt: Object.fromEntries([...byField].map(([u, g]) => [u, [g.n, g.day]])),
     });
   }
   return out;

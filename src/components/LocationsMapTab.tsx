@@ -281,7 +281,7 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin, ap
    * "No field nearby today" is its "New coverage". It wins over a field or bubble selection. */
   const selPin = tf.enabled && tf.selected ? tf.pins.find((p) => p.key === tf.selected) ?? null : null;
   const pinMembers = selPin ? tf.impact?.pins.find((p) => p.key === selPin.key)?.members ?? null : null;
-  const area: { title: string; rows: AreaPlayer[]; within?: string; distance?: Map<number, number>; newCover?: Set<number>; waiting?: boolean; onClear?: () => void } = (() => {
+  const area: { title: string; rows: AreaPlayer[]; within?: string; distance?: Map<number, number>; newCover?: Set<number>; fieldId?: number; waiting?: boolean; onClear?: () => void } = (() => {
     const all = people ?? [];
     if (selPin) {
       const near = (pinMembers ?? []).filter((m) => m.reach <= reach);
@@ -295,7 +295,7 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin, ap
     if (city && selZip) return { title: selZip.zip ? `Zip ${selZip.zip}` : selZip.area, rows: all.filter((p) => (act ? p.keys.cityAct : p.keys.city) === selZip.key) };
     if (city && areaField) {
       const rows = all.filter((p) => (p.fieldReach[areaField.id] ?? Infinity) <= reach);
-      return { title: areaField.title, within: ` within ${reach} ${U}`, rows,
+      return { title: areaField.title, within: ` within ${reach} ${U}`, rows, fieldId: areaField.id,
         distance: new Map(rows.flatMap((p) => (p.fieldMi?.[areaField.id] != null ? [[p.id, p.fieldMi[areaField.id]] as [number, number]] : []))),
         onClear: () => { setSelected(null); setHighlight(null); } };
     }
@@ -733,7 +733,7 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin, ap
       </div>
 
       {isAdmin && <LocationsPlayersPanel title={area.title} within={area.within} rows={area.rows} loading={(people == null || area.waiting === true) && !peopleErr} error={peopleErr}
-        onClear={area.onClear} distance={area.distance} newCover={area.newCover} />}
+        onClear={area.onClear} distance={area.distance} newCover={area.newCover} fieldId={area.fieldId} />}
     </div>
   );
 }

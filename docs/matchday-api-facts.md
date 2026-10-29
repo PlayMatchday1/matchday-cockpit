@@ -7895,3 +7895,23 @@ Evidence: read-only prod probe 2026-10-28 (one signin + `GET /cities`, `GET /adm
   autoCanceled true 785 at 75 min, isFreeMember true 755, isAutoBump false 577, guestCount 10 564.
 - **`POST /admin/matches` now refuses a missing `registrationPrice`** at our route (400, before any call)
   — `src/app/api/matchday/[env]/matches/create/route.ts`. Both copy paths always sent one.
+
+## Locations map: Played here, Matches here (2026-10-29)
+
+Evidence: mirror reads from a local script, stored stats refreshed 2026-10-29T17:35:44Z.
+
+- **Played here / Matches here / Last here come from `locations_play_stats`**, grouped by venue unit
+  (`locatePlayers` `playsAt`, the same unit id the pins and "Where they play" use). Controls, same run:
+  per player the venue totals sum to `matches` (5,394 players, 0 differences) and the latest venue day
+  equals `lastDay` (0); per zip bubble, summed Matches here and the count of players who played equal
+  the bubble's "Where they play" matches and players for every venue (3,128 bubble x venue pairs, 0
+  mismatches); a field's Anyone count equals its card's "players within" (35 fields x 4 reaches, 0).
+- **The play history counts WAITING rows.** `isValidPlayRow` checks cancelled, fake and user type, not
+  `paid_status`. 1,343 of the 74,146 stored plays (790 players) are a match where the player's only
+  rows are `paid_status = WAITING` (a checkout that never settled). Every map number includes them.
+  Open: whether the shared history should drop them (moves every map number about 2%).
+- **NEMP's field ids, before linking:** `fin_venue_fields` venue 2 "NEMP" held only 10 (North East
+  Metropolitan Park, counts_as_regular_play false) and 17 (NEMP Tournaments, true). 397 (titled "NEMP
+  Discounted", 23 matches, and "NEMP Grass", 18) and 20 ("NEMP Grass Fields", 26) were unlinked and
+  showed as their own pins. Ryan, 2026-10-29: all four are one NEMP field.
+- Played here only counts matches that have STARTED as of the refresh; a future booking is not a play.
