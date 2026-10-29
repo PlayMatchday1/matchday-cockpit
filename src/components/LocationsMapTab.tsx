@@ -82,6 +82,8 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin, ap
   // FIELD REACH RINGS are off by default (Ryan, 2026-10-09); a selected field still shows its own.
   const [showReach, setShowReach] = useState(false);
   const [howOpen, setHowOpen] = useState(false);
+  // PHONE WIDTH: the side panel stacks under the map, closed until asked for (Ryan, 2026-10-29).
+  const [panelOpen, setPanelOpen] = useState(false);
   // COLOUR BY (Ryan, 2026-10-08): Coverage is today's map; Activity colours bubbles by when their
   // players last played, from bubbles the server already split so no bubble mixes two buckets.
   const [colourBy, setColourBy] = useState<"coverage" | "activity">("coverage");
@@ -506,7 +508,12 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin, ap
           </div>
         </div>
 
-        <div className="lm-panel">
+        <div className={"lm-panel" + (panelOpen ? " lm-panel-open" : "")}>
+          <button type="button" className="lm-panel-toggle" aria-expanded={panelOpen} data-testid="map-panel-toggle"
+            onClick={() => setPanelOpen((o) => !o)}>{panelOpen ? "Hide details" : "Show details"}<span aria-hidden>{panelOpen ? "▴" : "▾"}</span></button>
+          {/* NO TALLER THAN THE MAP (Ryan, 2026-10-29): this box fills the panel, which the map column sizes,
+              and scrolls inside, so the players table always starts right under the map. */}
+          <div className="lm-panel-scroll" data-testid="map-panel-scroll">
           {tf.enabled && (
             <LocationsTestFields tf={tf} city={city} reach={reach} onReach={setReach} cityName={cityLabel}
               onFocus={(lat, lng) => setFocus({ lat, lng, zoom: 11, n: Date.now() })} />
@@ -729,6 +736,7 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin, ap
               </div>
             </>
           )}
+          </div>
         </div>
       </div>
 
@@ -789,7 +797,9 @@ const CSS = `
 .lm-dot-gap{border-style:dashed}
 .lm-pin{display:inline-block;width:10px;height:10px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);background:#003326;margin-right:7px;vertical-align:-1px}
 .lm-ring{display:inline-block;width:14px;height:14px;border-radius:50%;border:1.5px solid rgba(0,51,38,.55);background:rgba(0,51,38,.06);margin-right:6px;vertical-align:-3px}
-.lm-panel{display:flex;flex-direction:column;gap:0;min-width:0}
+.lm-panel{position:relative;min-width:0}
+.lm-panel-scroll{position:absolute;inset:0;overflow-y:auto;display:flex;flex-direction:column;gap:0}
+.lm-panel-toggle{display:none}
 .lm-pcard{padding:14px 16px;border-bottom:1px solid var(--line)}
 .lm-pcard:last-child{border-bottom:0}
 .lm-ptitle{font-size:10px;font-weight:900;letter-spacing:.7px;text-transform:uppercase;color:var(--muted);margin-bottom:8px}
@@ -815,5 +825,8 @@ const CSS = `
   .lm-left{border-right:0;border-bottom:1px solid var(--line)}
   .lm-map{height:420px}
   .lm-reach{margin-left:0}
+  .lm-panel-toggle{display:flex;justify-content:space-between;align-items:center;width:100%;padding:12px 16px;border:0;border-bottom:1px solid var(--line);background:#FAFCFA;font:inherit;font-size:12.5px;font-weight:800;color:var(--forest);cursor:pointer}
+  .lm-panel-scroll{position:static;display:none;max-height:420px}
+  .lm-panel-open .lm-panel-scroll{display:flex}
 }
 `;
