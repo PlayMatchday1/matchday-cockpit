@@ -26,6 +26,15 @@ export function isValidPlayRow(p: PlayRowLike): boolean {
   return !p.is_cancelled && !p.user_is_fake_player && p.user_type === "PLAYER";
 }
 
+/* A PLAY ON THE LOCATIONS PAGE is a valid row that SETTLED: paid_status PAID or FREE (Ryan, 2026-10-29).
+ * WAITING is a checkout that never settled (CLAUDE.md, the _count.players trap): 1,343 of 74,146 stored
+ * map plays were a match where the player had only WAITING rows. Locations only; isValidPlayRow above
+ * is the rest of Growth's rule and is unchanged. */
+export type SettledPlayRowLike = PlayRowLike & { paid_status: string | null };
+export function isSettledPlayRow(p: SettledPlayRowLike): boolean {
+  return isValidPlayRow(p) && (p.paid_status === "PAID" || p.paid_status === "FREE");
+}
+
 /** Active = latest valid play's true start is at or after now − 30 days (future bookings count). */
 export function isActiveByLastPlay(lastStartMs: number | null, now: Date): boolean {
   return lastStartMs != null && lastStartMs >= now.getTime() - ACTIVE_DAYS * DAY_MS;

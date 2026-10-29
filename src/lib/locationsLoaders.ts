@@ -8,7 +8,7 @@
 // city_identifier, cities to the scope's own. The scoped payload therefore never carries another
 // market's player, field or city. Staff and synthetic accounts are removed the same way on both:
 // player_area_seen.is_internal (the sync's @matchday.com / @playmatchday.com rule) and, for the
-// active and total counts, isValidPlayRow (no fake players) plus the same staff-email ids.
+// active and total counts, isSettledPlayRow (no fake players, PAID or FREE) plus the same staff-email ids.
 //
 // Moved here from the two growth route files on 2026-10-23 so the Poland tab reuses the code rather
 // than forking it; the unscoped path is the same statements in the same order.
@@ -17,7 +17,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { selectAll } from "./supabasePagination";
 import { buildLocationsReport, type LocationsReport, type SeenRow } from "./locationsReport";
-import { activePlayerIds, isValidPlayRow, type PlayRowLike } from "./playerActivity";
+import { activePlayerIds, isSettledPlayRow, type SettledPlayRowLike } from "./playerActivity";
 import { activeFields } from "./locationsMap";
 import { fetchFieldSnapshots, fetchLatestCities, fetchVenueLinks } from "./locationsData";
 import { groupIntoUnits } from "./venueUnits";
@@ -30,7 +30,7 @@ const scopedRows = <Q extends { ilike: (c: string, p: string) => Q }>(q: Q, scop
 
 /* THE SCOPE'S PLAYER COUNT — the denominator "of N" and the never-set line use. The sync's
  * players_total is every MatchDay account, which on the Poland tab would be a US number. A scope's
- * players are: anyone with a valid roster row on a match in its city (any date), plus anyone located
+ * players are: anyone with a settled roster row (PAID or FREE, never WAITING) on a match in its city (any date), plus anyone located
  * in it; staff removed. */
 async function scopePlayersTotal(sb: SupabaseClient, scope: LocationScope, located: number[], staff: Set<number> | null): Promise<number> {
   const matches = await selectAll<{ api_id: number }>(() => sb.from("mdapi_matches").select("api_id")
@@ -38,10 +38,10 @@ async function scopePlayersTotal(sb: SupabaseClient, scope: LocationScope, locat
   const ids = new Set<number>(located);
   const mids = matches.map((m) => m.api_id);
   for (let i = 0; i < mids.length; i += 200) {
-    const rows = await selectAll<PlayRowLike & { api_id: number; user_id: number | null }>(() => sb.from("mdapi_match_players")
-      .select("api_id,user_id,is_cancelled,user_is_fake_player,user_type").in("match_api_id", mids.slice(i, i + 200))
+    const rows = await selectAll<SettledPlayRowLike & { api_id: number; user_id: number | null }>(() => sb.from("mdapi_match_players")
+      .select("api_id,user_id,is_cancelled,user_is_fake_player,user_type,paid_status").in("match_api_id", mids.slice(i, i + 200))
       .is("deleted_at", null).order("api_id"));
-    for (const r of rows) if (r.user_id != null && isValidPlayRow(r)) ids.add(r.user_id);
+    for (const r of rows) if (r.user_id != null && isSettledPlayRow(r)) ids.add(r.user_id);
   }
   if (staff) for (const id of staff) ids.delete(id);
   return ids.size;

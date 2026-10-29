@@ -1,8 +1,8 @@
 // WHERE THEY PLAY, AND HOW RECENTLY — pure, shared by the server (which computes it) and the
 // Locations page (which renders it). Ryan, 2026-10-08.
 //
-// A PLAY is a VALID PLAY (src/lib/playerActivity.ts: not cancelled, not a fake player, user_type
-// PLAYER, on a match that is not cancelled and not deleted) that has STARTED (true instant at or
+// A PLAY is a SETTLED PLAY (src/lib/playerActivity.ts isSettledPlayRow: not cancelled, not a fake
+// player, user_type PLAYER, paid_status PAID or FREE, never WAITING, on a match that is not cancelled and not deleted) that has STARTED (true instant at or
 // before now) — "where they have actually played", so an upcoming booking is not a play here.
 // Fields are the match's own field (mdapi_matches.field_id); a field that is no longer active on the
 // map is still listed, marked closed.

@@ -501,7 +501,7 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin, ap
                 <p>Bubbles are placed a little off each player&apos;s exact spot, within about half a mile, to protect their privacy.</p>
                 <p>Distances are in a straight line, not driving distance.</p>
                 <p>Each pin is a venue: MatchDay field records at the same place (Round Rock&apos;s three, for example) are one pin, grouped by the venue they are linked to on the Fields page. A venue shows if any of its fields has a match coming up or had one in the last {data.activeWindowDays} days.</p>
-                <p>Activity colours each bubble by when its players last played a match: not cancelled, not a fake player. A bubble only ever holds players from one of the five groups.</p>
+                <p>Activity colours each bubble by when its players last played a match: a paid or free booking, not cancelled, not a fake player. A checkout that never went through does not count. A bubble only ever holds players from one of the five groups.</p>
                 <p>Selecting a bubble highlights it and lights up the fields its players have played at. A grey pin is a field that has closed.</p>
               </div>
             )}

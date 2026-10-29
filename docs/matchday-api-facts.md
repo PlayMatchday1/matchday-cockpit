@@ -7909,7 +7909,13 @@ Evidence: mirror reads from a local script, stored stats refreshed 2026-10-29T17
 - **The play history counts WAITING rows.** `isValidPlayRow` checks cancelled, fake and user type, not
   `paid_status`. 1,343 of the 74,146 stored plays (790 players) are a match where the player's only
   rows are `paid_status = WAITING` (a checkout that never settled). Every map number includes them.
-  Open: whether the shared history should drop them (moves every map number about 2%).
+  **Dropped, 2026-10-29 (Ryan: "drop WAITING everywhere"):** Locations now counts only
+  `playerActivity.isSettledPlayRow` (valid AND paid_status PAID or FREE): `fetchPlayHistory` (map,
+  players table, hourly refresh, test field impact, player detail), the player detail's own match list,
+  and the scoped players total in `locationsLoaders`. `isValidPlayRow` is unchanged for the rest of
+  Growth. Same refresh instant (19:35:47Z), same 3,674 players: 74,210 plays before, 72,866 after,
+  1,344 dropped, 791 players changed, 72 left with no play at all; no player gained one. No valid row
+  has a null paid_status (0 rows; a PAID query on the same filter returns rows).
 - **NEMP's field ids, before linking:** `fin_venue_fields` venue 2 "NEMP" held only 10 (North East
   Metropolitan Park, counts_as_regular_play false) and 17 (NEMP Tournaments, true). 397 (titled "NEMP
   Discounted", 23 matches, and "NEMP Grass", 18) and 20 ("NEMP Grass Fields", 26) were unlinked and

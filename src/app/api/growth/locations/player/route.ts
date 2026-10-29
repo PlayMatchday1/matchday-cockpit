@@ -19,7 +19,7 @@ import { activeFields, playFieldsWithVenues } from "@/lib/locationsMap";
 import { groupIntoUnits, unitIdOf } from "@/lib/venueUnits";
 import { fetchFieldSnapshots, fetchLatestCities, fetchVenueLinks } from "@/lib/locationsData";
 import { milesBetween, placeName } from "@/lib/playerAreaModel";
-import { isActiveByLastPlay, isPaidActiveSub, isValidPlayRow, type PlayRowLike } from "@/lib/playerActivity";
+import { isActiveByLastPlay, isPaidActiveSub, isSettledPlayRow, type SettledPlayRowLike } from "@/lib/playerActivity";
 import { fetchPlayHistory } from "@/lib/playHistory";
 import { summarizePlays } from "@/lib/wherePlayed";
 
@@ -51,8 +51,8 @@ export async function GET(req: Request) {
 
     const [user, plays, subs, snaps, latest] = await Promise.all([
       sb.from("mdapi_users").select("id,first_name,last_name,created_at,completed_sign_up_at").eq("id", id).maybeSingle(),
-      selectAll<PlayRowLike & { api_id: number; match_api_id: number | null }>(() => sb.from("mdapi_match_players")
-        .select("api_id,match_api_id,is_cancelled,user_is_fake_player,user_type").eq("user_id", id).is("deleted_at", null).order("api_id")),
+      selectAll<SettledPlayRowLike & { api_id: number; match_api_id: number | null }>(() => sb.from("mdapi_match_players")
+        .select("api_id,match_api_id,is_cancelled,user_is_fake_player,user_type,paid_status").eq("user_id", id).is("deleted_at", null).order("api_id")),
       selectAll<{ membership_id: number; status: string | null; price: number | string | null; member_email: string | null }>(() => sb.from("mdapi_subscriptions")
         .select("membership_id,status,price,member_email").eq("user_id", id).order("membership_id")),
       fetchFieldSnapshots(sb, now),
@@ -60,8 +60,8 @@ export async function GET(req: Request) {
     ]);
     if (user.error) throw new Error(user.error.message);
 
-    // Matches: valid plays on non-cancelled, non-deleted matches. PLAYED = started at or before now.
-    const matchIds = [...new Set(plays.filter(isValidPlayRow).map((p) => p.match_api_id).filter((x): x is number => x != null))];
+    // Matches: settled plays (PAID or FREE, never WAITING) on non-cancelled, non-deleted matches. PLAYED = started at or before now.
+    const matchIds = [...new Set(plays.filter(isSettledPlayRow).map((p) => p.match_api_id).filter((x): x is number => x != null))];
     const matches = matchIds.length === 0 ? [] : await selectAll<{ api_id: number; start_date: string | null; start_date_utc: string | null }>(() =>
       sb.from("mdapi_matches").select("api_id,start_date,start_date_utc").in("api_id", matchIds)
         .eq("is_cancelled", false).is("deleted_at", null).order("api_id"));

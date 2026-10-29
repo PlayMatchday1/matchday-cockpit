@@ -1,7 +1,7 @@
 // PLAY HISTORY BY FIELD, for the Locations page — SERVER-ONLY, Supabase only, never MatchDay.
 //
-// For a set of players: every VALID PLAY (playerActivity.isValidPlayRow on the roster row, on a
-// match that is not cancelled and not soft-deleted in our mirror) that has STARTED (true instant,
+// For a set of players: every SETTLED PLAY (playerActivity.isSettledPlayRow on the roster row: valid, and
+// PAID or FREE, never WAITING, on a match that is not cancelled and not soft-deleted in our mirror) that has STARTED (true instant,
 // matchStartMs, at or before now), with the match's field. The field's name and position come from
 // the match's own stored field (mdapi_matches.raw.field, as the map's field set does), so a field
 // that has closed is still known. `closed` = not in the map's ACTIVE field set.
@@ -10,7 +10,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { selectAll } from "./supabasePagination";
 import { matchStartMs } from "./matchTime";
-import { isValidPlayRow, type PlayRowLike } from "./playerActivity";
+import { isSettledPlayRow, type SettledPlayRowLike } from "./playerActivity";
 import type { Play, PlayField } from "./wherePlayed";
 
 const CHUNK = 200;
@@ -22,13 +22,13 @@ export async function fetchPlayHistory(
   sb: SupabaseClient, playerIds: number[], activeFieldIds: Set<number>, now = new Date(),
 ): Promise<PlayHistory> {
   const ids = [...new Set(playerIds)];
-  const rows: (PlayRowLike & { user_id: number | null; match_api_id: number | null })[] = [];
+  const rows: (SettledPlayRowLike & { user_id: number | null; match_api_id: number | null })[] = [];
   for (const c of chunks(ids)) {
-    rows.push(...await selectAll<PlayRowLike & { api_id: number; user_id: number | null; match_api_id: number | null }>(() =>
-      sb.from("mdapi_match_players").select("api_id,user_id,match_api_id,is_cancelled,user_is_fake_player,user_type")
+    rows.push(...await selectAll<SettledPlayRowLike & { api_id: number; user_id: number | null; match_api_id: number | null }>(() =>
+      sb.from("mdapi_match_players").select("api_id,user_id,match_api_id,is_cancelled,user_is_fake_player,user_type,paid_status")
         .in("user_id", c).is("deleted_at", null).order("api_id")));
   }
-  const valid = rows.filter((r) => r.user_id != null && r.match_api_id != null && isValidPlayRow(r));
+  const valid = rows.filter((r) => r.user_id != null && r.match_api_id != null && isSettledPlayRow(r));
   const matchIds = [...new Set(valid.map((r) => r.match_api_id as number))];
   type M = { api_id: number; field_id: number | null; field_title: string | null; start_date: string | null; start_date_utc: string | null;
     lat: unknown; lng: unknown; cityId: unknown };
