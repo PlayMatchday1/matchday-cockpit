@@ -338,12 +338,12 @@ export const TEST_FIELDS_CSS = `
 .lm-tf-row{flex:1;min-width:0;display:flex;align-items:center;gap:6px;border:0;background:none;padding:2px 0;font:inherit;font-size:12.5px;text-align:left;cursor:pointer;color:inherit}
 .lm-tf-caret{color:#6b3fd4;font-size:10px;width:10px}
 .lm-tf-namecol{flex:1;min-width:0;display:flex;flex-direction:column;line-height:1.25}
-.lm-tf-count{font-size:11.5px;white-space:nowrap;color:#4f5f57;font-variant-numeric:tabular-nums}
+.lm-tf-count{font-size:11.5px;color:#4f5f57;font-variant-numeric:tabular-nums}
 .lm-tf-detail{padding:4px 0 2px 16px}
 .lm-tf-pin-on{border-color:#6b3fd4;background:#faf8ff}
 .lm-tf-pinhead{display:flex;align-items:center;gap:6px}
 .lm-tf-tag{background:#6b3fd4;color:#fff;border-radius:4px;padding:1px 5px;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.03em}
-.lm-tf-pname{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lm-tf-pname{min-width:0;overflow-wrap:anywhere}
 .lm-tf-name{font-weight:700;width:100%;margin-bottom:4px}
 .lm-tf-small{padding:2px 8px;font-size:12px}
 .lm-tf-meta{font-size:12px;color:#5b6b63;margin:4px 0}
