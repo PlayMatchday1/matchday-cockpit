@@ -101,4 +101,9 @@ export const CITY_CODE_TO_DISPLAY: Record<string, string> = {
    * as the string "WAW" on dataRoom, scheduleReconcile, growth and retention. For those this is a
    * spelling fix, not a new row: same rows, same totals, "WAW" becomes "Warsaw". */
   WAW: "Warsaw",
+  /* PHILADELPHIA (2026-10-28). /cities id 234, abbr PHL, America/New_York, tax 8. Its first field is
+   * 2113 Friends Select School; it had no match when this line was added. The API's own name and
+   * this spelling are the same, so the line changes no rendering — it is here so code-keyed
+   * consumers (growth, dataRoom, retention) print "Philadelphia" rather than "PHL". */
+  PHL: "Philadelphia",
 };

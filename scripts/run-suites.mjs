@@ -209,6 +209,9 @@ const NODE_SUITES = [
    * match ends before it starts, or a midnight-crossing fixture is truncated by a day — both of
    * which render as a perfectly ordinary card in the grid. This is the only place that is visible. */
   "scripts/copy-retarget-test.ts",
+  // NEW MATCH ON A FIELD. A blank match has no source price to inherit; the body builder must refuse
+  // rather than omit one (18408 went live at $0). Also Philadelphia's zone/tax and the city lists.
+  "scripts/new-match-from-field-test.ts",
   // A MONEY FIELD YOU CAN TYPE IN. Both panels bound `value` to a formatted string on every
   // render, so the field reformatted on every keystroke and the caret landed in the cents.
   // Asserts focus -> type "12" -> blur reads 12.00 with 1200 on the wire, with a control that

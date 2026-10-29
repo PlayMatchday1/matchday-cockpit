@@ -35,6 +35,9 @@ const CITY_TIMEZONES: Record<KnownCityCode, string> = {
    * straight off startDate and the abbreviation off the API payload (gamedayModel.localClock /
    * tzAbbr), so it never converts and never consulted this map. */
   WAW: "Europe/Warsaw",
+  /* PHILADELPHIA. The API's own city row says America/New_York (GET /cities id 234, timeZone id 4,
+   * read 2026-10-28) — the same row Atlanta and New York City point at. */
+  PHL: "America/New_York",
 };
 
 // Returns the IANA timezone for a city code, or null if unknown.

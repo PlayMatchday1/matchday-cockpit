@@ -84,6 +84,9 @@ type VeoWeek = {
   generatedAt: string;
   /** max(synced_at) over the week — the DATA's age, not the read's. Null on an empty week. */
   dataAsOf: string | null;
+  /** Every city with a field, and its fields (MatchDay /cities + /admin/fields). Absent when that
+   *  read failed — the New match picker then disables and says so. */
+  fieldsByCity?: { city: string; fields: { id: number; title: string }[] }[];
 };
 
 type View = "schedule" | "month";
@@ -1149,6 +1152,33 @@ export default function VeoMasterSchedule() {
             >
               {copyBusy ? "Reading…" : drawerId == null ? "Select a match first" : `Copy match ${drawerId} to…`}
             </button>
+
+            {/* ── NEW MATCH ON A FIELD ───────────────────────────────────────────────────────────
+                Copy needs a match to copy, so a city with fields and no matches (Philadelphia,
+                2026-10-28) had no way in. This starts from the FIELD: picking one opens the full
+                editor on a blank match there (/match-ops/matches/new?field=N), where price and
+                capacity are typed — nothing is inherited and nothing is written until Create.
+                The list is the selected city's fields, or every city's with All cities. */}
+            {(() => {
+              const groups = (week?.fieldsByCity ?? []).filter((g) => city === null || g.city === city);
+              const none = !week?.fieldsByCity;
+              const off = none || groups.length === 0 || !mayWriteName;
+              const why = !mayWriteName ? "Read-only — you don't have EDIT MATCHES"
+                : none ? "Couldn't read the field list from MatchDay — refresh to try again"
+                : groups.length === 0 ? "This city has no fields yet" : "Open a blank match on the field you pick";
+              return (
+                <select className="vms-btn" data-testid="new-match-field" value="" disabled={off} title={why}
+                  aria-label="New match on a field"
+                  onChange={(e) => { if (e.target.value) window.location.assign(`/match-ops/matches/new?field=${e.target.value}`); }}>
+                  <option value="">New match on a field…</option>
+                  {groups.map((g) => (
+                    <optgroup key={g.city} label={g.city}>
+                      {g.fields.map((f) => <option key={f.id} value={f.id}>{f.title}</option>)}
+                    </optgroup>
+                  ))}
+                </select>
+              );
+            })()}
 
             {/* ── REFRESH RENDERS IN EVERY VIEW ─────────────────────────────────────────────────
                 doRefresh has always branched for Month — `if (view === "month" && range) { void

@@ -7861,3 +7861,37 @@ Evidence: read-only Supabase reads on 2026-10-23 ~13:00 UTC (`mdapi_matches`, `p
 - **Jaimee's Stripe total ties to fin_txn.** Charges + refunds + disputes, Central dates 2025-10-01 to
   2026-09-30, tax included: $797,013.80 (her $797,014). Failed payments ($542.64) are not in her total.
   No row in the window is flagged test or internal. Evidence: `fin_txn_sums` (month grain), 2026-10-27.
+
+## Philadelphia, and where the city lists come from (2026-10-28)
+
+Evidence: read-only prod probe 2026-10-28 (one signin + `GET /cities`, `GET /admin/cities`,
+`GET /time-zones`, 2 s apart); prod page reads of `/match-ops/fields`; mirror read of `mdapi_matches`
+(805 rows, start_date 2026-09-15..10-28).
+
+- **`GET /cities` returns 11**, and `/admin/cities` the same 11: ATX 1, HOU 2, SATX 3, ATL 4, STL 5,
+  NYC 6, DFW 7, OKC 8, ELP 9, WAW 10, **PHL 234** — `{ name: "Philadelphia", abbr: "PHL", country:
+  "United States", timeZone: { id: 4, name: "America/New_York", abbr: "ET" }, stripeTaxRateValue: 8 }`.
+  Supersedes the "→ 10" count in the match-managers section above.
+- **`GET /time-zones` → 6**: 1 America/Chicago, 2 "EDT", 3 "CDT", 4 America/New_York, 5 America/Denver,
+  6 Europe/Warsaw. Ids 2 and 3 are NOT IANA names — never pass a `timeZone.name` to Intl unchecked
+  (`cityDirectory.ts` checks the Area/Location shape).
+- **Where each list came from, before this change:**
+  - Master Schedule city chips — rows of `veo_camera_count` (`veoSchedule.ts`, fetchVeoWeek), 8 rows,
+    no PHL. Matches whose `city_identifier` is not in `CITY_CODE_TO_DISPLAY` are dropped
+    (`if (!city) continue`), and PHL was not in it.
+  - Fields page filter chips AND its New field City dropdown — `GET /cities` via `/api/fields`, the same
+    array. On prod 2026-10-28 the dropdown listed all 11 (incl. Philadelphia, Warsaw, NYC, El Paso); the
+    chips showed the 9 with a field (no NYC, no ELP).
+  - Field Ops "Add field" (`CitiesFieldsLens`, fin_venues) — `types.CITIES`, a hardcoded 8 with El Paso.
+  - `/api/schedule-master` (legacy plan grid) — hardcoded `CITY_ORDER`, 8, El Paso, no Warsaw.
+- **Now:** Master Schedule chips = MatchDay cities with ≥ 1 field (`/cities` + `/admin/fields`,
+  `src/lib/cityDirectory.ts`), and the New field dropdown = every MatchDay city; **both less ELP and
+  NYC** (`EXCLUDED_CITY_ABBRS`, Ryan 2026-10-28: "they have their own rules"). Warsaw is unchanged on
+  both. A failed directory read falls back to the `veo_camera_count` chips.
+- **Match settings on 805 recent prod matches** (why a new match has no inferred price or capacity):
+  price 1200:401 800:163 900:135 500:44 1500:30 3900:20; capacity 18:347 36:89 40:82 22:78 16:49 14:47;
+  maxTeamSize2Team 22:269 18:206 0:113; maxTeamSize4Team 40:223 20:204 36:164 0:81; recommendedPlayerCount
+  18 carried 18/0/0, 36/18/36 and 18/18/36. Near-uniform: type REGULAR 805, category OPEN 775,
+  autoCanceled true 785 at 75 min, isFreeMember true 755, isAutoBump false 577, guestCount 10 564.
+- **`POST /admin/matches` now refuses a missing `registrationPrice`** at our route (400, before any call)
+  — `src/app/api/matchday/[env]/matches/create/route.ts`. Both copy paths always sent one.

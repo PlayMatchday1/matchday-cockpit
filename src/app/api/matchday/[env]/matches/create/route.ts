@@ -124,6 +124,19 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string }>
     // legible rather than a 400 from somebody else's validator.
     return Response.json({ error: `not creatable: ${extra.join(", ")} — per-instance fields cannot be copied` }, { status: 400 });
   }
+  /* A PRICE IS REQUIRED, ON EVERY CREATE. The API defaults an absent registrationPrice to 0 and the
+   * match is joinable from its first millisecond — production 18408. Both copy paths always send the
+   * source's price, so this refuses nothing they send; it is here for the path that has no source
+   * (a new match from a field) and for any caller after it. 0 is allowed: typed, it is a decision. */
+  {
+    const p = match.registrationPrice;
+    if (typeof p !== "number" || !Number.isInteger(p) || p < 0) {
+      return Response.json({
+        error: "registrationPrice (in cents) is required — an absent price goes live at $0.",
+        field: "registrationPrice",
+      }, { status: 400 });
+    }
+  }
   if (!MATCH_TYPES.has(String(match.type))) {
     return Response.json({ error: `type must be one of ${[...MATCH_TYPES].join(", ")}`, field: "type" }, { status: 400 });
   }

@@ -44,6 +44,9 @@ const CITY_MAP: Record<string, string> = {
    * refused with "This account is confined to one city". */
   warsaw: "WAW",
   waw: "WAW",
+  // PHILADELPHIA — /cities id 234, abbr PHL (read 2026-10-28). Eastern, like Atlanta.
+  philadelphia: "PHL",
+  phl: "PHL",
 };
 
 // Cache so we only warn once per unmapped city per process.
@@ -88,6 +91,7 @@ export const KNOWN_CITY_CODES = [
   // Partner market. In KNOWN_CITY_CODES so it normalizes, colors, resolves and gets a timezone —
   // NOT in types.CITIES, so it never enters a P&L. See cityScope.ts for the identifier↔name pair.
   "WAW",
+  "PHL",
 ] as const;
 
 export type KnownCityCode = (typeof KNOWN_CITY_CODES)[number];

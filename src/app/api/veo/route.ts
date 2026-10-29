@@ -3,6 +3,7 @@
 // gated (authenticateCrm); reads mdapi read-only, never writes to MatchDay.
 import { authenticateCrm } from "@/lib/crmAuth";
 import { fetchVeoWeek } from "@/lib/veoSchedule";
+import { fetchCityDirectory } from "@/lib/cityDirectoryServer";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -23,7 +24,14 @@ export async function GET(req: Request) {
     // MASTER_SCHEDULE_WEEK_START in src/lib/weekStart.ts, since 2026-10-20) and what every other
     // caller (Veo dashboard, review count) has always had.
     const ws = new URL(req.url).searchParams.get("ws") === "0" ? 0 : 1;
-    const week = await fetchVeoWeek(auth.supabase, new Date(), weekRef, auth.confinedCity ?? null, false, ws);
+    /* THE CITY CHIPS COME FROM MATCHDAY: every city with a field (GET /cities + /admin/fields). A
+     * failed read is NOT fatal and NOT an empty list — the week falls back to the veo_camera_count
+     * cities it always used, and loses only the "New match on a field" picker. */
+    const directory = await fetchCityDirectory("production").catch((e) => {
+      console.error("[api/veo] city directory read failed; falling back to veo_camera_count", e);
+      return null;
+    });
+    const week = await fetchVeoWeek(auth.supabase, new Date(), weekRef, auth.confinedCity ?? null, false, ws, directory);
     return Response.json(week, { status: 200, headers: { "Cache-Control": "no-store" } });
   } catch (e) {
     console.error("[api/veo] failed", e);

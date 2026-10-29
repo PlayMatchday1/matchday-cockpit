@@ -41,7 +41,8 @@ import LogHealthBanner from "@/components/LogHealthBanner";
 import { useAuth, canEditMatches } from "@/lib/useAuth";
 import { can } from "@/lib/capabilities";
 import { wallDate, wallTime, buildStartDate, shiftedEndDate, isInvertedPair } from "@/lib/matchWallClock";
-import { tzShift } from "@/lib/matchTimezone";
+import { tzShift, tzLabelOfCity } from "@/lib/matchTimezone";
+import { missingForNewMatch, newMatchBody } from "@/lib/newMatchFromField";
 
 // MatchDay startDate/endDate are WALL-CLOCK strings mislabelled "…Z" (the true instant is
 // startDateUtc). NEVER `new Date()` them — that re-shifts to the viewer's timezone and
@@ -191,11 +192,14 @@ const money = (cents: unknown) => "$" + (Number(cents ?? 0) / 100).toFixed(2);
  * overlaid onto `state` so the diff shows them as changed and one save sends them. That is why
  * create can take nine fields and a copy can still carry twenty-one.
  */
-export default function MatchEditor({ id, mode = "edit", sourceId, variant = "page", onDirtyChange, veo, onToggleVeo, onCancelLanded, onSaved }: {
+export default function MatchEditor({ id, mode = "edit", sourceId, fieldId: fromFieldId, variant = "page", onDirtyChange, veo, onToggleVeo, onCancelLanded, onSaved }: {
   id: string;
   mode?: "edit" | "create";
   /** The match being copied FROM — pre-fills create, and step two's overlay. */
   sourceId?: string | null;
+  /** CREATE WITH NO SOURCE: a new match on this field (src/lib/newMatchFromField.ts). Used only
+   *  when there is no sourceId — how a city's first match is made. */
+  fieldId?: string | null;
   /* ONE COMPONENT, TWO PRESENTATIONS — content identical, chrome different.
    *
    * page   the Gameday Ops route: its own header, a full-bleed background, a save bar fixed to
@@ -305,8 +309,13 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
     // In CREATE mode there is nothing at `id` yet — the source match is what gets read, and only
     // to pre-fill. Nothing is written until Save.
     const readId = mode === "create" ? sourceId : id;
-    if (!readId) { setLoadErr("No source match to copy from."); return; }
-    const res = await authFetch(`/api/matchday/${FULL_EDITOR_ENV}/matches/${readId}`);
+    /* FROM A FIELD: the template route answers in the detail route's shape, so everything below
+     * loads it unchanged. */
+    const fromField = mode === "create" && !sourceId && !!fromFieldId;
+    if (!readId && !fromField) { setLoadErr("No source match to copy from."); return; }
+    const res = await authFetch(fromField
+      ? `/api/matchday/${FULL_EDITOR_ENV}/matches/template?fieldId=${encodeURIComponent(String(fromFieldId))}`
+      : `/api/matchday/${FULL_EDITOR_ENV}/matches/${readId}`);
     const json = await res.json().catch(() => ({}));
     if (!res.ok) { setLoadErr(json?.error ?? `HTTP ${res.status}`); return; }
     setFields(json.fields ?? []); setManagers(json.managers ?? []); setManagersAll(json.managersAllCities ?? []);
@@ -363,7 +372,7 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
       setStartAt(""); setEndAt("");
       setMeta((m) => ({ ...(m ?? {}), id: null, startDate: null, endDate: null }));
     }
-  }, [id, mode, sourceId, ingest]);
+  }, [id, mode, sourceId, fromFieldId, ingest]);
   useEffect(() => { void load(); }, [load]);
 
   // HAS THE DATE OR TIME MOVED? Compared against the loaded wall-clock values via wallDate and
@@ -709,6 +718,35 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
   };
   const inGroup = (g: Spec["group"]) => FIELDS.filter((f) => f.group === g);
 
+  /* CREATE FROM A FIELD — ONE STEP, NOT TWO. There is no source to overlay afterwards, so the
+   * whole match goes in the create body and the editor then opens on the real match. Every value
+   * the body carries was in front of the operator; the required ones are refused here by name
+   * (newMatchFromField.missingForNewMatch) and the price again by the server. */
+  const fromField = mode === "create" && !sourceId && !!fromFieldId;
+  const createFromField = async (allowDuplicate: boolean) => {
+    if (!state) return;
+    const missing = missingForNewMatch(state, startAt, endAt);
+    if (missing.length) { setDateErr(`Fill in before creating: ${missing.join(", ")}.`); return; }
+    setSaving(true); setMsg(null); setDupe(null); setDateErr(null);
+    const body = { match: newMatchBody(state, startAt, endAt), allowDuplicate, source: "Master Schedule · new match on a field" };
+    const res = await authFetch(`/api/matchday/${FULL_EDITOR_ENV}/matches/create`, { method: "POST", body: JSON.stringify(body) });
+    const json = await res.json().catch(() => ({}));
+    setSaving(false);
+    if (res.status === 409 && json?.duplicate) { setDupe({ id: Number(json.duplicate.id), name: String(json.duplicate.name ?? "") }); return; }
+    if (!res.ok && json?.outcome !== "UNKNOWN") { setMsg({ kind: "err", text: json?.error ?? `HTTP ${res.status}` }); return; }
+    setCreated({ id: Number(json.id), outcome: String(json.outcome) });
+    if (json.outcome === "LANDED" && json.id) {
+      if (json.mirrored === false && json.mirrorReason !== "not production") {
+        setMsg({ kind: "warn", text: `The match was created, but the Clubhouse copy was not (${json.mirrorReason ?? "unknown"}). ` +
+          `It will not appear on Master Schedule until the nightly sync — run the matches sync on /data.` });
+      }
+      router.push(`/match-ops/matches/${json.id}`);
+    } else {
+      setMsg({ kind: "warn", text: `The create returned ${json.outcome ?? "FAILED"}. It may or may not have landed — do NOT press it again; ` +
+        `check Master Schedule for ${String(body.match.name)} at ${startAt} first.` });
+    }
+  };
+
   /* CREATE — STEP ONE OF TWO.
    *
    * SINGLE-FIRE, AND NOT ONLY BY DISABLING THE BUTTON. `saving` stops a double click; the SERVER
@@ -722,6 +760,7 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
    */
   const createMatch = async (allowDuplicate = false) => {
     if (saving) return;
+    if (fromField) return createFromField(allowDuplicate);
     if (!startAt || !endAt) {
       setDateErr("Pick a start and end — the copy deliberately arrives without the original's date.");
       return;
@@ -893,10 +932,10 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
       <div className="head">
         <div>
           <button className="backb" data-testid="editor-back" onClick={goBack} aria-label="Back">‹ Back</button>
-          <h1 data-testid="title">{String(state.name)}</h1>
+          <h1 data-testid="title">{String(state.name ?? "").trim() || (fromField ? "New match" : "")}</h1>
           <div className="hmeta">
-            <span className="chip id">ID {String(meta.id)}</span>
-            <span className={`chip ${meta.isCancelled ? "warn" : "live"}`}>{meta.isCancelled ? "Cancelled" : "Live"}</span>
+            <span className="chip id">{meta.id == null ? "Not created yet" : `ID ${String(meta.id)}`}</span>
+            {meta.id != null && <span className={`chip ${meta.isCancelled ? "warn" : "live"}`}>{meta.isCancelled ? "Cancelled" : "Live"}</span>}
             <span>{meta.startDate ? wallStamp(String(meta.startDate)) : "—"} · {String(meta.fieldTitle ?? "—")}{meta.cityName ? ` · ${String(meta.cityName)}` : ""}</span>
             {/* NO ENVIRONMENT PILL. Master Schedule and this editor cannot be pointed at different
                 environments any more, so it fired on every match and was read on none of them. */}
@@ -950,7 +989,7 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
             <span>{money(state.registrationPrice)}</span>
           </div>
           <div className="mf3">
-            <span className="chip id">ID {String(meta.id)}</span>
+            <span className="chip id">{meta.id == null ? "Not created yet" : `ID ${String(meta.id)}`}</span>
             {meta.cityName ? <span className="chip">{String(meta.cityName)}</span> : null}
             <span className={`chip ${meta.isCancelled ? "warn" : "live"}`}>{meta.isCancelled ? "Cancelled" : "Live"}</span>
             {typeof veo === "boolean" && onToggleVeo && (
@@ -1020,7 +1059,9 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
               ) : (
                 <>
                   {/* BLANK ON PURPOSE, AND REQUIRED. The one field a copy must not inherit. */}
-                  <div className="f"><label>Start<span className="hint">Blank on purpose — a copy must not arrive carrying the original&rsquo;s date.</span></label>
+                  <div className="f"><label>Start<span className="hint">{fromField
+                    ? `Local time at the field${meta.cityName ? ` (${tzLabelOfCity(String(meta.cityName))})` : ""}.`
+                    : <>Blank on purpose — a copy must not arrive carrying the original&rsquo;s date.</>}</span></label>
                     <input type="datetime-local" data-testid="in-startDate" value={startAt}
                       onChange={(e) => { setStartAt(e.target.value); setDateErr(null); }} /></div>
                   <div className="f"><label>End<span className="hint">Same day unless you say otherwise.</span></label>

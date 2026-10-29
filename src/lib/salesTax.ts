@@ -45,6 +45,8 @@ export const CITY_TAX_RATE: Readonly<Record<string, number>> = {
   "New York City": 0.08875,
   OKC: 0.08625,
   Warsaw: 0,
+  // PHILADELPHIA — GET /cities id 234, abbr PHL, stripeTaxRateValue 8. Read 2026-10-28.
+  Philadelphia: 0.08,
 };
 
 export class UnknownTaxCityError extends Error {

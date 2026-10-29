@@ -181,6 +181,9 @@ is("authenticateMatchOpsRead is imported by EXACTLY the 22 intended routes", imp
   // round 2 — dual-gate: GET on the read gate, the write still authenticateAdmin + EDIT MATCHES
   "matchday/[env]/matches/[id]/route.ts", "matchday/[env]/roster/[matchId]/route.ts",
   "matchday/[env]/matches/[id]/cancel/route.ts",
+  // A blank match on a field, for the editor (2026-10-28). READ-ONLY: the write is matches/create,
+  // which stays on EDIT MATCHES. Confinement is applied to the fieldId inside the route.
+  "matchday/[env]/matches/template/route.ts",
 ].sort());
 // ITEMISED: this asserted that exactly THREE routes still carried both gates — a read on Match Ops
 // and a write on is_admin. The dual gate is gone entirely: a write now reads the capability its

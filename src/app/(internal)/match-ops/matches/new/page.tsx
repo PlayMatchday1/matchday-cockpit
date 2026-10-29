@@ -5,6 +5,9 @@ import MatchEditor from "../[id]/MatchEditor";
 // The SAME editor Gameday Ops uses, in create mode: pre-filled from ?from=<sourceId>, with the
 // date deliberately blank. Nothing is written until Create is pressed. A static segment, so it
 // takes precedence over [id] and "new" can never be read as a match id.
+//
+// OR A NEW MATCH ON A FIELD: ?field=<fieldId>, with no source — how a city's first match is made,
+// from Master Schedule's "New match on a field". ?from wins if both are given.
 export const dynamic = "force-dynamic";
 
 export default async function NewMatchPage({ searchParams }: {
@@ -12,5 +15,6 @@ export default async function NewMatchPage({ searchParams }: {
 }) {
   const sp = await searchParams;
   const from = typeof sp.from === "string" && sp.from ? sp.from : null;
-  return <MatchEditor id="new" mode="create" sourceId={from} />;
+  const field = !from && typeof sp.field === "string" && /^\d+$/.test(sp.field) ? sp.field : null;
+  return <MatchEditor id="new" mode="create" sourceId={from} fieldId={field} />;
 }

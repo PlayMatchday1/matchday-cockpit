@@ -8,6 +8,7 @@
 import { weekStartOf, weekdayHeaders } from "./weekStart";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { CITY_CODE_TO_DISPLAY } from "./scheduleReconcile";
+import { citiesWithFields, EXCLUDED_CITY_ABBRS, type DirectoryCity } from "./cityDirectory";
 import { canonicalVenueName } from "./venueResolver";
 import { hasCameraEmoji, stripCameraEmoji } from "./veo";
 
@@ -192,6 +193,9 @@ export type VeoWeek = {
   generatedAt: string;     // when this response was assembled — NOT a freshness claim
   /** max(synced_at) over the week's rows: how old the DATA is. Null when the week is empty. */
   dataAsOf: string | null;
+  /** Every city with a field, and its fields — what "New match on a field" picks from. Present
+   *  only when the caller passed the MatchDay city directory; absent means it could not be read. */
+  fieldsByCity?: { city: string; fields: { id: number; title: string }[] }[];
 };
 
 // `now` is the real clock (drives the per-day "today" flag + generatedAt);
@@ -218,7 +222,10 @@ export type VeoWeek = {
  * every caller had before and still gets: Match Promotion, the Veo dashboard, the review count. The
  * Master Schedule passes weekStart.MASTER_SCHEDULE_WEEK_START (Monday) through ?ws= on /api/veo. `mon` keeps its
  * name but is the week's FIRST DAY, and dayIdx counts from it. */
-export async function fetchVeoWeek(sb: SupabaseClient, now: Date, weekRef: Date = now, scopeCity: string | null = null, includeCancelled = false, weekStart = 1): Promise<VeoWeek> {
+/* `directory` IS WHERE THE CITY LIST COMES FROM when it is passed (Master Schedule passes it).
+ * Without it the list is veo_camera_count's rows, which is what every other caller has always got.
+ * See cityDirectory.ts. */
+export async function fetchVeoWeek(sb: SupabaseClient, now: Date, weekRef: Date = now, scopeCity: string | null = null, includeCancelled = false, weekStart = 1, directory: DirectoryCity[] | null = null): Promise<VeoWeek> {
   const mon = weekStartOf(weekRef, weekStart);
   const sun = new Date(mon.getFullYear(), mon.getMonth(), mon.getDate() + 6);
   const todayIso = ymd(now);
@@ -266,7 +273,7 @@ export async function fetchVeoWeek(sb: SupabaseClient, now: Date, weekRef: Date 
   let seededThisWeek = 0;
   for (const r of live) {
     const city = CITY_CODE_TO_DISPLAY[r.city_identifier ?? ""] ?? null;
-    if (!city) continue; // only fleet cities appear in the grid
+    if (!city) continue; // only fleet cities appear in the grid (PHL joined CITY_CODE_TO_DISPLAY 2026-10-28)
     const d = local(r.start_date as string);
     const dayIdx = Math.round((new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime() - monTime) / 86400000);
     if (dayIdx < 0 || dayIdx > 6) continue;
@@ -308,10 +315,30 @@ export async function fetchVeoWeek(sb: SupabaseClient, now: Date, weekRef: Date 
   const scopeName = scopeCity ? (CITY_CODE_TO_DISPLAY[scopeCity] ?? null) : null;
   const keep = (city: string) => !scopeName || city === scopeName;
 
+  /* THE CITY LIST. From the MatchDay directory when we have it: every city with at least one field,
+   * plus any city that has a match this week (a match must never render under a missing heading).
+   * The camera count is looked up per city and is 0 for a city with no veo_camera_count row — which
+   * is the truth for a new market, and needs no row inserted to show the city.
+   *
+   * WITHOUT THE DIRECTORY (not passed, or the read failed) this is exactly what it was. */
+  const camBy = new Map((cams ?? []).map((c) => [c.city as string, Number(c.cameras)]));
+  const withFields = directory ? citiesWithFields(directory) : null;
+  const excludedDisplay = new Set([...EXCLUDED_CITY_ABBRS].map((a) => CITY_CODE_TO_DISPLAY[a] ?? a));
+  const cityList = withFields
+    ? [...new Set([...withFields.map((c) => c.display), ...matches.map((m) => m.city)])]
+        // THE EXCLUDED CITIES STAY OFF even when they have a match this week (see cityDirectory).
+        .filter((c) => keep(c) && !excludedDisplay.has(c)).sort((a, b) => a.localeCompare(b))
+        .map((city) => ({ city, cameras: camBy.get(city) ?? 0 }))
+    : (cams ?? []).filter((c) => keep(c.city)).map((c) => ({ city: c.city, cameras: c.cameras }));
+
   return {
     weekStart: ymd(mon),
     days,
-    cities: (cams ?? []).filter((c) => keep(c.city)).map((c) => ({ city: c.city, cameras: c.cameras })),
+    cities: cityList,
+    /* FIELDS ARE SCOPED ON THE ABBR, not through keep(). keep() passes everything when a confined
+     * city has no display mapping, and a field list is exactly the thing a confined account must
+     * not see beyond its own city. */
+    ...(withFields ? { fieldsByCity: withFields.filter((c) => !scopeCity || c.abbr === scopeCity).map((c) => ({ city: c.display, fields: c.fields })) } : {}),
     matches,
     codesRef: [...codesByCity.entries()].filter(([city]) => keep(city)).map(([city, codes]) => ({ city, codes })),
     seededThisWeek,

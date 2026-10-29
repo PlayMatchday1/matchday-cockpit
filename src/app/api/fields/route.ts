@@ -28,6 +28,7 @@ import {
 } from "@/lib/fieldsModel";
 import { fieldScopeFor, fieldCityInScope, type Bound } from "@/lib/fieldScope";
 import { assertFieldInScope, assertCityInScope } from "@/lib/fieldScopeServer";
+import { buildCityDirectory, fieldFormCities } from "@/lib/cityDirectory";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -142,7 +143,11 @@ export async function GET(req: Request) {
       })),
       links: links.map((l) => ({ fieldId: Number(l.mdapi_field_id), venueId: l.fin_venue_id })),
       activeFieldIds: [...active],
-      cities: cities.map((c) => ({ id: Number(c.id), name: c.name })),
+      /* THE SAME DIRECTORY MASTER SCHEDULE'S CHIPS COME FROM (cityDirectory.ts), built from the two
+       * reads this route already made. Every city, not only those with a field — this list feeds the
+       * New field form, and a city's first field has to be creatable — less El Paso and New York
+       * City, which run on their own rules (EXCLUDED_CITY_ABBRS). */
+      cities: fieldFormCities(buildCityDirectory(cities, fields)).map((c) => ({ id: c.id, name: c.name, fieldCount: c.fields.length })),
       deleteEnabled: DELETE_ENABLED,
       // Named so the page can say "Showing Poland fields only" and hide the venue half.
       scope: scope ? { marketName: scope.marketName } : null,
