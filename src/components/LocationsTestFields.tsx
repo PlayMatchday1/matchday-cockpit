@@ -255,9 +255,11 @@ export default function LocationsTestFields({ tf, city, reach, onReach, cityName
                           title={expanded ? "Hide details" : "Show details"} onClick={() => setOpen(expanded ? null : p.key)}>
                           <span className="lm-tf-caret" aria-hidden>{expanded ? "▾" : "▸"}</span>
                           <span className="lm-tf-tag">{p.draft ? "Draft" : "Test"}</span>
-                          <b className="lm-tf-pname">{p.name || "Unnamed"}</b>
-                          <span className="lm-tf-count" title={`Players within ${reach} mi`} data-testid="tf-pin-players">
-                            {x ? `${int(x.players)} within ${reach} mi` : tf.impactErr ? "" : "..."}
+                          <span className="lm-tf-namecol">
+                            <b className="lm-tf-pname" title={p.name}>{p.name || "Unnamed"}</b>
+                            <span className="lm-tf-count" data-testid="tf-pin-players">
+                              {x ? `${players(x.players)} within ${reach} mi` : tf.impactErr ? "" : "..."}
+                            </span>
                           </span>
                         </button>
                         <button type="button" className="loc-btn lm-tf-small" onClick={() => { tf.setSelected(p.key); onFocus(p.lat, p.lng); }}>Show</button>
@@ -335,7 +337,8 @@ export const TEST_FIELDS_CSS = `
 .lm-tf-city{margin:10px 0 0;font-size:10px;font-weight:900;letter-spacing:.7px;text-transform:uppercase;color:var(--muted)}
 .lm-tf-row{flex:1;min-width:0;display:flex;align-items:center;gap:6px;border:0;background:none;padding:2px 0;font:inherit;font-size:12.5px;text-align:left;cursor:pointer;color:inherit}
 .lm-tf-caret{color:#6b3fd4;font-size:10px;width:10px}
-.lm-tf-count{margin-left:auto;white-space:nowrap;color:#4f5f57;font-variant-numeric:tabular-nums}
+.lm-tf-namecol{flex:1;min-width:0;display:flex;flex-direction:column;line-height:1.25}
+.lm-tf-count{font-size:11.5px;white-space:nowrap;color:#4f5f57;font-variant-numeric:tabular-nums}
 .lm-tf-detail{padding:4px 0 2px 16px}
 .lm-tf-pin-on{border-color:#6b3fd4;background:#faf8ff}
 .lm-tf-pinhead{display:flex;align-items:center;gap:6px}
