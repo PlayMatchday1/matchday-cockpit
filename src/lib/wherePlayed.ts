@@ -123,3 +123,21 @@ export function venuePlayFields(played: Iterable<PlayField>, unitOf: (fieldId: n
     };
   });
 }
+
+/* PER VENUE, AND THE FAVOURITE: one rule for the map's players (locationsMap.locatePlayers) and the
+ * Acquisition "Download players" file (Ryan, 2026-10-29), so a player's favourite reads the same on both.
+ * Venues keep the order their first play came in; FAVOURITE = the most matches, a tie to the one played
+ * most recently, then to the venue met first (a stable sort). */
+export function playsByVenue(plays: readonly Play[], unitOf: (fieldId: number) => number): Map<number, { n: number; ms: number; day: string }> {
+  const byField = new Map<number, { n: number; ms: number; day: string }>();
+  for (const p of plays) {
+    const u = unitOf(p.fieldId);
+    const g = byField.get(u) ?? { n: 0, ms: -Infinity, day: "" };
+    g.n++;
+    if (p.ms > g.ms) { g.ms = p.ms; g.day = p.day; }
+    byField.set(u, g);
+  }
+  return byField;
+}
+export const favouriteVenue = (byField: ReadonlyMap<number, { n: number; ms: number }>): number | null =>
+  [...byField].sort((x, y) => y[1].n - x[1].n || y[1].ms - x[1].ms)[0]?.[0] ?? null;

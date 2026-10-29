@@ -18,9 +18,26 @@
 // A deleted account gets blank email and phone, and the name MatchDay gives it ("Deleted Account").
 // An UNCONFIRMED row gets blank name, email and phone: an address nobody can vouch for is not exported.
 // "Verified by" was dropped (Ryan, 2026-10-21): emailVerifiedAt is on the detail payload only.
+//
+// SELF-RATED LEVEL (renamed from "Soccer level", Ryan, 2026-10-29): mdapi_users.raw.selfRatingValue, the
+// level the player picked for themselves, a whole number 1 to 5 (all 37,111 mirror rows, 2026-10-29: 1
+// 4,196 / 2 6,681 / 3 11,260 / 4 6,889 / 5 3,119 / blank 4,966). The payload carries no label for the
+// numbers, so which end is strongest is not in evidence.
+//
+// MATCHES (Ryan, 2026-10-29): the Locations page's plays (playHistory.fetchPlayHistory: started, match not
+// cancelled, roster row PAID or FREE, never WAITING, no fake players, one per match), read for exactly
+// these players from our copy. That is the function the hourly locations_play_stats refresh runs, so a
+// player's count and favourite equal the map's, give or take a match that started since the last
+// refresh. The stored table cannot answer this file by itself: it holds placed players only, and per
+// field only a count and the latest day (no first day, nothing to count a range with).
+//   matches_played            every play
+//   matches_played_in_period  plays whose match LOCAL day (wall clock, sliced) is inside the file's range
+//   first/last_match_date     the earliest / latest play's local day, YYYY-MM-DD
+//   favourite_field           wherePlayed.favouriteVenue over venues, the map's rule and names
 
 import { E2E_SERVICE_EMAIL } from "@/lib/matchOpsAuth";
 import { STOP_RX, phoneDigits10 } from "@/lib/aiDraftModel";
+import { favouriteVenue, playsByVenue, type Play } from "@/lib/wherePlayed";
 
 // OPT-OUTS (Ryan, 2026-10-21).
 //   Texts opted out   the player's phone (or a thread linked to the account) has a STOP-type reply in
@@ -36,7 +53,27 @@ export type MirrorUser = { id: number; email: string | null; first_name: string 
 export type SignupRow = {
   id: number; firstName: string; lastName: string; email: string; phone: string; city: string;
   completedCentral: string; level: string; deleted: "yes" | "no" | "unknown"; warsaw: boolean; textsOptedOut: boolean;
+  matches: MatchSummary;
 };
+
+export type MatchSummary = { played: number; inPeriod: number; first: string | null; last: string | null; favourite: string | null };
+const NO_MATCHES: MatchSummary = { played: 0, inPeriod: 0, first: null, last: null, favourite: null };
+
+/** One player's plays -> the file's match columns. `unitOf` groups field records into venues and
+ *  `venueTitle` names a venue, as the map does (venueUnits.unitIdOf, locationsMap.playFieldsWithVenues). */
+export function matchSummary(plays: readonly Play[], since: string, until: string,
+  unitOf: (fieldId: number) => number, venueTitle: (unitId: number) => string | null): MatchSummary {
+  if (plays.length === 0) return NO_MATCHES;
+  let first = plays[0], last = plays[0], inPeriod = 0;
+  for (const p of plays) {
+    if (p.ms < first.ms) first = p;
+    if (p.ms > last.ms) last = p;
+    if (p.day >= since && p.day <= until) inPeriod++;
+  }
+  const fav = favouriteVenue(playsByVenue(plays, unitOf));
+  return { played: plays.length, inPeriod, first: first.day || null, last: last.day || null,
+    favourite: fav == null ? null : venueTitle(fav) ?? `Field ${fav}` };
+}
 
 export type ChatMsg = { thread_id: string; body: string; sent_at: string };
 export type ChatThread = { id: string; phone_number: string | null; player_id: number | null };
@@ -87,7 +124,9 @@ export const inRange = (a: { completed_sign_up_at: string | null }, since: strin
  *  after it was confirmed by the API; one read before it was not returned since (null = no refresh on
  *  record, so nothing is held to it). */
 export function buildSignupRows(accounts: readonly CountedAccount[], mirror: ReadonlyMap<number, MirrorUser>, confirmedSince: string | null,
-  optOuts: { phones: ReadonlySet<string>; players: ReadonlySet<number> } = { phones: new Set(), players: new Set() }): SignupRow[] {
+  optOuts: { phones: ReadonlySet<string>; players: ReadonlySet<number> } = { phones: new Set(), players: new Set() },
+  /** Per account; an account with no entry played no match (the read covers every id in the file). */
+  matches: ReadonlyMap<number, MatchSummary> = new Map()): SignupRow[] {
   return [...accounts]
     .sort((a, b) => a.completed_sign_up_at.localeCompare(b.completed_sign_up_at) || a.account_id - b.account_id)
     .map((a) => {
@@ -111,14 +150,16 @@ export function buildSignupRows(accounts: readonly CountedAccount[], mirror: Rea
         // Read before the blanking: a phone that said STOP stays opted out.
         textsOptedOut: optOuts.players.has(a.account_id)
           || (() => { const k = phoneKey(m?.phone_number); return !!k && optOuts.phones.has(k); })(),
+        matches: matches.get(a.account_id) ?? NO_MATCHES,
       };
     });
 }
 
 export const SIGNUP_COLUMNS = [
   "ID", "First name", "Last name", "Email", "Phone number", "City",
-  "Signup completed (Central)", "Soccer level", "Deleted", "Warsaw",
+  "Signup completed (Central)", "Self-rated level (1 to 5)", "Deleted", "Warsaw",
   "Texts opted out", "Emails opted out",
+  "matches_played", "matches_played_in_period", "first_match_date", "last_match_date", "favourite_field",
 ] as const;
 
 // A cell Excel would run as a formula (=, +, -, @, tab, CR) gets a leading apostrophe. Names and
@@ -140,6 +181,7 @@ export function signupCsv(rows: readonly SignupRow[]): string {
       String(r.id), cell(r.firstName), cell(r.lastName), cell(r.email), cell(r.phone, true), cell(r.city),
       r.completedCentral, r.level, r.deleted, yn(r.warsaw),
       yn(r.textsOptedOut), "unknown",
+      String(r.matches.played), String(r.matches.inPeriod), r.matches.first ?? "", r.matches.last ?? "", cell(r.matches.favourite ?? ""),
     ].join(","));
   }
   return "﻿" + lines.join("\r\n") + "\r\n";

@@ -15,6 +15,9 @@
  * re-reads the accounts the list stopped returning; a row it has not confirmed since the last complete
  * pass goes out with blank name, email and phone and Deleted "unknown" (lib/signupExport).
  * "Verified by" was dropped with the live read: emailVerifiedAt is on the detail payload only.
+ *
+ * MATCHES (Ryan, 2026-10-29): the Locations page's plays for exactly these players, from our copy
+ * (playHistory.fetchPlayHistory, lib/signupExport.matchSummary). Never MatchDay.
  */
 
 import { randomUUID } from "node:crypto";
@@ -22,9 +25,13 @@ import { resolveSessionUser } from "@/lib/adminAuth";
 import { isConfined } from "@/lib/cityConfinement";
 import { selectAll } from "@/lib/supabasePagination";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
+import { fetchPlayHistory } from "@/lib/playHistory";
+import { fetchVenueLinks } from "@/lib/locationsData";
+import { playFieldsWithVenues } from "@/lib/locationsMap";
+import { unitIdOf } from "@/lib/venueUnits";
 import {
-  buildSignupRows, inRange, playerExportGate, signupCsv, signupExportLogBody, signupFileName,
-  textOptOuts, type ChatMsg, type ChatThread, type CountedAccount, type MirrorUser,
+  buildSignupRows, inRange, matchSummary, playerExportGate, signupCsv, signupExportLogBody, signupFileName,
+  textOptOuts, type ChatMsg, type ChatThread, type CountedAccount, type MatchSummary, type MirrorUser,
 } from "@/lib/signupExport";
 
 export const runtime = "nodejs";
@@ -101,7 +108,16 @@ export async function GET(req: Request) {
       threads.push(...((data ?? []) as ChatThread[]));
     }
 
-    const rows = buildSignupRows(accounts, mirror, confirmedSince, textOptOuts(inbound, threads));
+    // 4c: matches, every play of these players, as of now, by the Locations page's rule; venues and
+    // their names as the map groups them. activeFieldIds only marks closed fields, which the file does not show.
+    const [history, venueLinks] = await Promise.all([fetchPlayHistory(sb, ids, new Set(), new Date()), fetchVenueLinks(sb)]);
+    const venueTitle = new Map(playFieldsWithVenues({ history, venueLinks }).map((f) => [f.id, f.title]));
+    const matches = new Map<number, MatchSummary>();
+    for (const [id, plays] of history.playsByPlayer) {
+      matches.set(id, matchSummary(plays, since, until, (f) => unitIdOf(f, venueLinks), (u) => venueTitle.get(u) ?? null));
+    }
+
+    const rows = buildSignupRows(accounts, mirror, confirmedSince, textOptOuts(inbound, threads), matches);
     const unconfirmed = rows.filter((r) => r.deleted === "unknown").length;
     const csv = signupCsv(rows);
 

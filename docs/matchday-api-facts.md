@@ -7927,3 +7927,18 @@ Evidence: mirror reads from a local script, stored stats refreshed 2026-10-29T17
   Finance side effect: NEMP now carries 397's 27 and 20's 18 played matches at $77, which were
   unattributed before (Fields page: unattributed went from 34 fields, $19,320 to 32).
 - Played here only counts matches that have STARTED as of the refresh; a future booking is not a play.
+
+## Acquisition "Download players": level and matches (2026-10-29)
+
+- **"Soccer level" was `mdapi_users.raw.selfRatingValue`** (`src/lib/signupExport.ts`), the level the
+  player picked for themselves: an integer 1 to 5. All 37,111 mirror rows, 2026-10-29: 1 4,196, 2 6,681,
+  3 11,260, 4 6,889, 5 3,119, blank 4,966; no other rating-like key in `raw`. Which end is strongest is
+  UNKNOWN (no label in the payload). Header renamed "Self-rated level (1 to 5)".
+- **Matches columns use `fetchPlayHistory` live over the mirror for the file's ids**, not the stored
+  `locations_play_stats`: that table holds placed players only and per field just a count and the latest
+  day, so it cannot give a first date or a count within a range. In 2026-09-30..10-29, 818 of 2,592
+  signups have a play and 122 of them have no row on the map at all. Read time for that range: 2.0 s.
+- **Control, same run:** for the 2,041 file players the map places, matches, last day and favourite
+  field (map `locatePlayers` over a fresh history) vs the file: 0 differences each.
+- `matches_played_in_period` counts by the match's LOCAL day (wall clock, sliced) against the file's
+  Central range.

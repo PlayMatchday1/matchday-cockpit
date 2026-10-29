@@ -21,7 +21,7 @@
 
 import { areaGroupKey, areaGroupName, milesBetween, placeName, type AreaCity } from "./playerAreaModel";
 import { clusterOutside, effectiveVerdict, type OutsidePoint } from "./locationsInsights";
-import { activityOf, emptyActivity, summarizePlays, venuePlayFields, type Activity, type BubblePlays, type Play, type PlayField } from "./wherePlayed";
+import { activityOf, emptyActivity, favouriteVenue, playsByVenue, summarizePlays, venuePlayFields, type Activity, type BubblePlays, type Play, type PlayField } from "./wherePlayed";
 import { groupIntoUnits, unitIdOf, venueUnitId, type UnitMember, type VenueLink } from "./venueUnits";
 import { perMile, type DistanceUnit } from "./locationScopes";
 
@@ -424,17 +424,10 @@ export function locatePlayers(input: Parameters<typeof buildLocationsMap>[0]): P
     const a = actS.get(id) ?? {};
     const plays = input.history?.playsByPlayer.get(id) ?? [];
     let last: (typeof plays)[number] | null = null;
-    const byField = new Map<number, { n: number; ms: number; day: string }>();
-    for (const p of plays) {
-      if (!last || p.ms > last.ms) last = p;
-      const u = unitIdOf(p.fieldId, links);
-      const g = byField.get(u) ?? { n: 0, ms: -Infinity, day: "" };
-      g.n++;
-      if (p.ms > g.ms) { g.ms = p.ms; g.day = p.day; }
-      byField.set(u, g);
-    }
-    // FAVOURITE = the most matches; a tie goes to the one played most recently.
-    const fav = [...byField].sort((x, y) => y[1].n - x[1].n || y[1].ms - x[1].ms)[0]?.[0] ?? null;
+    for (const p of plays) if (!last || p.ms > last.ms) last = p;
+    const byField = playsByVenue(plays, (f) => unitIdOf(f, links));
+    // FAVOURITE = the most matches; a tie goes to the one played most recently (wherePlayed.favouriteVenue).
+    const fav = favouriteVenue(byField);
     out.push({
       playerId: id, verdict: e.verdict, cityId: e.cityId ?? null,
       area: areaOf.get(e.city ?? e.nat) ?? areaOf.get(e.nat) ?? "",
