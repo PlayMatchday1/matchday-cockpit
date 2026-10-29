@@ -630,7 +630,8 @@ export default function MatchEditor({ id, mode = "edit", sourceId, fieldId: from
     mgrPick.find((m) => m.id === Number(state.managerId))?.name,
   ].filter(Boolean).join(" · ") || "not set";
   const sumMoney = [
-    nz(state.registrationPrice) ? money(state.registrationPrice) : "free",
+    // BLANK IS NOT FREE. A new match arrives with no price, and "free" there would read as a decision.
+    blank(state.registrationPrice) ? "price not set" : nz(state.registrationPrice) ? money(state.registrationPrice) : "free",
     nz(state.additionalSpotPrice) ? `${money(state.additionalSpotPrice)} spot` : "no spot price",
     `${Number(state.guestCount ?? 0)} guest${Number(state.guestCount ?? 0) === 1 ? "" : "s"}`,
   ].join(" · ");
@@ -726,7 +727,9 @@ export default function MatchEditor({ id, mode = "edit", sourceId, fieldId: from
   const createFromField = async (allowDuplicate: boolean) => {
     if (!state) return;
     const missing = missingForNewMatch(state, startAt, endAt);
-    if (missing.length) { setDateErr(`Fill in before creating: ${missing.join(", ")}.`); return; }
+    // IN THE SAVE BAR, not the date section — that section is shut by default, so a message there
+    // would make Create look like it did nothing.
+    if (missing.length) { setMsg({ kind: "err", text: `Fill in before creating: ${missing.join(", ")}.` }); return; }
     setSaving(true); setMsg(null); setDupe(null); setDateErr(null);
     const body = { match: newMatchBody(state, startAt, endAt), allowDuplicate, source: "Master Schedule · new match on a field" };
     const res = await authFetch(`/api/matchday/${FULL_EDITOR_ENV}/matches/create`, { method: "POST", body: JSON.stringify(body) });
@@ -1222,6 +1225,8 @@ export default function MatchEditor({ id, mode = "edit", sourceId, fieldId: from
 
               REFUSED, NOT WARNED ABOUT, on a cancelled match — the cancel already credited those
               players, and a live button beside a warning is how somebody pays twice. */}
+          {/* NOT ON A MATCH THAT DOES NOT EXIST YET — there is nobody to credit. */}
+          {meta.id != null && (
           <section className="card credit" data-testid="creditall-card">
             <div className="cb"><div className="dz">
               <p data-testid="creditall-stakes">
@@ -1303,6 +1308,7 @@ export default function MatchEditor({ id, mode = "edit", sourceId, fieldId: from
               </div>
             )}
             </div></section>
+          )}
 
           {/* Cancel — its own red card. NEVER part of Save: Save sends the field diff, this fires a
               different endpoint with its own confirmation and its own verdict. */}
@@ -1342,7 +1348,7 @@ export default function MatchEditor({ id, mode = "edit", sourceId, fieldId: from
         {/* Roster — the ACTUAL roster: real names, grouped by real team + number. */}
         <Section id="roster" title="Roster" open={!!openSec.roster} onToggle={() => toggleSec("roster")}
           summary={<span className={over > 0 ? "over" : undefined} data-testid="pcount">
-            {occupancy}{cap != null ? <> of {cap}{over > 0 ? <b data-testid="cap-over"> · over by {over}</b> : occupancy === cap ? " · full" : ""}</> : " · no cap (special event)"}
+            {meta.id == null ? "not created yet" : <>{occupancy}{cap != null ? <> of {cap}{over > 0 ? <b data-testid="cap-over"> · over by {over}</b> : occupancy === cap ? " · full" : ""}</> : " · no cap (special event)"}</>}
           </span>}>
           <div>
             <div className="roster real" data-testid="roster">
