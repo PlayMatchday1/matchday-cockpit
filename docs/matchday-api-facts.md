@@ -7914,4 +7914,10 @@ Evidence: mirror reads from a local script, stored stats refreshed 2026-10-29T17
   Metropolitan Park, counts_as_regular_play false) and 17 (NEMP Tournaments, true). 397 (titled "NEMP
   Discounted", 23 matches, and "NEMP Grass", 18) and 20 ("NEMP Grass Fields", 26) were unlinked and
   showed as their own pins. Ryan, 2026-10-29: all four are one NEMP field.
+- **Linked 2026-10-29 on /admin/fields** (POST /api/admin/fields/assign, counts_as_regular_play false):
+  397 at 17:56:54Z, change_log `landed`, fin_change_log 2640; 20 at 18:15:01Z, change_log `landed`,
+  fin_change_log 2641. Read back from `fin_venue_fields`: venue 2 now holds 10, 17, 20, 397. The map
+  shows one NEMP pin ("3 fields": 397, 17, 10; field 20 has no active matches but its plays count).
+  Finance side effect: NEMP now carries 397's 27 and 20's 18 played matches at $77, which were
+  unattributed before (Fields page: unattributed went from 34 fields, $19,320 to 32).
 - Played here only counts matches that have STARTED as of the refresh; a future booking is not a play.
