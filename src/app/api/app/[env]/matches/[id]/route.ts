@@ -16,7 +16,7 @@
 
 import { authenticateApp, readRefusal } from "@/lib/appAuth";
 import { cityAllowed } from "@/lib/appModel";
-import { checkinFor, countedPlayers, fetchMarks, fetchPlayersLive, isEnv, rosterOut, todayRow } from "@/lib/appLive";
+import { checkinFor, countedPlayers, fetchMarks, fetchPlayersLive, isEnv, reviewsOut, rosterOut, todayRow } from "@/lib/appLive";
 import { trimMatch, type Raw } from "@/lib/gamedayApiShape";
 import { rosterRowIsFake } from "@/lib/gamedayModel";
 import { apiGet, StageConfigError, StageHostGuardError } from "@/lib/matchdayStageApi";
@@ -74,6 +74,8 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string; id
       teams,
       players: rosterOut(players, marks ? marks.get(Number(id)) ?? [] : null),
       checkinAvailable: marks !== null,
+      // From the roster already read above: no extra request.
+      reviews: reviewsOut(players),
     });
   } catch (e) {
     if (e instanceof StageHostGuardError || e instanceof StageConfigError) return Response.json({ error: e.message }, { status: 500 });

@@ -36,6 +36,7 @@ export async function fetchDayLive(env: MatchdayEnv, date: string): Promise<Raw[
 type PlayerRaw = RosterRow & {
   id?: number; userId?: number; team?: number; playerNumber?: number; userType?: string | null;
   user?: { firstName?: string; lastName?: string; isFakePlayer?: boolean; phoneNumber?: string | null };
+  starRating?: number | null; tagsRating?: unknown; comment?: string | null; updatedAtRating?: string | null;
 };
 
 export async function fetchPlayersLive(env: MatchdayEnv, matchId: number | string): Promise<PlayerRaw[]> {
@@ -107,6 +108,9 @@ export function todayRow(m: ReturnType<typeof trimMatch> & { venueMaxPlayers?: n
     managerFirstName: m.manager?.firstName?.trim() || null,
     managerAvatar: rm && typeof rm.avatar === "string" && rm.avatar.trim() ? rm.avatar : null,
     checkin,
+    /* THE RATING from the list row itself (trimMatch keeps it). Count says whether one exists:
+     * starRating is 0, not null, before anyone rates. */
+    rating: (m.starRatingCount ?? 0) > 0 ? { avg: m.starRating, count: m.starRatingCount } : null,
   };
 }
 
@@ -151,4 +155,30 @@ export function rosterOut(rows: PlayerRaw[], marks: Mark[] | null) {
       checkin: mk ? { status: mk.status, markedAt: mk.marked_at } : null,
     };
   });
+}
+
+/**
+ * THE REVIEWS ON A LIVE ROSTER. A review is a roster row with a starRating, exactly the rule
+ * reviewFromRoster (mdapiMatchesSync.ts) uses for mdapi_reviews. The reviewer is first name and last
+ * initial only, and nothing else about them leaves this function. Newest first.
+ */
+export const LOW_RATING_MAX = 3;
+const tagLabel = (t: string) => { const s = t.trim().toLowerCase().replace(/_/g, " "); return s.charAt(0).toUpperCase() + s.slice(1); };
+export function reviewsOut(rows: PlayerRaw[]) {
+  return rows
+    .filter((p) => p.starRating != null && Number.isFinite(Number(p.starRating)))
+    .map((p) => {
+      const first = p.user?.firstName?.trim() ?? "";
+      const last = p.user?.lastName?.trim() ?? "";
+      const tags = Array.isArray(p.tagsRating) ? p.tagsRating.filter((t): t is string => typeof t === "string" && t.trim() !== "").map(tagLabel) : [];
+      return {
+        id: num(p.id),
+        name: [first, last ? `${last.charAt(0).toUpperCase()}.` : ""].filter(Boolean).join(" ") || "Player",
+        stars: Number(p.starRating),
+        tags,
+        comment: typeof p.comment === "string" && p.comment.trim() !== "" ? p.comment.trim() : null,
+        ratedAt: typeof p.updatedAtRating === "string" ? p.updatedAtRating : null,
+      };
+    })
+    .sort((a, b) => (b.ratedAt ? Date.parse(b.ratedAt) : 0) - (a.ratedAt ? Date.parse(a.ratedAt) : 0));
 }
