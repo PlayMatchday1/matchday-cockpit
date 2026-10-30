@@ -16,7 +16,7 @@ import { PACE_MS } from "@/lib/matchdayApi";
 import { StageConfigError, apiGet, apiWrite, WriteFailedError, type WriteActor } from "@/lib/matchdayStageApi";
 import { OFFERS_NOT_FOUND, onOffersAllowlist } from "@/lib/offersAccess";
 import { readOffersConfig, type OffersConfig, type OffersConfigResult } from "@/lib/offersConfig";
-import { chicagoWallNow, offerMatchOpt, offersLogBody, photoUrlOk, pickerRange, wallFromMatch, type ApiOfferMatch, type Campaign, type FieldOpt, type MatchOpt } from "@/lib/offersModel";
+import { chicagoWallNow, offerMatchOpt, offersLogBody, photoUrlOk, pickerRange, wallFromMatch, type ApiOfferMatch, type Campaign, type City, type FieldOpt, type MatchOpt } from "@/lib/offersModel";
 import { READS_STOPPED, makePacer } from "@/lib/offersPacing";
 import { STAFF_NOT_ALLOWED_PLAIN, WHO_ARE_YOU, staffEmailOf, staffErrorKind } from "@/lib/staffIdentity";
 
@@ -95,6 +95,12 @@ export const readCampaigns = () => offersGet<Campaign[]>(CAMPAIGNS);
 export async function readCampaign(id: number): Promise<Campaign | null> {
   try { return await offersGet<Campaign>(`${CAMPAIGNS}/${id}`); }
   catch (e) { if (e instanceof WriteFailedError && e.status === 404) return null; throw e; }
+}
+
+// Every city, cut down: its name, and the zone an offer's end is judged in.
+export async function readCities(): Promise<City[]> {
+  const r = await offersGet<{ id: number; name: string; timeZone?: { name?: string | null } | null }[]>("/admin/cities");
+  return r.map((c) => ({ id: c.id, name: c.name, timeZone: c.timeZone?.name ?? null })).sort((a, b) => a.name.localeCompare(b.name));
 }
 
 // A match from admin/matches, cut down to what the page shows. The payload carries teams[].password

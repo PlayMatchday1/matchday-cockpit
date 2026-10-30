@@ -13,7 +13,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FIRST_NAME_TOKEN, MAX_TEST_IDS, SECTION_ADD, addSection, autoCopy, canReset, copyAfterType, isRemovable, staleLines, staleSections, writtenForOnLoad, removeSection, resetCopy, sectionCollapsed, canHidePhoto, copyAfterHide, hideUpload, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, MAX_USES_PER_PLAYER, notFoundLine, parsePlayerIds, playerLine, prefillField, PREVIEW_FIRST_NAME, amountText, limitLine, stepLimit, stepUses, usesLine, audienceBody, buttonMatchNote, buttonOf, opensText, chicagoWallNow, copyOf, createBody, defaultRun, endsTicket, formOf, formProblem, fromInput, matchInfo,
-  newForm, patchBody, mergeMatches, withCovers, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, endHasPassed, launchProblem, setPriceAnyWarning, setPriceProblem, pickedMatch, startLabel, STEPPER, summary, toInput, wallLabel,
+  newForm, patchBody, mergeMatches, withCovers, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, endHasPassed, launchProblem, offerWallNow, offerZones, setPriceAnyWarning, setPriceProblem, pickedMatch, startLabel, STEPPER, summary, toInput, wallLabel,
   type Campaign, type City, type Count, type FieldOpt, type Lookup, type UploadedPhoto, type CopyKey, type DealType, type Form, type MatchOpt, type WrittenFor,
 } from "@/lib/offersModel";
 import MatchPicker from "./MatchPicker";
@@ -76,6 +76,8 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
   const frozen = ended || matchUnread;
   const m = pickedMatch(f, data.matches);
   const copy = copyOf(f, data.matches, data.cities);
+  // Now, as the wall clock furthest ahead among this offer's cities. Worked out when asked, not on mount.
+  const offerWall = () => offerWallNow(offerZones(f, m?.cityId ?? null, data.cities));
   const problem = matchUnread ? null : formProblem(f, data.matches, c?.status ?? null);
   const diff = c && !matchUnread ? patchBody(c, f, data.matches, data.cities) : null;
   const dirty = c === null || Object.keys(diff ?? {}).length > 0;
@@ -171,7 +173,7 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
   // Launch (or resume): save first when there is anything to save, then launch. Two writes, in order;
   // the second goes only if the first LANDED. Neither is retried.
   async function launch(): Promise<WriteOutcome> {
-    const passed = launchProblem(f, chicagoWallNow());
+    const passed = launchProblem(f, offerWall());
     if (passed) return { verdict: "FAILED", text: `${passed} Nothing was sent.` };
     let id = c?.id ?? null;
     if (c === null || (c.status === "DRAFT" && dirty)) {
@@ -290,7 +292,7 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
   // What a section held when Remove was pressed, so + Add puts it back. Cleared by a save (the panel remounts).
   const [typedBefore, setTypedBefore] = useState<Partial<Record<CopyKey, string>>>({});
   const [more, setMore] = useState(false);
-  const ends = endsTicket(f.endsLocal, nowWall);
+  const ends = endsTicket(f.endsLocal, offerWall());
   // ── Button opens (Figma 20612:47 / 92 / 142). Editable after launch like the rest of the text;
   // forced and locked to the deal's match when the offer is for a specific match.
   const photoName = (url: string | null) => {
@@ -419,8 +421,8 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
     );
   };
   const dl = locked || frozen; // deal, audience and run locked
-  const passed = endHasPassed(f.endsLocal, chicagoWallNow());
-  const launchWhy = matchUnread ? matchUnreadText(matchRead) : problem ?? launchProblem(f, chicagoWallNow()) ?? COUNT_BLOCK[countNow];
+  const passed = endHasPassed(f.endsLocal, offerWall());
+  const launchWhy = matchUnread ? matchUnreadText(matchRead) : problem ?? launchProblem(f, offerWall()) ?? COUNT_BLOCK[countNow];
   const dealWarn = setPriceProblem(f, m);
   const anyWarn = setPriceAnyWarning(f, data.matches);
 
@@ -729,7 +731,7 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
       {/* LAUNCH */}
       <section className="flex flex-col gap-2.5 border-t p-4" style={{ borderColor: O.line }}>
         <p data-testid="offers-summary" className="text-[13px] font-medium leading-[19px]" style={{ color: O.ink }}>
-          {matchUnread ? matchUnreadText(matchRead) : summary(f, count, data.matches, data.cities, chicagoWallNow(), data.fields)}
+          {matchUnread ? matchUnreadText(matchRead) : summary(f, count, data.matches, data.cities, offerWall(), data.fields)}
         </p>
         {outcome && <VerdictLine outcome={outcome} />}
         {problem && !ended && dirty && <div data-testid="offers-problem" className="text-[12px]" style={{ color: O.warnInk }}>{problem}</div>}
@@ -777,7 +779,7 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
 
       {confirm === "launch" && (
         <ConfirmDialog title={c?.status === "PAUSED" ? `Resume ${f.name.trim()}?` : `Launch ${f.name.trim()}?`}
-          note={c?.status === "PAUSED" ? "Players who match start getting it again the next time they open the app." : `${summary(f, count, data.matches, data.cities, chicagoWallNow(), data.fields)} After launch the deal, who gets it and when it runs can't change.`}
+          note={c?.status === "PAUSED" ? "Players who match start getting it again the next time they open the app." : `${summary(f, count, data.matches, data.cities, offerWall(), data.fields)} After launch the deal, who gets it and when it runs can't change.`}
           warnings={staleLines(stale, f)}
           action={c?.status === "PAUSED" ? "Resume" : stale.length > 0 ? "Launch anyway" : "Launch"} onCancel={() => setConfirm(null)}
           onConfirm={async () => { const o = await once(launch); if (o) { setOutcome(o); if (o.verdict === "LANDED") setConfirm(null); } return o; }} />

@@ -7994,3 +7994,25 @@ stored text with what the deal suggests right now. "Written for the old deal" is
 browser (`offers:written-for:<id>`). In another browser, typed text counts as written for the deal it
 loads with, and no warning shows until the deal moves again. Guarded in `scripts/offers-model-test.ts`,
 "a saved draft when the deal, audience or match changes".
+
+### `GET /admin/offers/matches` and whose clock an offer ends on
+
+Probed on the local backend, 2026-10-30, as the Clubhouse's service account. The contract is
+`docs/offers/M3-ENDPOINTS.md` in `~/Code/backend-offers`, committed at 7414a46.
+
+- `?from=2026-10-30&to=2026-11-12&limit=3` answered 200 with `totalItems` 3 and rows keyed `id, name, startsAt,
+  startsLocal, timeZone, fieldId, fieldName, cityId, cityName, price, currency, playersIn, capacity, minimum`.
+- **No field cover in that row.** A suggested photo comes from `autoCopy`, so `withCovers`
+  (`src/lib/offersModel.ts`) fills it from `/admin/fields`. Without that, a saved match offer's stored photo
+  would look typed by hand.
+- `playersIn` also counts unpaid reservations (M3-ENDPOINTS.md), so it is not `_count.players`. A match read
+  through `GET /admin/matches/{id}` carries the other count.
+- The endpoint's `search` covers the match and field names only, and the design also searches by time, so the
+  picker filters in the browser.
+- Every seeded match has `minimum` 0, so "needs N" only shows locally with stubbed data.
+
+`GET /admin/cities` carries `timeZone: { name }` on each city (probed the same way: all three seeded cities are
+`America/Chicago`). The backend stops each player's offer at `endsLocal` in that player's own city, or `utc` if
+they have none (`apps/api/src/core/offers/prisma-offers.store.ts:44` and `:100`). Its own `state` field is only a rough
+guide against UTC wall clock (`offer-campaigns.service.ts:557`). So the Clubhouse counts an end as passed once
+it has passed in any of the offer's cities (`offerZones`, `offerWallNow`). Players with no city are not considered.

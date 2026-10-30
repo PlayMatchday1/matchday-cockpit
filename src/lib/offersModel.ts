@@ -47,7 +47,8 @@ export type Campaign = Copy & {
   results: Results;
 };
 
-export type City = { id: number; name: string };
+// timeZone is the city's IANA name (admin/cities: timeZone.name), used for when an offer's end has passed.
+export type City = { id: number; name: string; timeZone?: string | null };
 // A field as the photo picker and the Played at row need it. cover is the field's cover photo URL, or null.
 export type FieldOpt = { id: number; title: string; cityId: number | null; cover: string | null };
 // A match as the page needs it. startLocal is WALL CLOCK ("YYYY-MM-DD HH:mm:ss"). players is what the
@@ -105,10 +106,15 @@ export function wallText(ms: number): string {
 // A match's startDate ("2026-11-02T19:00:00.000Z", wall clock) as wall-clock text.
 export const wallFromMatch = (startDate: string) => startDate.slice(0, 19).replace("T", " ");
 
-export function chicagoWallNow(now: Date = new Date()): string {
-  const p = Object.fromEntries(new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/Chicago", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
-  }).formatToParts(now).map((x) => [x.type, x.value]));
+export const chicagoWallNow = (now: Date = new Date()): string => wallNowIn("America/Chicago", now);
+// A zone Intl doesn't know reads as UTC, the backend's own answer for a player with no city's zone.
+export function wallNowIn(timeZone: string, now: Date = new Date()): string {
+  let f: Intl.DateTimeFormat;
+  const parts = (zone: string) => new Intl.DateTimeFormat("en-US", {
+    timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
+  });
+  try { f = parts(timeZone); } catch { f = parts("UTC"); }
+  const p = Object.fromEntries(f.formatToParts(now).map((x) => [x.type, x.value]));
   return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}:${p.second}`;
 }
 
@@ -609,7 +615,19 @@ export function setPriceAnyWarning(f: Form, matches: MatchOpt[]): string | null 
 }
 
 // ── WHAT STOPS A LAUNCH, on top of formProblem ───────────────────────────────────────────────────
-// The end compared with Chicago's wall clock, the page's "now" (see the time model at the top).
+// WHEN THE END HAS PASSED. The backend stops each player's offer at endsLocal in that player's own city
+// (prisma-offers.store.ts isLiveInZone), so it falls at a different instant per city. An offer is past
+// its end from the moment that's true in ANY of its cities: its own, plus a specific match's city.
+// With no city (all cities, or specific players) that's every city there is. No zone known reads as UTC.
+export function offerZones(a: Pick<Campaign, "cityIds" | "audienceMode">, matchCityId: number | null, cities: City[]): string[] {
+  const own = a.audienceMode === "PLAYERS" ? [] : a.cityIds;
+  const ids = [...own, ...(matchCityId !== null ? [matchCityId] : [])];
+  const from = ids.length ? cities.filter((c) => ids.includes(c.id)) : cities;
+  const zones = [...new Set(from.map((c) => c.timeZone).filter((z): z is string => !!z))];
+  return zones.length ? zones : ["UTC"];
+}
+// The wall clock furthest ahead among those zones: the end reaches it first.
+export const offerWallNow = (zones: string[], now: Date = new Date()) => zones.map((z) => wallNowIn(z, now)).sort().at(-1)!;
 export const endHasPassed = (endsLocal: string, nowWall: string) => wallMs(endsLocal) <= wallMs(nowWall);
 export const launchProblem = (x: { endsLocal: string }, nowWall: string): string | null =>
   endHasPassed(x.endsLocal, nowWall) ? "The end time has already passed. Pick a later end." : null;

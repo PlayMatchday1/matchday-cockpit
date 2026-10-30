@@ -13,7 +13,7 @@ import { offersAccessState, onOffersAllowlist } from "../src/lib/offersAccess";
 import {
   audienceBody, chicagoWallNow, comparisonLine, costCeiling, createBody, defaultRun, endsTicket, formOf, newForm, patchBody, priceWithDeal,
   summary, wallFromMatch, withPreviewName, buttonOf, opensText, formProblem, stepUses, usesLine, stepLimit, limitLine, copyOf,
-  addSection, autoCopy, canReset, copyAfterType, staleLines, staleSections, writtenForOnLoad, isRemovable, removeSection, resetCopy, sectionCollapsed, REMOVABLE_KEYS, canHidePhoto, copyAfterHide, hideUpload, extraBookingsLine, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, prefillField, audienceText, parsePlayerIds, playerLine, notFoundLine, usedOfLimit, resultsLines, mergeMatches, offerMatchOpt, pickerRange, withCovers, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, endHasPassed, launchProblem, namedMatchIds, offersLogBody, pickerDayLabel, pickerView, fillText, fillFraction, setPriceAnyWarning, setPriceProblem, type Campaign, type City, type MatchOpt, type Results,
+  addSection, autoCopy, canReset, copyAfterType, staleLines, staleSections, writtenForOnLoad, isRemovable, removeSection, resetCopy, sectionCollapsed, REMOVABLE_KEYS, canHidePhoto, copyAfterHide, hideUpload, extraBookingsLine, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, prefillField, audienceText, parsePlayerIds, playerLine, notFoundLine, usedOfLimit, resultsLines, offerWallNow, offerZones, wallNowIn, mergeMatches, offerMatchOpt, pickerRange, withCovers, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, endHasPassed, launchProblem, namedMatchIds, offersLogBody, pickerDayLabel, pickerView, fillText, fillFraction, setPriceAnyWarning, setPriceProblem, type Campaign, type City, type MatchOpt, type Results,
 } from "../src/lib/offersModel";
 import { _setOffersGateDepsForTest, MAX_MATCH_PAGES, mismatches, offersGate, offersWrite, photoLinkProblem, readFirstMatchPage, readMatchesForCities, sendPreview, type OffersAuth } from "../src/lib/offersServer";
 import { readOffersConfig } from "../src/lib/offersConfig";
@@ -543,6 +543,35 @@ eq("...and two different ones, and none", [namedMatchIds({ matchIds: [116], butt
   eq("...even for a kickoff", line("2026-10-28 17:00:00", { scope: "MATCH", matchId: 116 }).includes("already passed"), true);
   eq("a coming end reads as before (the control)", line("2026-11-01 23:59:00").includes("until Sun 11:59 PM"), true);
   eq("the ticket for a past end is a date, not a weekday", endsTicket(past, NOW), "Ends Wed, Oct 28");
+}
+
+
+// ── THE END, IN THE OFFER'S OWN CITIES ───────────────────────────────────────────────────────────
+{
+  const C: City[] = [{ id: 1, name: "Austin", timeZone: "America/Chicago" }, { id: 2, name: "Houston", timeZone: "America/Chicago" }, { id: 3, name: "New York", timeZone: "America/New_York" }, { id: 4, name: "Los Angeles", timeZone: "America/Los_Angeles" }, { id: 5, name: "No zone", timeZone: null }];
+  const AT = new Date("2026-10-30T21:30:00Z"); // 4:30 PM Chicago, 5:30 PM New York, 2:30 PM Los Angeles
+  const filt = (cityIds: number[]) => ({ cityIds, audienceMode: "FILTERS" as const });
+  eq("each zone's wall clock", [wallNowIn("America/Chicago", AT), wallNowIn("America/New_York", AT), wallNowIn("America/Los_Angeles", AT)], ["2026-10-30 16:30:00", "2026-10-30 17:30:00", "2026-10-30 14:30:00"]);
+  eq("Chicago's helper is the same clock (the control)", chicagoWallNow(AT), "2026-10-30 16:30:00");
+  eq("wall clock follows DST, not a fixed offset", [wallNowIn("America/Chicago", new Date("2026-07-01T17:00:00Z")), wallNowIn("America/Chicago", new Date("2026-12-01T17:00:00Z"))], ["2026-07-01 12:00:00", "2026-12-01 11:00:00"]);
+  eq("a zone Intl doesn't know reads as UTC, and doesn't throw", wallNowIn("Mars/Olympus", AT), "2026-10-30 21:30:00");
+  eq("one city: its zone", offerZones(filt([4]), null, C), ["America/Los_Angeles"]);
+  eq("two cities in one zone: once", offerZones(filt([1, 2]), null, C), ["America/Chicago"]);
+  eq("no city: every city's zone", offerZones(filt([]), null, C), ["America/Chicago", "America/New_York", "America/Los_Angeles"]);
+  eq("specific players: every city's zone, whatever cityIds holds", offerZones({ cityIds: [4], audienceMode: "PLAYERS" }, null, C).length, 3);
+  eq("a specific match adds its city", offerZones(filt([4]), 3, C), ["America/New_York", "America/Los_Angeles"]);
+  eq("a match in all cities: just its city", offerZones(filt([]), 4, C), ["America/Los_Angeles"]);
+  eq("nothing known: UTC", offerZones(filt([5]), null, C), ["UTC"]);
+  const end = "2026-10-30 17:00:00"; // 5:00 PM on the wall
+  const past = (cityIds: number[], match: number | null = null) => endHasPassed(end, offerWallNow(offerZones(filt(cityIds), match, C), AT));
+  eq("5 PM has passed in New York at 5:30 there", past([3]), true);
+  eq("...and hasn't in Chicago or Los Angeles (the controls)", [past([1]), past([4])], [false, false]);
+  eq("Chicago and New York together: the earliest decides", past([1, 3]), true);
+  eq("Chicago and Los Angeles together: neither yet", past([1, 4]), false);
+  eq("all cities: New York decides", past([]), true);
+  eq("the match's city counts", past([4], 3), true);
+  eq("the Chicago clock alone would have said otherwise (why this changed)", endHasPassed(end, chicagoWallNow(AT)), false);
+  eq("the summary uses that clock", summary({ ...nowF, name: "x", cityIds: [3], endsLocal: end }, { count: 1, heldBack: 0, players: 1, mostItCanCost: null }, [], C, offerWallNow(["America/New_York"], AT)).includes("already passed"), true);
 }
 
 // ── THE COUNT'S STATE ────────────────────────────────────────────────────────────────────────────

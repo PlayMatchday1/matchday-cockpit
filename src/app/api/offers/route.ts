@@ -4,8 +4,8 @@
 // POST /api/offers: create a draft. The body is the page's createBody; keys outside BODY_KEYS are
 // dropped. The verdict comes from reading the new campaign back by the id the backend returned.
 
-import { BODY_KEYS, type City } from "@/lib/offersModel";
-import { CAMPAIGNS, errorText, offersGate, offersGet, offersWrite, readCampaigns, readJson, readFields, readFirstMatchPage, verdictResponse } from "@/lib/offersServer";
+import { BODY_KEYS } from "@/lib/offersModel";
+import { CAMPAIGNS, errorText, offersGate, offersWrite, readCampaigns, readCities, readJson, readFields, readFirstMatchPage, verdictResponse } from "@/lib/offersServer";
 
 export const dynamic = "force-dynamic";
 
@@ -15,10 +15,9 @@ export async function GET(req: Request) {
   try {
     // One at a time. A match an offer names but this list doesn't have is read when that offer is opened.
     const campaigns = await readCampaigns();
-    const citiesRaw = await offersGet<{ id: number; name: string }[]>("/admin/cities");
+    const cities = await readCities();
     const fields = await readFields();
     const list = await readFirstMatchPage().then((l) => ({ ...l, error: null as string | null }), (e) => ({ matches: [], complete: false, error: errorText(e) }));
-    const cities: City[] = citiesRaw.map((c) => ({ id: c.id, name: c.name })).sort((a, b) => a.name.localeCompare(b.name));
     return Response.json({ campaigns, cities, fields, matches: list.matches, matchesComplete: list.complete, matchesError: list.error });
   } catch (e) {
     return Response.json({ error: errorText(e) }, { status: 502 });
