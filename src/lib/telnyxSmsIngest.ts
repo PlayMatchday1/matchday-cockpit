@@ -246,7 +246,9 @@ export async function ingestTelnyxSms(
       if ((r.direction ?? "").toLowerCase() !== "outbound") continue;
       outboundSeen++;
       const id = r.uuid ?? r.id;
-      if (id) {
+      // Once per message: the same id can come back twice in one run (offset pages shift as new
+      // texts arrive), and one upsert batch may not name a row twice.
+      if (id && !mdrByUuid.has(id)) {
         uuids.push(id);
         mdrByUuid.set(id, r);
       }

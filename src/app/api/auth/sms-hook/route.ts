@@ -69,7 +69,9 @@ export async function POST(req: Request) {
   try {
     const sent = await new Telnyx({ apiKey }).messages.send({ from, to: phone, text: signInCodeText(otp) });
     console.log(`[sms-hook] sent to ...${phoneLast4(phone)} message ${sent.data?.id ?? "?"}`);
-    return new Response(null, { status: 200 });
+    // Supabase Auth refuses a bodyless 200 ("Missing Content-Type header") after the text has
+    // already gone, so the sign-in fails; an empty JSON object is what it accepts.
+    return Response.json({}, { status: 200 });
   } catch (e) {
     console.error(`[sms-hook] Telnyx send failed to ...${phoneLast4(phone)}: ${e instanceof Error ? e.message : String(e)}`);
     return refuse(502, "The text could not be sent.");
