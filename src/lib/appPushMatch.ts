@@ -12,6 +12,11 @@ import { atRiskNow, finalRecipients, matchRecipients, matchRiskText, sendAppPush
 
 export type RiskMatch = ReturnType<typeof todayRow>;
 
+/* LOG ONLY (Ryan, 2026-10-30): the scheduled run records which matches it WOULD notify, and whom,
+ * once per match, in app_push_log (dry_run, no ticket, "log only: not sent"). It sends nothing and
+ * claims nothing, so switching this off later still notifies each match once. */
+export const MATCH_RISK_LOG_ONLY = true;
+
 /** UTC yesterday, today and tomorrow: every city's "today" near this moment is one of them. */
 export function datesAround(nowMs: number): string[] {
   return [-1, 0, 1].map((d) => new Date(nowMs + d * 86_400_000).toISOString().slice(0, 10));
@@ -46,6 +51,19 @@ export async function runMatchRisk(sb: SupabaseClient, env: MatchdayEnv, nowMs =
   const sent: { matchId: number; claimed: boolean; result?: unknown }[] = [];
   if (risky.length === 0) return { env, scanned: seen.size, atRisk: 0, sent };
   const staff = await staffRows(sb);
+  if (MATCH_RISK_LOG_ONLY) {
+    for (const m of risky) {
+      const subject = `${env}:${m.id}`;
+      const seenBefore = await sb.from("app_push_log").select("id").eq("event", "match_at_risk").eq("subject", subject).eq("dry_run", true).is("ticket_status", null).limit(1);
+      if (seenBefore.error || (seenBefore.data?.length ?? 0) > 0) { sent.push({ matchId: m.id, claimed: false, result: "already logged" }); continue; }
+      const recipientIds = finalRecipients(matchRecipients(staff, m.cityName), staff, null, null);
+      const p = riskPayload(env, m);
+      const rows = (recipientIds.length ? recipientIds : [null]).map((id) => ({ event: "match_at_risk", app_user_id: id, subject, dry_run: true, ticket_status: null, ticket_error: `log only: not sent · ${p.body}`.slice(0, 300) }));
+      const ins = await sb.from("app_push_log").insert(rows);
+      sent.push({ matchId: m.id, claimed: false, result: ins.error ? `log failed: ${ins.error.message}` : `logged for ${recipientIds.length} recipients` });
+    }
+    return { env, scanned: seen.size, atRisk: risky.length, logOnly: true, sent };
+  }
   for (const m of risky) {
     const claim = await sb.from("app_push_match_risk").insert({ env, match_id: m.id });
     if (claim.error) { sent.push({ matchId: m.id, claimed: false }); continue; } // already notified (or the claim failed): never twice

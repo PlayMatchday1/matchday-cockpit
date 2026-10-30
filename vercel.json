@@ -83,6 +83,10 @@
     {
       "path": "/api/sync/player-areas/continue",
       "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/app/push/match-risk",
+      "schedule": "*/5 * * * *"
     }
   ]
 }

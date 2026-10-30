@@ -14,7 +14,7 @@ export const maxDuration = 60;
 
 const same = (a: string, b: string) => { const ab = Buffer.from(a), bb = Buffer.from(b); return ab.length === bb.length && timingSafeEqual(ab, bb); };
 
-export async function GET(req: Request) {
+export async function POST(req: Request) {
   const token = (req.headers.get("authorization") ?? "").replace(/^Bearer\s+/, "").trim();
   const cronSecret = process.env.CRON_SECRET;
   if (!(token && cronSecret && same(token, cronSecret))) return Response.json({ error: "Not allowed." }, { status: 401 });
@@ -27,3 +27,6 @@ export async function GET(req: Request) {
   console.log(`[app-push:cron] ${JSON.stringify(out).slice(0, 500)}`);
   return Response.json(out);
 }
+
+// Vercel cron issues a GET; POST is the entry point, GET its alias (scripts/cron-verb-test.ts).
+export const GET = POST;
