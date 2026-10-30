@@ -9,6 +9,7 @@
 // src/lib/offersModel.ts.
 
 import { useCallback, useEffect, useState } from "react";
+import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/useAuth";
 import {
   STATE_LABEL, audienceText, usedOfLimit, chicagoWallNow, comparisonLine, dealText, money, progressText, resultsLines, usedPct, usesText, wallLabel,
@@ -16,14 +17,15 @@ import {
 } from "@/lib/offersModel";
 import OfferPanel from "./OfferPanel";
 import { Banner, Btn, NotFound, O, Split, StateChip, authed, type WriteOutcome } from "./offersUi";
-import { useOffersAccess } from "./useOffersAccess";
+import { useOffersAccessState } from "./useOffersAccess";
 
 type Data = { campaigns: Campaign[]; cities: City[]; fields: FieldOpt[]; matches: MatchOpt[] };
 const COLS = "grid grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)_minmax(0,1.3fr)_88px] items-center gap-3";
 
 export default function OffersView() {
   const { isLoading } = useAuth();
-  const access = useOffersAccess();
+  const accessState = useOffersAccessState();
+  const access = accessState === null ? null : accessState === "yes";
   const [data, setData] = useState<Data | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [key, setKey] = useState(0);
@@ -51,6 +53,7 @@ export default function OffersView() {
   }, []);
 
   if (isLoading || access === null) return <div className="px-1 py-6 text-[13px]" style={{ color: O.muted }}>Loading…</div>;
+  if (accessState === "signin") return <SignInAgain />;
   if (access !== true) return <NotFound />;
 
   const current = open === "new" || open === null ? null : data?.campaigns.find((c) => c.id === open) ?? null;
@@ -116,6 +119,26 @@ export default function OffersView() {
             </div>
           } />
       )}
+    </div>
+  );
+}
+
+// The session has ended but the browser still holds its token. The login page bounces anyone it thinks
+// is signed in, so the dead token is cleared here first (this browser only; other sessions are left alone).
+function SignInAgain() {
+  const [busy, setBusy] = useState(false);
+  async function go() {
+    setBusy(true);
+    await supabase.auth.signOut({ scope: "local" }).catch(() => undefined);
+    window.location.assign("/login?next=/growth/offers");
+  }
+  return (
+    <div data-testid="offers-signin" className="flex min-h-[50vh] items-center justify-center px-6 py-12 text-center">
+      <div>
+        <div className="text-[15px] font-semibold" style={{ color: O.ink }}>Your sign-in has ended</div>
+        <div className="mb-3 mt-1 text-[13px]" style={{ color: O.muted }}>Sign in again to see Offers.</div>
+        <Btn kind="primary" testId="offers-signin-go" disabled={busy} onClick={go}>Sign in again</Btn>
+      </div>
     </div>
   );
 }

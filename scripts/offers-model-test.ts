@@ -9,7 +9,7 @@ import "server-only"; // no-op under --conditions=react-server
 //   - Wall clock stays wall clock (a match's "Z" is not re-shifted; now is America/Chicago).
 //   - The gate: local mode off 503, not admin 403, off the list 404, on the list through.
 
-import { onOffersAllowlist } from "../src/lib/offersAccess";
+import { offersAccessState, onOffersAllowlist } from "../src/lib/offersAccess";
 import {
   audienceBody, chicagoWallNow, comparisonLine, costCeiling, createBody, defaultRun, endsTicket, formOf, newForm, patchBody, priceWithDeal,
   summary, wallFromMatch, withPreviewName, buttonOf, opensText, formProblem, stepUses, usesLine, stepLimit, limitLine, copyOf,
@@ -217,6 +217,11 @@ console.log("access:");
 eq("unset list is nobody", onOffersAllowlist("rmancuso@playmatchday.com", {}), false);
 eq("on the list, any case", onOffersAllowlist("RMancuso@PlayMatchday.com", { OFFERS_ALLOWLIST: " rmancuso@playmatchday.com " }), true);
 eq("another admin is not on it", onOffersAllowlist("someone@playmatchday.com", { OFFERS_ALLOWLIST: "rmancuso@playmatchday.com" }), false);
+
+eq("a 401 is an ended sign-in, not a 404", offersAccessState(401, { error: "Invalid session" }), "signin");
+eq("a 200 yes is yes (the control)", offersAccessState(200, { allowed: true }), "yes");
+eq("off the list, not an admin, local mode off and a strange 200 are all no",
+  [offersAccessState(404, { error: "Not found" }), offersAccessState(403, { error: "x" }), offersAccessState(503, { error: "x" }), offersAccessState(200, { allowed: "yes" }), offersAccessState(200, null)], ["no", "no", "no", "no", "no"]);
 
 const fakeAdmin = (email: string) => async () => ({ ok: true as const, supabase: {} as never, appUserId: "u1", email, canEditMatches: false, canManagePlayers: false, canManagePromos: false });
 const status = async (r: unknown) => (r instanceof Response ? r.status : "through");
