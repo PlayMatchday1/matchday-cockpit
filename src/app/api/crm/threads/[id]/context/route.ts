@@ -42,6 +42,7 @@
 // membership to end.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { assertThreadInScope } from "@/lib/crmScope";
 import { authenticateCrm } from "@/lib/crmAuth";
 import { toNationalDigits } from "@/lib/phone";
 import { isPastMatch, matchStartMs } from "@/lib/matchTime";
@@ -69,6 +70,11 @@ export async function GET(req: Request, ctx: RouteCtx) {
   const { supabase } = auth;
 
   const { id: threadId } = await ctx.params;
+  {
+    // THE CITY BOUNDARY: a confined caller may only touch a thread inside its scope (crmScope).
+    const scope = await assertThreadInScope(auth, threadId);
+    if (!scope.ok) return Response.json({ error: scope.error }, { status: scope.status });
+  }
   if (!threadId) {
     return Response.json({ error: "id required" }, { status: 400 });
   }

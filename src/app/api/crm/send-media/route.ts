@@ -36,6 +36,7 @@
 // feature; rejected with 400 here).
 
 import { randomUUID } from "node:crypto";
+import { assertThreadInScope } from "@/lib/crmScope";
 import { authenticateCrm } from "@/lib/crmAuth";
 import { logCrmSend } from "@/lib/crmSendLog";
 import {
@@ -103,6 +104,11 @@ export async function POST(req: Request) {
 
   if (!threadId) {
     return Response.json({ error: "thread_id required" }, { status: 400 });
+  }
+  {
+    // THE CITY BOUNDARY: a confined caller may only touch a thread inside its scope (crmScope).
+    const scope = await assertThreadInScope(auth, threadId);
+    if (!scope.ok) return Response.json({ error: scope.error }, { status: scope.status });
   }
   if (!(fileField instanceof Blob)) {
     return Response.json({ error: "file required" }, { status: 400 });

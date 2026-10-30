@@ -26,6 +26,7 @@
 // get is_unread=false everywhere and empty mine/starred views.
 
 import { authenticateCrm } from "@/lib/crmAuth";
+import { crmScopedAssignees } from "@/lib/crmScope";
 import { isAwaitingReply, waitingSinceMs } from "@/lib/awaitingReply";
 
 export const runtime = "nodejs";
@@ -111,20 +112,9 @@ export async function GET(req: Request) {
    *
    * RESOLVED HERE, ABOVE EVERY QUERY, because the COUNTS run before the list. A total that counts
    * threads this account cannot open is a leak that shows a number instead of a row. */
-  let scopedAssignees: string[] | null = null;
-  if (auth.confinedCity) {
-    const ur = await supabase.from("app_users").select("id, city_identifier");
-    if (ur.error) {
-      return Response.json({ error: "Could not resolve city scope" }, { status: 500 });
-    }
-    const ids = (ur.data ?? [])
-      .filter((u) => u.city_identifier === auth.confinedCity)
-      .map((u) => String(u.id));
-    // No Warsaw user yet => nothing can belong to Warsaw. A sentinel that matches no row keeps the
-    // filter ON; dropping it would return every thread in the estate.
-    scopedAssignees = ids.length > 0 ? ids : ["00000000-0000-0000-0000-000000000000"];
-  }
-
+  const scope = await crmScopedAssignees(auth);
+  if (!scope.ok) return Response.json({ error: scope.error }, { status: scope.status });
+  const scopedAssignees = scope.ids;
   const url = new URL(req.url);
   const view = parseView(url.searchParams.get("view"));
 

@@ -29,6 +29,7 @@
 
 import Telnyx from "telnyx";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { assertThreadInScope } from "@/lib/crmScope";
 import { authenticateCrm } from "@/lib/crmAuth";
 import { logCrmSend } from "@/lib/crmSendLog";
 import { recordDraftSent } from "@/lib/aiDraftOutcome";
@@ -59,6 +60,23 @@ export async function POST(req: Request) {
   // SEND is its own right (Phase 19 Step 1). Gated EARLY — before any provider work — so there is
   // no reachable send path without can_send_messages: the route 403s immediately, not "late" after
   // doing work, and the composer greys as a courtesy. can_access_chats still means READ only.
+  let parsed: SendBody;
+  try {
+    parsed = (await req.json()) as SendBody;
+  } catch {
+    return Response.json({ error: "Body must be JSON" }, { status: 400 });
+  }
+  const threadId = typeof parsed.thread_id === "string" ? parsed.thread_id : "";
+  const body = typeof parsed.body === "string" ? parsed.body : "";
+  const draftId = typeof parsed.draft_id === "string" && parsed.draft_id ? parsed.draft_id : null;
+  if (!threadId) {
+    return Response.json({ error: "thread_id required" }, { status: 400 });
+  }
+  {
+    // THE CITY BOUNDARY: a confined caller may only touch a thread inside its scope (crmScope).
+    const scope = await assertThreadInScope(auth, threadId);
+    if (!scope.ok) return Response.json({ error: scope.error }, { status: scope.status });
+  }
   if (!auth.canSendMessages) {
     return Response.json(
       { error: "You don't have permission to send messages.", reason: "no_send_permission" },
@@ -80,18 +98,6 @@ export async function POST(req: Request) {
     );
   }
 
-  let parsed: SendBody;
-  try {
-    parsed = (await req.json()) as SendBody;
-  } catch {
-    return Response.json({ error: "Body must be JSON" }, { status: 400 });
-  }
-  const threadId = typeof parsed.thread_id === "string" ? parsed.thread_id : "";
-  const body = typeof parsed.body === "string" ? parsed.body : "";
-  const draftId = typeof parsed.draft_id === "string" && parsed.draft_id ? parsed.draft_id : null;
-  if (!threadId) {
-    return Response.json({ error: "thread_id required" }, { status: 400 });
-  }
   if (!body.trim()) {
     return Response.json({ error: "body required" }, { status: 400 });
   }

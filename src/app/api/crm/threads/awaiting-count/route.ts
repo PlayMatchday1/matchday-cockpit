@@ -12,6 +12,7 @@
 // than the page breaking. Auth: admin/chats via authenticateCrm.
 
 import { authenticateCrm } from "@/lib/crmAuth";
+import { crmScopedAssignees } from "@/lib/crmScope";
 import { isAwaitingReply } from "@/lib/awaitingReply";
 
 export const runtime = "nodejs";
@@ -25,6 +26,9 @@ export async function GET(req: Request) {
     return Response.json({ error: auth.error }, { status: auth.status });
   }
   const { supabase } = auth;
+  // The red badge counts only the caller's scope: a number for threads it cannot open is a leak.
+  const scope = await crmScopedAssignees(auth);
+  if (!scope.ok) return Response.json({ count: 0 }, { status: 200 });
 
   try {
     // Bounded scan of the awaiting CANDIDATES only (open + inbound-last — a
@@ -37,12 +41,13 @@ export async function GET(req: Request) {
     }[] = [];
     let from = 0;
     while (from < 20000) {
-      const r = await supabase
+      let q = supabase
         .from("crm_threads")
         .select("last_message_preview, last_message_at, no_reply_needed_at")
         .eq("status", "open")
-        .eq("last_message_direction", "inbound")
-        .range(from, from + PAGE - 1);
+        .eq("last_message_direction", "inbound");
+      if (scope.ids) q = q.in("assigned_to_user_id", scope.ids);
+      const r = await q.range(from, from + PAGE - 1);
       if (r.error) {
         console.error("[crm:awaiting-count] scan error", r.error);
         return Response.json({ count: 0 }, { status: 200 });

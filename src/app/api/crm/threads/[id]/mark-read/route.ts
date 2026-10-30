@@ -24,6 +24,7 @@
 // cross-admin unassigned-read convergence on top of the per-user
 // subscription that already handles same-user multi-device.
 
+import { assertThreadInScope } from "@/lib/crmScope";
 import { authenticateCrm } from "@/lib/crmAuth";
 
 export const runtime = "nodejs";
@@ -47,6 +48,11 @@ export async function POST(req: Request, ctx: RouteCtx) {
   }
 
   const { id: threadId } = await ctx.params;
+  {
+    // THE CITY BOUNDARY: a confined caller may only touch a thread inside its scope (crmScope).
+    const scope = await assertThreadInScope(auth, threadId);
+    if (!scope.ok) return Response.json({ error: scope.error }, { status: scope.status });
+  }
   if (!threadId || !UUID_RX.test(threadId)) {
     return Response.json({ error: "Invalid thread id" }, { status: 400 });
   }

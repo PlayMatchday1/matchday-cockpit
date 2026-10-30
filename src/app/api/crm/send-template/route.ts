@@ -27,6 +27,7 @@
 // CHANGE LOG (2026-10-20): every send, landed or failed, is recorded through logCrmSend, the same
 // metadata-only shape as /api/crm/send: template NAME and body LENGTH, never the variables.
 
+import { assertThreadInScope } from "@/lib/crmScope";
 import { authenticateCrm } from "@/lib/crmAuth";
 import { logCrmSend } from "@/lib/crmSendLog";
 import { sendWhatsAppTemplate, WhatsAppApiError } from "@/lib/whatsapp";
@@ -68,6 +69,11 @@ export async function POST(req: Request) {
       : {};
   if (!threadId) {
     return Response.json({ error: "thread_id required" }, { status: 400 });
+  }
+  {
+    // THE CITY BOUNDARY: a confined caller may only touch a thread inside its scope (crmScope).
+    const scope = await assertThreadInScope(auth, threadId);
+    if (!scope.ok) return Response.json({ error: scope.error }, { status: scope.status });
   }
 
   const tpl = getTemplate(templateName);
