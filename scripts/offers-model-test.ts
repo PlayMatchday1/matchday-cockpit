@@ -195,12 +195,35 @@ eq("another host, a POST and no key are refused", [photoLinkProblem({ ...lk, upl
   eq("the × takes only that tile off", hideUpload(up, "https://x/a.jpg").map((p) => p.name), ["b.jpg"]);
   eq("the saved photo has no ×, every other upload does", [canHidePhoto("https://x/a.jpg", "https://x/a.jpg"), canHidePhoto("https://x/b.jpg", "https://x/a.jpg"), canHidePhoto("https://x/b.jpg", null)], [false, true, true]);
   eq("a hidden saved-with photo would still be a tile (why it has no ×)", uploadTiles(hideUpload(up, "https://x/a.jpg"), "https://x/a.jpg", []).map((p) => p.url), ["https://x/b.jpg", "https://x/a.jpg"]);
-  eq("hiding the selected, unsaved photo falls back to the default", copyOf({ ...nowF, copy: copyAfterHide({ photoUrl: "https://x/a.jpg", headline: "HI" }, "https://x/a.jpg") }, matches, cities).photoUrl, null);
-  eq("...and leaves the other typed text alone", copyAfterHide({ photoUrl: "https://x/a.jpg", headline: "HI" }, "https://x/a.jpg"), { headline: "HI" });
-  eq("...on a specific match the default is its field cover", copyOf({ ...nowF, scope: "MATCH", matchId: 116, copy: copyAfterHide({ photoUrl: "https://x/a.jpg" }, "https://x/a.jpg") }, matches, cities).photoUrl, "https://covers.local/riverside.jpg");
-  eq("hiding a photo that is not selected changes nothing", copyAfterHide({ photoUrl: "https://x/b.jpg" }, "https://x/a.jpg"), { photoUrl: "https://x/b.jpg" });
-  const onDraft = draftFrom({ photoUrl: null });
-  eq("a draft with no saved photo: picking then hiding an upload sends nothing", patchBody(onDraft, { ...formOf(onDraft, matches, cities), copy: copyAfterHide({ photoUrl: "https://x/a.jpg" }, "https://x/a.jpg") }, matches, cities), {});
+  const A = "https://x/a.jpg", B = "https://x/b.jpg", COVER = "https://covers.local/riverside.jpg";
+  eq("a new offer: hiding the selected photo goes to the default", copyOf({ ...nowF, copy: copyAfterHide({ photoUrl: A, headline: "HI" }, A, undefined, null) }, matches, cities).photoUrl, null);
+  eq("...and leaves the other typed text alone", copyAfterHide({ photoUrl: A, headline: "HI" }, A, undefined, null), { headline: "HI" });
+  eq("...on a specific match the default is its field cover", copyOf({ ...nowF, scope: "MATCH", matchId: 116, copy: copyAfterHide({ photoUrl: A }, A, undefined, COVER) }, matches, cities).photoUrl, COVER);
+  eq("hiding a photo that is not selected changes nothing", copyAfterHide({ photoUrl: B }, A, B, null), { photoUrl: B });
+  // Saved with A, then B picked and hidden: back to A, nothing to save.
+  for (const [name, over] of [["a draft", {}], ["a launched offer", { status: "LAUNCHED", state: "LIVE" }], ["a paused offer", { status: "PAUSED", state: "PAUSED" }]] as const) {
+    const c = draftFrom({ photoUrl: A, ...over } as Partial<Campaign>);
+    const f = formOf(c, matches, cities);
+    const picked = { ...f, copy: { ...f.copy, photoUrl: B } };
+    eq(`${name} saved with a photo: picking another sends it (the control)`, patchBody(c, picked, matches, cities), { photoUrl: B });
+    const back = { ...picked, copy: copyAfterHide(picked.copy, B, c.photoUrl, null) };
+    eq(`${name}: hiding it goes back to the saved photo`, copyOf(back, matches, cities).photoUrl, A);
+    eq(`${name}: and leaves nothing to save`, patchBody(c, back, matches, cities), {});
+  }
+  const none = draftFrom({ photoUrl: null });
+  const nf = formOf(none, matches, cities);
+  const nb = { ...nf, copy: copyAfterHide({ ...nf.copy, photoUrl: B }, B, null, null) };
+  eq("saved with no photo: hiding goes to the default, nothing to save", [copyOf(nb, matches, cities).photoUrl, patchBody(none, nb, matches, cities)], [null, {}]);
+  eq("...and the offer still follows the deal, it is not pinned", "photoUrl" in nb.copy, false);
+  // Saved with no photo, on a specific match whose default is a cover: back to no photo, not the cover.
+  const sc = draftFrom({ photoUrl: null, matchIds: [116], matchScoped: true, buttonTarget: "MATCH", buttonMatchId: 116, usesPerPlayer: 1, endsLocal: "2026-11-02 19:00:00" });
+  const sf = formOf(sc, matches, cities);
+  const sb = { ...sf, copy: copyAfterHide({ ...sf.copy, photoUrl: B }, B, null, COVER) };
+  eq("saved with no photo where the default is a cover: back to saved, not the cover", [copyOf(sb, matches, cities).photoUrl, patchBody(sc, sb, matches, cities).photoUrl], [null, undefined]);
+  // Another unsaved edit is still there to save; hiding only removes its own.
+  const edited = draftFrom({ photoUrl: A });
+  const ef = { ...formOf(edited, matches, cities), name: "New name" };
+  eq("an unrelated unsaved edit survives hiding", patchBody(edited, { ...ef, copy: copyAfterHide({ ...ef.copy, photoUrl: B }, B, A, null) }, matches, cities), { name: "New name" });
   eq("a stored local photo saves", formProblem({ ...nowF, name: "x", copy: { photoUrl: "http://localhost:3070/dev/uploads/offers/photos/a.jpg" } }, matches), null);
 }
 eq("an https photo is fine (the control)", formProblem({ ...nowF, name: "x", copy: { photoUrl: "https://covers.local/a.jpg" } }, matches), null);

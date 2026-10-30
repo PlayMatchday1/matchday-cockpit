@@ -362,14 +362,17 @@ export function uploadTiles(uploaded: UploadedPhoto[], stored: string | null, co
 
 // HIDING AN UPLOAD (the × on its tile): off this offer's tiles in this browser, nothing more. The file
 // stays on the server. The photo the offer is saved with has no ×: the offer is still using it. A
-// hidden photo that was selected but not saved stops being selected, so the offer follows its default
-// again (a specific match's field cover, else the MatchDay photo).
+// hidden photo that was selected but not saved stops being selected and the offer goes back to its
+// SAVED photo, or to its default if it was never saved, so hiding alone never creates a change to save.
 export const canHidePhoto = (url: string, stored: string | null) => url !== stored;
 export const hideUpload = (uploaded: UploadedPhoto[], url: string) => uploaded.filter((p) => p.url !== url);
-export function copyAfterHide(copy: Form["copy"], url: string): Form["copy"] {
+// `saved` is the campaign's stored photoUrl (undefined: a new offer, nothing saved). `deflt` is what the
+// deal would pick right now. When those agree the key is dropped, so the offer keeps following the
+// deal as it did before the pick, rather than being pinned to today's answer.
+export function copyAfterHide(copy: Form["copy"], url: string, saved: string | null | undefined, deflt: string | null): Form["copy"] {
   if (copy.photoUrl !== url) return copy;
   const { photoUrl: _gone, ...rest } = copy;
-  return rest;
+  return saved === undefined || saved === deflt ? rest : { ...rest, photoUrl: saved };
 }
 
 // ── REQUEST BODIES ───────────────────────────────────────────────────────────────────────────────

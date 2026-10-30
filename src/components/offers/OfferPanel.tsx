@@ -276,7 +276,7 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
     const next = hideUpload(uploaded, url);
     setUploaded(next);
     if (c) keepUploads(c.id, next);
-    setF((v) => ({ ...v, copy: copyAfterHide(v.copy, url) }));
+    setF((v) => ({ ...v, copy: copyAfterHide(v.copy, url, c?.photoUrl ?? (c ? null : undefined), copyOf({ ...v, copy: {} }, data.matches, data.cities).photoUrl) }));
   }
   const photoTile = (key: string | number, url: string | null, title: string, sub: string, onHide?: () => void) => {
     const on = (copy.photoUrl ?? null) === url;
