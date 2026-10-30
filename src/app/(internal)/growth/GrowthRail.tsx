@@ -5,7 +5,7 @@
 // a second copy of this markup would be a second thing to keep in step and the collapse state
 // would be the first to drift.
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import ChatsRail from "../match-ops/ChatsRail";
 import { useSectionNav } from "@/components/SectionNav";
 import { GROWTH_SECTIONS } from "./growthSections";
@@ -22,7 +22,8 @@ export default function GrowthRail({ children }: { children: React.ReactNode }) 
   // OFFERS IS THE ONE EXCEPTION to "gated on growth and nothing else": until release it is drawn only
   // when the server says this user is on OFFERS_ALLOWLIST. No answer yet is no.
   const offersOk = useOffersAccess() === true;
-  const items = offersOk ? GROWTH_SECTIONS : GROWTH_SECTIONS.filter((s) => s.key !== "offers");
+  // MEMOISED: useSectionNav depends on the array's identity, and a fresh filter each render loops.
+  const items = useMemo(() => (offersOk ? GROWTH_SECTIONS : GROWTH_SECTIONS.filter((s) => s.key !== "offers")), [offersOk]);
   useSectionNav({ items, label: LABEL, showSwitch: false });
   const [collapsed, setCollapsed] = useState(false);
   useEffect(() => {
