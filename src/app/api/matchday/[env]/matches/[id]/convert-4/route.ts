@@ -82,7 +82,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string; id
   const auth = await authenticateCapability(req, "editMatches");
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   const { env, id } = await ctx.params;
-  const scope = await assertMatchInScope(auth.supabase, auth.confinedCity, id);
+  const scope = await assertMatchInScope(auth.supabase, auth.confinedCity, id, env);
   if (!scope.ok) return Response.json({ error: scope.error }, { status: scope.status });
   if (!isEnv(env)) return Response.json({ error: `unknown environment ${JSON.stringify(env)}` }, { status: 400 });
   if (!/^\d+$/.test(id)) return Response.json({ error: "Match id must be numeric" }, { status: 400 });
@@ -105,7 +105,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
   const auth = await authenticateCapability(req, "editMatches");
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   const { env, id } = await ctx.params;
-  const scope = await assertMatchInScope(auth.supabase, auth.confinedCity, id);
+  const scope = await assertMatchInScope(auth.supabase, auth.confinedCity, id, env);
   if (!scope.ok) return Response.json({ error: scope.error }, { status: scope.status });
   if (!isEnv(env)) return Response.json({ error: `unknown environment ${JSON.stringify(env)}` }, { status: 400 });
   if (!/^\d+$/.test(id)) return Response.json({ error: "Match id must be numeric" }, { status: 400 });

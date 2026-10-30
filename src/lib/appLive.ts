@@ -128,6 +128,11 @@ export async function summariesLive(
   return out;
 }
 
+/** One match's check-in summary from its live roster and its marks (Clubhouse-owned, production). */
+export function checkinFor(rows: PlayerRaw[], marks: Mark[], kickoffUtcMs: number): CheckinSummary {
+  return summarizeCheckin(realIds(rows), marks, kickoffUtcMs);
+}
+
 /** The roster as the app shows it. Phone is display-only, as on the desktop panel. */
 export function rosterOut(rows: PlayerRaw[], marks: Mark[] | null) {
   const byPlayer = new Map((marks ?? []).map((k) => [Number(k.player_id), k]));

@@ -265,6 +265,32 @@ export default function AdminUsersView() {
     }
   }
 
+  /* THE STAFF APP SIGNS IN BY TEXT CODE to this number. The route normalises it to E.164, refuses
+   * one already on another staff account, and attaches it to the person's existing sign-in account;
+   * a 207 means the staff row saved but the sign-in account did not, and the alert says so. */
+  async function updatePhone(user: AppUser, value: string) {
+    const cur = (user as AppUser & { phone?: string | null }).phone ?? "";
+    if (value.trim() === cur) return;
+    const { data: sess } = await supabase.auth.getSession();
+    const token = sess.session?.access_token;
+    if (!token) { alert("No active session."); return; }
+    setSavingId(`${user.id}:phone`);
+    try {
+      const res = await fetch("/api/admin/users/phone", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ userId: user.id, phone: value.trim() || null }),
+      });
+      const json = (await res.json().catch(() => ({}))) as { error?: string; phoneSaved?: boolean };
+      if (!res.ok && res.status !== 207) { alert(json.error ?? `HTTP ${res.status}`); return; }
+      if (res.status === 207) alert(json.error ?? "Saved on the staff account only.");
+      await load();
+      flash(user.id);
+    } finally {
+      setSavingId(null);
+    }
+  }
+
   async function deleteUser(user: AppUser) {
     if (appUser?.id === user.id) return;
     if (
@@ -336,6 +362,7 @@ export default function AdminUsersView() {
               <tr className="border-b border-cream-line bg-cream-soft text-[10px] font-bold uppercase tracking-wider text-deep-green/60">
                 <th className="px-4 py-3 text-left">Name</th>
                 <th className="px-3 py-3 text-left">Email</th>
+                <th className="px-3 py-3 text-left" data-testid="col-phone" title="Mobile number for staff app sign-in by text code">Phone</th>
                 {PERMISSION_COLUMNS.map((c) => (
                   <th
                     key={c.key}
@@ -361,7 +388,7 @@ export default function AdminUsersView() {
               {loading ? (
                 <tr>
                   <td
-                    colSpan={PERMISSION_COLUMNS.length + CITY_MANAGER_COLUMNS.length + 6}
+                    colSpan={PERMISSION_COLUMNS.length + CITY_MANAGER_COLUMNS.length + 7}
                     className="px-4 py-8 text-center text-sm text-deep-green/50"
                   >
                     Loading…
@@ -370,7 +397,7 @@ export default function AdminUsersView() {
               ) : users.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={PERMISSION_COLUMNS.length + CITY_MANAGER_COLUMNS.length + 6}
+                    colSpan={PERMISSION_COLUMNS.length + CITY_MANAGER_COLUMNS.length + 7}
                     className="px-4 py-8 text-center text-sm text-deep-green/50"
                   >
                     No users yet.
@@ -397,6 +424,15 @@ export default function AdminUsersView() {
                       </td>
                       <td className="px-3 py-2 align-middle text-sm text-deep-green/75">
                         {u.email}
+                      </td>
+                      <td className="px-3 py-2 align-middle" data-testid="cell-phone">
+                        <InlineEdit
+                          value={(u as AppUser & { phone?: string | null }).phone ?? ""}
+                          onSave={(v) => updatePhone(u, v)}
+                          className="text-sm text-deep-green/75"
+                          inputClassName="text-sm text-deep-green"
+                          placeholder="Add mobile"
+                        />
                       </td>
                       {PERMISSION_COLUMNS.map((c) => {
                         const on = u[c.key] === true;

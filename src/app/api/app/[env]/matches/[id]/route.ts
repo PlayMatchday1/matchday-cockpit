@@ -8,13 +8,17 @@
 // The match and its players are fetched together; if the city check fails the players are dropped
 // in this handler and never serialised.
 //
+// THE MATCH SCREEN reads this one route: header, status, roster, ladder timeline and details.
+//
 // NOT HERE: the member badge. The only membership read the desktop roster has is the
 // mdapi_subscriptions mirror, and the payload's own user.isMember was measured wrong on 39 of 120
 // rows. A live membership read per player is a Milestone 2 decision, not a quiet fallback.
 
 import { authenticateApp, readRefusal } from "@/lib/appAuth";
 import { cityAllowed } from "@/lib/appModel";
-import { fetchMarks, fetchPlayersLive, isEnv, rosterOut } from "@/lib/appLive";
+import { checkinFor, countedPlayers, fetchMarks, fetchPlayersLive, isEnv, rosterOut, todayRow } from "@/lib/appLive";
+import { trimMatch, type Raw } from "@/lib/gamedayApiShape";
+import { rosterRowIsFake } from "@/lib/gamedayModel";
 import { apiGet, StageConfigError, StageHostGuardError } from "@/lib/matchdayStageApi";
 import { CONFINED_CITY_ERROR } from "@/lib/cityConfinement";
 
@@ -48,18 +52,21 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string; id
     const teams = ((match.teams as Row[]) ?? [])
       .map((t) => ({ id: Number(t.id), teamNumber: Number(t.teamNumber), name: (t.name as string) ?? `Team ${t.teamNumber}` }))
       .sort((a, b) => a.teamNumber - b.teamNumber);
-    const mgr = match.manager as Row | null | undefined;
-    const tz = (city.timeZone as Row | undefined) ?? {};
+    /* THE SAME ROW SHAPE AS TODAY, from the board's own trim and model. The detail endpoint's _count
+     * has no fakePlayers, so the fake count is taken from the live roster read in this request
+     * (the counted, fake rows), which is the number the board's realCount then subtracts. */
+    const fakesOnRoster = countedPlayers(players).filter((p) => rosterRowIsFake(p)).length;
+    const counted = { ...match, _count: { ...((match._count as Row | undefined) ?? {}), fakePlayers: fakesOnRoster } } as Raw;
+    const now = Date.now();
+    const myMarks = marks ? marks.get(Number(id)) ?? [] : null;
+    const checkin = myMarks ? checkinFor(players, myMarks, Date.parse(String(match.startDateUtc))) : null;
+    const row = todayRow(trimMatch(counted), counted, checkin, now);
     return Response.json({
-      env, fetchedAt: new Date().toISOString(),
+      env, fetchedAt: new Date(now).toISOString(),
       match: {
-        id: Number(id), name: (match.name as string) ?? "",
-        startDate: (match.startDate as string) ?? null, startDateUtc: (match.startDateUtc as string) ?? null,
-        fieldTitle: typeof field.title === "string" ? field.title.trim() : null, cityName,
-        tzAbbr: typeof tz.abbr === "string" ? tz.abbr.trim() || null : null,
-        isCancelled: match.isCancelled === true,
-        manager: mgr ? [mgr.firstName, mgr.lastName].filter(Boolean).join(" ").trim() || null : null,
-        capacity: Number(match.maxPlayerCount) || null,
+        ...row,
+        address: typeof field.address === "string" ? field.address.trim() || null : null,
+        type: typeof match.type === "string" ? match.type : null,
         occupancy: Number((match._count as Row | undefined)?.players ?? 0),
       },
       teams,

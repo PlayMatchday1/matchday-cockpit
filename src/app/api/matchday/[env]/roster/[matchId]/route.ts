@@ -39,7 +39,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string; ma
 
   // THE BOUNDARY ON THE ID ITSELF — filtering a list is not authorisation. See assertMatchInScope.
   {
-    const scope = await assertMatchInScope(auth.supabase, auth.confinedCity, matchId);
+    const scope = await assertMatchInScope(auth.supabase, auth.confinedCity, matchId, env);
     if (!scope.ok) return Response.json({ error: scope.error }, { status: scope.status });
   }
   if (!isEnv(env)) return Response.json({ error: `unknown environment ${JSON.stringify(env)}` }, { status: 400 });
@@ -186,7 +186,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; m
   // THE SAME BOUNDARY ON THE WRITE PATH. A confined account must not act on a match it was never
   // shown — and the list it was shown is a post-fetch filter, not a permission.
   {
-    const scope = await assertMatchInScope(auth.supabase, auth.confinedCity, matchId);
+    const scope = await assertMatchInScope(auth.supabase, auth.confinedCity, matchId, env);
     if (!scope.ok) return Response.json({ error: scope.error }, { status: scope.status });
   }
   if (!isEnv(env)) return Response.json({ error: `unknown environment ${JSON.stringify(env)}` }, { status: 400 });

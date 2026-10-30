@@ -31,6 +31,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { normalizePhone, toNationalDigits } from "./phone";
 import { classifySmsBody, type SmsSourceType } from "./telnyxSmsClassify";
+import { redactForLog } from "./signInCode";
 
 const TELNYX_BASE = "https://api.telnyx.com/v2";
 const MDR_PAGE_SIZE = 50; // Telnyx max
@@ -311,7 +312,11 @@ export async function ingestTelnyxSms(
     const toRaw = msg.to?.[0]?.phone_number ?? mdr.cld ?? null;
     if (!toRaw) continue; // to_phone is NOT NULL — nothing to anchor on
     const toE164 = normalizePhone(toRaw);
-    const body = typeof msg.text === "string" ? msg.text : null;
+    /* A STAFF SIGN-IN CODE IS NEVER STORED. The staff app's Send SMS hook texts codes from this
+     * same account; one is recognised by its exact template and replaced, in message_body AND in
+     * the raw message below, with "[sign-in code]". Every other message is stored as it was. */
+    const red = redactForLog(typeof msg.text === "string" ? msg.text : null, msg);
+    const body = red.body;
 
     const source: SmsSourceType = matchNotifyIds.has(uuid)
       ? "match_notify"
@@ -335,7 +340,7 @@ export async function ingestTelnyxSms(
       sent_at: msg.sent_at ?? mdr.sent_at ?? mdr.created_at ?? null,
       completed_at: msg.completed_at ?? mdr.completed_at ?? null,
       telnyx_created_at: mdr.created_at ?? msg.received_at ?? null,
-      raw: { mdr, message: msg },
+      raw: { mdr, message: red.msg },
       ingested_at: new Date().toISOString(),
       toE164,
     });

@@ -265,6 +265,9 @@ is("authenticateAdmin guards the User access screen and the Fields mapping admin
     "admin/users/auth-status/route.ts", "admin/users/city-manager/route.ts", "admin/users/delete/route.ts",
     "admin/users/match-permissions/route.ts", "admin/users/permissions/route.ts",
     "admin/users/resend-invite/route.ts",
+    // +1 admin/users/phone (2026-10-29) — a staff member's mobile number for staff app sign-in by
+    // text code. is_admin, like every other User access write.
+    "admin/users/phone/route.ts",
     // +1 city-check-ins/[id] — DELETE one city manager check-in. is_admin because the card's
     // control is gated on is_admin, and the file this was copied from (/api/inventory/[id]) gates
     // on the matchops CAPABILITY while its own header claims authenticateAdmin. Copying that would
@@ -309,7 +312,7 @@ is("...and the admin-user routes are exactly these five",
   // NOT invite/ — that one is gated on isProvisioningOwner (stricter than admin), deliberately.
   ["admin/users/auth-status/route.ts", "admin/users/city-manager/route.ts", "admin/users/delete/route.ts",
    "admin/users/match-permissions/route.ts", "admin/users/permissions/route.ts",
-   "admin/users/resend-invite/route.ts"].sort());
+   "admin/users/resend-invite/route.ts", "admin/users/phone/route.ts"].sort());
 
 // LISTED IS NOT GATED. Appearing in the census only proves the file mentions authenticateAdmin;
 // it does not prove the gate runs BEFORE anything happens. Pin that the delete route checks auth
