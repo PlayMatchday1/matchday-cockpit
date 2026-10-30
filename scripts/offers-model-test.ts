@@ -13,7 +13,7 @@ import { offersAccessState, onOffersAllowlist } from "../src/lib/offersAccess";
 import {
   audienceBody, chicagoWallNow, comparisonLine, costCeiling, createBody, defaultRun, endsTicket, formOf, newForm, patchBody, priceWithDeal,
   summary, wallFromMatch, withPreviewName, buttonOf, opensText, formProblem, stepUses, usesLine, stepLimit, limitLine, copyOf,
-  prefillField, audienceText, parsePlayerIds, playerLine, notFoundLine, usedOfLimit, resultsLines, type Campaign, type City, type MatchOpt, type Results,
+  extraBookingsLine, prefillField, audienceText, parsePlayerIds, playerLine, notFoundLine, usedOfLimit, resultsLines, type Campaign, type City, type MatchOpt, type Results,
 } from "../src/lib/offersModel";
 import { _setOffersGateDepsForTest, mismatches, offersGate } from "../src/lib/offersServer";
 
@@ -212,6 +212,25 @@ const heldBack = (players: number, booked: number) => ({ ...results, booked: { .
 eq("3 held back is too few: no rates", comparisonLine(heldBack(3, 1)), "Too few players held back to compare yet (3 so far)");
 eq("29 held back is still too few", comparisonLine(heldBack(29, 1)), "Too few players held back to compare yet (29 so far)");
 eq("30 held back compares (the control for the two above)", comparisonLine(heldBack(30, 3)), "With the offer, 9% booked. The 30 players held back with no offer: 10% booked.");
+
+console.log("extra bookings:");
+{
+  const at = (wP: number, wB: number, hP: number, hB: number, discount: number) => ({ ...results, discountGiven: discount,
+    booked: { withOffer: { players: wP, booked: wB, rate: wP ? wB / wP : null }, heldBack: { players: hP, booked: hB, rate: hP ? hB / hP : null } } });
+  // 37 x (10/37 - 4/40) = 10 - 3.7 = 6.3, so 6; $54 / 6 = $9.
+  eq("N and X", extraBookingsLine(at(37, 10, 40, 4, 5400), "FILTERS"), "About 6 extra bookings · $9 in discounts per extra booking");
+  // 100 x (0.2 - 0.1) = 10; $25 / 10 = $2.50, which rounds to the dollar.
+  eq("X rounds to the dollar", extraBookingsLine(at(100, 20, 30, 3, 2500), "FILTERS"), "About 10 extra bookings · $3 in discounts per extra booking");
+  eq("one extra booking is singular", extraBookingsLine(at(10, 2, 30, 3, 1000), "FILTERS"), "About 1 extra booking · $10 in discounts per extra booking");
+  eq("the same rate is no extra bookings, and no cost", extraBookingsLine(at(100, 10, 30, 3, 5000), "FILTERS"), "No extra bookings so far");
+  eq("a worse rate than held back is no extra bookings", extraBookingsLine(at(100, 5, 30, 3, 5000), "FILTERS"), "No extra bookings so far");
+  eq("an N that rounds to 0 is no extra bookings, not a divide by zero", extraBookingsLine(at(10, 1, 30, 2, 5000), "FILTERS"), "No extra bookings so far");
+  eq("exactly 30 held back shows it", extraBookingsLine(at(100, 20, 30, 3, 1000), "FILTERS") !== null, true);
+  eq("29 held back hides it", extraBookingsLine(at(100, 20, 29, 3, 1000), "FILTERS"), null);
+  eq("the fixture's 3 held back hides it", extraBookingsLine(at(37, 10, 3, 1, 5400), "FILTERS"), null);
+  eq("Specific players hides it, whatever the numbers", extraBookingsLine(at(100, 20, 40, 3, 1000), "PLAYERS"), null);
+  eq("no rate for the offer group hides it", extraBookingsLine(at(0, 0, 40, 3, 0), "FILTERS"), null);
+}
 
 console.log("access:");
 eq("unset list is nobody", onOffersAllowlist("rmancuso@playmatchday.com", {}), false);

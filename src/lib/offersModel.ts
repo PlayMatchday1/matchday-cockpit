@@ -444,6 +444,20 @@ export function usedOfLimit(r: Results): string | null {
   return `${r.usesTaken.toLocaleString("en-US")} of ${r.maxRedemptions.toLocaleString("en-US")} used`;
 }
 
+// The line under the comparison: "About 6 extra bookings · $9 in discounts per extra booking".
+// N = players with the offer x (their booking rate - the held-back rate), to a whole number.
+// $X = discount given / N, to the dollar. Rounding comes first: an N that rounds to 0 is no extra
+// bookings, so X can never divide by zero. Null (no line) under MIN_HELD_BACK_TO_COMPARE held back,
+// and for Specific players, where nobody is held back and the rates compare nothing.
+export function extraBookingsLine(r: Results, mode: AudienceMode): string | null {
+  const w = r.booked.withOffer, h = r.booked.heldBack;
+  if (mode === "PLAYERS" || h.players < MIN_HELD_BACK_TO_COMPARE || w.rate === null || h.rate === null) return null;
+  const n = Math.round(w.players * (w.rate - h.rate));
+  if (n <= 0) return "No extra bookings so far";
+  const x = Math.round(r.discountGiven / 100 / n);
+  return `About ${n.toLocaleString("en-US")} extra ${n === 1 ? "booking" : "bookings"} · $${x.toLocaleString("en-US")} in discounts per extra booking`;
+}
+
 // ── PLAYER IDS (Specific players and Send test) ──────────────────────────────────────────────────
 // Commas, spaces or one per line. Whole positive numbers only, first appearance kept, in order.
 export function parsePlayerIds(text: string, max = 2000): { ids: number[]; bad: string[]; tooMany: boolean } {

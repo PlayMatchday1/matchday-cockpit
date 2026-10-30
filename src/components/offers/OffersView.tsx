@@ -12,7 +12,7 @@ import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/useAuth";
 import {
-  STATE_LABEL, audienceText, usedOfLimit, chicagoWallNow, comparisonLine, dealText, money, progressText, resultsLines, usedPct, usesText, wallLabel,
+  STATE_LABEL, audienceText, extraBookingsLine, usedOfLimit, chicagoWallNow, comparisonLine, dealText, money, progressText, resultsLines, usedPct, usesText, wallLabel,
   type Campaign, type City, type FieldOpt, type MatchOpt,
 } from "@/lib/offersModel";
 import OfferPanel from "./OfferPanel";
@@ -155,6 +155,7 @@ function Stat({ value, label, testId }: { value: string; label: string; testId: 
 function ResultsCard({ c, nowWall }: { c: Campaign; nowWall: string }) {
   const r = c.results;
   const up = usedPct(r);
+  const extra = extraBookingsLine(r, c.audienceMode);
   return (
     <div data-testid="offers-results" className="flex flex-col gap-3.5 rounded-[12px] border p-4" style={{ background: O.surface, borderColor: O.line }}>
       <div className="flex items-start justify-between gap-3">
@@ -168,6 +169,7 @@ function ResultsCard({ c, nowWall }: { c: Campaign; nowWall: string }) {
         <Stat testId="offers-stat-came-back" value={r.cameBackAtFullPrice.toLocaleString("en-US")} label="Came back at full price" />
       </div>
       <div data-testid="offers-comparison" className="rounded-[8px] px-3 py-[9px] text-[13px] font-medium" style={{ background: O.mint, color: O.ok }}>{comparisonLine(r)}</div>
+      {extra && <div data-testid="offers-extra" className="px-3 text-[13px] font-medium" style={{ color: O.ink }}>{extra}</div>}
     </div>
   );
 }
