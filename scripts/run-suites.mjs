@@ -132,6 +132,10 @@ const NODE_SUITES = [
   // the whole Add venue drawer. Cheap, pure, and it pins the three call sites in the drawer she
   // used as well as the helper.
   "scripts/error-text-test.ts",
+  // STAFF SIGN-IN CODES BY TEXT (2026-10-29): a code is never stored in telnyx_sms_log (body or raw)
+  // while a normal message is kept in full; the Send SMS hook sends only to staff numbers, inside
+  // the 30 second cooldown and 5 an hour, and only for a correctly signed request.
+  "scripts/sign-in-code-test.ts",
   // How Clubhouse reads the production MatchDay API (2026-10-21, after the R15 outage): the paced
   // client, a forced 503 stopping the location and matches syncs after one request, the hourly roster
   // pick, reviews from rosters, the night pass's window quarters, Download players from our copy.
@@ -308,6 +312,8 @@ const NODE_SUITES = [
   "scripts/fake-roster-plan-test.ts",
   "scripts/gameday-reviews-test.ts",
   "scripts/reviews-scope-test.ts",
+  "scripts/crm-thread-scope-test.ts",
+  "scripts/app-push-test.ts",
   /* AN ASSERTION OVER AN EMPTY COLLECTION PASSES WITHOUT TESTING ANYTHING. 27 sites across 10
    * browser suites were in that shape, and one had been green for a round while testing nothing.
    * This keeps the count at zero. */

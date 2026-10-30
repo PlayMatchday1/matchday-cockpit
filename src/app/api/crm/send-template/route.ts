@@ -27,10 +27,11 @@
 // CHANGE LOG (2026-10-20): every send, landed or failed, is recorded through logCrmSend, the same
 // metadata-only shape as /api/crm/send: template NAME and body LENGTH, never the variables.
 
+import { assertThreadInScope } from "@/lib/crmScope";
 import { authenticateCrm } from "@/lib/crmAuth";
 import { logCrmSend } from "@/lib/crmSendLog";
 import { sendWhatsAppTemplate, WhatsAppApiError } from "@/lib/whatsapp";
-import { getTemplate, renderTemplateBody } from "@/lib/whatsappTemplates";
+import { getTemplate, WHATSAPP_TEMPLATES, renderTemplateBody } from "@/lib/whatsappTemplates";
 import { writeThreadStatusLog } from "@/lib/crmThreadStatus";
 
 export const runtime = "nodejs";
@@ -43,6 +44,13 @@ type Body = {
   template_name?: unknown;
   variables?: unknown;
 };
+
+/** GET: the approved templates, for a client that cannot import the registry (the staff app). */
+export async function GET(req: Request) {
+  const auth = await authenticateCrm(req);
+  if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
+  return Response.json({ templates: Object.values(WHATSAPP_TEMPLATES) }, { status: 200 });
+}
 
 export async function POST(req: Request) {
   const startedAt = Date.now();
@@ -68,6 +76,19 @@ export async function POST(req: Request) {
       : {};
   if (!threadId) {
     return Response.json({ error: "thread_id required" }, { status: 400 });
+  }
+  {
+    // THE CITY BOUNDARY: a confined caller may only touch a thread inside its scope (crmScope).
+    const scope = await assertThreadInScope(auth, threadId);
+    if (!scope.ok) return Response.json({ error: scope.error }, { status: scope.status });
+  }
+  // SENDING IS ITS OWN RIGHT (crmAuth canSendMessages), on every send path, not only /api/crm/send.
+  // Ryan, 2026-10-30. Checked before anything is sent.
+  if (!auth.canSendMessages) {
+    return Response.json(
+      { error: "You don't have permission to send messages.", reason: "no_send_permission" },
+      { status: 403 },
+    );
   }
 
   const tpl = getTemplate(templateName);

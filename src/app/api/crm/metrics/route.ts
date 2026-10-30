@@ -19,6 +19,7 @@
 // Auth: dual-mode bearer via authenticateCrm (admin OR can_access_chats).
 
 import { authenticateCrm } from "@/lib/crmAuth";
+import { crmScopedAssignees } from "@/lib/crmScope";
 import {
   computePeriodMetrics,
   computeAwaitingNow,
@@ -94,7 +95,14 @@ export async function GET(req: Request) {
   const url = new URL(req.url);
   const period = parsePeriodKind(url.searchParams.get("period"));
 
-  if (period === "all" && allTimeCache && Date.now() - allTimeCache.at < ALL_TIME_TTL_MS) {
+  // A confined caller's tiles count only its scope (crmScope); messages and closes follow the
+  // scoped thread set below. The all-time cache holds the UNSCOPED answer, so it is neither served
+  // to nor filled by a confined caller.
+  const scope = await crmScopedAssignees(auth);
+  if (!scope.ok) return Response.json({ error: scope.error }, { status: scope.status });
+  const scoped = scope.ids;
+
+  if (!scoped && period === "all" && allTimeCache && Date.now() - allTimeCache.at < ALL_TIME_TTL_MS) {
     return Response.json(allTimeCache.body, {
       status: 200,
       headers: { "x-cache": "hit" },
@@ -106,11 +114,13 @@ export async function GET(req: Request) {
   // Threads: the full set (small — the whole inbox history). Drives the
   // opened/closed/handled counts and the live awaiting tile.
   const threadRes = await fetchAll<ThreadScanRow>(async (from, to) => {
-    const { data, error } = await supabase
+    let q = supabase
       .from("crm_threads")
       .select(
         "id, player_id, created_at, closed_at, status, last_message_at, last_message_direction, last_message_preview, no_reply_needed_at",
-      )
+      );
+    if (scoped) q = q.in("assigned_to_user_id", scoped);
+    const { data, error } = await q
       .order("created_at", { ascending: true })
       .range(from, to);
     return { data: data as ThreadScanRow[] | null, error };
@@ -278,7 +288,7 @@ export async function GET(req: Request) {
     episodeSplitExactFromIso,
   };
 
-  if (period === "all") {
+  if (period === "all" && !scoped) {
     allTimeCache = { at: Date.now(), body };
   }
 

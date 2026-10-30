@@ -35,10 +35,13 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string }> 
     const decorated = withVenueMaxPlayers(scoped, await fetchVenueMaxPlayers(auth.supabase));
     const now = Date.now();
     const summaries = await summariesLive(env, auth.supabase, decorated, now);
+    // The untrimmed rows, by id, for the cover photo and manager avatar trimMatch leaves out. Only
+    // rows that survived the scope above are ever looked up here.
+    const rawById = new Map(raw.map((r) => [Number(r.id), r]));
     const matches = decorated
       .slice()
       .sort((a, b) => Date.parse(a.startDateUtc) - Date.parse(b.startDateUtc))
-      .map((m) => todayRow(m, summaries.get(m.id) ?? null));
+      .map((m) => todayRow(m, rawById.get(m.id), summaries.get(m.id) ?? null, now));
     return Response.json({
       date, env, fetchedAt: new Date(now).toISOString(),
       scope: { confined: auth.confined, city: auth.scopeCity, cityName: auth.scopeCityName },

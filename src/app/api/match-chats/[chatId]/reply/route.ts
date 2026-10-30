@@ -84,6 +84,14 @@ export async function POST(req: Request, ctx: RouteCtx) {
     const scope = await assertMatchInScope(auth.supabase, auth.confinedCity, chatId);
     if (!scope.ok) return Response.json({ error: scope.error }, { status: scope.status });
   }
+  // SENDING IS ITS OWN RIGHT (crmAuth canSendMessages), on every send path, not only /api/crm/send.
+  // Ryan, 2026-10-30. Checked before anything is sent.
+  if (!auth.canSendMessages) {
+    return Response.json(
+      { error: "You don't have permission to send messages.", reason: "no_send_permission" },
+      { status: 403 },
+    );
+  }
   if (!chatId || !isValidChatId(chatId)) {
     return Response.json(
       { error: "chatId must be a numeric Firestore chat id" },

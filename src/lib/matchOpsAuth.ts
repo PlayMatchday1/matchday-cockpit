@@ -13,6 +13,7 @@
 import { type SupabaseClient } from "@supabase/supabase-js";
 import { resolveSessionUser, deriveMatchOpsFlags, isCityManagerConfined, CITY_MANAGER_CONFINED_ERROR, type AppUserRow } from "./adminAuth";
 import { confinedCity, isConfined, assertConfinedRoute, CONFINED_CITY_ERROR } from "./cityConfinement";
+import { cityNameFor } from "./cityScope";
 
 export type MatchOpsAuthResult =
   | { ok: true; supabase: SupabaseClient; appUserId: string; email: string; isAdmin: boolean;
@@ -89,17 +90,23 @@ export async function authenticateMatchOpsRead(req: Request): Promise<MatchOpsAu
  * the only thing standing between this account and another city's match were the list it was shown,
  * there would be no boundary at all — just a shorter menu.
  *
- * DENY BY DEFAULT. The city comes from mdapi_matches, the mirror every other scoped query uses. A
- * match the mirror does not carry cannot be proved in-scope, so a confined account is refused it.
- * That is the safe direction: a sync lag costs a confined operator one refusal, where the other
- * default would hand them another city's match every time the mirror was behind.
+ * THE MIRROR FIRST, UNCHANGED. The city comes from mdapi_matches, the mirror every other scoped
+ * query uses. When the mirror carries the match, that row decides, exactly as it always has.
  *
- * Returns { ok: true } immediately for unconfined accounts — this adds no query to their path.
+ * A MATCH THE MIRROR DOES NOT CARRY IS ASKED OF THE LIVE API (Ryan, 2026-10-29). The mirror syncs
+ * once a day, so a match created since then used to be refused to the confined account whose city
+ * it is in. Now its city is read from GET /admin/matches/{id} in the request's own environment and
+ * compared by name, the way the board scopes its list. Still deny by default: a live read that
+ * fails, a match with no city, or an environment that is not one of the two is a refusal.
+ *
+ * `env` is the route's own environment for /api/matchday/{env}/ routes; routes that only ever act on
+ * production omit it. Returns { ok: true } immediately for unconfined accounts, with no query.
  */
 export async function assertMatchInScope(
   supabase: SupabaseClient,
   scopeCity: string | null,
   matchApiId: string | number | null | undefined,
+  env?: string,
 ): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
   if (!scopeCity) return { ok: true };
   const id = Number(matchApiId);
@@ -110,9 +117,30 @@ export async function assertMatchInScope(
     .eq("api_id", id)
     .maybeSingle();
   if (error) return { ok: false, status: 500, error: "Could not verify the match's city" };
-  if (!data) return { ok: false, status: 403, error: CONFINED_CITY_ERROR };
+  if (!data) return liveMatchInScope(scopeCity, id, env);
   if (String(data.city_identifier ?? "") !== scopeCity) {
     return { ok: false, status: 403, error: CONFINED_CITY_ERROR };
   }
   return { ok: true };
+}
+
+/* ONLY REACHED WHEN THE MIRROR HAS NO ROW. The guarded client is imported here, inside the call, so
+ * this module stays importable by the offline gate suites, which load it without the server-only
+ * condition. */
+async function liveMatchInScope(
+  scopeCity: string,
+  id: number,
+  env: string | undefined,
+): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
+  const target = env === undefined ? "production" : env === "staging" || env === "production" ? env : null;
+  const want = cityNameFor(scopeCity);
+  if (!target || !want) return { ok: false, status: 403, error: CONFINED_CITY_ERROR };
+  try {
+    const { apiGet } = await import("./matchdayStageApi");
+    const match = await apiGet<Record<string, unknown>>(target, `/admin/matches/${id}`);
+    const city = ((match.field as Record<string, unknown> | undefined)?.city as Record<string, unknown> | undefined)?.name;
+    return city === want ? { ok: true } : { ok: false, status: 403, error: CONFINED_CITY_ERROR };
+  } catch {
+    return { ok: false, status: 403, error: CONFINED_CITY_ERROR };
+  }
 }

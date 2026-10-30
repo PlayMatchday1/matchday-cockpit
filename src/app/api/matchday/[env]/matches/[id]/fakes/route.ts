@@ -48,7 +48,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
   // The same boundary the roster write path uses: a confined account must not act on a match it
   // was never shown. Filtering a list is not authorisation.
   {
-    const scope = await assertMatchInScope(auth.supabase, auth.confinedCity, id);
+    const scope = await assertMatchInScope(auth.supabase, auth.confinedCity, id, env);
     if (!scope.ok) return Response.json({ error: scope.error }, { status: scope.status });
   }
   if (!isEnv(env)) return Response.json({ error: `unknown environment ${JSON.stringify(env)}` }, { status: 400 });

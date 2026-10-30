@@ -44,6 +44,7 @@ import {
   notifyInboundChatMessage,
   type CrmInboundPushArgs,
 } from "@/lib/crmPushNotify";
+import { notifyAppPlayerChat } from "@/lib/appPushChat";
 
 export const runtime = "nodejs";
 export const maxDuration = 15;
@@ -280,11 +281,15 @@ export async function POST(req: Request) {
   //    succeed regardless.
   if (pushIntents.length > 0) {
     await Promise.race([
-      Promise.all(
-        pushIntents.map((args) =>
+      Promise.all([
+        ...pushIntents.map((args) =>
           notifyInboundChatMessage({ ...args, supabase: sb }),
         ),
-      ),
+        // Staff app push (Expo): once per thread in this delivery, only when it now waits.
+        ...[...new Set(pushIntents.map((a) => a.threadId))].map((threadId) =>
+          notifyAppPlayerChat({ threadId, supabase: sb }),
+        ),
+      ]),
       new Promise<void>((resolve) => setTimeout(resolve, 2000)),
     ]).catch((err) => {
       console.error("[whatsapp:webhook] push fan-out failed:", err);

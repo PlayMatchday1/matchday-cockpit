@@ -48,7 +48,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   const { env, id } = await ctx.params;
   {
-    const scope = await assertMatchInScope(auth.supabase, auth.confinedCity, id);
+    const scope = await assertMatchInScope(auth.supabase, auth.confinedCity, id, env);
     if (!scope.ok) return Response.json({ error: scope.error }, { status: scope.status });
   }
   if (!isEnv(env)) return Response.json({ error: `unknown environment ${JSON.stringify(env)}` }, { status: 400 });
