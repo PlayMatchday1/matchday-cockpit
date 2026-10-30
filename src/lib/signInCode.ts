@@ -13,12 +13,16 @@ export const isSignInCodeText = (body: string | null | undefined): boolean => ty
 
 /**
  * WHAT telnyx_sms_log MAY STORE for one outbound message. A sign-in code is replaced in BOTH places
- * the ingest writes text: message_body, and the raw Telnyx message kept in `raw`. Anything else is
- * returned untouched.
+ * the ingest writes text: message_body, and the raw Telnyx message kept in `raw`. In the raw message
+ * EVERY string field holding the template is replaced, not only `text`: Telnyx also returns the
+ * same words as `original_text` (seen 2026-10-30). Anything else is returned untouched.
  */
 export function redactForLog<M extends { text?: string | null }>(body: string | null, msg: M): { body: string | null; msg: M } {
-  if (!isSignInCodeText(body) && !isSignInCodeText(msg.text)) return { body, msg };
-  return { body: SIGN_IN_CODE_REDACTED, msg: { ...msg, text: SIGN_IN_CODE_REDACTED } };
+  const hits = Object.keys(msg).filter((k) => isSignInCodeText((msg as Record<string, unknown>)[k] as string));
+  if (!isSignInCodeText(body) && hits.length === 0) return { body, msg };
+  const out: Record<string, unknown> = { ...msg };
+  for (const k of hits) out[k] = SIGN_IN_CODE_REDACTED;
+  return { body: SIGN_IN_CODE_REDACTED, msg: out as M };
 }
 
 /* ── THE GATE ─────────────────────────────────────────────────────────────────────────────────

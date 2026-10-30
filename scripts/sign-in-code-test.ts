@@ -38,6 +38,12 @@ is("PRESENCE CONTROL: a normal message's body is stored in full", r2.body, norma
 is("PRESENCE CONTROL: …and its raw text too", r2.msg.text, normal.text);
 yes("PRESENCE CONTROL: …as the same object, untouched", r2.msg === normal);
 is("a message with no text stays empty", redactForLog(null, { id: "m3" }).body, null);
+// Telnyx returns the words twice, as text and original_text (2026-10-30): both are replaced.
+const twice = { id: "m4", text: sent, original_text: sent, to: [{ phone_number: "+15125550123" }] };
+const r4 = redactForLog(twice.text, twice);
+is("original_text is replaced too", r4.msg.original_text, SIGN_IN_CODE_REDACTED);
+yes("…and the code appears nowhere in what is stored", !JSON.stringify(r4).includes("482913"), JSON.stringify(r4));
+yes("…while the rest of the raw message is kept", r4.msg.id === "m4" && r4.msg.to[0].phone_number === "+15125550123");
 
 console.log("\nthe hook's gate");
 const now = new Date("2026-10-29T20:00:00.000Z");
