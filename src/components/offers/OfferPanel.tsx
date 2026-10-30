@@ -12,9 +12,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  FIRST_NAME_TOKEN, MAX_TEST_IDS, SECTION_ADD, addSection, autoCopy, canReset, isRemovable, removeSection, resetCopy, sectionCollapsed, canHidePhoto, copyAfterHide, hideUpload, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, MAX_USES_PER_PLAYER, notFoundLine, parsePlayerIds, playerLine, prefillField, PREVIEW_FIRST_NAME, amountText, limitLine, stepLimit, stepUses, usesLine, audienceBody, buttonMatchNote, buttonOf, matchDay, opensText, chicagoWallNow, copyOf, createBody, defaultRun, endsTicket, formOf, formProblem, fromInput, matchInfo,
+  FIRST_NAME_TOKEN, MAX_TEST_IDS, SECTION_ADD, addSection, autoCopy, canReset, copyAfterType, isRemovable, staleLines, staleSections, writtenForOnLoad, removeSection, resetCopy, sectionCollapsed, canHidePhoto, copyAfterHide, hideUpload, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, MAX_USES_PER_PLAYER, notFoundLine, parsePlayerIds, playerLine, prefillField, PREVIEW_FIRST_NAME, amountText, limitLine, stepLimit, stepUses, usesLine, audienceBody, buttonMatchNote, buttonOf, matchDay, opensText, chicagoWallNow, copyOf, createBody, defaultRun, endsTicket, formOf, formProblem, fromInput, matchInfo,
   matchShort, newForm, patchBody, pickedMatch, startLabel, STEPPER, summary, toInput, wallLabel,
-  type Campaign, type City, type Count, type FieldOpt, type Lookup, type UploadedPhoto, type CopyKey, type DealType, type Form, type MatchOpt,
+  type Campaign, type City, type Count, type FieldOpt, type Lookup, type UploadedPhoto, type CopyKey, type DealType, type Form, type MatchOpt, type WrittenFor,
 } from "@/lib/offersModel";
 import OfferPopupPreview from "./OfferPopupPreview";
 import {
@@ -43,6 +43,9 @@ function putPhoto(url: string, headers: [string, string][], file: File, onProgre
     x.send(file);
   });
 }
+const writtenKey = (id: number) => `offers:written-for:${id}`;
+const readWritten = (id: number): WrittenFor => { try { const v = JSON.parse(window.localStorage.getItem(writtenKey(id)) ?? "{}"); return v && typeof v === "object" ? v : {}; } catch { return {}; } };
+const keepWritten = (id: number, w: WrittenFor) => { try { window.localStorage.setItem(writtenKey(id), JSON.stringify(w)); } catch { /* private mode */ } };
 const TEST_IDS_KEY = "offers:last-test-ids";
 const readTestIds = () => { try { return window.localStorage.getItem(TEST_IDS_KEY) ?? ""; } catch { return ""; } };
 const keepTestIds = (text: string) => { try { window.localStorage.setItem(TEST_IDS_KEY, text); } catch { /* private mode */ } };
@@ -51,7 +54,7 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
   c: Campaign | null; data: Data; onClose: () => void; onLanded: (o: WriteOutcome, selectId?: number) => void;
 }) {
   const nowWall = useMemo(() => chicagoWallNow(), []);
-  const start = useMemo(() => (c ? formOf(c) : newForm(nowWall)), [c, data, nowWall]);
+  const start = useMemo(() => (c ? formOf(c, data.matches, data.cities) : newForm(nowWall)), [c, data, nowWall]);
   const [f, setF] = useState<Form>(start);
   const set = (patch: Partial<Form>) => setF((x) => ({ ...x, ...patch }));
   const locked = c !== null && c.status !== "DRAFT";
@@ -97,11 +100,12 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
     if (c === null) {
       const { o, after } = await send("/api/offers", "POST", createBody(f, data.matches, data.cities), `Saved "${f.name.trim()}" as a draft.`);
       // A new offer's uploads move to its id, so they are still tiles when it reopens.
-      if (after?.id) keepUploads(after.id, uploaded);
+      if (after?.id) { keepUploads(after.id, uploaded); keepWritten(after.id, writtenFor); }
       return { o, id: after?.id ?? null };
     }
     if (!dirty) return { o: { verdict: "LANDED", text: "Nothing to save." }, id: c.id };
     const { o } = await send(`/api/offers/${c.id}`, "PATCH", diff, `Saved changes to "${f.name.trim()}".`);
+    if (o.verdict === "LANDED") keepWritten(c.id, writtenFor);
     return { o, id: c.id };
   }
   async function onSave() {
@@ -222,10 +226,15 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
 
   // ── popup text ──
   const [editText, setEditText] = useState(false);
-  const setCopy = (k: CopyKey, v: string) => setF((x) => ({ ...x, copy: { ...x.copy, [k]: v } }));
+  const suggested = autoCopy(f, data.matches, data.cities);
+  const setCopy = (k: CopyKey, v: string) => {
+    setF((x) => ({ ...x, copy: copyAfterType(x.copy, k, v, suggested[k]) }));
+    setWrittenFor((w) => ({ ...w, [k]: suggested[k] }));
+  };
+  const [writtenFor, setWrittenFor] = useState<WrittenFor>(() => (c ? writtenForOnLoad(start, readWritten(c.id), data.matches, data.cities) : {}));
+  const stale = staleSections(f, writtenFor, c?.status ?? null, data.matches, data.cities);
   // What a section held when Remove was pressed, so + Add puts it back. Cleared by a save (the panel remounts).
   const [typedBefore, setTypedBefore] = useState<Partial<Record<CopyKey, string>>>({});
-  const suggested = autoCopy(f, data.matches, data.cities);
   const [more, setMore] = useState(false);
   const ends = endsTicket(f.endsLocal, nowWall);
   // ── Button opens (Figma 20612:47 / 92 / 142). Editable after launch like the rest of the text;
@@ -279,7 +288,7 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
     const next = hideUpload(uploaded, url);
     setUploaded(next);
     if (c) keepUploads(c.id, next);
-    setF((v) => ({ ...v, copy: copyAfterHide(v.copy, url, c?.photoUrl ?? (c ? null : undefined)) }));
+    setF((v) => ({ ...v, copy: copyAfterHide(v.copy, url, c?.photoUrl ?? (c ? null : undefined), copyOf({ ...v, copy: {} }, data.matches, data.cities).photoUrl) }));
   }
   const photoTile = (key: string | number, url: string | null, title: string, sub: string, onHide?: () => void) => {
     const on = (copy.photoUrl ?? null) === url;
@@ -577,7 +586,7 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
                 if (isRemovable(k) && sectionCollapsed(f.copy, k, auto)) {
                   return (
                     <button key={k} type="button" data-testid={`offers-add-${k}`} className="self-start text-[12px] font-semibold" style={{ color: O.ok }}
-                      onClick={() => setF((x) => ({ ...x, copy: addSection(x.copy, k, typedBefore[k], auto, c !== null) }))}>{SECTION_ADD[k]}</button>
+                      onClick={() => setF((x) => ({ ...x, copy: addSection(x.copy, k, typedBefore[k], auto) }))}>{SECTION_ADD[k]}</button>
                   );
                 }
                 const value = f.copy[k] ?? auto ?? "";
@@ -598,9 +607,14 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
                       {k === "body"
                         ? <textarea id={`offers-copy-${k}`} data-testid={`offers-copy-${k}`} rows={3} maxLength={max} className={inputCls} style={inputStyle} value={value} onChange={(e) => setCopy(k, e.target.value)} />
                         : <input id={`offers-copy-${k}`} data-testid={`offers-copy-${k}`} maxLength={max} className={inputCls} style={inputStyle} value={value} onChange={(e) => setCopy(k, e.target.value)} />}
-                      {canReset(f.copy, k, auto) && (
-                        <button type="button" data-testid={`offers-reset-${k}`} className="self-start text-[11.5px] font-medium" style={{ color: O.ok }}
-                          onClick={() => setF((x) => ({ ...x, copy: resetCopy(x.copy, k, auto, c !== null) }))}>Reset to suggested</button>
+                      {(stale.includes(k) || canReset(f.copy, k, auto)) && (
+                        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                          {stale.includes(k) && <span data-testid={`offers-stale-${k}`} className="text-[11.5px] font-medium" style={{ color: O.warnInk }}>Written for the old deal</span>}
+                          {canReset(f.copy, k, auto) && (
+                            <button type="button" data-testid={`offers-reset-${k}`} className="text-[11.5px] font-medium" style={{ color: O.ok }}
+                              onClick={() => setF((x) => ({ ...x, copy: resetCopy(x.copy, k) }))}>Reset to suggested</button>
+                          )}
+                        </div>
                       )}
                     </div>
                     {k === "buttonLabel" && buttonOpens()}
@@ -615,13 +629,14 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
             </div>
           ) : (
             <div className="flex min-w-0 flex-1 flex-col gap-2">
-              <div className="text-[12px] leading-[17px]" style={{ color: O.muted }}>{c ? "The saved text. It stays as it is if the deal or who gets it changes." : "Written for you from the deal. Change any line if you want."}</div>
+              <div className="text-[12px] leading-[17px]" style={{ color: O.muted }}>Written for you from the deal. Change any line if you want.</div>
               {([["Headline", copy.headline], ["Line", copy.line], ["Photo", photoName(copy.photoUrl)], ["Button", copy.buttonLabel]] as const).map(([k, v]) => (
                 <div key={k} className="flex flex-col gap-[3px] font-medium">
                   <div className="text-[11px]" style={{ color: O.label }}>{k}</div>
                   <div className="break-words text-[13px]" style={{ color: O.ink }}>{v || "None"}</div>
                 </div>
               ))}
+              {stale.length > 0 && <div data-testid="offers-stale-note" className="text-[12px] font-medium" style={{ color: O.warnInk }}>Written for the old deal: {stale.length} {stale.length === 1 ? "section" : "sections"}. See Edit text.</div>}
               {!ended && (
                 <button type="button" data-testid="offers-edit-text" onClick={() => setEditText(true)} className="self-start text-[12px] font-semibold" style={{ color: O.ok }}>Edit text ›</button>
               )}
@@ -710,7 +725,8 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
       {confirm === "launch" && (
         <ConfirmDialog title={c?.status === "PAUSED" ? `Resume ${f.name.trim()}?` : `Launch ${f.name.trim()}?`}
           note={c?.status === "PAUSED" ? "Players who match start getting it again the next time they open the app." : `${summary(f, count, data.matches, data.cities, nowWall, data.fields)} After launch the deal, who gets it and when it runs can't change.`}
-          action={c?.status === "PAUSED" ? "Resume" : "Launch"} onCancel={() => setConfirm(null)}
+          warnings={staleLines(stale, f)}
+          action={c?.status === "PAUSED" ? "Resume" : stale.length > 0 ? "Launch anyway" : "Launch"} onCancel={() => setConfirm(null)}
           onConfirm={async () => { const o = await once(launch); if (o) { setOutcome(o); if (o.verdict === "LANDED") setConfirm(null); } return o; }} />
       )}
       {confirm === "delete" && (

@@ -221,9 +221,9 @@ export type Form = {
   // Where the popup's button goes (Edit text › Button opens). Forced to the deal's match when the
   // offer is for a specific match; see buttonOf.
   buttonTarget: ButtonTarget; buttonMatchId: number | null;
-  // Copy per key. Absent follows the deal, which only happens before the first save: formOf fills in
-  // every key, so a saved offer's text never changes by itself. A string is the text; an emptied box
-  // stays empty rather than going back to the deal (see copyOf). null is a removed section.
+  // Copy per key. Absent is the suggestion, and moves with the deal, audience and match. A string was
+  // typed and stays; an emptied box stays empty rather than going back to the deal (see copyOf). null
+  // is a removed section and never comes back on its own.
   copy: Partial<Record<CopyKey, string | null>>;
 };
 
@@ -237,7 +237,7 @@ export function newForm(nowWall: string): Form {
   };
 }
 
-export function formOf(c: Campaign): Form {
+export function formOf(c: Campaign, matches: MatchOpt[], cities: City[]): Form {
   const f: Form = {
     name: c.name, dealType: c.dealType, dealAmount: c.dealAmount, usesPerPlayer: c.usesPerPlayer,
     matchId: c.matchIds[0] ?? null, scope: c.matchScoped ? "MATCH" : "ANY",
@@ -247,9 +247,17 @@ export function formOf(c: Campaign): Form {
     startsLocal: c.startsLocal, endsLocal: c.endsLocal, holdoutPercent: c.holdoutPercent, maxRedemptions: c.maxRedemptions,
     buttonTarget: c.buttonTarget, buttonMatchId: c.buttonMatchId, copy: {},
   };
-  // Saved text is fixed. The backend can't tell "removed" from "nothing suggested" (both are null), so
-  // nothing stored may follow the deal: changing the deal only changes what Reset to suggested gives.
-  for (const k of COPY_KEYS) f.copy[k] = c[k] ?? null;
+  // Stored copy that differs from what the deal would write was typed by someone: keep it as typed.
+  // A stored null on a section is removed even where nothing is suggested today: the backend can't tell
+  // the two apart, and a removed section must not come back when the audience or the match changes.
+  const auto = autoCopy(f, matches, cities);
+  for (const k of COPY_KEYS) {
+    const stored = c[k] ?? null;
+    if (stored !== (auto[k] ?? null) || (stored === null && isRemovable(k))) f.copy[k] = stored;
+  }
+  // A specific match's button opens that match because of the match (buttonOf), so it isn't kept as
+  // someone's pick: moving the offer to any match goes back to Find a match, not the old match.
+  if (c.matchScoped && c.buttonTarget === "MATCH" && c.buttonMatchId === c.matchIds[0]) { f.buttonTarget = "FIND_MATCH"; f.buttonMatchId = null; }
   return f;
 }
 
@@ -341,14 +349,15 @@ export const sectionCollapsed = (copy: Form["copy"], k: RemovableKey, suggested:
 export const removeSection = (copy: Form["copy"], k: RemovableKey): Form["copy"] => ({ ...copy, [k]: null });
 // Back to what it held before Remove (typedBefore) if anything was typed, else the deal's text. With
 // no suggestion there is nothing to show, so an empty box opens; left empty it still saves as null.
-export function addSection(copy: Form["copy"], k: RemovableKey, typedBefore: string | undefined, suggested: string | null, saved: boolean): Form["copy"] {
+export function addSection(copy: Form["copy"], k: RemovableKey, typedBefore: string | undefined, suggested: string | null): Form["copy"] {
   if (typedBefore !== undefined) return { ...copy, [k]: typedBefore };
-  return suggested === null ? { ...copy, [k]: "" } : resetCopy(copy, k, suggested, saved);
+  return suggested === null ? { ...copy, [k]: "" } : resetCopy(copy, k);
 }
-// saved: the suggestion as it stands now becomes the text, so a later deal change leaves it alone.
-// Before the first save the key goes, and the section follows the deal again.
-export function resetCopy(copy: Form["copy"], k: CopyKey, suggested: string | null, saved: boolean): Form["copy"] {
-  if (saved) return { ...copy, [k]: suggested };
+// Typing the suggestion itself is the same as not having touched it, so it keeps following.
+export function copyAfterType(copy: Form["copy"], k: CopyKey, text: string, suggested: string | null): Form["copy"] {
+  return text === suggested ? resetCopy(copy, k) : { ...copy, [k]: text };
+}
+export function resetCopy(copy: Form["copy"], k: CopyKey): Form["copy"] {
   const next = { ...copy };
   delete next[k];
   return next;
@@ -358,6 +367,32 @@ export function canReset(copy: Form["copy"], k: CopyKey, suggested: string | nul
   const typed = copy[k];
   return typeof typed === "string" && suggested !== null && typed !== suggested;
 }
+
+// ── WRITTEN FOR THE OLD DEAL ─────────────────────────────────────────────────────────────────────
+// Typed text doesn't follow the deal, so it can end up promising the wrong one. writtenFor holds what
+// the deal suggested for each typed section when it was typed. The backend stores none of this, so the
+// page keeps it per offer in the browser; text saved elsewhere counts as written for the deal it loads with.
+export type WrittenFor = Partial<Record<CopyKey, string | null>>;
+export const SECTION_NAME: Record<CopyKey, string> = {
+  eyebrow: "Tag on the photo", caption: "Line on the photo", headline: "Headline", line: "Line", body: "Body", photoUrl: "Photo", buttonLabel: "Button label", dismissLabel: "Dismiss link",
+};
+export function writtenForOnLoad(f: Form, kept: WrittenFor, matches: MatchOpt[], cities: City[]): WrittenFor {
+  const auto = autoCopy(f, matches, cities);
+  const out: WrittenFor = {};
+  for (const k of COPY_KEYS) if (k !== "photoUrl" && typeof f.copy[k] === "string") out[k] = k in kept ? kept[k] : auto[k];
+  return out;
+}
+// Only before launch: after it the deal, audience and match are locked, so nothing can go stale.
+export function staleSections(f: Form, writtenFor: WrittenFor, status: CampaignStatus | null, matches: MatchOpt[], cities: City[]): CopyKey[] {
+  if (status !== null && status !== "DRAFT") return [];
+  const auto = autoCopy(f, matches, cities);
+  return COPY_KEYS.filter((k) => {
+    const typed = f.copy[k];
+    return k !== "photoUrl" && typeof typed === "string" && typed.trim() !== "" && k in writtenFor && (writtenFor[k] ?? null) !== (auto[k] ?? null) && typed !== auto[k];
+  });
+}
+// What the Launch confirm lists. Empty: the confirm says nothing about old text.
+export const staleLines = (stale: CopyKey[], f: Form) => stale.map((k) => `${SECTION_NAME[k]}: ${f.copy[k]}`);
 
 // ── THE PHOTO ────────────────────────────────────────────────────────────────────────────────────
 // photoUrl must be https. The one exception is the local backend's own files (seeded covers and local
@@ -408,10 +443,10 @@ export const hideUpload = (uploaded: UploadedPhoto[], url: string) => uploaded.f
 // `saved` is the campaign's stored photoUrl (undefined: a new offer, nothing saved). `deflt` is what the
 // deal would pick right now. When those agree the key is dropped, so the offer keeps following the
 // deal as it did before the pick, rather than being pinned to today's answer.
-export function copyAfterHide(copy: Form["copy"], url: string, saved: string | null | undefined): Form["copy"] {
+export function copyAfterHide(copy: Form["copy"], url: string, saved: string | null | undefined, deflt: string | null): Form["copy"] {
   if (copy.photoUrl !== url) return copy;
   const { photoUrl: _gone, ...rest } = copy;
-  return saved === undefined ? rest : { ...rest, photoUrl: saved };
+  return saved === undefined || saved === deflt ? rest : { ...rest, photoUrl: saved };
 }
 
 // ── REQUEST BODIES ───────────────────────────────────────────────────────────────────────────────

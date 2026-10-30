@@ -7985,7 +7985,12 @@ on 2026-10-30; read, not run), and no test popup was sent for this.
 ### Null means two things, and the backend cannot tell them apart
 
 A stored `null` is either "staff removed it" or "the deal suggested nothing" (only `caption` can be the
-second: `autoCopy` in `src/lib/offersModel.ts`). So the Clubhouse treats saved text as fixed: `formOf`
-(`src/lib/offersModel.ts:252`) loads every copy key as stored, and changing the deal, audience or match
-afterwards moves only what Reset to suggested would give. Before the first save, text follows the deal.
-Guarded in `scripts/offers-model-test.ts`, "saved text is fixed".
+second: `autoCopy` in `src/lib/offersModel.ts`). `formOf` treats every stored `null` on the four sections
+as removed, so it never comes back on its own. The cost: a draft that never had a photo line does not
+gain the suggested one when its audience or match changes; it takes + Add photo line.
+
+The backend also stores nothing about which deal typed text was written for, so `formOf` can only compare
+stored text with what the deal suggests right now. "Written for the old deal" is kept per offer in the
+browser (`offers:written-for:<id>`). In another browser, typed text counts as written for the deal it
+loads with, and no warning shows until the deal moves again. Guarded in `scripts/offers-model-test.ts`,
+"a saved draft when the deal, audience or match changes".

@@ -146,8 +146,8 @@ export function Split({ main, panel }: { main: React.ReactNode; panel: React.Rea
 
 // For big one-way actions: launch, pause, end. LANDED closes it (the caller reports it); anything else
 // stays open with its verdict, and the action stays locked once settled (never a double write).
-export function ConfirmDialog({ title, note, action, kind = "primary", onConfirm, onCancel }: {
-  title: string; note?: string | null; action: string; kind?: "primary" | "dangerSolid";
+export function ConfirmDialog({ title, note, warnings = [], action, kind = "primary", onConfirm, onCancel }: {
+  title: string; note?: string | null; warnings?: string[]; action: string; kind?: "primary" | "dangerSolid";
   onConfirm: () => Promise<WriteOutcome | null>; onCancel: () => void;
 }) {
   const [busy, setBusy] = useState(false);
@@ -169,6 +169,12 @@ export function ConfirmDialog({ title, note, action, kind = "primary", onConfirm
         className="w-full max-w-[360px] rounded-[12px] border px-5 pb-4 pt-5 shadow-[0_12px_40px_rgba(7,42,32,.18)]" style={{ background: O.surface, borderColor: O.line }}>
         <div className="text-[16px] font-bold" style={{ color: O.ink }}>{title}</div>
         {note ? <div className="mt-1.5 text-[12.5px] leading-[18px]" style={{ color: O.muted }}>{note}</div> : null}
+        {warnings.length > 0 && (
+          <div data-testid="offers-confirm-stale" className="mt-3 rounded-[8px] px-3 py-2 text-[12.5px] leading-[18px]" style={{ background: O.warnBg, color: O.warnInk }}>
+            <div className="font-semibold">Written for the old deal</div>
+            {warnings.map((w) => <div key={w} className="break-words">{w}</div>)}
+          </div>
+        )}
         {outcome && <div className="mt-3"><VerdictLine outcome={outcome} /></div>}
         <div className="mt-4 flex justify-end gap-2">
           <Btn testId="offers-confirm-cancel" disabled={busy} onClick={onCancel}>Cancel</Btn>
