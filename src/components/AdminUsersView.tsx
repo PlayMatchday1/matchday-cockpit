@@ -12,6 +12,7 @@ import { confinementSummary, CONFINED_RAIL_KEYS } from "@/lib/cityConfinement";
 import { CITY_SECTIONS } from "@/app/(internal)/city/citySections";
 
 type PermissionKey =
+  | "can_send_messages"
   | "can_manage_promos"
   | "can_edit_credits"
   | "can_edit_memberships"
@@ -473,6 +474,24 @@ export default function AdminUsersView() {
                                 {permErr?.id === u.id && (
                                   <span className="mt-1 max-w-[160px] text-[10px] leading-tight text-coral" data-testid="perm-error">{permErr.msg}</span>
                                 )}
+                              </div>
+                            </td>
+                          );
+                        }
+                        if (c.key === "can_access_chats") {
+                          const chats = !!u.can_access_chats || !!u.is_admin;
+                          return (
+                            <td key={c.key} className="px-2 py-2 align-middle text-center">
+                              <div className="flex flex-col items-center gap-1">
+                                <ToggleBox on={on} disabled={disabled} onClick={() => togglePermission(u, c.key)} label={`${c.label} access for ${u.email}`} />
+                                {/* CAN SEND: the chat SEND permission (can_send_messages). Reading a
+                                    conversation is Chats; sending is its own right on every send path.
+                                    It had no checkbox, so it could only be granted with SQL. Same route
+                                    and change_log as every other permission here. */}
+                                <div className="flex items-center gap-1 pl-3" title={u.is_service_account ? "The E2E service account can never hold CAN SEND" : !chats ? "Requires Chats" : "CAN SEND: send text, images and templates to players, and reply in match chats"}>
+                                  <span className="text-[8px] leading-none text-deep-green/40">↳ can send</span>
+                                  <ToggleBox on={!!u.can_send_messages} disabled={!chats || !!u.is_service_account} onClick={() => togglePermission(u, "can_send_messages")} label={`CAN SEND (write) for ${u.email}`} />
+                                </div>
                               </div>
                             </td>
                           );

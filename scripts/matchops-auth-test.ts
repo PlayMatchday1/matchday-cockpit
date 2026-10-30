@@ -268,6 +268,9 @@ is("authenticateAdmin guards the User access screen and the Fields mapping admin
     // +1 admin/users/phone (2026-10-29) — a staff member's mobile number for staff app sign-in by
     // text code. is_admin, like every other User access write.
     "admin/users/phone/route.ts",
+    // +1 admin/push-switches (2026-10-30) — the staff app push kill switch per event. is_admin
+    // because Ryan made it admin-only: it stops a notification type for every staff member at once.
+    "admin/push-switches/route.ts",
     // +1 city-check-ins/[id] — DELETE one city manager check-in. is_admin because the card's
     // control is gated on is_admin, and the file this was copied from (/api/inventory/[id]) gates
     // on the matchops CAPABILITY while its own header claims authenticateAdmin. Copying that would

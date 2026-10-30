@@ -31,6 +31,7 @@ import { TelnyxWebhook, TelnyxWebhookVerificationError } from "telnyx";
 import { createClient } from "@supabase/supabase-js";
 import { normalizePhone, toNationalDigits } from "@/lib/phone";
 import { notifyInboundChatMessage } from "@/lib/crmPushNotify";
+import { notifyAppPlayerChat } from "@/lib/appPushChat";
 import { writeThreadStatusLog } from "@/lib/crmThreadStatus";
 
 export const runtime = "nodejs";
@@ -289,6 +290,11 @@ export async function POST(req: Request) {
     mediaFilename: null,
     supabase: sb,
   });
+  // Staff app push (Expo): only when this message makes the thread wait. Bounded like the above.
+  await Promise.race([
+    notifyAppPlayerChat({ threadId, supabase: sb }),
+    new Promise<void>((resolve) => setTimeout(resolve, 2000)),
+  ]);
 
   const elapsed = Date.now() - startedAt;
   console.log(
