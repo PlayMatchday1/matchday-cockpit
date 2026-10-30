@@ -67,6 +67,8 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string; id
         ...row,
         address: typeof field.address === "string" ? field.address.trim() || null : null,
         type: typeof match.type === "string" ? match.type : null,
+        secondManager: (() => { const s = match.secondManager as Row | null | undefined; return s ? [s.firstName, s.lastName].filter(Boolean).join(" ").trim() || null : null; })(),
+        description: typeof match.description === "string" ? match.description.trim() || null : null,
         occupancy: Number((match._count as Row | undefined)?.players ?? 0),
       },
       teams,

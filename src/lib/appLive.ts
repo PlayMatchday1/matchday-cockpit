@@ -97,6 +97,9 @@ export function todayRow(m: ReturnType<typeof trimMatch> & { venueMaxPlayers?: n
     isCancelled: m.isCancelled,
     autoCanceled: m.autoCanceled, autoCanceledMinutes: m.autoCanceledMinutes,
     registrationPrice: m.registrationPrice,
+    // The end in the match's own wall clock ("ENDS 8:00 PM"), and two settings the Match screen lists.
+    endDate: typeof raw?.endDate === "string" ? raw.endDate : null,
+    category: m.category, isAutoBump: m.isAutoBump,
     ladder, spotsLeft: spotsLeftNow(ladder, hoursToKickoff),
     group: matchGroup(am, nowMs),
     attention: attention(am, nowMs),

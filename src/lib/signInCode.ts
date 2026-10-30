@@ -49,5 +49,3 @@ export function smsGate(isStaffNumber: boolean, recent: readonly Date[], now: Da
 
 /** The one reply the app shows after asking for a code, staff number or not. */
 export const PHONE_START_REPLY = "If this number is on a MatchDay staff account, a code is on its way.";
-/** Every start request answers no sooner than this, so timing does not tell staff from non-staff. */
-export const PHONE_START_MIN_MS = 2500;
