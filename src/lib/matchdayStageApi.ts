@@ -65,8 +65,9 @@ const PRODUCTION_WRITES_ENABLED = true;
 // pointed at production by a generic name six months from now. There is NO
 // default base URL for either environment: an unset base throws with the missing
 // variable named, loudly — a silent fallback is the same failure mode as the env
-// flag STEP 1 deliberately refused. The PROD write credentials live ONLY in
-// .env.local (never Vercel); the deployed Clubhouse must not gain write creds.
+// flag STEP 1 deliberately refused. The PROD write credentials are on Vercel
+// (encrypted, Production scope) as well as in .env.local: the deployed Clubhouse
+// writes to production through this client.
 const CRED_VARS: Record<MatchdayEnv, { base: string; email: string; password: string }> = {
   staging: { base: "MATCHDAY_STAGE_API_BASE_URL", email: "MATCHDAY_STAGE_API_EMAIL", password: "MATCHDAY_STAGE_API_PASSWORD" },
   production: { base: "MATCHDAY_PROD_BASE_URL", email: "MATCHDAY_PROD_API_EMAIL", password: "MATCHDAY_PROD_API_PASSWORD" },

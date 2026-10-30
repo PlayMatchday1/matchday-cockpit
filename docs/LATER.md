@@ -21,10 +21,12 @@ Also needed, none of them new variables:
 
 - **Service-account credentials for that environment** (`MATCHDAY_PROD_BASE_URL`, `MATCHDAY_PROD_API_EMAIL`,
   `MATCHDAY_PROD_API_PASSWORD`, or the `MATCHDAY_STAGE_API_*` set). The write client signs in with these.
-  **Check first:** the comment at `src/lib/matchdayStageApi.ts:68` says the production write credentials live
-  only in `.env.local` and never on Vercel. Whether Vercel has them today is UNKNOWN from here, and Offers on
-  production can't write without them, so decide this before release.
+  The production three are already on Vercel, encrypted, Production scope (`vercel env ls production`,
+  2026-10-30), so Offers needs no new credentials. **Check first:** read the value of `MATCHDAY_PROD_API_EMAIL`
+  on Vercel. It is the email the next line needs, and it is UNKNOWN from here.
 - That service account's email in the backend's `CLUBHOUSE_SERVICE_ACCOUNT_EMAILS`, or every Offers write is refused.
+  The backend's `RELEASE-CHECKLIST.md` names `clubhouse-earnings@example.com`, which is the local seed account
+  (`apps/api/tasks/seed-offers-local.mjs:40`), so that name needs replacing.
 - CORS on the upload bucket for the Clubhouse origin, or the browser's PUT fails.
 
 Not changed by these variables: `photoUrlOk` (`src/lib/offersModel.ts`) still accepts the local backend's

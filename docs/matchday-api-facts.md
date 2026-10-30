@@ -835,14 +835,17 @@ Two credential sets point at production from two places. The loose summary
   scripts). Wired to Vercel. These credentials are **admin-capable** — the
   `/admin` endpoints require admin and the sync uses them. Therefore the
   **deployed Clubhouse DOES hold production credentials capable of writing.**
-- What prevents production writes is NOT a lack of capability — it is that **no
-  deployed code path performs one**, now ENFORCED by the write client's two-host
-  allowlist + explicit per-call environment argument + the
-  `PRODUCTION_WRITES_ENABLED` bolt. Capability without a code path.
+- **Corrected 2026-10-30:** the deployed Clubhouse does write to production, through the write client
+  (`PRODUCTION_WRITES_ENABLED = true`, `src/lib/matchdayStageApi.ts:60`). Each write is limited by the
+  client's two-host allowlist, the environment named on each call, and the signed-in person's rights.
+  The last 500 `change_log` rows on 2026-10-30 (read through `/api/changelog`, Oct 27 to 30) include 424
+  under `production`, and the 500 have 10 different actors. A row does not record which machine wrote it.
 - **MATCHDAY_PROD_API_*** (`MATCHDAY_PROD_API_EMAIL` / `_PASSWORD` /
   `MATCHDAY_PROD_BASE_URL`) — the write client's production credentials.
-  LOCAL-ONLY (.env.local), NEVER in Vercel; used only by hand-run Phase 8 probes.
-  `MATCHDAY_PROD_BASE_URL` has no default — unset throws.
+  **On Vercel, encrypted, Production scope**, and in `.env.local`. Seen by name with
+  `vercel env ls production` on 2026-10-30, created 83 days before that; values not read. Which account
+  `MATCHDAY_PROD_API_EMAIL` holds is UNKNOWN from here. They were local-only in Phase 8, when this entry
+  was written. `MATCHDAY_PROD_BASE_URL` has no default: unset throws.
 - Two naming schemes now name the same environment. A future rename of the
   Vercel-wired `MATCHDAY_API_*` set to `MATCHDAY_PROD_*` MUST keep these in
   LOCKSTEP or the sync breaks on the next auto-deploy (git-integration deploys on
@@ -850,8 +853,8 @@ Two credential sets point at production from two places. The loose summary
     1. the ~24 code call sites (matchdayApi.ts, envHygiene.ts DETECT_ONLY list,
        the sync/probe scripts);
     2. the Vercel environment variables, renamed at the same time the code deploys;
-    3. do NOT collapse the two sets into one name — the write set must stay
-       local-only, so it needs a name distinct from the Vercel-wired read set.
+    3. do NOT collapse the two sets into one name: each client reads its own, and
+       whether they hold the same account is UNKNOWN from here.
 
 ## Retool production export (Phase 6) — corrections & corroborations
 
