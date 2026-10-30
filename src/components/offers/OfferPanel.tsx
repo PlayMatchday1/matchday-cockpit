@@ -12,7 +12,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  FIRST_NAME_TOKEN, MAX_TEST_IDS, canHidePhoto, copyAfterHide, hideUpload, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, MAX_USES_PER_PLAYER, notFoundLine, parsePlayerIds, playerLine, prefillField, PREVIEW_FIRST_NAME, amountText, limitLine, stepLimit, stepUses, usesLine, audienceBody, buttonMatchNote, buttonOf, matchDay, opensText, chicagoWallNow, copyOf, createBody, defaultRun, endsTicket, formOf, formProblem, fromInput, matchInfo,
+  FIRST_NAME_TOKEN, MAX_TEST_IDS, SECTION_ADD, addSection, autoCopy, canReset, isRemovable, removeSection, resetCopy, sectionCollapsed, canHidePhoto, copyAfterHide, hideUpload, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, MAX_USES_PER_PLAYER, notFoundLine, parsePlayerIds, playerLine, prefillField, PREVIEW_FIRST_NAME, amountText, limitLine, stepLimit, stepUses, usesLine, audienceBody, buttonMatchNote, buttonOf, matchDay, opensText, chicagoWallNow, copyOf, createBody, defaultRun, endsTicket, formOf, formProblem, fromInput, matchInfo,
   matchShort, newForm, patchBody, pickedMatch, startLabel, STEPPER, summary, toInput, wallLabel,
   type Campaign, type City, type Count, type FieldOpt, type Lookup, type UploadedPhoto, type CopyKey, type DealType, type Form, type MatchOpt,
 } from "@/lib/offersModel";
@@ -223,6 +223,9 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
   // ── popup text ──
   const [editText, setEditText] = useState(false);
   const setCopy = (k: CopyKey, v: string) => setF((x) => ({ ...x, copy: { ...x.copy, [k]: v } }));
+  // What a section held when Remove was pressed, so + Add puts it back. Cleared by a save (the panel remounts).
+  const [typedBefore, setTypedBefore] = useState<Partial<Record<CopyKey, string>>>({});
+  const suggested = autoCopy(f, data.matches, data.cities);
   const [more, setMore] = useState(false);
   const ends = endsTicket(f.endsLocal, nowWall);
   // ── Button opens (Figma 20612:47 / 92 / 142). Editable after launch like the rest of the text;
@@ -570,21 +573,41 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
           {editText && !ended ? (
             <div data-testid="offers-text-fields" className="flex min-w-0 flex-1 flex-col gap-3">
               {([["buttonLabel", "Button label", 64], ["eyebrow", "Tag on the photo", 64], ["caption", "Line on the photo", 64], ["headline", "Headline (last word in green)", 64], ["line", "Line", 64], ["body", "Body", 300], ["dismissLabel", "Dismiss link", 64]] as const).map(([k, label, max]) => {
-                const auto = copyOf({ ...f, copy: {} }, data.matches, data.cities)[k] ?? "";
+                const auto = suggested[k];
+                if (isRemovable(k) && sectionCollapsed(f.copy, k, auto)) {
+                  return (
+                    <button key={k} type="button" data-testid={`offers-add-${k}`} className="self-start text-[12px] font-semibold" style={{ color: O.ok }}
+                      onClick={() => setF((x) => ({ ...x, copy: addSection(x.copy, k, typedBefore[k], auto) }))}>{SECTION_ADD[k]}</button>
+                  );
+                }
+                const value = f.copy[k] ?? auto ?? "";
                 return (
                   <div key={k} className="flex flex-col gap-3">
-                    <label className="flex flex-col gap-1.5">
-                      <span className="text-[12px] font-medium" style={{ color: O.ink }}>{label}</span>
+                    <div className="flex flex-col gap-1.5">
+                      <div className="flex items-baseline justify-between gap-2">
+                        <label htmlFor={`offers-copy-${k}`} className="text-[12px] font-medium" style={{ color: O.ink }}>{label}</label>
+                        {isRemovable(k) && (
+                          <button type="button" data-testid={`offers-remove-${k}`} className="text-[11.5px] font-medium" style={{ color: O.muted }}
+                            onClick={() => {
+                              const typed = f.copy[k];
+                              setTypedBefore((x) => { const n = { ...x }; if (typeof typed === "string") n[k] = typed; else delete n[k]; return n; });
+                              setF((x) => ({ ...x, copy: removeSection(x.copy, k) }));
+                            }}>Remove</button>
+                        )}
+                      </div>
                       {k === "body"
-                        ? <textarea data-testid={`offers-copy-${k}`} rows={3} maxLength={max} className={inputCls} style={inputStyle} placeholder={auto} value={f.copy[k] ?? ""} onChange={(e) => setCopy(k, e.target.value)} />
-                        : <input data-testid={`offers-copy-${k}`} maxLength={max} className={inputCls} style={inputStyle} placeholder={auto} value={f.copy[k] ?? ""} onChange={(e) => setCopy(k, e.target.value)} />}
-                    </label>
+                        ? <textarea id={`offers-copy-${k}`} data-testid={`offers-copy-${k}`} rows={3} maxLength={max} className={inputCls} style={inputStyle} value={value} onChange={(e) => setCopy(k, e.target.value)} />
+                        : <input id={`offers-copy-${k}`} data-testid={`offers-copy-${k}`} maxLength={max} className={inputCls} style={inputStyle} value={value} onChange={(e) => setCopy(k, e.target.value)} />}
+                      {canReset(f.copy, k, auto) && (
+                        <button type="button" data-testid={`offers-reset-${k}`} className="self-start text-[11.5px] font-medium" style={{ color: O.ok }}
+                          onClick={() => setF((x) => ({ ...x, copy: resetCopy(x.copy, k) }))}>Reset to suggested</button>
+                      )}
+                    </div>
                     {k === "buttonLabel" && buttonOpens()}
                     {k === "buttonLabel" && photoPicker()}
                   </div>
                 );
               })}
-              <div className="text-[11.5px]" style={{ color: O.muted }}>An empty line goes back to the text written from the deal.</div>
               <div data-testid="offers-firstname-hint" className="text-[11.5px]" style={{ color: O.muted }}>
                 <code className="rounded px-1" style={{ background: O.subtle, color: O.ink }}>{FIRST_NAME_TOKEN}</code> becomes the player&apos;s first name (shown here as {PREVIEW_FIRST_NAME}). With no first name on file it is left out.
               </div>

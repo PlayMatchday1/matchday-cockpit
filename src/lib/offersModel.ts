@@ -221,8 +221,9 @@ export type Form = {
   // Where the popup's button goes (Edit text › Button opens). Forced to the deal's match when the
   // offer is for a specific match; see buttonOf.
   buttonTarget: ButtonTarget; buttonMatchId: number | null;
-  // Copy the person typed. A key that is absent (or cleared back to empty) follows the deal. null is
-  // "none" for an optional line, kept from a stored campaign so loading it never invents a change.
+  // Copy per key. Absent follows the deal. A string was typed; an emptied box stays empty rather than
+  // going back to the deal (see copyOf). null is a removed section, also how a stored campaign's
+  // removed section loads, so loading it never invents a change.
   copy: Partial<Record<CopyKey, string | null>>;
 };
 
@@ -314,10 +315,45 @@ export function copyOf(f: Form, matches: MatchOpt[], cities: City[]): Copy {
   const out = { ...auto };
   for (const k of COPY_KEYS) {
     const typed = f.copy[k];
-    const optional = k !== "headline" && k !== "buttonLabel";
-    if (typed === null ? optional : typed !== undefined && typed.trim() !== "") (out as Record<CopyKey, string | null>)[k] = typed ?? null;
+    if (typed === undefined) continue;
+    const blank = typed !== null && typed.trim() === "";
+    const o = out as Record<CopyKey, string | null>;
+    if (isRemovable(k)) o[k] = typed === null || blank ? null : typed;
+    // Required: left blank so formProblem stops the save. Nothing else can make these null.
+    else if (k === "headline" || k === "buttonLabel") { if (typed !== null) o[k] = typed; }
+    // The dismiss link has no empty state (the column is NOT NULL and the app always draws one).
+    else if (!blank) o[k] = typed;
   }
   return out;
+}
+
+// ── OPTIONAL SECTIONS ────────────────────────────────────────────────────────────────────────────
+// The four parts of the popup staff can cut. Removed is stored as null and the app draws nothing for
+// null (OfferPopup.tsx). The headline and the button label are required; the dismiss link and the photo
+// are not sections.
+export const REMOVABLE_KEYS = ["eyebrow", "caption", "line", "body"] as const;
+export type RemovableKey = (typeof REMOVABLE_KEYS)[number];
+export function isRemovable(k: CopyKey): k is RemovableKey { return (REMOVABLE_KEYS as readonly CopyKey[]).includes(k); }
+export const SECTION_ADD: Record<RemovableKey, string> = { eyebrow: "+ Add tag", caption: "+ Add photo line", line: "+ Add line", body: "+ Add body" };
+// Collapsed: removed, or following a deal that suggests nothing (only the photo line can do that).
+export const sectionCollapsed = (copy: Form["copy"], k: RemovableKey, suggested: string | null) =>
+  copy[k] === null || (copy[k] === undefined && suggested === null);
+export const removeSection = (copy: Form["copy"], k: RemovableKey): Form["copy"] => ({ ...copy, [k]: null });
+// Back to what it held before Remove (typedBefore) if anything was typed, else the deal's text. With
+// no suggestion there is nothing to show, so an empty box opens; left empty it still saves as null.
+export function addSection(copy: Form["copy"], k: RemovableKey, typedBefore: string | undefined, suggested: string | null): Form["copy"] {
+  if (typedBefore !== undefined) return { ...copy, [k]: typedBefore };
+  return suggested === null ? { ...copy, [k]: "" } : resetCopy(copy, k);
+}
+export function resetCopy(copy: Form["copy"], k: CopyKey): Form["copy"] {
+  const next = { ...copy };
+  delete next[k];
+  return next;
+}
+// Only when it would change something: with no suggestion, or the suggestion already there, it is not offered.
+export function canReset(copy: Form["copy"], k: CopyKey, suggested: string | null): boolean {
+  const typed = copy[k];
+  return typeof typed === "string" && suggested !== null && typed !== suggested;
 }
 
 // ── THE PHOTO ────────────────────────────────────────────────────────────────────────────────────
@@ -397,9 +433,10 @@ export function fullBody(f: Form, matches: MatchOpt[], cities: City[]): Record<s
   };
 }
 
-// CREATE: the full body with nulls left out (the backend's defaults stand in for them).
+// CREATE: the full body with nulls left out (the backend's defaults stand in for them), except a
+// removed section, which is sent as null like any other save.
 export function createBody(f: Form, matches: MatchOpt[], cities: City[]): Record<string, unknown> {
-  return Object.fromEntries(Object.entries(fullBody(f, matches, cities)).filter(([, v]) => v !== null));
+  return Object.fromEntries(Object.entries(fullBody(f, matches, cities)).filter(([k, v]) => v !== null || isRemovable(k as CopyKey)));
 }
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
@@ -434,6 +471,8 @@ export function formProblem(f: Form, matches: MatchOpt[]): string | null {
   if (b.target === "MATCH" && !matches.some((x) => x.id === b.matchId)) return "Pick the match the button opens.";
   if (f.maxRedemptions !== null && (!Number.isInteger(f.maxRedemptions) || f.maxRedemptions < 1)) return "The total limit must be 1 or more.";
   if (f.audienceMode === "PLAYERS" && f.playerIds.length === 0) return "Add at least one player ID.";
+  if (f.copy.headline?.trim() === "") return "The popup needs a headline.";
+  if (f.copy.buttonLabel?.trim() === "") return "The popup needs a button label.";
   const photo = copyOf(f, matches, [])["photoUrl"];
   if (photo !== null && !photoUrlOk(photo)) return "The photo must be an https link.";
   return null;

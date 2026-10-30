@@ -13,7 +13,7 @@ import { offersAccessState, onOffersAllowlist } from "../src/lib/offersAccess";
 import {
   audienceBody, chicagoWallNow, comparisonLine, costCeiling, createBody, defaultRun, endsTicket, formOf, newForm, patchBody, priceWithDeal,
   summary, wallFromMatch, withPreviewName, buttonOf, opensText, formProblem, stepUses, usesLine, stepLimit, limitLine, copyOf,
-  canHidePhoto, copyAfterHide, hideUpload, extraBookingsLine, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, prefillField, audienceText, parsePlayerIds, playerLine, notFoundLine, usedOfLimit, resultsLines, type Campaign, type City, type MatchOpt, type Results,
+  addSection, autoCopy, canReset, isRemovable, removeSection, resetCopy, sectionCollapsed, REMOVABLE_KEYS, canHidePhoto, copyAfterHide, hideUpload, extraBookingsLine, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, prefillField, audienceText, parsePlayerIds, playerLine, notFoundLine, usedOfLimit, resultsLines, type Campaign, type City, type MatchOpt, type Results,
 } from "../src/lib/offersModel";
 import { _setOffersGateDepsForTest, mismatches, offersGate, photoLinkProblem } from "../src/lib/offersServer";
 
@@ -56,7 +56,8 @@ console.log("the diff is the request body:");
   eq("a stored 'no caption' (saved before captions) loads and sends nothing", patchBody(old, formOf(old, matches, cities), matches, cities), {});
   eq("the lapsed eyebrow carries {firstName} for the backend to fill", createBody(f, matches, cities).eyebrow, "WE MISS YOU, {firstName}");
   eq("the preview shows {firstName} as Luis", withPreviewName("WE MISS YOU, {firstName}"), "WE MISS YOU, Luis");
-  eq("an emptied box goes back to the deal's text, which is no change", patchBody(c2, { ...formOf(c2, matches, cities), copy: { headline: "" } }, matches, cities), { headline: "50% OFF" });
+  eq("an emptied headline stays empty and stops the save", [copyOf({ ...f, copy: { headline: "" } }, matches, cities).headline, formProblem({ ...f, copy: { headline: "  " } }, matches)], ["", "The popup needs a headline."]);
+  eq("Reset to suggested on a typed headline sends the deal's text", patchBody(c2, { ...formOf(c2, matches, cities), copy: resetCopy(formOf(c2, matches, cities).copy, "headline") }, matches, cities), { headline: "50% OFF" });
 }
 {
   const c = draftFrom({ status: "LAUNCHED", state: "LIVE" });
@@ -227,6 +228,59 @@ eq("another host, a POST and no key are refused", [photoLinkProblem({ ...lk, upl
   eq("a stored local photo saves", formProblem({ ...nowF, name: "x", copy: { photoUrl: "http://localhost:3070/dev/uploads/offers/photos/a.jpg" } }, matches), null);
 }
 eq("an https photo is fine (the control)", formProblem({ ...nowF, name: "x", copy: { photoUrl: "https://covers.local/a.jpg" } }, matches), null);
+
+console.log("optional sections of the popup:");
+{
+  eq("the four removable sections, and not the required ones", [REMOVABLE_KEYS, isRemovable("headline"), isRemovable("buttonLabel"), isRemovable("dismissLabel"), isRemovable("photoUrl")], [["eyebrow", "caption", "line", "body"], false, false, false, false]);
+  const base = { ...nowF, name: "x", lastPlayed: "LAPSED" as const, lastPlayedDays: 30 };
+  const auto = autoCopy(base, matches, cities);
+  const gone = (["eyebrow", "caption", "line", "body"] as const).reduce((cp, k) => removeSection(cp, k), base.copy);
+  const created = createBody({ ...base, copy: gone }, matches, cities);
+  eq("creating with all four removed sends null for each, not their absence", [created.eyebrow, created.caption, created.line, created.body], [null, null, null, null]);
+  eq("the control: created untouched they carry the deal's text", (["eyebrow", "caption", "line", "body"] as const).map((k) => createBody(base, matches, cities)[k]), [auto.eyebrow, auto.caption, auto.line, auto.body]);
+  eq("other nulls are still left out of a create", ["photoUrl" in created, "maxRedemptions" in created, "maxMatches" in created], [false, false, false]);
+  const removedKeys = copyOf({ ...base, copy: gone }, matches, cities);
+  eq("removed reads as null for the preview, required text stays", [removedKeys.eyebrow, removedKeys.caption, removedKeys.line, removedKeys.body, removedKeys.headline, removedKeys.buttonLabel], [null, null, null, null, auto.headline, auto.buttonLabel]);
+  eq("headline and button can't be made null", (({ headline, buttonLabel }) => [headline, buttonLabel])(copyOf({ ...base, copy: { headline: null, buttonLabel: null } }, matches, cities)), [auto.headline, auto.buttonLabel]);
+  eq("the dismiss link emptied is the deal's text, never null", copyOf({ ...base, copy: { dismissLabel: " " } }, matches, cities).dismissLabel, "Not now");
+  eq("a removed section stays removed when the deal changes", copyOf({ ...base, dealAmount: 40, copy: gone }, matches, cities).eyebrow, null);
+  eq("the headline still follows that deal change", copyOf({ ...base, dealAmount: 40, copy: gone }, matches, cities).headline, "40% OFF");
+  eq("an optional box emptied by hand saves as null, like Remove", createBody({ ...base, copy: { body: "  " } }, matches, cities).body, null);
+
+  for (const [name, status] of [["draft", "DRAFT"], ["launched", "LAUNCHED"], ["paused", "PAUSED"]] as const) {
+    const c = draftFrom({ status, state: status === "DRAFT" ? "DRAFT" : status === "PAUSED" ? "PAUSED" : "LIVE" });
+    const f = formOf(c, matches, cities);
+    const cut = { ...f, copy: removeSection(f.copy, "body") };
+    eq(`${name}: Remove sends null for that section alone`, patchBody(c, cut, matches, cities), { body: null });
+    const saved = { ...c, body: null };
+    const sf = formOf(saved, matches, cities);
+    eq(`${name}: a saved removal loads removed and sends nothing`, [sf.copy.body, sectionCollapsed(sf.copy, "body", autoCopy(sf, matches, cities).body), patchBody(saved, sf, matches, cities)], [null, true, {}]);
+    eq(`${name}: + Add on a saved removal sends the suggested text`, patchBody(saved, { ...sf, copy: addSection(sf.copy, "body", undefined, autoCopy(sf, matches, cities).body) }, matches, cities), { body: "Any match in Austin. The discount is already on your account." });
+    eq(`${name}: Remove then + Add on the same visit leaves nothing to save`, patchBody(c, { ...cut, copy: addSection(cut.copy, "body", undefined, auto.body) }, matches, cities), {});
+  }
+
+  const typed = draftFrom({ eyebrow: "HEY THERE", status: "LAUNCHED", state: "LIVE" });
+  const tf = formOf(typed, matches, cities);
+  eq("typed text is the control: it loads as typed", tf.copy.eyebrow, "HEY THERE");
+  const cutT = removeSection(tf.copy, "eyebrow");
+  eq("Remove then + Add brings typed text back, nothing to save", patchBody(typed, { ...tf, copy: addSection(cutT, "eyebrow", "HEY THERE", auto.eyebrow) }, matches, cities), {});
+  eq("Reset to suggested is offered on typed text", canReset(tf.copy, "eyebrow", auto.eyebrow), true);
+  eq("Reset to suggested sends the deal's text after launch", patchBody(typed, { ...tf, copy: resetCopy(tf.copy, "eyebrow") }, matches, cities), { eyebrow: auto.eyebrow });
+  eq("not offered when following the deal, or on the suggestion itself", [canReset({}, "eyebrow", auto.eyebrow), canReset({ eyebrow: auto.eyebrow }, "eyebrow", auto.eyebrow)], [false, false]);
+  eq("not offered with nothing to suggest", canReset({ caption: "typed" }, "caption", null), false);
+  eq("offered on an emptied required field", canReset({ headline: "" }, "headline", "50% OFF"), true);
+
+  // The photo line is the one section a deal can leave empty.
+  const any = { ...nowF, name: "x" };
+  eq("an any-match offer suggests no photo line, so it starts collapsed", [autoCopy(any, matches, cities).caption, sectionCollapsed(any.copy, "caption", null)], [null, true]);
+  const opened = addSection(any.copy, "caption", undefined, null);
+  eq("+ Add photo line opens an empty box", [opened.caption, sectionCollapsed(opened, "caption", null)], ["", false]);
+  eq("left empty it still saves as null", "caption" in createBody({ ...any, copy: opened }, matches, cities) && createBody({ ...any, copy: opened }, matches, cities).caption === null, true);
+  eq("with text typed it is sent", createBody({ ...any, copy: { caption: "See you there" } }, matches, cities).caption, "See you there");
+  eq("a section with text is not collapsed (the control)", sectionCollapsed({}, "eyebrow", "JUST FOR YOU"), false);
+  eq("button label empty stops the save", formProblem({ ...any, copy: { buttonLabel: "" } }, matches), "The popup needs a button label.");
+  eq("all four removed saves (the control)", formProblem({ ...any, copy: gone }, matches), null);
+}
 
 console.log("money, in cents, as the backend's applyOfferDeal:");
 eq("50% of $15", priceWithDeal(1500, "PERCENT_OFF", 50), 750);
