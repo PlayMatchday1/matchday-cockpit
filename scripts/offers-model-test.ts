@@ -12,7 +12,7 @@ import "server-only"; // no-op under --conditions=react-server
 import { onOffersAllowlist } from "../src/lib/offersAccess";
 import {
   audienceBody, chicagoWallNow, comparisonLine, costCeiling, createBody, defaultRun, endsTicket, formOf, newForm, patchBody, priceWithDeal,
-  summary, wallFromMatch, withPreviewName, buttonOf, opensText, formProblem, type Campaign, type City, type MatchOpt, type Results,
+  summary, wallFromMatch, withPreviewName, buttonOf, opensText, formProblem, stepUses, usesLine, stepLimit, limitLine, copyOf, type Campaign, type City, type MatchOpt, type Results,
 } from "../src/lib/offersModel";
 import { _setOffersGateDepsForTest, offersGate } from "../src/lib/offersServer";
 
@@ -24,8 +24,8 @@ const eq = (name: string, got: unknown, want: unknown) => {
 
 const cities: City[] = [{ id: 1, name: "Austin" }, { id: 2, name: "Houston" }];
 const matches: MatchOpt[] = [
-  { id: 116, name: "Riverside Thursday", startLocal: "2026-11-02 19:00:00", fieldId: 1, fieldTitle: "Riverside Fields", cityId: 1, price: 1500, players: 11, maxPlayers: 16, minPlayers: 14, upcoming: true },
-  { id: 117, name: "Mueller Friday", startLocal: "2026-11-03 19:00:00", fieldId: 2, fieldTitle: "Mueller Park", cityId: 1, price: 900, players: 0, maxPlayers: 20, minPlayers: 0, upcoming: true },
+  { id: 116, name: "Riverside Thursday", startLocal: "2026-11-02 19:00:00", fieldId: 1, fieldTitle: "Riverside Fields", fieldCover: "https://covers.local/riverside.jpg", cityId: 1, price: 1500, players: 11, maxPlayers: 16, minPlayers: 14, upcoming: true },
+  { id: 117, name: "Mueller Friday", startLocal: "2026-11-03 19:00:00", fieldId: 2, fieldTitle: "Mueller Park", fieldCover: null, cityId: 1, price: 900, players: 0, maxPlayers: 20, minPlayers: 0, upcoming: true },
 ];
 const results: Results = { granted: 412, heldBack: 46, saw: 412, tapped: 60, dismissed: 300, used: 38, discountGiven: 17100, cameBackAtFullPrice: 21,
   booked: { withOffer: { players: 412, booked: 37, rate: 37 / 412 }, heldBack: { players: 46, booked: 1, rate: 1 / 46 } } };
@@ -99,6 +99,41 @@ console.log("button opens:");
   eq("after launch, back to Find a match clears buttonMatchId and sends nothing else",
     patchBody(live2, { ...formOf(live2, matches, cities), buttonTarget: "FIND_MATCH", buttonMatchId: null }, matches, cities), { buttonTarget: "FIND_MATCH", buttonMatchId: null });
   eq("a launched offer with a match button loads and sends nothing", patchBody(live2, formOf(live2, matches, cities), matches, cities), {});
+}
+
+console.log("uses per player:");
+eq("the stepper runs 1 to 20", [stepUses(1, -1), stepUses(3, 1), stepUses(20, 1)], [1, 4, 20]);
+eq("the line", [usesLine(1), usesLine(3)], ["Each player can use it on 1 match before it ends.", "Each player can use it on up to 3 matches before it ends."]);
+eq("any match sends the stepper's number", createBody({ ...nowF, name: "x", usesPerPlayer: 7 }, matches, cities).usesPerPlayer, 7);
+eq("a specific match is always one use", createBody({ ...nowF, name: "x", usesPerPlayer: 7, scope: "MATCH", matchId: 117, endsLocal: "2026-11-03 19:00:00" }, matches, cities).usesPerPlayer, 1);
+eq("the summary says the number", summary({ ...nowF, name: "x", cityIds: [1], usesPerPlayer: 7 }, { count: 10, heldBack: 1, players: 9, mostItCanCost: null }, matches, cities, NOW).includes("50% off 7 matches"), true);
+
+console.log("total limit:");
+eq("no limit by default, and none is sent", "maxRedemptions" in createBody({ ...nowF, name: "x" }, matches, cities), false);
+eq("a limit is sent", createBody({ ...nowF, name: "x", maxRedemptions: 50 }, matches, cities).maxRedemptions, 50);
+eq("the stepper starts at 1 and never goes under it", [stepLimit(null, 1), stepLimit(1, -1), stepLimit(50, 1)], [1, 1, 51]);
+eq("the line", [limitLine(1), limitLine(1200)], ["The offer stops once 1 use is taken across all players.", "The offer stops once 1,200 uses are taken across all players."]);
+{
+  const f = { ...nowF, name: "x", cityIds: [1], usesPerPlayer: 3 };
+  const count = { count: 458, heldBack: 46, players: 412, mostItCanCost: null };
+  eq("most it can cost: players x uses when that is lower than the limit", costCeiling({ ...f, maxRedemptions: 5000 }, count, matches)?.cents, 750 * 412 * 3);
+  eq("most it can cost: the limit when it is lower", costCeiling({ ...f, maxRedemptions: 100 }, count, matches)?.cents, 750 * 100);
+  const live = draftFrom({ status: "LAUNCHED", state: "LIVE" });
+  eq("after launch, the limit is one of the fields still sent, alone", patchBody(live, { ...formOf(live, matches, cities), maxRedemptions: 80 }, matches, cities), { maxRedemptions: 80 });
+  eq("after launch, back to no limit sends null", patchBody({ ...live, maxRedemptions: 80 }, { ...formOf({ ...live, maxRedemptions: 80 }, matches, cities), maxRedemptions: null }, matches, cities), { maxRedemptions: null });
+}
+
+console.log("photo:");
+eq("any match: the default MatchDay photo (null)", copyOf({ ...nowF, name: "x" }, matches, cities).photoUrl, null);
+eq("a specific match: that match's field cover", copyOf({ ...nowF, scope: "MATCH", matchId: 116 }, matches, cities).photoUrl, "https://covers.local/riverside.jpg");
+eq("a specific match with no cover: the default", copyOf({ ...nowF, scope: "MATCH", matchId: 117 }, matches, cities).photoUrl, null);
+eq("a picked cover is sent as the photo", createBody({ ...nowF, name: "x", copy: { photoUrl: "https://covers.local/mueller.jpg" } }, matches, cities).photoUrl, "https://covers.local/mueller.jpg");
+eq("picking MatchDay photo on a specific match sends no photo (null), not the cover", copyOf({ ...nowF, scope: "MATCH", matchId: 116, copy: { photoUrl: null } }, matches, cities).photoUrl, null);
+{
+  const live = draftFrom({ status: "LAUNCHED", state: "LIVE" });
+  eq("after launch, changing the photo sends only photoUrl", patchBody(live, { ...formOf(live, matches, cities), copy: { photoUrl: "https://covers.local/mueller.jpg" } }, matches, cities), { photoUrl: "https://covers.local/mueller.jpg" });
+  const withPhoto = { ...live, photoUrl: "https://covers.local/mueller.jpg" };
+  eq("a stored photo loads and sends nothing", patchBody(withPhoto, formOf(withPhoto, matches, cities), matches, cities), {});
 }
 
 console.log("money, in cents, as the backend's applyOfferDeal:");

@@ -16,7 +16,7 @@ import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
 import { localModeOn } from "@/lib/localMode";
 import { apiGet, apiWrite, WriteFailedError, type ClientEnv, type WriteActor } from "@/lib/matchdayStageApi";
 import { OFFERS_NOT_FOUND, onOffersAllowlist } from "@/lib/offersAccess";
-import { wallFromMatch, type Campaign, type MatchOpt } from "@/lib/offersModel";
+import { wallFromMatch, type Campaign, type FieldOpt, type MatchOpt } from "@/lib/offersModel";
 import { STAFF_NOT_ALLOWED_PLAIN, WHO_ARE_YOU, staffEmailOf, staffErrorKind } from "@/lib/staffIdentity";
 
 export const OFFERS_ENV: ClientEnv = "local";
@@ -82,11 +82,11 @@ export async function readCampaign(id: number): Promise<Campaign | null> {
 type ApiMatch = {
   id: number; name: string; startDate: string; startDateUtc: string; isCancelled: boolean; fieldId: number | null;
   registrationPrice: number; maxPlayerCount: number; minPlayerCount: number;
-  field?: { title: string; cityId: number } | null; _count?: { players: number };
+  field?: { title: string; cityId: number; cover?: string | null } | null; _count?: { players: number };
 };
 export function matchOpt(m: ApiMatch, now = Date.now()): MatchOpt {
   return {
-    id: m.id, name: m.name, startLocal: wallFromMatch(m.startDate), fieldId: m.fieldId, fieldTitle: m.field?.title ?? null,
+    id: m.id, name: m.name, startLocal: wallFromMatch(m.startDate), fieldId: m.fieldId, fieldTitle: m.field?.title ?? null, fieldCover: m.field?.cover ?? null,
     cityId: m.field?.cityId ?? null, price: m.registrationPrice, players: m._count?.players ?? 0,
     maxPlayers: m.maxPlayerCount, minPlayers: m.minPlayerCount, upcoming: !m.isCancelled && Date.parse(m.startDateUtc) > now,
   };
@@ -111,6 +111,15 @@ export async function readUpcomingMatches(): Promise<MatchOpt[]> {
 export type AudienceCount = { count: number; heldBack: number; players: number; mostItCanCost: number | null };
 export const readAudienceCount = (auth: OffersAuth, body: Record<string, unknown>) =>
   apiWrite<AudienceCount>(OFFERS_ENV, "POST", `${CAMPAIGNS}/audience-count`, body, auth.actor, "admin");
+
+// Every field, cut down to what the photo picker and Played at need (title, city, cover URL).
+type ApiField = { id: number; title: string; cityId: number | null; cover?: string | null; deletedAt?: string | null };
+export async function readFields(): Promise<FieldOpt[]> {
+  const r = await apiGet<ApiField[] | { data: ApiField[] }>(OFFERS_ENV, "/admin/fields");
+  return (Array.isArray(r) ? r : r.data ?? []).filter((f) => !f.deletedAt)
+    .map((f) => ({ id: f.id, title: f.title, cityId: f.cityId ?? null, cover: f.cover ?? null }))
+    .sort((a, b) => a.title.localeCompare(b.title));
+}
 
 // A campaign's match that is no longer upcoming, read one by one so its label still shows.
 export async function readMatch(id: number): Promise<MatchOpt | null> {

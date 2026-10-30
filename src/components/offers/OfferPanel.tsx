@@ -11,16 +11,16 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  FIRST_NAME_TOKEN, PREVIEW_FIRST_NAME, amountText, audienceBody, buttonMatchNote, buttonOf, matchDay, opensText, chicagoWallNow, copyOf, createBody, defaultRun, endsTicket, formOf, formProblem, fromInput, matchInfo,
+  FIRST_NAME_TOKEN, MAX_USES_PER_PLAYER, PREVIEW_FIRST_NAME, amountText, limitLine, stepLimit, stepUses, usesLine, audienceBody, buttonMatchNote, buttonOf, matchDay, opensText, chicagoWallNow, copyOf, createBody, defaultRun, endsTicket, formOf, formProblem, fromInput, matchInfo,
   matchShort, newForm, patchBody, pickedMatch, startLabel, STEPPER, summary, toInput, wallLabel,
-  type Campaign, type City, type Count, type CopyKey, type DealType, type Form, type MatchOpt,
+  type Campaign, type City, type Count, type FieldOpt, type CopyKey, type DealType, type Form, type MatchOpt,
 } from "@/lib/offersModel";
 import OfferPopupPreview from "./OfferPopupPreview";
 import {
   Btn, Chip, ConfirmDialog, Labeled, O, PanelSection, VerdictLine, authed, inputCls, inputStyle, outcomeOf, settled, type WriteOutcome,
 } from "./offersUi";
 
-type Data = { campaigns: Campaign[]; cities: City[]; matches: MatchOpt[] };
+type Data = { campaigns: Campaign[]; cities: City[]; fields: FieldOpt[]; matches: MatchOpt[] };
 const DEALS: { type: DealType; label: string }[] = [
   { type: "PERCENT_OFF", label: "% off" }, { type: "AMOUNT_OFF", label: "$ off" }, { type: "SET_PRICE", label: "Set price" }, { type: "FREE_MATCH", label: "Free match" },
 ];
@@ -151,9 +151,40 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
   const ends = endsTicket(f.endsLocal, nowWall);
   // ── Button opens (Figma 20612:47 / 92 / 142). Editable after launch like the rest of the text;
   // forced and locked to the deal's match when the offer is for a specific match.
+  const photoName = (url: string | null) => {
+    if (!url) return "MatchDay photo";
+    const fx = data.fields.find((x) => x.cover === url);
+    return fx ? `${fx.title} cover` : "Custom photo";
+  };
   const btn = buttonOf(f, data.matches);
   const btnMatch = data.matches.find((x) => x.id === btn.matchId) ?? null;
   const btnChoices = btnMatch && !upcoming.some((x) => x.id === btnMatch.id) ? [btnMatch, ...upcoming] : upcoming;
+  // ── Photo (no mock): field cover photos for fields in the offer's cities, name and city under each.
+  // Picking one stores its URL as the photo; MatchDay photo is the app's default. No uploads in v1.
+  // A specific match's own field cover is the default for that offer. Editable after launch.
+  const coverFields = data.fields.filter((x) => x.cover && (f.cityIds.length === 0 || (x.cityId !== null && f.cityIds.includes(x.cityId))));
+  const cityName = (id: number | null) => data.cities.find((x) => x.id === id)?.name ?? "";
+  const photoPicker = () => (
+    <div data-testid="offers-photo" className="flex flex-col gap-1.5">
+      <div className="text-[12px] font-medium" style={{ color: O.ink }}>Photo</div>
+      <div className="grid grid-cols-2 gap-2">
+        {[{ id: 0, title: "MatchDay photo", cityId: null, cover: null as string | null }, ...coverFields].map((x) => {
+          const on = (copy.photoUrl ?? null) === x.cover;
+          return (
+            <button key={x.id} type="button" data-testid={`offers-photo-${x.id}`} data-on={on ? "1" : "0"} disabled={ended}
+              onClick={() => setF((v) => ({ ...v, copy: { ...v.copy, photoUrl: x.cover } }))}
+              className="flex flex-col overflow-hidden rounded-[8px] border-2 text-left" style={{ borderColor: on ? O.chipOn : O.line }}>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img alt="" src={x.cover ?? "/offers/popup-photo.png"} className="h-[48px] w-full object-cover" />
+              <span className="truncate px-1.5 pt-1 text-[11px] font-medium" style={{ color: O.ink }}>{x.title}</span>
+              <span className="truncate px-1.5 pb-1 text-[10.5px]" style={{ color: O.muted }}>{x.cover ? cityName(x.cityId) : "Default"}</span>
+            </button>
+          );
+        })}
+      </div>
+      {coverFields.length === 0 && <div data-testid="offers-nophoto" className="text-[11.5px]" style={{ color: O.muted }}>No field in {f.cityIds.length ? "these cities" : "any city"} has a cover photo yet.</div>}
+    </div>
+  );
   const buttonOpens = () => {
     const off = btn.locked || ended;
     const chip = (on: boolean) => btn.locked
@@ -216,9 +247,9 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
         <div className="flex flex-wrap gap-1.5">
           {DEALS.map((d) => <Chip key={d.type} testId={`offers-deal-${d.type}`} on={f.dealType === d.type} disabled={dl} onClick={() => pickDeal(d.type)}>{d.label}</Chip>)}
         </div>
-        {(STEPPER[f.dealType] || (!m && f.dealType === "FREE_MATCH")) && (
+        {STEPPER[f.dealType] && (
           <div className="flex flex-wrap items-center gap-2.5">
-            {STEPPER[f.dealType] && (
+            {(
               <>
                 <div className="flex items-center gap-[18px] rounded-[8px] border px-2.5 py-[7px] text-[14px]" style={{ borderColor: O.line, opacity: dl ? 0.6 : 1 }}>
                   <button type="button" data-testid="offers-minus" disabled={dl} onClick={() => step(-1)} className="font-medium disabled:cursor-not-allowed" style={{ color: O.muted }}>–</button>
@@ -228,14 +259,39 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
                 <span className="text-[13px]" style={{ color: O.ink }}>{f.dealType === "SET_PRICE" ? "for their spot" : "off"}</span>
               </>
             )}
-            {!m && (
-              <div className="flex gap-1.5">
-                {[1, 3].map((n) => <Chip key={n} testId={`offers-uses-${n}`} on={f.usesPerPlayer === n} disabled={dl} onClick={() => set({ usesPerPlayer: n })}>{n === 1 ? "1 match" : "3 matches"}</Chip>)}
-                {f.usesPerPlayer !== 1 && f.usesPerPlayer !== 3 && <Chip on>{`${f.usesPerPlayer} matches`}</Chip>}
-              </div>
-            )}
           </div>
         )}
+        {/* USES (Figma 20620:46): how many matches each player can use it on. A specific match is one. */}
+        {!m && (
+          <div data-testid="offers-uses" className="flex flex-col gap-1.5">
+            <div className="text-[12px] font-medium" style={{ color: O.ink }}>Uses</div>
+            <div className="flex items-center gap-2.5">
+              <Stepper testId="offers-uses-n" value={String(f.usesPerPlayer)} disabled={dl}
+                minus={() => set({ usesPerPlayer: stepUses(f.usesPerPlayer, -1) })} plus={() => set({ usesPerPlayer: stepUses(f.usesPerPlayer, 1) })}
+                atMin={f.usesPerPlayer <= 1} atMax={f.usesPerPlayer >= MAX_USES_PER_PLAYER} />
+              <span className="text-[13px]" style={{ color: O.ink }}>matches per player</span>
+            </div>
+            <div data-testid="offers-uses-line" className="text-[12px]" style={{ color: O.muted }}>{usesLine(f.usesPerPlayer)}</div>
+          </div>
+        )}
+        {/* TOTAL LIMIT (maxRedemptions): no mock; same grammar as Uses. Editable after launch. */}
+        <div data-testid="offers-limit" className="flex flex-col gap-1.5">
+          <div className="text-[12px] font-medium" style={{ color: O.ink }}>Total limit</div>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <Chip testId="offers-limit-none" on={f.maxRedemptions === null} disabled={ended} onClick={() => set({ maxRedemptions: null })}>No limit</Chip>
+            {f.maxRedemptions === null
+              ? <Chip testId="offers-limit-set" on={false} disabled={ended} onClick={() => set({ maxRedemptions: 50 })}>Set a limit</Chip>
+              : (
+                <div className="flex items-center gap-2.5">
+                  <Stepper testId="offers-limit-n" value={f.maxRedemptions} disabled={ended} atMin={f.maxRedemptions <= 1}
+                    minus={() => set({ maxRedemptions: stepLimit(f.maxRedemptions, -1) })} plus={() => set({ maxRedemptions: stepLimit(f.maxRedemptions, 1) })}
+                    onType={(n) => set({ maxRedemptions: n })} />
+                  <span className="text-[13px]" style={{ color: O.ink }}>uses in total</span>
+                </div>
+              )}
+          </div>
+          {f.maxRedemptions !== null && <div data-testid="offers-limit-line" className="text-[12px]" style={{ color: O.muted }}>{limitLine(f.maxRedemptions)}</div>}
+        </div>
         {m && f.dealType === "SET_PRICE" && f.dealAmount >= m.price && (
           <div className="text-[12px]" style={{ color: O.warnInk }}>That is not less than its normal {amountText("SET_PRICE", m.price)}, so nobody saves anything.</div>
         )}
@@ -335,6 +391,7 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
                         : <input data-testid={`offers-copy-${k}`} maxLength={max} className={inputCls} style={inputStyle} placeholder={auto} value={f.copy[k] ?? ""} onChange={(e) => setCopy(k, e.target.value)} />}
                     </label>
                     {k === "buttonLabel" && buttonOpens()}
+                    {k === "buttonLabel" && photoPicker()}
                   </div>
                 );
               })}
@@ -347,7 +404,7 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
           ) : (
             <div className="flex min-w-0 flex-1 flex-col gap-2">
               <div className="text-[12px] leading-[17px]" style={{ color: O.muted }}>Written for you from the deal. Change any line if you want.</div>
-              {([["Headline", copy.headline], ["Line", copy.line], ["Photo", copy.photoUrl ? "Custom photo" : "MatchDay field photo"], ["Button", copy.buttonLabel]] as const).map(([k, v]) => (
+              {([["Headline", copy.headline], ["Line", copy.line], ["Photo", photoName(copy.photoUrl)], ["Button", copy.buttonLabel]] as const).map(([k, v]) => (
                 <div key={k} className="flex flex-col gap-[3px] font-medium">
                   <div className="text-[11px]" style={{ color: O.label }}>{k}</div>
                   <div className="break-words text-[13px]" style={{ color: O.ink }}>{v || "None"}</div>
@@ -371,7 +428,7 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
         <div className="text-[11.5px]" style={{ color: O.muted }}>Times are each player&apos;s own city time.</div>
         <button type="button" data-testid="offers-more" onClick={() => setMore((v) => !v)} className="flex w-full items-center justify-between gap-2 rounded-[8px] px-3 py-[9px] text-left text-[12px]" style={{ background: O.subtle }}>
           <span className="font-medium" style={{ color: O.ink }}>More options</span>
-          <span style={{ color: O.muted }}>{f.holdoutPercent > 0 ? `${f.holdoutPercent}% held back to measure` : "Nobody held back"} · {f.maxRedemptions ? `Cap of ${f.maxRedemptions.toLocaleString("en-US")} uses` : "No use cap"} {more ? "‹" : "›"}</span>
+          <span style={{ color: O.muted }}>{f.holdoutPercent > 0 ? `${f.holdoutPercent}% held back to measure` : "Nobody held back"} {more ? "‹" : "›"}</span>
         </button>
         {more && (
           <div data-testid="offers-more-fields" className="flex flex-col gap-3 rounded-[8px] border p-3" style={{ borderColor: O.line }}>
@@ -384,11 +441,6 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
                 </div>
               </div>
               <div className="text-[11.5px]" style={{ color: O.muted }}>These players get no offer and no popup, so their bookings show what the offer changed.</div>
-            </Labeled>
-            <Labeled label="Use cap">
-              <input data-testid="offers-cap" type="number" min={1} inputMode="numeric" className={inputCls} style={inputStyle} disabled={ended} placeholder="No cap"
-                value={f.maxRedemptions ?? ""} onChange={(e) => set({ maxRedemptions: e.target.value === "" ? null : Math.floor(Number(e.target.value)) })} />
-              <div className="text-[11.5px]" style={{ color: O.muted }}>The most uses in total, across every player. Empty means no cap.</div>
             </Labeled>
           </div>
         )}
@@ -455,5 +507,21 @@ function WallInput({ label, value, onChange, disabled, testId }: { label: string
         onChange={(e) => { const v = fromInput(e.target.value); if (v) onChange(v); }}
         className="absolute inset-0 cursor-pointer opacity-0 disabled:cursor-not-allowed" />
     </label>
+  );
+}
+
+// A stepper in the mock's shape (– value +). onType makes the value a number box as well.
+function Stepper({ value, minus, plus, disabled, atMin, atMax, onType, testId }: {
+  value: string | number; minus: () => void; plus: () => void; disabled?: boolean; atMin?: boolean; atMax?: boolean; onType?: (n: number) => void; testId: string;
+}) {
+  return (
+    <div className="flex items-center gap-[18px] rounded-[8px] border px-2.5 py-[7px] text-[14px]" style={{ borderColor: O.line, opacity: disabled ? 0.6 : 1 }}>
+      <button type="button" data-testid={`${testId}-minus`} disabled={disabled || atMin} onClick={minus} className="font-medium disabled:cursor-not-allowed" style={{ color: O.muted }}>–</button>
+      {onType
+        ? <input data-testid={testId} inputMode="numeric" disabled={disabled} value={value} onChange={(e) => { const n = Math.floor(Number(e.target.value.replace(/\D/g, ""))); if (n >= 1) onType(n); }}
+            className="w-[48px] bg-transparent text-center font-bold outline-none" style={{ color: O.ink }} />
+        : <span data-testid={testId} className="min-w-[14px] text-center font-bold" style={{ color: O.ink }}>{value}</span>}
+      <button type="button" data-testid={`${testId}-plus`} disabled={disabled || atMax} onClick={plus} className="font-medium disabled:cursor-not-allowed" style={{ color: O.muted }}>+</button>
+    </div>
   );
 }

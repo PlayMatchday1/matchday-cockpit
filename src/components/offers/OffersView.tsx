@@ -12,13 +12,13 @@ import { useCallback, useEffect, useState } from "react";
 import { useAuth } from "@/lib/useAuth";
 import {
   STATE_LABEL, audienceText, chicagoWallNow, comparisonLine, dealText, money, progressText, resultsLines, usedPct, usesText, wallLabel,
-  type Campaign, type City, type MatchOpt,
+  type Campaign, type City, type FieldOpt, type MatchOpt,
 } from "@/lib/offersModel";
 import OfferPanel from "./OfferPanel";
 import { Banner, Btn, NotFound, O, Split, StateChip, authed, type WriteOutcome } from "./offersUi";
 import { useOffersAccess } from "./useOffersAccess";
 
-type Data = { campaigns: Campaign[]; cities: City[]; matches: MatchOpt[] };
+type Data = { campaigns: Campaign[]; cities: City[]; fields: FieldOpt[]; matches: MatchOpt[] };
 const COLS = "grid grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)_minmax(0,1.3fr)_88px] items-center gap-3";
 
 export default function OffersView() {

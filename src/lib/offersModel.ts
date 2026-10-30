@@ -41,10 +41,12 @@ export type Campaign = Copy & {
 };
 
 export type City = { id: number; name: string };
+// A field as the photo picker and the Played at row need it. cover is the field's cover photo URL, or null.
+export type FieldOpt = { id: number; title: string; cityId: number | null; cover: string | null };
 // A match as the page needs it. startLocal is WALL CLOCK ("YYYY-MM-DD HH:mm:ss"). players is
 // _count.players, the authoritative roster count.
 export type MatchOpt = {
-  id: number; name: string; startLocal: string; fieldId: number | null; fieldTitle: string | null;
+  id: number; name: string; startLocal: string; fieldId: number | null; fieldTitle: string | null; fieldCover: string | null;
   cityId: number | null; price: number; players: number; maxPlayers: number; minPlayers: number; upcoming: boolean;
 };
 
@@ -147,6 +149,14 @@ export function dealText(type: DealType, amount: number): string {
   return "Free match";
 }
 export const usesText = (n: number) => (n === 1 ? "1 match" : `${n} matches`);
+
+// USES PER PLAYER: a stepper from 1 to MAX_USES_PER_PLAYER (the backend's MAX_OFFER_USES_PER_PLAYER).
+export const MAX_USES_PER_PLAYER = 20;
+export const stepUses = (n: number, dir: 1 | -1) => Math.min(MAX_USES_PER_PLAYER, Math.max(1, n + dir));
+export const usesLine = (n: number) => (n === 1 ? "Each player can use it on 1 match before it ends." : `Each player can use it on up to ${n} matches before it ends.`);
+// TOTAL LIMIT (maxRedemptions): null is no limit; otherwise 1 and up.
+export const stepLimit = (n: number | null, dir: 1 | -1) => Math.max(1, (n ?? 0) + dir);
+export const limitLine = (n: number) => `The offer stops once ${n.toLocaleString("en-US")} ${n === 1 ? "use is" : "uses are"} taken across all players.`;
 
 export function matchShort(m: MatchOpt): string {
   return `${wallLabel(m.startLocal)}${m.fieldTitle ? ` · ${m.fieldTitle}` : ""}`;
@@ -276,7 +286,8 @@ export function autoCopy(f: Form, matches: MatchOpt[], cities: City[] = []): Cop
     : `${n === 1 ? "Any match" : `Any ${n} matches`}${where}. The discount is already on your account.`;
   const eyebrow = f.lastPlayed === "LAPSED" ? `WE MISS YOU, ${FIRST_NAME_TOKEN}` : f.lastPlayed === "NEVER" ? "YOUR FIRST MATCH" : m && f.playedAtMatchField ? "YOUR FIELD" : "JUST FOR YOU";
   const caption = m ? `Your spot at ${m.fieldTitle ?? "the field"} is waiting.` : f.lastPlayed === "LAPSED" ? "Your spot at the field is waiting." : null;
-  return { eyebrow, caption, headline, line, body, photoUrl: null, buttonLabel: m ? "Join this match" : "Find a match", dismissLabel: "Not now" };
+  // The photo: a specific match's own field cover, else null (the app's default MatchDay photo).
+  return { eyebrow, caption, headline, line, body, photoUrl: m?.fieldCover ?? null, buttonLabel: m ? "Join this match" : "Find a match", dismissLabel: "Not now" };
 }
 export function copyOf(f: Form, matches: MatchOpt[], cities: City[]): Copy {
   const auto = autoCopy(f, matches, cities);
