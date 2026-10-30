@@ -466,6 +466,8 @@ export async function GET(req: Request) {
         ? assigneesById.get(t.assigned_to_user_id) ?? null
         : null,
     is_unread: computeUnread(t),
+    // The shared Waiting rule, per row, so a client groups Waiting / Replied without copying it.
+    awaiting: isAwaitingReply(t),
     is_follow_up: viewerId ? starredThreadIds.has(t.id) : false,
     // First-response SLA anchor (Decision 2); null for non-awaiting rows.
     waiting_since: waitingSinceByThread.get(t.id) ?? null,

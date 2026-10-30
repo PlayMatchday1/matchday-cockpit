@@ -31,7 +31,7 @@ import { assertThreadInScope } from "@/lib/crmScope";
 import { authenticateCrm } from "@/lib/crmAuth";
 import { logCrmSend } from "@/lib/crmSendLog";
 import { sendWhatsAppTemplate, WhatsAppApiError } from "@/lib/whatsapp";
-import { getTemplate, renderTemplateBody } from "@/lib/whatsappTemplates";
+import { getTemplate, WHATSAPP_TEMPLATES, renderTemplateBody } from "@/lib/whatsappTemplates";
 import { writeThreadStatusLog } from "@/lib/crmThreadStatus";
 
 export const runtime = "nodejs";
@@ -44,6 +44,13 @@ type Body = {
   template_name?: unknown;
   variables?: unknown;
 };
+
+/** GET: the approved templates, for a client that cannot import the registry (the staff app). */
+export async function GET(req: Request) {
+  const auth = await authenticateCrm(req);
+  if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
+  return Response.json({ templates: Object.values(WHATSAPP_TEMPLATES) }, { status: 200 });
+}
 
 export async function POST(req: Request) {
   const startedAt = Date.now();
