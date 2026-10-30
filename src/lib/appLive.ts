@@ -8,7 +8,9 @@ import "server-only";
 import { type SupabaseClient } from "@supabase/supabase-js";
 import { apiGet, type MatchdayEnv } from "./matchdayStageApi";
 import { trimMatch, type Raw } from "./gamedayApiShape";
-import { rosterRowCounts, rosterRowIsFake, type RosterRow } from "./gamedayModel";
+import { attention, capacity, matchGroup, realCount, rosterRowCounts, rosterRowIsFake, vsMinDelta, type ApiMatch, type RosterRow } from "./gamedayModel";
+import { RUNG_KEYS, spotsLeftNow, type Ladder } from "./fakeLadder";
+import { hasCameraEmoji } from "./veo";
 import { perTeamCapacity } from "./checkinModel";
 import { checkinOpen, mapLimit, summarizeCheckin, type CheckinSummary, type Mark } from "./appModel";
 
@@ -65,19 +67,42 @@ export async function fetchMarks(sb: SupabaseClient, env: MatchdayEnv, matchIds:
 
 export type AppTodayRow = ReturnType<typeof todayRow>;
 
-export function todayRow(m: ReturnType<typeof trimMatch> & { venueMaxPlayers?: number | null }, checkin: CheckinSummary | null) {
+/**
+ * One Today row. `m` is the board's own trimmed row, so every derived number (real, cushion,
+ * attention, group, spots left) comes from the SAME gamedayModel / fakeLadder functions the desktop
+ * board calls. `raw` is the untrimmed API row, read only for the two fields trimMatch drops and the
+ * card needs: the field's cover photo and the manager's avatar.
+ */
+export function todayRow(m: ReturnType<typeof trimMatch> & { venueMaxPlayers?: number | null }, raw: Raw | undefined, checkin: CheckinSummary | null, nowMs: number) {
   const teamCount = m.teams.length;
-  const players = m._count.players ?? 0, fakes = m._count.fakePlayers ?? 0;
+  const fakes = m._count.fakePlayers ?? 0;
+  const rf = (raw?.field ?? {}) as Record<string, unknown>;
+  const rm = (raw?.manager ?? null) as Record<string, unknown> | null;
+  const ladder: Ladder = Object.fromEntries(RUNG_KEYS.map((k) => [k, Number((m as Record<string, unknown>)[k] ?? 0)]));
+  const hoursToKickoff = (Date.parse(m.startDateUtc) - nowMs) / 3_600_000;
+  // The board receives this same trimmed row as JSON and reads it as ApiMatch; the cast says so here.
+  const am = m as unknown as ApiMatch;
   return {
     id: m.id, name: m.name,
     startDate: m.startDate, startDateUtc: m.startDateUtc, endDateUtc: m.endDateUtc,
     cityName: m.field.city.name, tzAbbr: m.field.city.timeZone.abbr, fieldTitle: m.field.title,
+    coverUrl: typeof rf.cover === "string" && rf.cover.trim() ? rf.cover : null,
+    filmed: hasCameraEmoji(m.name),
     teamCount,
     perTeam: perTeamCapacity({ teamCount, maxTeamSize2Team: m.maxTeamSize2Team, maxTeamSize4Team: m.maxTeamSize4Team, maxPlayerCount: m.maxPlayerCount }),
-    booked: Math.max(0, players - fakes), fakes,
-    capacity: m.maxPlayerCount == null || m.maxPlayerCount === 0 ? null : m.maxPlayerCount,
+    booked: realCount(am), fakes,
+    capacity: capacity(am),
+    minPlayerCount: m.minPlayerCount ?? 0,
+    cushion: vsMinDelta(am),
     isCancelled: m.isCancelled,
+    autoCanceled: m.autoCanceled, autoCanceledMinutes: m.autoCanceledMinutes,
+    registrationPrice: m.registrationPrice,
+    ladder, spotsLeft: spotsLeftNow(ladder, hoursToKickoff),
+    group: matchGroup(am, nowMs),
+    attention: attention(am, nowMs),
     manager: m.manager ? [m.manager.firstName, m.manager.lastName].filter(Boolean).join(" ").trim() || null : null,
+    managerFirstName: m.manager?.firstName?.trim() || null,
+    managerAvatar: rm && typeof rm.avatar === "string" && rm.avatar.trim() ? rm.avatar : null,
     checkin,
   };
 }

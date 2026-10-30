@@ -5,6 +5,7 @@
 
 import { authenticateApp } from "@/lib/appAuth";
 import { cityNameFor } from "@/lib/cityScope";
+import { can } from "@/lib/capabilities";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -22,5 +23,8 @@ export async function GET(req: Request) {
     confined: auth.confined,
     city: auth.scopeCity,
     cityName: auth.scopeCity ? cityNameFor(auth.scopeCity) : null,
+    // A COURTESY for greying Save, from the same predicate the desktop UI uses. The adjust route
+    // does not read this: the desktop write handlers it calls re-check the grant on every request.
+    canEditMatches: can(row, "editMatches", auth.email),
   });
 }
