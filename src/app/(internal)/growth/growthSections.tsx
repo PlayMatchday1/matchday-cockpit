@@ -64,7 +64,7 @@ export const GROWTH_SECTIONS: RailItem[] = [
     icon: <I><path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11z" /><circle cx="12" cy="10" r="2.4" /></I>,
   },
   {
-    // TARGETED OFFERS (popup deals in the app). Local backend only until release, and drawn only for
+    // TARGETED OFFERS (popup deals in the app). The backend comes from OFFERS_ENV, and drawn only for
     // the people on OFFERS_ALLOWLIST (GrowthRail filters it on useOffersAccess).
     key: "offers", group: "Growth", label: "Offers", href: "/growth/offers",
     desc: "Popup deals for the players you pick",

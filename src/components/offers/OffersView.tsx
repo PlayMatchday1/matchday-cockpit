@@ -8,18 +8,18 @@
 // panel is src/components/offers/OfferPanel.tsx; every rule and every string is in
 // src/lib/offersModel.ts.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/useAuth";
 import {
-  STATE_LABEL, audienceText, extraBookingsLine, usedOfLimit, chicagoWallNow, comparisonLine, dealText, money, progressText, resultsLines, usedPct, usesText, wallLabel,
-  type Campaign, type City, type FieldOpt, type MatchOpt,
+  STATE_LABEL, audienceText, extraBookingsLine, usedOfLimit, chicagoWallNow, comparisonLine, dealText, money, namedMatchIds, progressText, resultsLines, usedPct, usesText, wallLabel,
+  withCovers, mergeMatches, type Campaign, type City, type FieldOpt, type MatchOpt,
 } from "@/lib/offersModel";
-import OfferPanel from "./OfferPanel";
+import OfferPanel, { type MatchRead } from "./OfferPanel";
 import { Banner, Btn, NotFound, O, Split, StateChip, authed, type WriteOutcome } from "./offersUi";
 import { useOffersAccessState } from "./useOffersAccess";
 
-type Data = { campaigns: Campaign[]; cities: City[]; fields: FieldOpt[]; matches: MatchOpt[] };
+type Data = { campaigns: Campaign[]; cities: City[]; fields: FieldOpt[]; matches: MatchOpt[]; matchesComplete: boolean; matchesError: string | null };
 const COLS = "grid grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)_minmax(0,1.3fr)_88px] items-center gap-3";
 
 export default function OffersView() {
@@ -46,6 +46,31 @@ export default function OffersView() {
     })();
     return () => { cancelled = true; };
   }, [access, key]);
+  // MATCHES AN OFFER NAMES that the list doesn't hold: read when that offer is opened, never on page load.
+  const [extraMatches, setExtraMatches] = useState<Record<number, MatchOpt>>({});
+  const [matchFailed, setMatchFailed] = useState(false);
+  const [matchRetry, setMatchRetry] = useState(0);
+  const view = useMemo<Data | null>(() => {
+    if (!data) return null;
+    return { ...data, matches: withCovers(mergeMatches(Object.values(extraMatches), data.matches), data.fields) };
+  }, [data, extraMatches]);
+  const current = open === "new" || open === null ? null : view?.campaigns.find((c) => c.id === open) ?? null;
+  const missingKey = current && view ? namedMatchIds(current).filter((id) => !view.matches.some((m) => m.id === id)).join(",") : "";
+  useEffect(() => {
+    setMatchFailed(false);
+    if (!missingKey) return;
+    let cancelled = false;
+    (async () => {
+      for (const id of missingKey.split(",")) {
+        const r = await authed(`/api/offers/matches/${id}`);
+        if (cancelled) return;
+        if (!r.ok) { console.error(`[offers] match ${id}: HTTP ${r.status}`); setMatchFailed(true); return; }
+        setExtraMatches((x) => ({ ...x, [id]: r.json as unknown as MatchOpt }));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [missingKey, matchRetry]);
+  const matchRead: MatchRead = !missingKey ? "ok" : matchFailed ? "failed" : "loading";
   const landed = useCallback((o: WriteOutcome, selectId?: number) => {
     setBanner(o);
     if (selectId !== undefined) setOpen(selectId);
@@ -56,7 +81,6 @@ export default function OffersView() {
   if (accessState === "signin") return <SignInAgain />;
   if (access !== true) return <NotFound />;
 
-  const current = open === "new" || open === null ? null : data?.campaigns.find((c) => c.id === open) ?? null;
   const nowWall = chicagoWallNow();
 
   return (
@@ -69,10 +93,10 @@ export default function OffersView() {
       {banner && <Banner outcome={banner} onDismiss={() => setBanner(null)} />}
       {err ? (
         <div data-testid="offers-error" className="rounded-[10px] border px-3 py-2.5 text-[12.5px]" style={{ background: O.critBg, borderColor: O.critLine, color: O.critInk }}>Could not load: {err}</div>
-      ) : !data ? <div className="py-6 text-[13px]" style={{ color: O.muted }}>Loading…</div> : (
+      ) : !view ? <div className="py-6 text-[13px]" style={{ color: O.muted }}>Loading…</div> : (
         <Split
           panel={open !== null && (open === "new" || current) ? (
-            <OfferPanel key={`${open}:${ver}:${open === "new" ? newN : ""}`} c={current} data={data} onClose={() => setOpen(null)} onLanded={landed} />
+            <OfferPanel key={`${open}:${ver}:${open === "new" ? newN : ""}:${matchRead === "ok"}`} c={current} data={view} matchRead={matchRead} onRetryMatch={() => setMatchRetry((n) => n + 1)} onClose={() => setOpen(null)} onLanded={landed} />
           ) : null}
           main={
             <div className="flex flex-col gap-5">
@@ -84,20 +108,20 @@ export default function OffersView() {
                 <div className={`${COLS} border-y px-4 py-[9px] text-[10px] font-semibold tracking-[0.6px]`} style={{ borderColor: O.line, background: O.subtle, color: O.label }}>
                   <div>OFFER</div><div>DEAL</div><div>RESULTS</div><div />
                 </div>
-                {data.campaigns.length === 0 ? (
+                {view.campaigns.length === 0 ? (
                   <div data-testid="offers-empty" className="border-b px-4 py-6 text-center" style={{ borderColor: O.line }}>
                     <div className="text-[14px] font-semibold" style={{ color: O.ink }}>No offers yet</div>
                     <div className="mt-1 text-[12px]" style={{ color: O.muted }}>Make one with + New offer. It shows as a popup when players open the app.</div>
                   </div>
-                ) : data.campaigns.map((c) => {
+                ) : view.campaigns.map((c) => {
                   const [r1, r2] = resultsLines(c);
-                  const m = c.matchIds[0] ? data.matches.find((x) => x.id === c.matchIds[0]) : null;
+                  const m = c.matchIds[0] ? view.matches.find((x) => x.id === c.matchIds[0]) : null;
                   return (
                     <div key={c.id} data-testid="offers-row" data-id={c.id} onClick={() => setOpen(c.id)} className={`${COLS} cursor-pointer border-b px-4 py-3`}
                       style={{ borderColor: O.line, background: open === c.id ? O.mint : O.surface }}>
                       <div className="flex min-w-0 flex-col gap-0.5">
                         <div className="truncate text-[14px] font-semibold" style={{ color: O.ink }}>{c.name || "Untitled offer"}</div>
-                        <div data-testid="offers-row-who" className="truncate text-[12px]" style={{ color: O.muted }}>{audienceText(c, data.cities, data.fields)}</div>
+                        <div data-testid="offers-row-who" className="truncate text-[12px]" style={{ color: O.muted }}>{audienceText(c, view.cities, view.fields)}</div>
                       </div>
                       <div className="flex min-w-0 flex-col gap-0.5">
                         <div data-testid="offers-row-deal" className="truncate text-[13px] font-medium" style={{ color: O.ink }}>{dealText(c.dealType, c.dealAmount)}</div>

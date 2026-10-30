@@ -1,5 +1,5 @@
 // WHO MAY USE GROWTH › OFFERS until it ships: an allowlist ON TOP OF the admin check and the
-// local-mode guard, never instead of them (Ryan, 2026-10-29: allowlisted to him until release).
+// config gate, never instead of them (Ryan, 2026-10-29: allowlisted to him until release).
 //
 //   OFFERS_ALLOWLIST=rmancuso@playmatchday.com
 //

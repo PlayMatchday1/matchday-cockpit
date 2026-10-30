@@ -50,12 +50,36 @@ export type Campaign = Copy & {
 export type City = { id: number; name: string };
 // A field as the photo picker and the Played at row need it. cover is the field's cover photo URL, or null.
 export type FieldOpt = { id: number; title: string; cityId: number | null; cover: string | null };
-// A match as the page needs it. startLocal is WALL CLOCK ("YYYY-MM-DD HH:mm:ss"). players is
-// _count.players, the authoritative roster count.
+// A match as the page needs it. startLocal is WALL CLOCK ("YYYY-MM-DD HH:mm:ss"). players is what the
+// source counts: playersIn from admin/offers/matches, _count.players from admin/matches/{id}. maxPlayers
+// null is a match with no cap. fieldCover comes from the field; admin/offers/matches doesn't carry it.
 export type MatchOpt = {
   id: number; name: string; startLocal: string; fieldId: number | null; fieldTitle: string | null; fieldCover: string | null;
-  cityId: number | null; price: number; players: number; maxPlayers: number; minPlayers: number; upcoming: boolean;
+  cityId: number | null; price: number; players: number; maxPlayers: number | null; minPlayers: number; upcoming: boolean;
 };
+// GET /admin/offers/matches, one row (backend docs/offers/M3-ENDPOINTS.md).
+export type ApiOfferMatch = {
+  id: number; name: string; startsLocal: string; fieldId: number | null; fieldName: string | null; cityId: number | null;
+  price: number; playersIn: number; capacity: number | null; minimum: number;
+};
+export const offerMatchOpt = (m: ApiOfferMatch): MatchOpt => ({
+  id: m.id, name: m.name, startLocal: m.startsLocal, fieldId: m.fieldId, fieldTitle: m.fieldName, fieldCover: null, cityId: m.cityId,
+  price: m.price, players: m.playersIn, maxPlayers: m.capacity, minPlayers: m.minimum, upcoming: true,
+});
+// Fill in each match's cover from the field list, so the suggested photo is the same whichever read it came from.
+export const withCovers = (matches: MatchOpt[], fields: FieldOpt[]) =>
+  matches.map((m) => (m.fieldCover || m.fieldId === null ? m : { ...m, fieldCover: fields.find((x) => x.id === m.fieldId)?.cover ?? null }));
+// Later lists win on the same id.
+export function mergeMatches(...lists: MatchOpt[][]): MatchOpt[] {
+  const byId = new Map<number, MatchOpt>();
+  for (const l of lists) for (const m of l) byId.set(m.id, m);
+  return [...byId.values()];
+}
+// What the page's load and the picker read: today and the 13 days after it, the picker's longest range.
+export const PICKER_MAX_DAYS = 14;
+export function pickerRange(nowWall: string): { from: string; to: string } {
+  return { from: nowWall.slice(0, 10), to: wallText(wallMs(nowWall) + (PICKER_MAX_DAYS - 1) * 86_400_000).slice(0, 10) };
+}
 
 // Fields a launched or paused campaign may still change (the backend's EDITABLE_AFTER_LAUNCH).
 export const EDITABLE_AFTER_LAUNCH = new Set<string>([
@@ -109,7 +133,8 @@ export function startLabel(s: string, nowWall: string): string {
 export function endsTicket(endsLocal: string, nowWall: string): string | null {
   const ms = wallMs(endsLocal);
   if (!Number.isFinite(ms)) return null;
-  return calendarDaysBetween(nowWall, endsLocal) < 7
+  const days = calendarDaysBetween(nowWall, endsLocal);
+  return days >= 0 && days < 7
     ? `Ends ${fmt(ms, { weekday: "short" })} ${fmt(ms, { hour: "numeric", minute: "2-digit" })}`
     : `Ends ${fmt(ms, { weekday: "short", month: "short", day: "numeric" })}`;
 }
@@ -165,16 +190,58 @@ export const usesLine = (n: number) => (n === 1 ? "Each player can use it on 1 m
 export const stepLimit = (n: number | null, dir: 1 | -1) => Math.max(1, (n ?? 0) + dir);
 export const limitLine = (n: number) => `The offer stops once ${n.toLocaleString("en-US")} ${n === 1 ? "use is" : "uses are"} taken across all players.`;
 
+const spotsTaken = (m: Pick<MatchOpt, "players" | "maxPlayers">) => (m.maxPlayers === null ? `${m.players} ${m.players === 1 ? "spot" : "spots"} taken` : `${m.players} of ${m.maxPlayers} spots taken`);
 export function matchShort(m: MatchOpt): string {
   return `${wallLabel(m.startLocal)}${m.fieldTitle ? ` · ${m.fieldTitle}` : ""}`;
 }
 // "Normally $9 · 11 of 16 spots taken · needs 3 more · offer ends at kickoff"
 export function matchInfo(m: MatchOpt): string {
-  const parts = [`Normally ${money(m.price)}`, `${m.players} of ${m.maxPlayers} spots taken`];
+  const parts = [`Normally ${money(m.price)}`, spotsTaken(m)];
   const needs = m.minPlayers - m.players;
   if (needs > 0) parts.push(`needs ${needs} more`);
   parts.push("offer ends at kickoff");
   return parts.join(" · ");
+}
+
+// ── THE MATCH PICKER (Figma 20638:45) ────────────────────────────────────────────────────────────
+export type PickerDays = 7 | 14;
+export type PickerFilter = { search: string; days: PickerDays; needsPlayers: boolean; cityIds: number[] };
+export const matchNeeds = (m: Pick<MatchOpt, "minPlayers" | "players">) => Math.max(0, m.minPlayers - m.players);
+export const fillFraction = (m: Pick<MatchOpt, "players" | "maxPlayers">) => (m.maxPlayers !== null && m.maxPlayers > 0 ? Math.min(1, Math.max(0, m.players / m.maxPlayers)) : 0);
+// "11/16 · needs 3"
+export function fillText(m: Pick<MatchOpt, "minPlayers" | "players" | "maxPlayers">): string {
+  const needs = matchNeeds(m);
+  const of = m.maxPlayers === null ? `${m.players}` : `${m.players}/${m.maxPlayers}`;
+  return `${of}${needs > 0 ? ` · needs ${needs}` : m.maxPlayers !== null && m.players >= m.maxPlayers ? " · full" : ""}`;
+}
+// "TODAY · FRI OCT 30", then "SAT OCT 31".
+export function pickerDayLabel(startLocal: string, nowWall: string): string {
+  const day = fmt(wallMs(startLocal), { weekday: "short", month: "short", day: "numeric" }).replace(",", "").toUpperCase();
+  return calendarDaysBetween(nowWall, startLocal) === 0 ? `TODAY · ${day}` : day;
+}
+const pickerTime = (startLocal: string) => fmt(wallMs(startLocal), { hour: "numeric", minute: "2-digit" });
+// Soonest first, grouped by day. total is every upcoming match in those cities and days; shown is what
+// the search and Needs players leave of them. The next 7 days are today and the six after it.
+export function pickerView(matches: MatchOpt[], f: PickerFilter, nowWall: string, cities: City[]) {
+  const inWindow = matches.filter((m) => {
+    const days = calendarDaysBetween(nowWall, m.startLocal);
+    return m.upcoming && days >= 0 && days < f.days && (f.cityIds.length === 0 || (m.cityId !== null && f.cityIds.includes(m.cityId)));
+  });
+  const words = f.search.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const kept = inWindow.filter((m) => {
+    if (f.needsPlayers && matchNeeds(m) === 0) return false;
+    const hay = `${m.fieldTitle ?? ""} ${m.name} ${pickerTime(m.startLocal)} ${pickerDayLabel(m.startLocal, nowWall)}`.toLowerCase();
+    return words.every((w) => hay.includes(w));
+  }).sort((a, b) => a.startLocal.localeCompare(b.startLocal) || a.id - b.id);
+  const groups: { label: string; rows: { match: MatchOpt; time: string }[] }[] = [];
+  for (const m of kept) {
+    const label = pickerDayLabel(m.startLocal, nowWall);
+    if (groups[groups.length - 1]?.label !== label) groups.push({ label, rows: [] });
+    groups[groups.length - 1].rows.push({ match: m, time: pickerTime(m.startLocal) });
+  }
+  const where = f.cityIds.length ? `${andList(cityNames(f.cityIds, cities))} ` : "";
+  const footer = `Showing ${kept.length} of ${inWindow.length} ${where}${inWindow.length === 1 ? "match" : "matches"} in the next ${f.days} days`;
+  return { groups, shown: kept.length, total: inWindow.length, footer };
 }
 
 // ── WHO GETS IT ──────────────────────────────────────────────────────────────────────────────────
@@ -261,6 +328,10 @@ export function formOf(c: Campaign, matches: MatchOpt[], cities: City[]): Form {
   return f;
 }
 
+// The matches an offer names: the page's list may not hold them (a past match, or one outside its days).
+export const namedMatchIds = (c: Pick<Campaign, "matchIds" | "buttonMatchId">) =>
+  [...new Set([...c.matchIds, ...(c.buttonMatchId ? [c.buttonMatchId] : [])])];
+
 // Picking a specific match prefills Played at with its field (kept if already there).
 export const prefillField = (fieldIds: number[], m: Pick<MatchOpt, "fieldId">) =>
   m.fieldId === null || fieldIds.includes(m.fieldId) ? fieldIds : [...fieldIds, m.fieldId];
@@ -291,7 +362,7 @@ export function opensText(f: Form, matches: MatchOpt[]): string {
   return bm ? `↳ Opens ${matchDay(bm)}` : "↳ Opens a match (pick one)";
 }
 // The mint note under the button's own match: "Normally $9 · 11 of 16 spots taken. The offer still works on any match."
-export const buttonMatchNote = (m: MatchOpt) => `Normally ${money(m.price)} · ${m.players} of ${m.maxPlayers} spots taken. The offer still works on any match.`;
+export const buttonMatchNote = (m: MatchOpt) => `Normally ${money(m.price)} · ${spotsTaken(m)}. The offer still works on any match.`;
 
 // ── THE POPUP TEXT, written from the deal ─────────────────────────────────────────────────────────
 // The app (OfferPopup.tsx) renders exactly these fields. {firstName} in any of them is filled in by
@@ -500,8 +571,10 @@ export function audienceBody(f: Form, matches: MatchOpt[], cities: City[]): Reco
 }
 
 // What stops a launch or a save, in plain words. Null: nothing.
-export function formProblem(f: Form, matches: MatchOpt[]): string | null {
+// status: a launched offer's deal is locked, so a deal rule can't stop it saving its name or text.
+export function formProblem(f: Form, matches: MatchOpt[], status: CampaignStatus | null = null): string | null {
   if (!f.name.trim()) return "Give the offer a name.";
+  if (status === null || status === "DRAFT") { const deal = setPriceProblem(f, pickedMatch(f, matches)); if (deal) return deal; }
   if (f.scope === "MATCH" && !pickedMatch(f, matches)) return "Pick the match.";
   if (!Number.isFinite(wallMs(f.startsLocal)) || !Number.isFinite(wallMs(f.endsLocal))) return "Set when it starts and ends.";
   if (wallMs(f.endsLocal) <= wallMs(f.startsLocal)) return "It has to end after it starts.";
@@ -514,6 +587,51 @@ export function formProblem(f: Form, matches: MatchOpt[]): string | null {
   const photo = copyOf(f, matches, [])["photoUrl"];
   if (photo !== null && !photoUrlOk(photo)) return "The photo must be an https link.";
   return null;
+}
+
+// SET PRICE: at least $1, whatever the deal is on. Above the normal price of the one match it is for is
+// refused; on any match the normal price differs match to match, so it is only a warning.
+export const MIN_SET_PRICE = 100;
+export function setPriceProblem(f: Pick<Form, "dealType" | "dealAmount">, m: Pick<MatchOpt, "price"> | null): string | null {
+  if (f.dealType !== "SET_PRICE") return null;
+  if (!Number.isInteger(f.dealAmount) || f.dealAmount < MIN_SET_PRICE) return `A set price must be at least ${money(MIN_SET_PRICE)}.`;
+  if (m && f.dealAmount > m.price) return `That is above this match's normal ${money(m.price)}. Set it at or below that.`;
+  return null;
+}
+export function setPriceAnyWarning(f: Form, matches: MatchOpt[]): string | null {
+  if (f.dealType !== "SET_PRICE" || f.scope !== "ANY") return null;
+  const anyCity = f.audienceMode === "PLAYERS" || f.cityIds.length === 0;
+  const prices = matches.filter((m) => m.upcoming && (anyCity || (m.cityId !== null && f.cityIds.includes(m.cityId)))).map((m) => m.price);
+  if (prices.length === 0) return null;
+  const low = Math.min(...prices);
+  // The backend's join-pricing.ts: on a match already cheaper, the player pays that lower price and the offer isn't used.
+  return f.dealAmount > low ? `${money(f.dealAmount)} is above the normal price of some matches here (as low as ${money(low)}). On those, players pay the normal price and the offer isn't used.` : null;
+}
+
+// ── WHAT STOPS A LAUNCH, on top of formProblem ───────────────────────────────────────────────────
+// The end compared with Chicago's wall clock, the page's "now" (see the time model at the top).
+export const endHasPassed = (endsLocal: string, nowWall: string) => wallMs(endsLocal) <= wallMs(nowWall);
+export const launchProblem = (x: { endsLocal: string }, nowWall: string): string | null =>
+  endHasPassed(x.endsLocal, nowWall) ? "The end time has already passed. Pick a later end." : null;
+
+// THE LIVE COUNT'S STATE. asked is the body as the form stands; answered is the body the last answer
+// was for. A count for an older audience is loading, not ready, from the moment the form changes.
+export const COUNT_DEBOUNCE_MS = 800;
+export type CountState = "loading" | "ready" | "error";
+export const countState = (asked: string, answered: string | null, failed: boolean): CountState =>
+  asked !== answered ? "loading" : failed ? "error" : "ready";
+export const COUNT_BLOCK: Record<CountState, string | null> = {
+  loading: "Still counting the players.", error: "Couldn't count the players, so it can't launch yet. Retry the count.", ready: null,
+};
+
+// WHAT GOES IN change_log: how many players, never which. A list of player ids is a second copy of who
+// was targeted, with different access rules. The request itself still carries the ids.
+export function offersLogBody(body: Record<string, unknown>): Record<string, unknown> {
+  const out = { ...body };
+  for (const [k, to] of [["playerIds", "playerCount"], ["userIds", "userCount"]] as const) {
+    if (k in out) { out[to] = Array.isArray(out[k]) ? (out[k] as unknown[]).length : 0; delete out[k]; }
+  }
+  return out;
 }
 
 // ── THE SUMMARY ──────────────────────────────────────────────────────────────────────────────────
@@ -551,7 +669,8 @@ export function summary(f: Form, count: Count | null, matches: MatchOpt[], citie
   const deal = m
     ? (f.dealType === "FREE_MATCH" ? `${m.name} free` : f.dealType === "SET_PRICE" ? `a ${money(f.dealAmount)} spot in ${m.name}` : `${dealText(f.dealType, f.dealAmount)} ${m.name}`)
     : (f.dealType === "FREE_MATCH" ? (n === 1 ? "one free match" : `${n} free matches`) : f.dealType === "SET_PRICE" ? `a ${money(f.dealAmount)} spot in ${one}` : `${dealText(f.dealType, f.dealAmount)} ${one}`);
-  const until = m && f.endsLocal === m.startLocal ? "until kickoff"
+  const until = endHasPassed(f.endsLocal, nowWall) ? `until ${wallLabel(f.endsLocal)}, which has already passed`
+    : m && f.endsLocal === m.startLocal ? "until kickoff"
     : calendarDaysBetween(nowWall, f.endsLocal) < 7 ? `until ${fmt(wallMs(f.endsLocal), { weekday: "short" })} ${fmt(wallMs(f.endsLocal), { hour: "numeric", minute: "2-digit" })}`
     : `until ${wallDate(f.endsLocal)}`;
   const people = `${count.players.toLocaleString("en-US")} ${players ? "chosen " : ""}${where}${count.players === 1 ? "player" : "players"}`;

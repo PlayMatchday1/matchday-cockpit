@@ -1,11 +1,10 @@
 import "server-only";
 // GROWTH › OFFERS, the server half shared by every /api/offers/* route.
 //
-// LOCAL ONLY FOR NOW. admin/offers/campaigns exists only on the local backend (feature/offers on
-// localhost:3070), so every route here talks to the "local" target of the write client and answers
-// 503 unless local mode is on. When the backend ships, the target changes in ONE place (OFFERS_ENV).
+// WHERE IT TALKS TO comes from the environment (src/lib/offersConfig.ts): OFFERS_ENV, the backend's
+// base URL and the allowed upload host. Anything unset or wrong answers 503, for everyone.
 //
-// THREE GATES, in order, each on top of the last: local mode (503), admin (authenticateAdmin, read
+// THREE GATES, in order, each on top of the last: the config (503), admin (authenticateAdmin, read
 // fresh from app_users on every request), OFFERS_ALLOWLIST (404). The backend's ADMIN-only rule is a
 // separate check on the service account; it says nothing about which Clubhouse user is asking.
 
@@ -13,27 +12,39 @@ import { randomUUID } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { authenticateAdmin } from "@/lib/adminAuth";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
-import { LOCAL_MDAPI_HOST, localModeOn } from "@/lib/localMode";
-import { apiGet, apiWrite, WriteFailedError, type ClientEnv, type WriteActor } from "@/lib/matchdayStageApi";
+import { PACE_MS } from "@/lib/matchdayApi";
+import { StageConfigError, apiGet, apiWrite, WriteFailedError, type WriteActor } from "@/lib/matchdayStageApi";
 import { OFFERS_NOT_FOUND, onOffersAllowlist } from "@/lib/offersAccess";
-import { photoUrlOk, wallFromMatch, type Campaign, type FieldOpt, type MatchOpt } from "@/lib/offersModel";
+import { readOffersConfig, type OffersConfig, type OffersConfigResult } from "@/lib/offersConfig";
+import { chicagoWallNow, offerMatchOpt, offersLogBody, photoUrlOk, pickerRange, wallFromMatch, type ApiOfferMatch, type Campaign, type FieldOpt, type MatchOpt } from "@/lib/offersModel";
+import { READS_STOPPED, makePacer } from "@/lib/offersPacing";
 import { STAFF_NOT_ALLOWED_PLAIN, WHO_ARE_YOU, staffEmailOf, staffErrorKind } from "@/lib/staffIdentity";
 
-export const OFFERS_ENV: ClientEnv = "local";
 export const CAMPAIGNS = "/admin/offers/campaigns";
+export const MATCHES = "/admin/offers/matches";
 export const PHOTO_UPLOADS = "/admin/offers/photo-uploads";
 
 export type OffersAuth = { email: string; actor: WriteActor; supabase: SupabaseClient };
 
-type GateDeps = { localModeOn: () => boolean; authenticateAdmin: (req: Request) => ReturnType<typeof authenticateAdmin> };
-const realDeps: GateDeps = { localModeOn, authenticateAdmin };
+type GateDeps = { config: () => OffersConfigResult; authenticateAdmin: (req: Request) => ReturnType<typeof authenticateAdmin>; logStore: typeof supabaseLogStore };
+const realDeps: GateDeps = { config: readOffersConfig, authenticateAdmin, logStore: supabaseLogStore };
 let gateDeps: GateDeps = realDeps;
-// FOR scripts/offers-model-test.ts ONLY: run the real gate as each kind of caller, offline.
+// FOR scripts/offers-model-test.ts ONLY: run the real gate and the real writes as each kind of caller, offline.
 export function _setOffersGateDepsForTest(d: Partial<GateDeps> | null) { gateDeps = d ? { ...realDeps, ...d } : realDeps; }
 
+// The config for this request. offersGate has already answered 503 if there is none; this throw is
+// the same refusal for anything that reaches a read or write some other way.
+function cfg(): OffersConfig {
+  const r = gateDeps.config();
+  if (!r.ok) throw new StageConfigError(`Offers config: ${r.problem}`);
+  return r.config;
+}
+
 export async function offersGate(req: Request): Promise<OffersAuth | Response> {
-  if (!gateDeps.localModeOn()) {
-    return Response.json({ error: "Offers runs against the local backend only, and local mode is off (MATCHDAY_LOCAL_API=1 under next dev)." }, { status: 503 });
+  const config = gateDeps.config();
+  if (!config.ok) {
+    console.error(`[offers] closed: ${config.problem}`);
+    return Response.json({ error: "Offers isn't set up on this server." }, { status: 503 });
   }
   const auth = await gateDeps.authenticateAdmin(req);
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
@@ -60,6 +71,7 @@ export function errorText(e: unknown): string {
     console.error(`[offers] backend refused X-Acting-Staff-Email (STAFF_EMAIL_NOT_ALLOWED): ${raw.slice(0, 300)}`);
     return STAFF_NOT_ALLOWED_PLAIN;
   }
+  if (e instanceof Error && e.name === READS_STOPPED) return "The backend just had a problem, so reads have stopped for a moment. Try again in 30 seconds.";
   const { code, message } = backendMessage(e);
   if (code === "OFFER_CAMPAIGN_FIELD_LOCKED") return `Those parts can't change once it has launched (${message?.split(": ")[1] ?? "locked fields"}). Nothing was saved.`;
   if (code === "INVALID_OFFER_CAMPAIGN") return `The backend refused it: ${message?.split(": ").slice(1).join(": ") || "the offer is not valid"}. Nothing was saved.`;
@@ -71,9 +83,17 @@ export function errorText(e: unknown): string {
 }
 
 // ── READS ───────────────────────────────────────────────────────────────────────────────────────
-export const readCampaigns = () => apiGet<Campaign[]>(OFFERS_ENV, CAMPAIGNS);
+// The ordinary client, for single staff lookups. The page's load runs them one after another.
+export function offersGet<T>(path: string, query?: Record<string, string | number | boolean>): Promise<T> {
+  const { env, baseUrl } = cfg();
+  return apiGet<T>(env, path, query, baseUrl);
+}
+// What fires as someone types or clicks goes through the pacer instead (src/lib/offersPacing.ts).
+const paced = makePacer({ paceMs: PACE_MS, stopsOn: (e) => !(e instanceof WriteFailedError && e.status >= 400 && e.status < 500) });
+
+export const readCampaigns = () => offersGet<Campaign[]>(CAMPAIGNS);
 export async function readCampaign(id: number): Promise<Campaign | null> {
-  try { return await apiGet<Campaign>(OFFERS_ENV, `${CAMPAIGNS}/${id}`); }
+  try { return await offersGet<Campaign>(`${CAMPAIGNS}/${id}`); }
   catch (e) { if (e instanceof WriteFailedError && e.status === 404) return null; throw e; }
 }
 
@@ -92,40 +112,55 @@ export function matchOpt(m: ApiMatch, now = Date.now()): MatchOpt {
     maxPlayers: m.maxPlayerCount, minPlayers: m.minPlayerCount, upcoming: !m.isCancelled && Date.parse(m.startDateUtc) > now,
   };
 }
+// THE MATCH LIST (GET admin/offers/matches): upcoming and not cancelled, soonest first, in the picker's
+// longest range. The page's load takes ONE page of it and says whether that was all of them. Only when it
+// wasn't does the panel ask for its own cities' list, walked here through the pacer, stopping at the
+// first error and after MAX_MATCH_PAGES. Search and Needs players filter in the browser: the design
+// searches by time as well, which the endpoint doesn't, and it saves a read for every key.
+export const MATCH_PAGE = 100;
+export const MAX_MATCH_PAGES = 5;
 type Page<T> = { page: number; limit: number; totalItems: number; data: T[] };
-// Every page of the upcoming list (the backend's default fromDate is today, UTC). Local, single-writer
-// backend, so paging is sound here.
-export async function readUpcomingMatches(): Promise<MatchOpt[]> {
-  const out: ApiMatch[] = [];
-  for (let page = 1; page <= 20; page++) {
-    const r = await apiGet<Page<ApiMatch>>(OFFERS_ENV, "/admin/matches", { page, limit: 100 });
+const matchPage = (page: number, cityIds: number[]) => offersGet<Page<ApiOfferMatch>>(MATCHES, {
+  ...pickerRange(chicagoWallNow()), ...(cityIds.length ? { cityIds: cityIds.join(",") } : {}), page, limit: MATCH_PAGE,
+});
+export type MatchList = { matches: MatchOpt[]; complete: boolean };
+export async function readFirstMatchPage(): Promise<MatchList> {
+  const r = await matchPage(1, []);
+  return { matches: (r.data ?? []).map(offerMatchOpt), complete: (r.data ?? []).length >= r.totalItems };
+}
+export async function readMatchesForCities(cityIds: number[]): Promise<MatchList> {
+  const out: ApiOfferMatch[] = [];
+  let total = 0;
+  for (let page = 1; page <= MAX_MATCH_PAGES; page++) {
+    const r = await paced(() => matchPage(page, cityIds));
     out.push(...(r.data ?? []));
-    if (!r.data?.length || out.length >= r.totalItems) break;
+    total = r.totalItems;
+    if (!r.data?.length || out.length >= total) break;
   }
-  return out.map((m) => matchOpt(m)).filter((m) => m.upcoming).sort((a, b) => a.startLocal.localeCompare(b.startLocal));
+  return { matches: out.map(offerMatchOpt), complete: out.length >= total };
 }
 // THE LIVE COUNT (POST admin/offers/campaigns/audience-count). A READ that the backend takes as a
-// POST: it goes through the guarded write client (host check, local target only) because that is the
-// client that can POST, but it changes nothing, so it is not put through recordWrite and carries no
-// staff header. It lives here rather than in its route so write-routes-logged-test keeps meaning
-// "every apiWrite in a route is a logged write".
+// POST: it goes through the guarded write client (host check) because that is the client that can
+// POST, but it changes nothing, so it is not put through recordWrite and carries no staff header. It
+// lives here rather than in its route so write-routes-logged-test keeps meaning "every apiWrite in a
+// route is a logged write". Paced: it fires as someone changes the audience.
 export type AudienceCount = { count: number; heldBack: number; players: number; mostItCanCost: number | null };
-export const readAudienceCount = (auth: OffersAuth, body: Record<string, unknown>) =>
-  apiWrite<AudienceCount>(OFFERS_ENV, "POST", `${CAMPAIGNS}/audience-count`, body, auth.actor, "admin");
+export const readAudienceCount = (auth: OffersAuth, body: Record<string, unknown>) => paced(() => {
+  const { env, baseUrl } = cfg();
+  return apiWrite<AudienceCount>(env, "POST", `${CAMPAIGNS}/audience-count`, body, auth.actor, "admin", undefined, undefined, baseUrl);
+});
 
 // Every field, cut down to what the photo picker and Played at need (title, city, cover URL).
 type ApiField = { id: number; title: string; cityId: number | null; cover?: string | null; deletedAt?: string | null };
 export async function readFields(): Promise<FieldOpt[]> {
-  const r = await apiGet<ApiField[] | { data: ApiField[] }>(OFFERS_ENV, "/admin/fields");
+  const r = await offersGet<ApiField[] | { data: ApiField[] }>("/admin/fields");
   return (Array.isArray(r) ? r : r.data ?? []).filter((f) => !f.deletedAt)
     .map((f) => ({ id: f.id, title: f.title, cityId: f.cityId ?? null, cover: f.cover ?? null }))
     .sort((a, b) => a.title.localeCompare(b.title));
 }
 
-// A campaign's match that is no longer upcoming, read one by one so its label still shows.
-export async function readMatch(id: number): Promise<MatchOpt | null> {
-  try { return matchOpt(await apiGet<ApiMatch>(OFFERS_ENV, `/admin/matches/${id}`)); } catch { return null; }
-}
+// One match, read when an offer that names it is opened (GET /api/offers/matches/{id}), never on page load.
+export const readMatch = async (id: number): Promise<MatchOpt> => matchOpt(await offersGet<ApiMatch>(`/admin/matches/${id}`));
 
 // ── THE WRITE ───────────────────────────────────────────────────────────────────────────────────
 // One request, never retried, through recordWrite (which stores nothing in local mode). The answer
@@ -136,7 +171,8 @@ export type Verdict = "LANDED" | "FAILED" | "NOT APPLIED" | "UNKNOWN";
 export function offersApiWrite<T = unknown>(auth: OffersAuth, method: "POST" | "PATCH" | "DELETE", path: string, body?: unknown): Promise<T> {
   const staff = staffEmailOf(auth.email);
   if (!staff) return Promise.reject(new Error(WHO_ARE_YOU));
-  return apiWrite<T>(OFFERS_ENV, method, path, body, auth.actor, "admin", undefined, staff);
+  const { env, baseUrl } = cfg();
+  return apiWrite<T>(env, method, path, body, auth.actor, "admin", undefined, staff, baseUrl);
 }
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
@@ -165,9 +201,9 @@ export async function offersWrite(opts: {
   const read = async () => (createdId === null ? null : await readCampaign(createdId));
   const { outcome, error } = await recordWrite(
     {
-      env: OFFERS_ENV, source: opts.source, actorName: opts.auth.email, actorEmail: opts.auth.email, saveId: randomUUID(),
+      env: cfg().env, source: opts.source, actorName: opts.auth.email, actorEmail: opts.auth.email, saveId: randomUUID(),
       matchId: null, matchName: null, method: opts.method, path: opts.path,
-      body: opts.body ?? {}, keys: Object.keys(opts.expect), label: (k) => k,
+      body: offersLogBody(opts.body ?? {}), keys: Object.keys(opts.expect), label: (k) => k,
       applied: (_b, after) => (opts.expectGone ? after.missing === true : mismatches(opts.expect, after).length === 0),
     },
     {
@@ -179,7 +215,7 @@ export async function offersWrite(opts: {
       },
       now: () => new Date().toISOString(),
     },
-    supabaseLogStore(),
+    gateDeps.logStore(),
   );
   const after = await read().catch(() => undefined);
   const missing = mismatches(opts.expect, (after ?? null) as unknown as Record<string, unknown> | null);
@@ -218,8 +254,8 @@ export async function sendPreview(auth: OffersAuth, id: number, userIds: number[
   let answer: { sent?: number[]; notFound?: number[] } | null = null;
   const { outcome, error } = await recordWrite(
     {
-      env: OFFERS_ENV, source: "offers:send-preview", actorName: auth.email, actorEmail: auth.email, saveId: randomUUID(),
-      matchId: null, matchName: null, method: "POST", path, body: { userIds }, keys: [], label: (k) => k,
+      env: cfg().env, source: "offers:send-preview", actorName: auth.email, actorEmail: auth.email, saveId: randomUUID(),
+      matchId: null, matchName: null, method: "POST", path, body: offersLogBody({ userIds }), keys: [], label: (k) => k,
       applied: () => answer !== null && Array.isArray(answer.sent),
     },
     {
@@ -231,7 +267,7 @@ export async function sendPreview(auth: OffersAuth, id: number, userIds: number[
       },
       now: () => new Date().toISOString(),
     },
-    supabaseLogStore(),
+    gateDeps.logStore(),
   );
   if (error) {
     const { code } = backendMessage(error);
@@ -247,14 +283,14 @@ export async function sendPreview(auth: OffersAuth, id: number, userIds: number[
 
 // ── PHOTO UPLOADS (POST admin/offers/photo-uploads, then .../register) ─────────────────────────
 // Step 1 is a link and changes no record, so there is nothing to log or read back. THE LINK'S HOST IS
-// CHECKED ON THE PARSED URL before the browser is told to PUT a file there: only the local backend
-// passes, which is also all this page can reach until release. At release this must name the S3 or
-// CDN upload host, and the bucket needs CORS for the Clubhouse origin. It fails closed until then.
+// CHECKED ON THE PARSED URL before the browser is told to PUT a file there: only OFFERS_UPLOAD_HOST
+// passes. At release that names the S3 or CDN upload host, and the bucket needs CORS for the Clubhouse
+// origin (docs/LATER.md).
 export type PhotoLink = { uploadURL: string; method: string; headers: Record<string, string>; fileKey: string; expiresAt: string };
-export function photoLinkProblem(link: Partial<PhotoLink>): string | null {
+export function photoLinkProblem(link: Partial<PhotoLink>, uploadHost: string = cfg().uploadHost): string | null {
   let host = "";
   try { host = new URL(link.uploadURL ?? "").host; } catch { /* no host: refused below */ }
-  if (link.method !== "PUT" || !link.fileKey || host !== LOCAL_MDAPI_HOST) return `The upload link was not the expected one (${link.method ?? "no method"} to ${host || "no host"}); nothing was uploaded.`;
+  if (link.method !== "PUT" || !link.fileKey || host !== uploadHost) return `The upload link was not the expected one (${link.method ?? "no method"} to ${host || "no host"}); nothing was uploaded.`;
   return null;
 }
 export const askPhotoLink = (auth: OffersAuth, contentType: string, sizeBytes: number) =>
@@ -267,7 +303,7 @@ export async function registerPhoto(auth: OffersAuth, fileKey: string): Promise<
   let answer: { url?: string } | null = null;
   const { outcome, error } = await recordWrite(
     {
-      env: OFFERS_ENV, source: "offers:photo-register", actorName: auth.email, actorEmail: auth.email, saveId: randomUUID(),
+      env: cfg().env, source: "offers:photo-register", actorName: auth.email, actorEmail: auth.email, saveId: randomUUID(),
       matchId: null, matchName: null, method: "POST", path, body: { fileKey }, keys: [], label: (k) => k,
       applied: () => typeof answer?.url === "string",
     },
@@ -276,7 +312,7 @@ export async function registerPhoto(auth: OffersAuth, fileKey: string): Promise<
       write: async () => { const r = await offersApiWrite<{ url?: string }>(auth, "POST", path, { fileKey }); answer = r ?? null; return r; },
       now: () => new Date().toISOString(),
     },
-    supabaseLogStore(),
+    gateDeps.logStore(),
   );
   if (error) {
     const { code } = backendMessage(error);
@@ -296,5 +332,7 @@ export async function registerPhoto(auth: OffersAuth, fileKey: string): Promise<
 // up to 2000 ids, and the ids that are not players. Not a write, so not through recordWrite, and
 // nothing about the players is logged.
 export type PlayerLookup = { players: { id: number; name: string | null; city: string | null; matchesPlayed: number }[]; notFound: number[] };
-export const readPlayerLookup = (auth: OffersAuth, ids: number[]) =>
-  apiWrite<PlayerLookup>(OFFERS_ENV, "POST", "/admin/offers/players/lookup", { ids }, auth.actor, "admin");
+export const readPlayerLookup = (auth: OffersAuth, ids: number[]) => paced(() => {
+  const { env, baseUrl } = cfg();
+  return apiWrite<PlayerLookup>(env, "POST", "/admin/offers/players/lookup", { ids }, auth.actor, "admin", undefined, undefined, baseUrl);
+});

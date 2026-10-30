@@ -7,15 +7,18 @@ import "server-only"; // no-op under --conditions=react-server
 //     only what changed; after launch a locked field is never sent, whatever the form says.
 //   - The deal's money matches the backend's applyOfferDeal, in cents.
 //   - Wall clock stays wall clock (a match's "Z" is not re-shifted; now is America/Chicago).
-//   - The gate: local mode off 503, not admin 403, off the list 404, on the list through.
+//   - The gate: config unset or wrong 503, not admin 403, off the list 404, on the list through.
 
 import { offersAccessState, onOffersAllowlist } from "../src/lib/offersAccess";
 import {
   audienceBody, chicagoWallNow, comparisonLine, costCeiling, createBody, defaultRun, endsTicket, formOf, newForm, patchBody, priceWithDeal,
   summary, wallFromMatch, withPreviewName, buttonOf, opensText, formProblem, stepUses, usesLine, stepLimit, limitLine, copyOf,
-  addSection, autoCopy, canReset, copyAfterType, staleLines, staleSections, writtenForOnLoad, isRemovable, removeSection, resetCopy, sectionCollapsed, REMOVABLE_KEYS, canHidePhoto, copyAfterHide, hideUpload, extraBookingsLine, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, prefillField, audienceText, parsePlayerIds, playerLine, notFoundLine, usedOfLimit, resultsLines, type Campaign, type City, type MatchOpt, type Results,
+  addSection, autoCopy, canReset, copyAfterType, staleLines, staleSections, writtenForOnLoad, isRemovable, removeSection, resetCopy, sectionCollapsed, REMOVABLE_KEYS, canHidePhoto, copyAfterHide, hideUpload, extraBookingsLine, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, prefillField, audienceText, parsePlayerIds, playerLine, notFoundLine, usedOfLimit, resultsLines, mergeMatches, offerMatchOpt, pickerRange, withCovers, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, endHasPassed, launchProblem, namedMatchIds, offersLogBody, pickerDayLabel, pickerView, fillText, fillFraction, setPriceAnyWarning, setPriceProblem, type Campaign, type City, type MatchOpt, type Results,
 } from "../src/lib/offersModel";
-import { _setOffersGateDepsForTest, mismatches, offersGate, photoLinkProblem } from "../src/lib/offersServer";
+import { _setOffersGateDepsForTest, MAX_MATCH_PAGES, mismatches, offersGate, offersWrite, photoLinkProblem, readFirstMatchPage, readMatchesForCities, sendPreview, type OffersAuth } from "../src/lib/offersServer";
+import { readOffersConfig } from "../src/lib/offersConfig";
+import { assertAllowedHost, preflightWrite } from "../src/lib/matchdayStageApi";
+import { makePacer, READS_STOPPED } from "../src/lib/offersPacing";
 
 let pass = 0, fail = 0;
 const eq = (name: string, got: unknown, want: unknown) => {
@@ -185,9 +188,10 @@ eq("exactly 5 MB is fine, a byte more is not, and empty is not", [photoFileProbl
 eq("the wrong type says so", photoFileProblem({ type: "application/pdf", name: "a.pdf", size: 10 }), "Only JPG, PNG or WebP images can be uploaded.");
 eq("headers a page may not set are dropped", settableHeaders({ "Content-Type": "image/png", "Content-Length": "9", Host: "x", "If-None-Match": "*" }), [["Content-Type", "image/png"], ["If-None-Match", "*"]]);
 const lk = { method: "PUT", fileKey: "k", headers: {}, expiresAt: "" };
-eq("the link must be a PUT to the local backend (the control)", photoLinkProblem({ ...lk, uploadURL: "http://localhost:3070/dev/uploads/offers/photos/a.jpg" }), null);
-eq("a spoofed host is refused on the parsed host", photoLinkProblem({ ...lk, uploadURL: "http://localhost:3070.evil.com/a.jpg" }) !== null, true);
-eq("another host, a POST and no key are refused", [photoLinkProblem({ ...lk, uploadURL: "https://evil.com/a.jpg" }) !== null, photoLinkProblem({ ...lk, method: "POST", uploadURL: "http://localhost:3070/a" }) !== null, photoLinkProblem({ ...lk, fileKey: "", uploadURL: "http://localhost:3070/a" }) !== null, photoLinkProblem({ ...lk }) !== null], [true, true, true, true]);
+const UP = "localhost:3070";
+eq("the link must be a PUT to the local backend (the control)", photoLinkProblem({ ...lk, uploadURL: "http://localhost:3070/dev/uploads/offers/photos/a.jpg" }, UP), null);
+eq("a spoofed host is refused on the parsed host", photoLinkProblem({ ...lk, uploadURL: "http://localhost:3070.evil.com/a.jpg" }, UP) !== null, true);
+eq("another host, a POST and no key are refused", [photoLinkProblem({ ...lk, uploadURL: "https://evil.com/a.jpg" }, UP) !== null, photoLinkProblem({ ...lk, method: "POST", uploadURL: "http://localhost:3070/a" }, UP) !== null, photoLinkProblem({ ...lk, fileKey: "", uploadURL: "http://localhost:3070/a" }, UP) !== null, photoLinkProblem({ ...lk }, UP) !== null], [true, true, true, true]);
 {
   const up = [{ url: "https://x/a.jpg", name: "a.jpg" }, { url: "https://x/b.jpg", name: "b.jpg" }];
   eq("uploads stay as tiles", uploadTiles(up, null, []).map((p) => p.url), ["https://x/a.jpg", "https://x/b.jpg"]);
@@ -426,20 +430,237 @@ eq("a 200 yes is yes (the control)", offersAccessState(200, { allowed: true }), 
 eq("off the list, not an admin, local mode off and a strange 200 are all no",
   [offersAccessState(404, { error: "Not found" }), offersAccessState(403, { error: "x" }), offersAccessState(503, { error: "x" }), offersAccessState(200, { allowed: "yes" }), offersAccessState(200, null)], ["no", "no", "no", "no", "no"]);
 
+
+// ── THE SERVER CONFIG: env-driven, fails closed ──────────────────────────────────────────────────
+const LOCAL_ON = { MATCHDAY_LOCAL_API: "1", NODE_ENV: "development" };
+const goodLocal = { ...LOCAL_ON, OFFERS_ENV: "local", OFFERS_API_BASE_URL: "http://localhost:3070", OFFERS_UPLOAD_HOST: "localhost:3070" };
+const goodProd = { NODE_ENV: "production", OFFERS_ENV: "production", OFFERS_API_BASE_URL: "https://playmatchday.herokuapp.com", OFFERS_UPLOAD_HOST: "bucket.s3.amazonaws.com" };
+const cfgOk = (e: Record<string, string | undefined>) => readOffersConfig(e).ok;
+eq("local, all set: open (the control)", readOffersConfig(goodLocal), { ok: true, config: { env: "local", baseUrl: "http://localhost:3070", uploadHost: "localhost:3070" } });
+eq("production, all set: open (the control)", readOffersConfig(goodProd), { ok: true, config: { env: "production", baseUrl: "https://playmatchday.herokuapp.com", uploadHost: "bucket.s3.amazonaws.com" } });
+eq("staging, all set: open (the control)", cfgOk({ NODE_ENV: "production", OFFERS_ENV: "staging", OFFERS_API_BASE_URL: "https://matchday-stage.herokuapp.com", OFFERS_UPLOAD_HOST: "b.s3.amazonaws.com" }), true);
+eq("nothing set: closed", cfgOk({}), false);
+for (const k of ["OFFERS_ENV", "OFFERS_API_BASE_URL", "OFFERS_UPLOAD_HOST"] as const) {
+  eq(`${k} unset: closed, on local and on production`, [cfgOk({ ...goodLocal, [k]: undefined }), cfgOk({ ...goodProd, [k]: undefined })], [false, false]);
+  eq(`${k} empty: closed`, cfgOk({ ...goodProd, [k]: "" }), false);
+}
+eq("an unknown OFFERS_ENV: closed", cfgOk({ ...goodProd, OFFERS_ENV: "prod" }), false);
+eq("local with local mode off (a deployed server): closed", cfgOk({ ...goodLocal, MATCHDAY_LOCAL_API: undefined }), false);
+eq("production with local mode on: closed", cfgOk({ ...goodProd, ...LOCAL_ON }), false);
+eq("staging's URL for production, and production's for local: closed", [cfgOk({ ...goodProd, OFFERS_API_BASE_URL: "https://matchday-stage.herokuapp.com" }), cfgOk({ ...goodLocal, OFFERS_API_BASE_URL: "https://playmatchday.herokuapp.com" })], [false, false]);
+eq("a spoofed base host: closed", cfgOk({ ...goodProd, OFFERS_API_BASE_URL: "https://playmatchday.herokuapp.com.evil.com" }), false);
+eq("http on production: closed", cfgOk({ ...goodProd, OFFERS_API_BASE_URL: "http://playmatchday.herokuapp.com" }), false);
+eq("a base with a path: closed", cfgOk({ ...goodProd, OFFERS_API_BASE_URL: "https://playmatchday.herokuapp.com/api" }), false);
+eq("an upload host that is a URL, a wildcard or has a path: closed",
+  ["https://bucket.s3.amazonaws.com", "*.amazonaws.com", "bucket.s3.amazonaws.com/x", "user@bucket.com"].map((h) => cfgOk({ ...goodProd, OFFERS_UPLOAD_HOST: h })), [false, false, false, false]);
+eq("the problem names the variable, never a value", (readOffersConfig({ ...goodProd, OFFERS_API_BASE_URL: "https://secret.example.com" }) as { problem: string }).problem.includes("secret"), false);
+const S3 = "bucket.s3.amazonaws.com";
+eq("a link on the configured upload host passes", photoLinkProblem({ ...lk, uploadURL: `https://${S3}/offers/a.jpg` }, S3), null);
+eq("with S3 configured, the local backend and a spoof are refused", [photoLinkProblem({ ...lk, uploadURL: "http://localhost:3070/a" }, S3) !== null, photoLinkProblem({ ...lk, uploadURL: `https://${S3}.evil.com/a` }, S3) !== null], [true, true]);
+// The write client's own guard still stands behind the config (local mode is off under this suite).
+eq("the production base passes the client's host guard, an Offers write passes preflight", (() => { assertAllowedHost("production", "https://playmatchday.herokuapp.com/admin/offers/campaigns"); preflightWrite("production", "POST", "https://playmatchday.herokuapp.com/admin/offers/campaigns", { name: "x", playerIds: [1] }); return "through"; })(), "through");
+
+
+// ── THE MATCH LIST (GET admin/offers/matches) ────────────────────────────────────────────────────
+{
+  const api = { id: 5, name: "Thu", startsLocal: "2026-11-02 19:00:00", fieldId: 3, fieldName: "NEMP", cityId: 1, price: 900, playersIn: 11, capacity: 16, minimum: 14 };
+  eq("a row maps across, wall clock untouched", offerMatchOpt(api), { id: 5, name: "Thu", startLocal: "2026-11-02 19:00:00", fieldId: 3, fieldTitle: "NEMP", fieldCover: null, cityId: 1, price: 900, players: 11, maxPlayers: 16, minPlayers: 14, upcoming: true });
+  eq("no cap reads as no cap", [fillText(offerMatchOpt({ ...api, capacity: null })), fillFraction(offerMatchOpt({ ...api, capacity: null }))], ["11 · needs 3", 0]);
+  const fields = [{ id: 3, title: "NEMP", cityId: 1, cover: "https://c/n.jpg" }];
+  eq("the cover comes from the field, so the suggested photo doesn't change with the read", withCovers([offerMatchOpt(api)], fields)[0].fieldCover, "https://c/n.jpg");
+  eq("a field with no cover stays none (the control)", withCovers([offerMatchOpt({ ...api, fieldId: 9 })], fields)[0].fieldCover, null);
+  const saved = draftFrom({ matchIds: [5], matchScoped: true, photoUrl: "https://c/n.jpg" });
+  const withCover = withCovers([offerMatchOpt(api)], fields);
+  eq("a saved match offer with its cover is not a change", patchBody(saved, formOf(saved, withCover, cities), withCover, cities).photoUrl, undefined);
+  eq("later lists win, and nothing doubles", mergeMatches([offerMatchOpt(api)], [offerMatchOpt({ ...api, playersIn: 12 })]).map((m) => [m.id, m.players]), [[5, 12]]);
+  eq("the range is today and the next 13 days, across a month", pickerRange("2026-10-30 23:59:00"), { from: "2026-10-30", to: "2026-11-12" });
+}
+
+// ── THE MATCH PICKER ─────────────────────────────────────────────────────────────────────────────
+{
+  const row = (id: number, startLocal: string, over: Partial<MatchOpt> = {}): MatchOpt => ({ id, name: `M${id}`, startLocal, fieldId: id, fieldTitle: `Field ${id}`, fieldCover: null, cityId: 1, price: 900, players: 5, maxPlayers: 16, minPlayers: 14, upcoming: true, ...over });
+  const NOWP = "2026-10-30 14:00:00"; // a Friday
+  const list = [
+    row(3, "2026-10-31 18:00:00", { fieldTitle: "Round Rock" }),
+    row(1, "2026-10-30 19:00:00", { fieldTitle: "NEMP Field 2", players: 11, minPlayers: 14, maxPlayers: 16 }),
+    row(2, "2026-10-30 20:30:00", { fieldTitle: "Mueller Park", players: 14, minPlayers: 14 }),
+    row(4, "2026-11-05 19:00:00", { fieldTitle: "Last Day Of Seven" }),
+    row(5, "2026-11-06 19:00:00", { fieldTitle: "Day Eight" }),
+    row(6, "2026-11-12 19:00:00", { fieldTitle: "Day Fourteen" }),
+    row(7, "2026-11-13 19:00:00", { fieldTitle: "Day Fifteen" }),
+    row(8, "2026-10-30 19:00:00", { cityId: 2, fieldTitle: "Houston Field" }),
+    row(9, "2026-10-30 09:00:00", { upcoming: false, fieldTitle: "Already Started" }),
+  ];
+  const v = (f: Partial<Parameters<typeof pickerView>[1]> = {}) => pickerView(list, { search: "", days: 7, needsPlayers: true, cityIds: [1], ...f }, NOWP, cities);
+  const ids = (x: ReturnType<typeof pickerView>) => x.groups.flatMap((g) => g.rows.map((r) => r.match.id));
+  eq("next 7 days, needs players, soonest first, one city: not the full match, not day 8, not another city, not started", ids(v()), [1, 3, 4]);
+  eq("grouped by day, today marked", v().groups.map((g) => g.label), ["TODAY · FRI OCT 30", "SAT OCT 31", "THU NOV 5"]);
+  eq("the footer counts what's shown of everything in those days", v().footer, "Showing 3 of 4 Austin matches in the next 7 days");
+  eq("Needs players off shows the full match too", ids(v({ needsPlayers: false })), [1, 2, 3, 4]);
+  eq("next 14 days reaches day 14 and stops", ids(v({ days: 14 })), [1, 3, 4, 5, 6]);
+  eq("no city chosen: every city", ids(v({ cityIds: [] })), [1, 8, 3, 4]);
+  eq("search by field", ids(v({ search: "nemp" })), [1]);
+  eq("search by time", ids(v({ search: "6:00" })), [3]);
+  eq("search by day and field together", ids(v({ search: "sat round" })), [3]);
+  eq("a search with no match shows none, and says so in the footer", [ids(v({ search: "zzz" })), v({ search: "zzz" }).footer], [[], "Showing 0 of 4 Austin matches in the next 7 days"]);
+  eq("the row's time is wall clock, not re-shifted", v().groups[0].rows[0].time, "7:00 PM");
+  eq("fill text as the mock", fillText({ players: 11, maxPlayers: 16, minPlayers: 14 }), "11/16 · needs 3");
+  eq("fill text with enough, and full", [fillText({ players: 14, maxPlayers: 16, minPlayers: 14 }), fillText({ players: 16, maxPlayers: 16, minPlayers: 14 })], ["14/16", "16/16 · full"]);
+  eq("the bar never leaves its track", [fillFraction({ players: 20, maxPlayers: 16 }), fillFraction({ players: 3, maxPlayers: 0 })], [1, 0]);
+  eq("a day label is not today's tomorrow", pickerDayLabel("2026-10-31 00:30:00", NOWP), "SAT OCT 31");
+}
+eq("an offer names its match and its button's match, once each", namedMatchIds({ matchIds: [116], buttonMatchId: 116 }), [116]);
+eq("...and two different ones, and none", [namedMatchIds({ matchIds: [116], buttonMatchId: 117 }), namedMatchIds({ matchIds: [], buttonMatchId: null })], [[116, 117], []]);
+
+// ── SET PRICE ────────────────────────────────────────────────────────────────────────────────────
+{
+  const sp = (dealAmount: number, over = {}) => ({ ...nowF, name: "x", dealType: "SET_PRICE" as const, dealAmount, ...over });
+  const one = { scope: "MATCH" as const, matchId: 116, endsLocal: "2026-11-02 19:00:00" }; // normally $15
+  eq("under $1 is refused, on any match and on one", [formProblem(sp(99), matches), formProblem(sp(99, one), matches)], ["A set price must be at least $1.", "A set price must be at least $1."]);
+  eq("$1 exactly is fine (the control)", formProblem(sp(100), matches), null);
+  eq("0 and fractions of a cent are refused", [setPriceProblem({ dealType: "SET_PRICE", dealAmount: 0 }, null) !== null, setPriceProblem({ dealType: "SET_PRICE", dealAmount: 150.5 }, null) !== null], [true, true]);
+  eq("one match, above its normal price: blocked", formProblem(sp(1600, one), matches), "That is above this match's normal $15. Set it at or below that.");
+  eq("one match, at its normal price: not blocked", formProblem(sp(1500, one), matches), null);
+  eq("one match, under it: not blocked (the control)", formProblem(sp(1400, one), matches), null);
+  eq("any match, above the cheapest: saves, with a warning", [formProblem(sp(1000), matches), setPriceAnyWarning(sp(1000), matches)], [null, "$10 is above the normal price of some matches here (as low as $9). On those, players pay the normal price and the offer isn't used."]);
+  eq("any match, at or under the cheapest: no warning", [setPriceAnyWarning(sp(900), matches), setPriceAnyWarning(sp(500), matches)], [null, null]);
+  eq("the warning looks only at those cities", setPriceAnyWarning(sp(1000, { cityIds: [2] }), matches), null);
+  eq("one match gets the block, not the any-match warning", setPriceAnyWarning(sp(1600, one), matches), null);
+  eq("other deals: neither", [formProblem({ ...nowF, name: "x", dealAmount: 5000 }, matches), setPriceAnyWarning({ ...nowF, name: "x", dealAmount: 5000 }, matches)], [null, null]);
+  eq("after launch the deal is locked, so the rule can't stop saving its name", [formProblem(sp(1600, one), matches, "LAUNCHED"), formProblem(sp(1600, one), matches, "PAUSED"), formProblem(sp(1600, one), matches, "DRAFT") !== null], [null, null, true]);
+}
+
+// ── THE END TIME AND THE LABELS ──────────────────────────────────────────────────────────────────
+{
+  const past = "2026-10-28 17:00:00";
+  eq("an end in the past stops a launch", launchProblem({ endsLocal: past }, NOW), "The end time has already passed. Pick a later end.");
+  eq("an end earlier today stops a launch", launchProblem({ endsLocal: "2026-10-29 14:00:00" }, NOW) !== null, true);
+  eq("an end exactly now stops a launch", endHasPassed(NOW, NOW), true);
+  eq("an end a minute away doesn't (the control)", launchProblem({ endsLocal: "2026-10-29 14:31:00" }, NOW), null);
+  const cnt = { count: 3, heldBack: 0, players: 3, mostItCanCost: null };
+  const line = (endsLocal: string, over = {}) => summary({ ...nowF, name: "x", endsLocal, ...over }, cnt, matches, cities, NOW);
+  eq("the summary says a past end has passed, never a weekday that reads as coming", line(past).includes("until Wed, Oct 28 · 5:00 PM, which has already passed"), true);
+  eq("...even for a kickoff", line("2026-10-28 17:00:00", { scope: "MATCH", matchId: 116 }).includes("already passed"), true);
+  eq("a coming end reads as before (the control)", line("2026-11-01 23:59:00").includes("until Sun 11:59 PM"), true);
+  eq("the ticket for a past end is a date, not a weekday", endsTicket(past, NOW), "Ends Wed, Oct 28");
+}
+
+// ── THE COUNT'S STATE ────────────────────────────────────────────────────────────────────────────
+eq("the debounce is 800 ms", COUNT_DEBOUNCE_MS, 800);
+eq("no answer yet: loading", countState("a", null, false), "loading");
+eq("the form moved past the answer: loading, even with an answer in hand", countState("b", "a", false), "loading");
+eq("the form moved past a failure: loading", countState("b", "a", true), "loading");
+eq("answered for this form: ready (the control)", countState("a", "a", false), "ready");
+eq("failed for this form: error", countState("a", "a", true), "error");
+eq("loading and error stop a launch, ready doesn't", [COUNT_BLOCK.loading !== null, COUNT_BLOCK.error !== null, COUNT_BLOCK.ready], [true, true, null]);
+
+// ── WHAT GOES IN THE LOG ─────────────────────────────────────────────────────────────────────────
+eq("player ids become a count", offersLogBody({ name: "x", playerIds: [7, 8, 9] }), { name: "x", playerCount: 3 });
+eq("test ids become a count", offersLogBody({ userIds: [7] }), { userCount: 1 });
+eq("a body without ids is untouched (the control)", offersLogBody({ name: "x", cityIds: [1] }), { name: "x", cityIds: [1] });
+
 const fakeAdmin = (email: string) => async () => ({ ok: true as const, supabase: {} as never, appUserId: "u1", email, canEditMatches: false, canManagePlayers: false, canManagePromos: false });
 const status = async (r: unknown) => (r instanceof Response ? r.status : "through");
 (async () => {
   process.env.OFFERS_ALLOWLIST = "rmancuso@playmatchday.com";
   const req = (method = "GET") => new Request("http://localhost/api/offers", { method });
-  _setOffersGateDepsForTest({ localModeOn: () => false, authenticateAdmin: fakeAdmin("rmancuso@playmatchday.com") });
-  eq("local mode off: 503", await status(await offersGate(req())), 503);
-  _setOffersGateDepsForTest({ localModeOn: () => true, authenticateAdmin: async () => ({ ok: false as const, status: 403, error: "Admins only" }) });
+  const open = () => ({ ok: true as const, config: { env: "local" as const, baseUrl: "http://localhost:3070", uploadHost: "localhost:3070" } });
+  _setOffersGateDepsForTest({ config: () => ({ ok: false, problem: "OFFERS_ENV must be local, staging or production" }), authenticateAdmin: fakeAdmin("rmancuso@playmatchday.com") });
+  eq("config unset or wrong: 503", await status(await offersGate(req())), 503);
+  _setOffersGateDepsForTest({ config: open, authenticateAdmin: async () => ({ ok: false as const, status: 403, error: "Admins only" }) });
   eq("not an admin: 403", await status(await offersGate(req())), 403);
-  _setOffersGateDepsForTest({ localModeOn: () => true, authenticateAdmin: fakeAdmin("someone@playmatchday.com") });
+  _setOffersGateDepsForTest({ config: open, authenticateAdmin: fakeAdmin("someone@playmatchday.com") });
   eq("admin off the list: 404", await status(await offersGate(req())), 404);
-  _setOffersGateDepsForTest({ localModeOn: () => true, authenticateAdmin: fakeAdmin("rmancuso@playmatchday.com") });
+  _setOffersGateDepsForTest({ config: open, authenticateAdmin: fakeAdmin("rmancuso@playmatchday.com") });
   eq("on the list: through (the control for the three refusals)", await status(await offersGate(req("POST"))), "through");
   _setOffersGateDepsForTest(null);
+
+  // THE PACER: fake clock, no network.
+  {
+    let t = 0; const slept: number[] = [];
+    const pacer = makePacer({ paceMs: 1000, stopMs: 30_000, now: () => t, sleep: async (ms) => { slept.push(ms); t += ms; }, stopsOn: (e) => (e as Error).message !== "400" });
+    const seen: string[] = [];
+    let running = 0, most = 0;
+    const read = (name: string, ms = 10, fail?: string) => pacer(async () => { running++; most = Math.max(most, running); seen.push(`${name}@${t}`); t += ms; running--; if (fail) throw new Error(fail); return name; });
+    eq("three at once come back in order", await Promise.all([read("a"), read("b"), read("c")]), ["a", "b", "c"]);
+    eq("one at a time", most, 1);
+    eq("each starts a full pace after the last ended", seen, ["a@0", "b@1010", "c@2020"]);
+    eq("a 4xx is an answer: it fails, and doesn't stop the next", [await read("d", 10, "400").catch((e) => e.message), await read("e")], ["400", "e"]);
+    const before = seen.length;
+    eq("a 5xx fails", await read("f", 10, "502").catch((e) => e.message), "502");
+    const firstAfter = seen.length;
+    eq("the next read stops with no request", await read("g").catch((e) => e.name), READS_STOPPED);
+    eq("...positive control: f did run, g did not", [firstAfter - before, seen.length - firstAfter], [1, 0]);
+    t += 30_001;
+    eq("after the stop it reads again, once", await read("h"), "h");
+  }
+
+  // THE LOG, on the real offersWrite and sendPreview: fetch is stubbed, so nothing leaves this process.
+  {
+    const realFetch = globalThis.fetch;
+    const JWT = `x.${Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600 })).toString("base64")}.y`;
+    const sent: { url: string; body: string | null }[] = [];
+    const stored: { players: number[] | null } = { players: null };
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (url.endsWith("/auth/signin")) return new Response(JSON.stringify({ accessToken: JWT }), { status: 200 });
+      if (init?.method && init.method !== "GET") sent.push({ url, body: typeof init.body === "string" ? init.body : null });
+      if (url.endsWith("/send-preview")) return new Response(JSON.stringify({ sent: [7, 8], notFound: [] }), { status: 200 });
+      if (init?.method === "POST") { const b = JSON.parse(String(init.body)); stored.players = b.playerIds; return new Response(JSON.stringify({ id: 9 }), { status: 201 }); }
+      return new Response(JSON.stringify({ id: 9, status: "DRAFT", name: "x", playerIds: stored.players ?? [] }), { status: 200 });
+    }) as typeof fetch;
+    Object.assign(process.env, { MATCHDAY_STAGE_API_BASE_URL: "https://matchday-stage.herokuapp.com", MATCHDAY_STAGE_API_EMAIL: "s@example.com", MATCHDAY_STAGE_API_PASSWORD: "x" });
+    const rows: { env: string; body: Record<string, unknown>; changes: unknown }[] = [];
+    const logStore = () => ({ insert: async (r: unknown) => { rows.push(r as (typeof rows)[number]); }, resolve: async () => undefined, recent: async () => [] }) as never;
+    _setOffersGateDepsForTest({ logStore, config: () => ({ ok: true, config: { env: "staging", baseUrl: "https://matchday-stage.herokuapp.com", uploadHost: "b.s3.amazonaws.com" } }) });
+    const auth = { email: "rmancuso@playmatchday.com", supabase: {} as never, actor: { canEditMatches: false, isAdmin: true, email: "rmancuso@playmatchday.com", userId: "u1" } } as OffersAuth;
+    const w = await offersWrite({ auth, source: "offers:create", method: "POST", path: "/admin/offers/campaigns", body: { name: "x", playerIds: [7, 8, 9] }, id: null, expect: { name: "x", playerIds: [7, 8, 9] } });
+    eq("the write landed (the control: this is a real run of the write path)", w.verdict, "LANDED");
+    eq("the request carried the ids, on the configured base", [sent[0]?.url, JSON.parse(sent[0]?.body ?? "{}").playerIds], ["https://matchday-stage.herokuapp.com/admin/offers/campaigns", [7, 8, 9]]);
+    eq("one row was logged, under the configured env", [rows.length, rows[0]?.env], [1, "staging"]);
+    eq("the row has the count", rows[0]?.body, { name: "x", playerCount: 3 });
+    eq("no ids anywhere in the row, changes included", /\b[789],[789]\b/.test(JSON.stringify(rows[0])) || JSON.stringify(rows[0]).includes("playerIds"), false);
+    await sendPreview(auth, 9, [7, 8]);
+    eq("a test's request carries the ids", JSON.parse(sent[1]?.body ?? "{}").userIds, [7, 8]);
+    eq("a test's row has the count, not the ids", [rows[1]?.body, JSON.stringify(rows[1]).includes("userIds")], [{ userCount: 2 }, false]);
+
+    // THE MATCH READS, on the real functions: one page on load, a paced walk only when asked, and never admin/matches.
+    {
+      const urls: string[] = [];
+      let pages = 7, failAt = 0;
+      const row = (id: number) => ({ id, name: `M${id}`, startsLocal: "2026-11-02 19:00:00", fieldId: 1, fieldName: "F", cityId: 1, price: 900, playersIn: 1, capacity: 16, minimum: 14 });
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        const url = String(input instanceof Request ? input.url : input);
+        if (url.endsWith("/auth/signin")) return new Response(JSON.stringify({ accessToken: JWT }), { status: 200 });
+        urls.push(url);
+        const page = Number(new URL(url).searchParams.get("page"));
+        if (failAt && page === failAt) return new Response("{}", { status: 503 });
+        return new Response(JSON.stringify({ page, limit: 100, totalItems: pages * 100, data: Array.from({ length: 100 }, (_, i) => row((page - 1) * 100 + i + 1)) }), { status: 200 });
+      }) as typeof fetch;
+      const first = await readFirstMatchPage();
+      eq("page load: exactly one request", urls.length, 1);
+      eq("...to the new endpoint, with the range and the limit", [new URL(urls[0]).pathname, new URL(urls[0]).searchParams.get("limit"), new URL(urls[0]).searchParams.has("from"), new URL(urls[0]).searchParams.has("to")], ["/admin/offers/matches", "100", true, true]);
+      eq("...and says it wasn't all of them", [first.matches.length, first.complete], [100, false]);
+      urls.length = 0;
+      pages = 2;
+      const started = Date.now();
+      const two = await readMatchesForCities([1, 2]);
+      eq("a walk asks for those cities, and stops when it has them all", [urls.length, new URL(urls[0]).searchParams.get("cityIds"), two.matches.length, two.complete], [2, "1,2", 200, true]);
+      eq("...a full pace apart", Date.now() - started >= 1000, true);
+      urls.length = 0;
+      pages = MAX_MATCH_PAGES + 2;
+      const capped = await readMatchesForCities([]);
+      eq("a walk stops at its cap and says so", [urls.length, capped.complete], [MAX_MATCH_PAGES, false]);
+      urls.length = 0;
+      failAt = 2;
+      eq("a walk stops at the first error", [await readMatchesForCities([]).then(() => "read", () => "threw"), urls.length], ["threw", 2]);
+      eq("...and the next read makes no request (the pacer's stop)", [await readMatchesForCities([]).catch((e) => e.name), urls.length], [READS_STOPPED, 2]);
+      eq("no read here ever touched admin/matches", urls.some((u) => new URL(u).pathname === "/admin/matches"), false);
+    }
+    globalThis.fetch = realFetch;
+    _setOffersGateDepsForTest(null);
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`);
   if (pass === 0 || fail > 0) process.exit(1);
 })();

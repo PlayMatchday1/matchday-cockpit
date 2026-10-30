@@ -2,7 +2,8 @@
 // backend rejects an empty body sent as application/json. LANDED means the read-back shows the status
 // the move was meant to leave (launch: LAUNCHED, pause: PAUSED, end: ENDED).
 
-import { CAMPAIGNS, offersGate, offersWrite, verdictResponse } from "@/lib/offersServer";
+import { chicagoWallNow, launchProblem } from "@/lib/offersModel";
+import { CAMPAIGNS, errorText, offersGate, offersWrite, readCampaign, verdictResponse } from "@/lib/offersServer";
 
 export const dynamic = "force-dynamic";
 
@@ -15,6 +16,14 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string; ac
   const id = Number(rawId);
   if (!Number.isInteger(id) || id <= 0 || !(action in MOVES)) return Response.json({ error: "Not found" }, { status: 404 });
   const status = MOVES[action as keyof typeof MOVES];
+  // An offer whose end has passed never launches or resumes: the page stops it, and so does this.
+  if (action === "launch") {
+    let current;
+    try { current = await readCampaign(id); } catch (e) { return Response.json({ error: errorText(e) }, { status: 502 }); }
+    if (!current) return Response.json({ error: "That offer no longer exists. Refresh the list." }, { status: 404 });
+    const why = launchProblem(current, chicagoWallNow());
+    if (why) return Response.json({ error: `${why} Nothing was sent.` }, { status: 400 });
+  }
   const w = await offersWrite({ auth, source: `offers:${action}`, method: "POST", path: `${CAMPAIGNS}/${id}/${action}`, id, expect: { status } });
   return verdictResponse(w);
 }

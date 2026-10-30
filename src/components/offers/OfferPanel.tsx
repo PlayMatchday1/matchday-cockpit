@@ -12,16 +12,21 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  FIRST_NAME_TOKEN, MAX_TEST_IDS, SECTION_ADD, addSection, autoCopy, canReset, copyAfterType, isRemovable, staleLines, staleSections, writtenForOnLoad, removeSection, resetCopy, sectionCollapsed, canHidePhoto, copyAfterHide, hideUpload, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, MAX_USES_PER_PLAYER, notFoundLine, parsePlayerIds, playerLine, prefillField, PREVIEW_FIRST_NAME, amountText, limitLine, stepLimit, stepUses, usesLine, audienceBody, buttonMatchNote, buttonOf, matchDay, opensText, chicagoWallNow, copyOf, createBody, defaultRun, endsTicket, formOf, formProblem, fromInput, matchInfo,
-  matchShort, newForm, patchBody, pickedMatch, startLabel, STEPPER, summary, toInput, wallLabel,
+  FIRST_NAME_TOKEN, MAX_TEST_IDS, SECTION_ADD, addSection, autoCopy, canReset, copyAfterType, isRemovable, staleLines, staleSections, writtenForOnLoad, removeSection, resetCopy, sectionCollapsed, canHidePhoto, copyAfterHide, hideUpload, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, MAX_USES_PER_PLAYER, notFoundLine, parsePlayerIds, playerLine, prefillField, PREVIEW_FIRST_NAME, amountText, limitLine, stepLimit, stepUses, usesLine, audienceBody, buttonMatchNote, buttonOf, opensText, chicagoWallNow, copyOf, createBody, defaultRun, endsTicket, formOf, formProblem, fromInput, matchInfo,
+  newForm, patchBody, mergeMatches, withCovers, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, endHasPassed, launchProblem, setPriceAnyWarning, setPriceProblem, pickedMatch, startLabel, STEPPER, summary, toInput, wallLabel,
   type Campaign, type City, type Count, type FieldOpt, type Lookup, type UploadedPhoto, type CopyKey, type DealType, type Form, type MatchOpt, type WrittenFor,
 } from "@/lib/offersModel";
+import MatchPicker from "./MatchPicker";
 import OfferPopupPreview from "./OfferPopupPreview";
 import {
   Btn, Chip, ConfirmDialog, Labeled, O, PanelSection, VerdictLine, authed, inputCls, inputStyle, outcomeOf, settled, type WriteOutcome,
 } from "./offersUi";
 
-type Data = { campaigns: Campaign[]; cities: City[]; fields: FieldOpt[]; matches: MatchOpt[] };
+// Whether the matches this offer names are in hand. Until they are, what the form would work out from
+// them (the match, its button, its text) is wrong, so nothing can be edited or launched. Pause, End and
+// Delete still work, so an offer whose match can't be read can always be stopped.
+export type MatchRead = "ok" | "loading" | "failed";
+type Data = { campaigns: Campaign[]; cities: City[]; fields: FieldOpt[]; matches: MatchOpt[]; matchesComplete: boolean; matchesError: string | null };
 const DEALS: { type: DealType; label: string }[] = [
   { type: "PERCENT_OFF", label: "% off" }, { type: "AMOUNT_OFF", label: "$ off" }, { type: "SET_PRICE", label: "Set price" }, { type: "FREE_MATCH", label: "Free match" },
 ];
@@ -50,35 +55,84 @@ const TEST_IDS_KEY = "offers:last-test-ids";
 const readTestIds = () => { try { return window.localStorage.getItem(TEST_IDS_KEY) ?? ""; } catch { return ""; } };
 const keepTestIds = (text: string) => { try { window.localStorage.setItem(TEST_IDS_KEY, text); } catch { /* private mode */ } };
 
-export default function OfferPanel({ c, data, onClose, onLanded }: {
-  c: Campaign | null; data: Data; onClose: () => void; onLanded: (o: WriteOutcome, selectId?: number) => void;
+export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, onClose, onLanded }: {
+  c: Campaign | null; data: Data; matchRead: MatchRead; onRetryMatch: () => void; onClose: () => void; onLanded: (o: WriteOutcome, selectId?: number) => void;
 }) {
   const nowWall = useMemo(() => chicagoWallNow(), []);
+  // THE PICKER'S LIST. The page's load holds one page of it. Only if that wasn't all of them (or it
+  // failed) is this offer's own cities' list read, once per set of cities, and for an offer that has
+  // launched only once someone opens a picker.
+  const [pool, setPool] = useState<{ key: string; matches: MatchOpt[]; complete: boolean } | null>(null);
+  const [poolErr, setPoolErr] = useState<string | null>(null);
+  const [poolWanted, setPoolWanted] = useState(c === null || c.status === "DRAFT");
+  const [poolRetry, setPoolRetry] = useState(0);
+  const data = useMemo(() => (pool ? { ...loaded, matches: withCovers(mergeMatches(pool.matches, loaded.matches), loaded.fields) } : loaded), [loaded, pool]);
   const start = useMemo(() => (c ? formOf(c, data.matches, data.cities) : newForm(nowWall)), [c, data, nowWall]);
   const [f, setF] = useState<Form>(start);
   const set = (patch: Partial<Form>) => setF((x) => ({ ...x, ...patch }));
   const locked = c !== null && c.status !== "DRAFT";
   const ended = c?.status === "ENDED";
+  const matchUnread = matchRead !== "ok";
+  const frozen = ended || matchUnread;
   const m = pickedMatch(f, data.matches);
   const copy = copyOf(f, data.matches, data.cities);
-  const problem = formProblem(f, data.matches);
-  const diff = c ? patchBody(c, f, data.matches, data.cities) : null;
+  const problem = matchUnread ? null : formProblem(f, data.matches, c?.status ?? null);
+  const diff = c && !matchUnread ? patchBody(c, f, data.matches, data.cities) : null;
   const dirty = c === null || Object.keys(diff ?? {}).length > 0;
+  const needPool = !loaded.matchesComplete && poolWanted && !ended;
+  const poolKey = f.cityIds.join(",");
+  useEffect(() => {
+    if (!needPool || pool?.key === poolKey) return;
+    let cancelled = false;
+    setPoolErr(null);
+    const t = setTimeout(async () => {
+      const r = await authed(`/api/offers/matches${poolKey ? `?cityIds=${poolKey}` : ""}`);
+      if (cancelled) return;
+      if (!r.ok) { setPoolErr(String(r.json.error)); return; }
+      setPool({ key: poolKey, matches: r.json.matches as MatchOpt[], complete: r.json.complete === true });
+    }, COUNT_DEBOUNCE_MS);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [needPool, poolKey, poolRetry, pool?.key]);
+  const pickerProps = {
+    matches: data.matches, cities: data.cities, cityIds: f.cityIds, nowWall, onOpen: () => setPoolWanted(true), onRetry: () => setPoolRetry((n) => n + 1),
+    listState: poolErr ? ("failed" as const) : needPool && pool?.key !== poolKey ? ("loading" as const) : ("ready" as const),
+    listError: poolErr, partial: pool?.key === poolKey && !pool.complete,
+  };
 
   // ── the live count, debounced, for the audience and deal as they stand ──
-  const [count, setCount] = useState<Count | null>(null);
+  // Fires COUNT_DEBOUNCE_MS after the last change, one request at a time: a change while one is out
+  // waits for it, then asks about the form as it stands by then. The route paces it again.
+  const [countAnswer, setCountAnswer] = useState<Count | null>(null);
   const [countErr, setCountErr] = useState<string | null>(null);
+  const [answeredKey, setAnsweredKey] = useState<string | null>(null);
   const audKey = JSON.stringify(audienceBody(f, data.matches, data.cities));
+  const latestKey = useRef(audKey);
+  const counting = useRef(false);
+  const askAgain = useRef(false);
+  const mounted = useRef(true);
+  const askCount = useCallback(async () => {
+    if (counting.current) { askAgain.current = true; return; }
+    counting.current = true;
+    const key = latestKey.current;
+    const r = await authed("/api/offers/audience", { method: "POST", body: key });
+    counting.current = false;
+    if (!mounted.current) return;
+    if (r.ok) { setCountErr(null); setCountAnswer(r.json as unknown as Count); }
+    else { setCountErr(String(r.json.error)); setCountAnswer(null); }
+    setAnsweredKey(key);
+    if (askAgain.current) { askAgain.current = false; void askCount(); }
+  }, []);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => {
-    let cancelled = false;
-    const t = setTimeout(async () => {
-      const r = await authed("/api/offers/audience", { method: "POST", body: audKey });
-      if (cancelled) return;
-      if (!r.ok) { setCountErr(String(r.json.error)); setCount(null); return; }
-      setCountErr(null); setCount(r.json as unknown as Count);
-    }, 300);
-    return () => { cancelled = true; clearTimeout(t); };
-  }, [audKey]);
+    latestKey.current = audKey;
+    if (matchUnread) return;
+    const t = setTimeout(() => { void askCount(); }, COUNT_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [audKey, matchUnread, askCount]);
+  const countNow = countState(audKey, answeredKey, countErr !== null);
+  // An answer for an older audience is never shown or launched on.
+  const count = countNow === "ready" ? countAnswer : null;
+  const retryCount = () => { setAnsweredKey(null); void askCount(); };
 
   // ── writes ──
   const [busy, setBusy] = useState(false);
@@ -117,6 +171,8 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
   // Launch (or resume): save first when there is anything to save, then launch. Two writes, in order;
   // the second goes only if the first LANDED. Neither is retried.
   async function launch(): Promise<WriteOutcome> {
+    const passed = launchProblem(f, chicagoWallNow());
+    if (passed) return { verdict: "FAILED", text: `${passed} Nothing was sent.` };
     let id = c?.id ?? null;
     if (c === null || (c.status === "DRAFT" && dirty)) {
       const s = await save();
@@ -180,14 +236,12 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
     if (scope === "ANY") set({ scope, matchId: null, endsLocal: defaultRun(nowWall).endsLocal });
     else set({ scope, usesPerPlayer: 1 });
   };
-  const pickMatch = (id: number | null) => {
+  const pickMatch = (id: number) => {
     const mm = data.matches.find((x) => x.id === id) ?? null;
     // A specific match's offer ends at its kickoff unless someone moves it, and Played at is
     // prefilled with that match's field (the person can take it off).
     set({ matchId: id, ...(mm ? { endsLocal: mm.startLocal, fieldIds: prefillField(f.fieldIds, mm) } : {}) });
   };
-  const upcoming = data.matches.filter((x) => x.upcoming && (f.cityIds.length === 0 || (x.cityId !== null && f.cityIds.includes(x.cityId))));
-  const matchChoices = m && !upcoming.some((x) => x.id === m.id) ? [m, ...upcoming] : upcoming;
 
   // ── who gets it ──
   const [addingCity, setAddingCity] = useState(false);
@@ -246,7 +300,6 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
   };
   const btn = buttonOf(f, data.matches);
   const btnMatch = data.matches.find((x) => x.id === btn.matchId) ?? null;
-  const btnChoices = btnMatch && !upcoming.some((x) => x.id === btnMatch.id) ? [btnMatch, ...upcoming] : upcoming;
   // ── Photo (no mock): field cover photos for fields in the offer's cities, name and city under each.
   // Picking one stores its URL as the photo; MatchDay photo is the app's default. No uploads in v1.
   // A specific match's own field cover is the default for that offer. Editable after launch.
@@ -294,7 +347,7 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
     const on = (copy.photoUrl ?? null) === url;
     return (
       <div key={key} className="relative flex">
-      <button type="button" data-testid={`offers-photo-${key}`} data-on={on ? "1" : "0"} disabled={ended}
+      <button type="button" data-testid={`offers-photo-${key}`} data-on={on ? "1" : "0"} disabled={frozen}
         onClick={() => setF((v) => ({ ...v, copy: { ...v.copy, photoUrl: url } }))}
         className="flex w-full flex-col overflow-hidden rounded-[8px] border-2 text-left" style={{ borderColor: on ? O.chipOn : O.line }}>
         {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -302,7 +355,7 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
         <span className="truncate px-1.5 pt-1 text-[11px] font-medium" style={{ color: O.ink }}>{title}</span>
         <span className="truncate px-1.5 pb-1 text-[10.5px]" style={{ color: O.muted }}>{sub}</span>
       </button>
-      {onHide && !ended && (
+      {onHide && !frozen && (
         <button type="button" data-testid={`offers-hide-${key}`} aria-label={`Hide ${title}`} title="Hide this photo" onClick={onHide}
           className="absolute right-1 top-1 flex h-[18px] w-[18px] items-center justify-center rounded-full text-[12px] leading-none text-white" style={{ background: "rgba(6,61,44,.85)" }}>×</button>
       )}
@@ -339,7 +392,7 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
     </div>
   );
   const buttonOpens = () => {
-    const off = btn.locked || ended;
+    const off = btn.locked || frozen;
     const chip = (on: boolean) => btn.locked
       ? (on ? { background: O.muted, borderColor: O.muted, color: "#fff" } : { background: "#eef0ee", borderColor: O.line, color: O.label })
       : undefined;
@@ -355,15 +408,8 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
         </div>
         {btn.target === "MATCH" && (
           <>
-            <div className="relative">
-              <select data-testid="offers-btn-match" className={`${inputCls} appearance-none pr-8 font-medium`} disabled={off}
-                style={btn.locked ? { ...inputStyle, background: "#eef0ee", color: O.muted, opacity: 1 } : inputStyle}
-                value={btn.matchId ?? ""} onChange={(e) => set({ buttonMatchId: e.target.value ? Number(e.target.value) : null })}>
-                <option value="">{btnChoices.length ? "Pick a match" : "No upcoming matches in these cities"}</option>
-                {btnChoices.map((x) => <option key={x.id} value={x.id}>{matchDay(x)}</option>)}
-              </select>
-              <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[12px]" style={{ color: O.muted }}>{btn.locked ? "🔒" : "⌄"}</span>
-            </div>
+            <MatchPicker {...pickerProps} testId="offers-btn-match" selected={btnMatch}
+              disabled={frozen} locked={btn.locked} empty={matchUnread ? matchUnreadText(matchRead) : undefined} onPick={(id) => set({ buttonMatchId: id })} />
             {btn.locked
               ? <div data-testid="offers-btn-note" className="rounded-[8px] px-2.5 py-2 text-[12px]" style={{ background: O.subtle, color: O.muted }}>Opens the match this offer is for.</div>
               : btnMatch && <div data-testid="offers-btn-note" className="rounded-[8px] px-2.5 py-2 text-[12px]" style={{ background: O.mint, color: O.ok }}>{buttonMatchNote(btnMatch)}</div>}
@@ -372,7 +418,11 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
       </div>
     );
   };
-  const dl = locked || ended; // deal, audience and run locked
+  const dl = locked || frozen; // deal, audience and run locked
+  const passed = endHasPassed(f.endsLocal, chicagoWallNow());
+  const launchWhy = matchUnread ? matchUnreadText(matchRead) : problem ?? launchProblem(f, chicagoWallNow()) ?? COUNT_BLOCK[countNow];
+  const dealWarn = setPriceProblem(f, m);
+  const anyWarn = setPriceAnyWarning(f, data.matches);
 
   const title = c ? c.name || "Untitled offer" : f.name.trim() || "New offer";
   return (
@@ -384,7 +434,7 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
           <button type="button" aria-label="Close" onClick={onClose} className="text-[16px] leading-none" style={{ color: O.muted }}>✕</button>
         </div>
         <Labeled label="Name">
-          <input data-testid="offers-name" className={inputCls} style={inputStyle} value={f.name} disabled={ended} placeholder="Austin win-back"
+          <input data-testid="offers-name" className={inputCls} style={inputStyle} value={f.name} disabled={frozen} placeholder="Austin win-back"
             onChange={(e) => set({ name: e.target.value })} />
         </Labeled>
         {locked && !ended && (
@@ -393,6 +443,12 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
           </div>
         )}
         {ended && <div className="rounded-[8px] px-3 py-2 text-[12px]" style={{ background: O.subtle, color: O.muted }}>Ended. Nothing about it can change.</div>}
+        {matchUnread && (
+          <div data-testid="offers-match-unread" data-read={matchRead} className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-[8px] px-3 py-2 text-[12px] font-medium" style={matchRead === "failed" ? { background: O.critBg, color: O.critInk } : { background: O.subtle, color: O.muted }}>
+            <span>{matchUnreadText(matchRead)}</span>
+            {matchRead === "failed" && <button type="button" data-testid="offers-match-retry" className="font-semibold underline" onClick={onRetryMatch}>Retry</button>}
+          </div>
+        )}
       </div>
 
       {/* THE DEAL */}
@@ -415,7 +471,7 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
           </div>
         )}
         {/* USES (Figma 20620:46): how many matches each player can use it on. A specific match is one. */}
-        {!m && (
+        {!m && !matchUnread && (
           <div data-testid="offers-uses" className="flex flex-col gap-1.5">
             <div className="text-[12px] font-medium" style={{ color: O.ink }}>Uses</div>
             <div className="flex items-center gap-2.5">
@@ -431,12 +487,12 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
         <div data-testid="offers-limit" className="flex flex-col gap-1.5">
           <div className="text-[12px] font-medium" style={{ color: O.ink }}>Total limit</div>
           <div className="flex flex-wrap items-center gap-1.5">
-            <Chip testId="offers-limit-none" on={f.maxRedemptions === null} disabled={ended} onClick={() => set({ maxRedemptions: null })}>No limit</Chip>
+            <Chip testId="offers-limit-none" on={f.maxRedemptions === null} disabled={frozen} onClick={() => set({ maxRedemptions: null })}>No limit</Chip>
             {f.maxRedemptions === null
-              ? <Chip testId="offers-limit-set" on={false} disabled={ended} onClick={() => set({ maxRedemptions: 50 })}>Set a limit</Chip>
+              ? <Chip testId="offers-limit-set" on={false} disabled={frozen} onClick={() => set({ maxRedemptions: 50 })}>Set a limit</Chip>
               : (
                 <div className="flex items-center gap-2.5">
-                  <Stepper testId="offers-limit-n" value={f.maxRedemptions} disabled={ended} atMin={f.maxRedemptions <= 1}
+                  <Stepper testId="offers-limit-n" value={f.maxRedemptions} disabled={frozen} atMin={f.maxRedemptions <= 1}
                     minus={() => set({ maxRedemptions: stepLimit(f.maxRedemptions, -1) })} plus={() => set({ maxRedemptions: stepLimit(f.maxRedemptions, 1) })}
                     onType={(n) => set({ maxRedemptions: n })} />
                   <span className="text-[13px]" style={{ color: O.ink }}>uses in total</span>
@@ -445,9 +501,11 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
           </div>
           {f.maxRedemptions !== null && <div data-testid="offers-limit-line" className="text-[12px]" style={{ color: O.muted }}>{limitLine(f.maxRedemptions)}</div>}
         </div>
-        {m && f.dealType === "SET_PRICE" && f.dealAmount >= m.price && (
-          <div className="text-[12px]" style={{ color: O.warnInk }}>That is not less than its normal {amountText("SET_PRICE", m.price)}, so nobody saves anything.</div>
+        {!dl && dealWarn && <div data-testid="offers-setprice-block" className="text-[12px] font-medium" style={{ color: O.critInk }}>{dealWarn}</div>}
+        {!dl && !dealWarn && m && f.dealType === "SET_PRICE" && f.dealAmount === m.price && (
+          <div className="text-[12px]" style={{ color: O.warnInk }}>That is the same as its normal {amountText("SET_PRICE", m.price)}, so nobody saves anything.</div>
         )}
+        {!dl && !dealWarn && anyWarn && <div data-testid="offers-setprice-warn" className="text-[12px]" style={{ color: O.warnInk }}>{anyWarn}</div>}
         <Labeled label="Applies to">
           <div className="flex flex-wrap gap-1.5">
             <Chip testId="offers-scope-ANY" on={f.scope === "ANY"} disabled={dl} onClick={() => pickScope("ANY")}>Any match</Chip>
@@ -457,14 +515,8 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
         {f.scope === "MATCH" && (
           <>
             <Labeled label="Match">
-              <div className="relative">
-                <select data-testid="offers-match" className={`${inputCls} appearance-none pr-8 font-medium`} style={inputStyle} disabled={dl}
-                  value={f.matchId ?? ""} onChange={(e) => pickMatch(e.target.value ? Number(e.target.value) : null)}>
-                  <option value="">{matchChoices.length ? "Pick a match" : "No upcoming matches in these cities"}</option>
-                  {matchChoices.map((x) => <option key={x.id} value={x.id}>{matchShort(x)}</option>)}
-                </select>
-                <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[12px]" style={{ color: O.muted }}>⌄</span>
-              </div>
+              <MatchPicker {...pickerProps} testId="offers-match" selected={m}
+                disabled={dl} empty={matchUnread ? matchUnreadText(matchRead) : undefined} onPick={pickMatch} />
             </Labeled>
             {m && <div data-testid="offers-match-info" className="rounded-[8px] px-3 py-[9px] text-[12px]" style={{ background: O.subtle, color: O.muted }}>{matchInfo(m)}</div>}
           </>
@@ -564,22 +616,22 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
             )}
           </>
         )}
-        {!players && <div data-testid="offers-count" className="flex gap-1.5 self-start rounded-[8px] px-2.5 py-1.5 text-[12px]" style={{ background: countErr ? O.critBg : O.mint, color: countErr ? O.critInk : O.ok }}>
-          {countErr ? <span>Couldn&apos;t count: {countErr}</span>
+        {!players && !matchUnread && <div data-testid="offers-count" data-state={countNow} className="flex flex-wrap gap-1.5 self-start rounded-[8px] px-2.5 py-1.5 text-[12px]" style={{ background: countNow === "error" ? O.critBg : O.mint, color: countNow === "error" ? O.critInk : O.ok }}>
+          {countNow === "error" ? <><span>Couldn&apos;t count: {countErr}</span><button type="button" data-testid="offers-count-retry" className="font-semibold underline" onClick={retryCount}>Retry</button></>
             : count ? <><b>≈ {count.count.toLocaleString("en-US")} {count.count === 1 ? "player" : "players"}</b><span>match right now</span></>
             : <span>Counting…</span>}
         </div>}
       </PanelSection>
 
       {/* POPUP */}
-      <PanelSection title={editText && !ended ? "Popup · Edit text" : "Popup"} testId="offers-popup">
+      <PanelSection title={editText && !frozen ? "Popup · Edit text" : "Popup"} testId="offers-popup">
         {/* Figma 20612:47: with Edit text open the fields take the summary's place beside the preview. */}
         <div className="flex items-start gap-3.5">
           <div className="flex shrink-0 flex-col gap-2">
             <OfferPopupPreview copy={copy} ends={ends} />
-            <div data-testid="offers-opens" className="max-w-[156px] text-[11px] font-medium" style={{ color: O.muted }}>{opensText(f, data.matches)}</div>
+            <div data-testid="offers-opens" className="max-w-[156px] text-[11px] font-medium" style={{ color: O.muted }}>{matchUnread ? "↳ Opens a match" : opensText(f, data.matches)}</div>
           </div>
-          {editText && !ended ? (
+          {editText && !frozen ? (
             <div data-testid="offers-text-fields" className="flex min-w-0 flex-1 flex-col gap-3">
               {([["buttonLabel", "Button label", 64], ["eyebrow", "Tag on the photo", 64], ["caption", "Line on the photo", 64], ["headline", "Headline (last word in green)", 64], ["line", "Line", 64], ["body", "Body", 300], ["dismissLabel", "Dismiss link", 64]] as const).map(([k, label, max]) => {
                 const auto = suggested[k];
@@ -637,7 +689,7 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
                 </div>
               ))}
               {stale.length > 0 && <div data-testid="offers-stale-note" className="text-[12px] font-medium" style={{ color: O.warnInk }}>Written for the old deal: {stale.length} {stale.length === 1 ? "section" : "sections"}. See Edit text.</div>}
-              {!ended && (
+              {!frozen && (
                 <button type="button" data-testid="offers-edit-text" onClick={() => setEditText(true)} className="self-start text-[12px] font-semibold" style={{ color: O.ok }}>Edit text ›</button>
               )}
             </div>
@@ -653,6 +705,7 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
           <WallInput testId="offers-ends" label={m && f.endsLocal === m.startLocal ? `Kickoff · ${wallLabel(f.endsLocal)}` : wallLabel(f.endsLocal)} value={f.endsLocal} disabled={dl} onChange={(v) => set({ endsLocal: v })} />
         </div>
         <div className="text-[11.5px]" style={{ color: O.muted }}>Times are each player&apos;s own city time.</div>
+        {passed && !dl && <div data-testid="offers-end-passed" className="text-[12px] font-medium" style={{ color: O.critInk }}>That end time has already passed, so it can&apos;t launch.</div>}
         {!players && <button type="button" data-testid="offers-more" onClick={() => setMore((v) => !v)} className="flex w-full items-center justify-between gap-2 rounded-[8px] px-3 py-[9px] text-left text-[12px]" style={{ background: O.subtle }}>
           <span className="font-medium" style={{ color: O.ink }}>More options</span>
           <span style={{ color: O.muted }}>{f.holdoutPercent > 0 ? `${f.holdoutPercent}% held back to measure` : "Nobody held back"} {more ? "‹" : "›"}</span>
@@ -676,16 +729,16 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
       {/* LAUNCH */}
       <section className="flex flex-col gap-2.5 border-t p-4" style={{ borderColor: O.line }}>
         <p data-testid="offers-summary" className="text-[13px] font-medium leading-[19px]" style={{ color: O.ink }}>
-          {summary(f, count, data.matches, data.cities, nowWall, data.fields)}
+          {matchUnread ? matchUnreadText(matchRead) : summary(f, count, data.matches, data.cities, chicagoWallNow(), data.fields)}
         </p>
         {outcome && <VerdictLine outcome={outcome} />}
         {problem && !ended && dirty && <div data-testid="offers-problem" className="text-[12px]" style={{ color: O.warnInk }}>{problem}</div>}
         {!ended && (
           <div className="flex flex-wrap gap-2">
             {(c === null || c.status === "DRAFT") && (
-              <Btn kind="primary" testId="offers-launch" disabled={busy || !!problem} onClick={() => setConfirm("launch")}>Launch</Btn>
+              <Btn kind="primary" testId="offers-launch" disabled={busy || !!launchWhy} title={launchWhy ?? undefined} onClick={() => setConfirm("launch")}>Launch</Btn>
             )}
-            {c?.status === "PAUSED" && <Btn kind="primary" testId="offers-resume" disabled={busy || dirty} title={dirty ? "Save or undo your changes first" : undefined} onClick={() => setConfirm("launch")}>Resume</Btn>}
+            {c?.status === "PAUSED" && <Btn kind="primary" testId="offers-resume" disabled={busy || dirty || passed} title={passed ? "The end time has already passed." : dirty ? "Save or undo your changes first" : undefined} onClick={() => setConfirm("launch")}>Resume</Btn>}
             {(c === null || dirty) && (
               <Btn testId="offers-save" disabled={busy || !!problem || (c !== null && settled(outcome) && !dirty)} onClick={onSave}>{c === null ? "Save draft" : "Save changes"}</Btn>
             )}
@@ -724,7 +777,7 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
 
       {confirm === "launch" && (
         <ConfirmDialog title={c?.status === "PAUSED" ? `Resume ${f.name.trim()}?` : `Launch ${f.name.trim()}?`}
-          note={c?.status === "PAUSED" ? "Players who match start getting it again the next time they open the app." : `${summary(f, count, data.matches, data.cities, nowWall, data.fields)} After launch the deal, who gets it and when it runs can't change.`}
+          note={c?.status === "PAUSED" ? "Players who match start getting it again the next time they open the app." : `${summary(f, count, data.matches, data.cities, chicagoWallNow(), data.fields)} After launch the deal, who gets it and when it runs can't change.`}
           warnings={staleLines(stale, f)}
           action={c?.status === "PAUSED" ? "Resume" : stale.length > 0 ? "Launch anyway" : "Launch"} onCancel={() => setConfirm(null)}
           onConfirm={async () => { const o = await once(launch); if (o) { setOutcome(o); if (o.verdict === "LANDED") setConfirm(null); } return o; }} />
@@ -747,6 +800,8 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
     </div>
   );
 }
+
+const matchUnreadText = (read: MatchRead) => (read === "failed" ? "Couldn't load the match" : "Loading the match…");
 
 // A wall-clock time that reads like the mock ("Today", "Sun, Nov 2 · 11:59 PM") and opens the
 // browser's own picker. The value stays wall-clock text end to end; no Date is built from it.

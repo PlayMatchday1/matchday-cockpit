@@ -52,6 +52,7 @@ const HOSTS: Record<MatchdayEnv, string> = {
   staging: "matchday-stage.herokuapp.com",
   production: "playmatchday.herokuapp.com",
 };
+export const MATCHDAY_HOSTS: Readonly<Record<MatchdayEnv, string>> = HOSTS;
 
 // THE BOLT. Flip this ONE constant (in a reviewed change, next phase) to unbolt
 // production writes. Not read from env — an env flag is exactly the kind of thing
@@ -460,9 +461,11 @@ export async function stageSignInProbe(env: MatchdayEnv = "staging"): Promise<{ 
 }
 
 // READS — env-explicit GET. Reads are safe; production reads are allowed.
-export async function apiGet<T = unknown>(env: ClientEnv, path: string, query?: Record<string, string | number | boolean>): Promise<T> {
+// `base`: the caller's own base URL for this request (Offers reads OFFERS_API_BASE_URL). It can't widen
+// anything: the host guard below runs on the URL it produces.
+export async function apiGet<T = unknown>(env: ClientEnv, path: string, query?: Record<string, string | number | boolean>, base?: string): Promise<T> {
   const { baseUrl } = getCreds(env);
-  const url = buildUrl(baseUrl, path, query);
+  const url = buildUrl(base ?? baseUrl, path, query);
   assertAllowedHost(env, url);
   const token = await freshToken(env);
   const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(WRITE_TIMEOUT_MS) });
@@ -474,7 +477,7 @@ export async function apiGet<T = unknown>(env: ClientEnv, path: string, query?: 
 // WRITES — env-explicit, single-shot, host-allowlisted, deny-listed, prod-bolted.
 // `actingStaffEmail`: X-Acting-Staff-Email (src/lib/staffIdentity.ts), the signed-in person behind the
 // shared service account. Only the Offers proxy (offersApiWrite) passes it.
-export async function apiWrite<T = unknown>(env: ClientEnv, method: "POST" | "PUT" | "PATCH" | "DELETE", path: string, body?: unknown, actor?: WriteActor, requires: "edit" | "manage" | "promos" | "city" | "credits" | "memberships" | "admin" = "edit", unlock?: WriteUnlock, actingStaffEmail?: string): Promise<T> {
+export async function apiWrite<T = unknown>(env: ClientEnv, method: "POST" | "PUT" | "PATCH" | "DELETE", path: string, body?: unknown, actor?: WriteActor, requires: "edit" | "manage" | "promos" | "city" | "credits" | "memberships" | "admin" = "edit", unlock?: WriteUnlock, actingStaffEmail?: string, base?: string): Promise<T> {
   // STEP 2 in the write pipeline (authenticated is step 1, in the route): does the caller
   // hold the required authority — EDIT MATCHES for match/roster writes, MANAGE PLAYERS for
   // ban writes, MANAGE PROMOS for promo writes? These are INDEPENDENT grants; each path names
@@ -494,7 +497,7 @@ export async function apiWrite<T = unknown>(env: ClientEnv, method: "POST" | "PU
     );
   }
   const { baseUrl } = getCreds(env);
-  const url = buildUrl(baseUrl, path);
+  const url = buildUrl(base ?? baseUrl, path);
   /* THE UNLOCK TRAVELS NO FURTHER THAN THIS CALL. It is the last argument, named by the one route
    * that needs it, and it reaches nothing but the endpoint deny check: the host guard, the field
    * deny-list, the authority guard and the production bolt are all untouched by it. */
