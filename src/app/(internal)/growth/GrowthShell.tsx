@@ -16,10 +16,25 @@
 // wrapper. It is a CLIENT guard and it is chrome: every route under it is refused server-side on
 // its own gate. See the Push C report for the one place that is not yet true.
 
+import { useEffect } from "react";
+import { usePathname, useRouter } from "next/navigation";
 import PagePermissionGuard from "@/components/PagePermissionGuard";
+import { canUseOffers } from "@/lib/offersCanUse";
+import { canAccess, useAuth } from "@/lib/useAuth";
 import GrowthRail from "./GrowthRail";
 
+// OFFERS FOLLOWS MATCH OPS, NOT GROWTH. Its page takes the shell without this guard and answers for itself
+// from the server (OffersView, a 404 without access). Someone with Match Ops but not Growth is sent
+// there from anywhere else under /growth, the one page here they can open.
 export default function GrowthShell({ children }: { children: React.ReactNode }) {
+  const { appUser, isLoading } = useAuth();
+  const router = useRouter();
+  const pathname = usePathname();
+  const onOffers = pathname.startsWith("/growth/offers");
+  const offersOnly = !onOffers && !isLoading && canUseOffers(appUser) && !canAccess(appUser, "growth");
+  useEffect(() => { if (offersOnly) router.replace("/growth/offers"); }, [offersOnly, router]);
+  if (offersOnly) return null;
+  if (onOffers) return <GrowthRail>{children}</GrowthRail>;
   return (
     <PagePermissionGuard page="growth">
       <GrowthRail>{children}</GrowthRail>

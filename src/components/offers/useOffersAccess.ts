@@ -1,14 +1,15 @@
 "use client";
 
 // May the signed-in user see Growth › Offers? Asked of the server (GET /api/offers/access, the same
-// gate as every /api/offers/* route); the allowlist itself never reaches the browser.
-// useOffersAccessState: null while asking, then "yes", "no" (a 404 off the list, a 403 not an admin, a
-// 503 local mode off, a network error) or "signin" (a 401: the session has ended; see
+// gate as every /api/offers/* route). canUseOffers is the courtesy for the chrome; the server decides.
+// useOffersAccessState: null while asking, then "yes", "no" (a 404 without Match Ops access, a 503
+// config unset or wrong, a network error) or "signin" (a 401: the session has ended; see
 // offersAccessState). useOffersAccess is the rail's yes or no. One request per signed-in user,
 // shared by the rail and the page; "signin" is not kept, so signing in again asks afresh.
 
 import { useEffect, useState } from "react";
 import { offersAccessState, type OffersAccessState } from "@/lib/offersAccess";
+import { canUseOffers } from "@/lib/offersCanUse";
 import { useAuth } from "@/lib/useAuth";
 import { supabase } from "@/lib/supabase";
 
@@ -31,8 +32,8 @@ function ask(userKey: string): Promise<OffersAccessState> {
 
 export function useOffersAccessState(): OffersAccessState | null {
   const { appUser, isLoading } = useAuth();
-  // Not an admin: no, without asking (the server would refuse them anyway).
-  const key = appUser?.id && appUser.is_admin ? String(appUser.id) : null;
+  // Without Match Ops: no, without asking (the server would refuse them anyway).
+  const key = appUser?.id && canUseOffers(appUser) ? String(appUser.id) : null;
   const [answer, setAnswer] = useState<{ key: string; state: OffersAccessState } | null>(null);
   useEffect(() => {
     if (!key) return;

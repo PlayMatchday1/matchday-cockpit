@@ -7,9 +7,13 @@ import "server-only"; // no-op under --conditions=react-server
 //     only what changed; after launch a locked field is never sent, whatever the form says.
 //   - The deal's money matches the backend's applyOfferDeal, in cents.
 //   - Wall clock stays wall clock (a match's "Z" is not re-shifted; now is America/Chicago).
-//   - The gate: config unset or wrong 503, not admin 403, off the list 404, on the list through.
+//   - The gate: config unset or wrong 503, no session 401, without Match Ops 404, with it through.
 
-import { offersAccessState, onOffersAllowlist } from "../src/lib/offersAccess";
+import { offersAccessState } from "../src/lib/offersAccess";
+import { matchOpsReadGate } from "../src/lib/matchOpsAuth";
+import { apiWrite, NotAuthorizedError } from "../src/lib/matchdayStageApi";
+import { readdirSync, statSync } from "node:fs";
+import { join, resolve } from "node:path";
 import {
   audienceBody, chicagoWallNow, comparisonLine, costCeiling, createBody, defaultRun, endsTicket, formOf, newForm, patchBody, priceWithDeal,
   summary, wallFromMatch, withPreviewName, buttonOf, opensText, formProblem, stepUses, usesLine, stepLimit, limitLine, copyOf,
@@ -421,9 +425,6 @@ console.log("extra bookings:");
 }
 
 console.log("access:");
-eq("unset list is nobody", onOffersAllowlist("rmancuso@playmatchday.com", {}), false);
-eq("on the list, any case", onOffersAllowlist("RMancuso@PlayMatchday.com", { OFFERS_ALLOWLIST: " rmancuso@playmatchday.com " }), true);
-eq("another admin is not on it", onOffersAllowlist("someone@playmatchday.com", { OFFERS_ALLOWLIST: "rmancuso@playmatchday.com" }), false);
 
 eq("a 401 is an ended sign-in, not a 404", offersAccessState(401, { error: "Invalid session" }), "signin");
 eq("a 200 yes is yes (the control)", offersAccessState(200, { allowed: true }), "yes");
@@ -588,20 +589,72 @@ eq("player ids become a count", offersLogBody({ name: "x", playerIds: [7, 8, 9] 
 eq("test ids become a count", offersLogBody({ userIds: [7] }), { userCount: 1 });
 eq("a body without ids is untouched (the control)", offersLogBody({ name: "x", cityIds: [1] }), { name: "x", cityIds: [1] });
 
-const fakeAdmin = (email: string) => async () => ({ ok: true as const, supabase: {} as never, appUserId: "u1", email, canEditMatches: false, canManagePlayers: false, canManagePromos: false });
+// What the real gate answers for a row, the way authenticateMatchOpsRead uses it.
+const asRow = (row: Record<string, unknown>, email = "someone@playmatchday.com") => async () => {
+  const g = matchOpsReadGate(row, email);
+  return g.ok
+    ? { ok: true as const, supabase: {} as never, appUserId: "u1", email, isAdmin: row.is_admin === true, canEditMatches: false, canManagePlayers: false, canManagePromos: false, canEditMemberships: false, confinedCity: null, confined: false }
+    : g;
+};
 const status = async (r: unknown) => (r instanceof Response ? r.status : "through");
+// Every route file under /api/offers, found on disk, so a new one can't dodge this.
+function routeFiles(dir: string): string[] {
+  return readdirSync(dir).flatMap((n) => { const p = join(dir, n); return statSync(p).isDirectory() ? routeFiles(p) : n === "route.ts" ? [p] : []; });
+}
 (async () => {
-  process.env.OFFERS_ALLOWLIST = "rmancuso@playmatchday.com";
   const req = (method = "GET") => new Request("http://localhost/api/offers", { method });
   const open = () => ({ ok: true as const, config: { env: "local" as const, baseUrl: "http://localhost:3070", uploadHost: "localhost:3070" } });
-  _setOffersGateDepsForTest({ config: () => ({ ok: false, problem: "OFFERS_ENV must be local, staging or production" }), authenticateAdmin: fakeAdmin("rmancuso@playmatchday.com") });
-  eq("config unset or wrong: 503", await status(await offersGate(req())), 503);
-  _setOffersGateDepsForTest({ config: open, authenticateAdmin: async () => ({ ok: false as const, status: 403, error: "Admins only" }) });
-  eq("not an admin: 403", await status(await offersGate(req())), 403);
-  _setOffersGateDepsForTest({ config: open, authenticateAdmin: fakeAdmin("someone@playmatchday.com") });
-  eq("admin off the list: 404", await status(await offersGate(req())), 404);
-  _setOffersGateDepsForTest({ config: open, authenticateAdmin: fakeAdmin("rmancuso@playmatchday.com") });
-  eq("on the list: through (the control for the three refusals)", await status(await offersGate(req("POST"))), "through");
+  _setOffersGateDepsForTest({ config: () => ({ ok: false, problem: "OFFERS_ENV must be local, staging or production" }), authenticate: asRow({ is_admin: true }) });
+  eq("config unset or wrong: 503, even for an admin", await status(await offersGate(req())), 503);
+  // WHO GETS IN: the Match Ops section's own decision, row by row.
+  const cases: [string, Record<string, unknown>, unknown][] = [
+    ["Match Ops, no Growth, not an admin: in", { can_access_matchops: true, can_access_growth: false }, "through"],
+    ["an admin: in", { is_admin: true }, "through"],
+    ["Growth but not Match Ops: 404", { can_access_growth: true, can_access_matchops: false }, 404],
+    ["no flags at all: 404", {}, 404],
+    ["Chats only: 404", { can_access_chats: true }, 404],
+    ["a city manager holding the flag: 404", { can_access_matchops: true, is_city_manager: true, city_identifier: "ATX" }, 404],
+    ["a service account holding the flag: 404", { can_access_matchops: true, is_service_account: true }, 404],
+  ];
+  for (const [name, row, want] of cases) {
+    _setOffersGateDepsForTest({ config: open, authenticate: asRow(row) });
+    eq(name, await status(await offersGate(req("POST"))), want);
+  }
+  _setOffersGateDepsForTest({ config: open, authenticate: asRow({ can_access_matchops: true }, "clubhouse-e2e@playmatchday.com") });
+  eq("the E2E account by email: 404", await status(await offersGate(req())), 404);
+  _setOffersGateDepsForTest({ config: open, authenticate: async () => ({ ok: true as const, supabase: {} as never, appUserId: "u1", email: "not-an-email", isAdmin: false, canEditMatches: false, canManagePlayers: false, canManagePromos: false, canEditMemberships: false, confinedCity: null, confined: false }) });
+  eq("in, but with no usable email: a write is refused 401", await status(await offersGate(req("POST"))), 401);
+  // The real check, unstubbed, as far as it goes offline.
+  _setOffersGateDepsForTest({ config: open });
+  eq("the real check with no session: 401, not a 404", await status(await offersGate(req())), 401);
+  // EVERY ROUTE, EVERY HANDLER, the real code. The body says nothing is reached: fetch counts.
+  {
+    const realFetch = globalThis.fetch;
+    let fetched = 0;
+    globalThis.fetch = (async () => { fetched++; return new Response("{}", { status: 200 }); }) as typeof fetch;
+    const files = routeFiles(resolve(process.cwd(), "src/app/api/offers"));
+    const ctx = { params: Promise.resolve({ id: "1", action: "launch" }) };
+    let handlers = 0;
+    const answers: Record<string, unknown> = {};
+    const through: Record<string, unknown> = {};
+    for (const f of files) {
+      const mod = (await import(f)) as Record<string, unknown>;
+      for (const m of ["GET", "POST", "PATCH", "DELETE", "PUT"]) {
+        const h = mod[m] as undefined | ((r: Request, c: typeof ctx) => Promise<Response>);
+        if (!h) continue;
+        handlers++;
+        const name = `${m} ${f.split("/api/offers")[1]}`;
+        _setOffersGateDepsForTest({ config: open, authenticate: asRow({ can_access_growth: true }) });
+        const r = await h(new Request("http://localhost/api/offers/1", { method: m, ...(m === "GET" ? {} : { body: "{}" }) }), ctx);
+        answers[name] = r.status;
+        through[name] = 404;
+      }
+    }
+    eq("the positive control: the walk found the routes", handlers >= 13, true);
+    eq("without Match Ops, every handler of every route answers 404", answers, through);
+    eq("...and none of them reached the backend", fetched, 0);
+    globalThis.fetch = realFetch;
+  }
   _setOffersGateDepsForTest(null);
 
   // THE PACER: fake clock, no network.
@@ -629,23 +682,27 @@ const status = async (r: unknown) => (r instanceof Response ? r.status : "throug
     const realFetch = globalThis.fetch;
     const JWT = `x.${Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600 })).toString("base64")}.y`;
     const sent: { url: string; body: string | null }[] = [];
+    const sentStaff: (string | null)[] = [];
     const stored: { players: number[] | null } = { players: null };
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input instanceof Request ? input.url : input);
       if (url.endsWith("/auth/signin")) return new Response(JSON.stringify({ accessToken: JWT }), { status: 200 });
-      if (init?.method && init.method !== "GET") sent.push({ url, body: typeof init.body === "string" ? init.body : null });
+      if (init?.method && init.method !== "GET") { sent.push({ url, body: typeof init.body === "string" ? init.body : null }); sentStaff.push(new Headers(init.headers).get("X-Acting-Staff-Email")); }
       if (url.endsWith("/send-preview")) return new Response(JSON.stringify({ sent: [7, 8], notFound: [] }), { status: 200 });
       if (init?.method === "POST") { const b = JSON.parse(String(init.body)); stored.players = b.playerIds; return new Response(JSON.stringify({ id: 9 }), { status: 201 }); }
       return new Response(JSON.stringify({ id: 9, status: "DRAFT", name: "x", playerIds: stored.players ?? [] }), { status: 200 });
     }) as typeof fetch;
     Object.assign(process.env, { MATCHDAY_STAGE_API_BASE_URL: "https://matchday-stage.herokuapp.com", MATCHDAY_STAGE_API_EMAIL: "s@example.com", MATCHDAY_STAGE_API_PASSWORD: "x" });
-    const rows: { env: string; body: Record<string, unknown>; changes: unknown }[] = [];
+    const rows: { env: string; body: Record<string, unknown>; changes: unknown; actorName: string; actorEmail: string }[] = [];
     const logStore = () => ({ insert: async (r: unknown) => { rows.push(r as (typeof rows)[number]); }, resolve: async () => undefined, recent: async () => [] }) as never;
     _setOffersGateDepsForTest({ logStore, config: () => ({ ok: true, config: { env: "staging", baseUrl: "https://matchday-stage.herokuapp.com", uploadHost: "b.s3.amazonaws.com" } }) });
-    const auth = { email: "rmancuso@playmatchday.com", supabase: {} as never, actor: { canEditMatches: false, isAdmin: true, email: "rmancuso@playmatchday.com", userId: "u1" } } as OffersAuth;
+    const auth = { email: "someone@playmatchday.com", supabase: {} as never, actor: { canEditMatches: false, canUseOffers: true, email: "someone@playmatchday.com", userId: "u1" } } as OffersAuth;
+    await apiWrite("staging", "POST", "/admin/offers/campaigns", {}, { canEditMatches: true, isAdmin: true, email: "x@y.z" }, "offers").then(() => eq("no Offers authority: refused", "sent", "refused"), (e) => eq("no Offers authority, whatever else it holds: refused before any request", [e instanceof NotAuthorizedError, sent.length], [true, 0]));
     const w = await offersWrite({ auth, source: "offers:create", method: "POST", path: "/admin/offers/campaigns", body: { name: "x", playerIds: [7, 8, 9] }, id: null, expect: { name: "x", playerIds: [7, 8, 9] } });
     eq("the write landed (the control: this is a real run of the write path)", w.verdict, "LANDED");
     eq("the request carried the ids, on the configured base", [sent[0]?.url, JSON.parse(sent[0]?.body ?? "{}").playerIds], ["https://matchday-stage.herokuapp.com/admin/offers/campaigns", [7, 8, 9]]);
+    eq("the log says who did it", [rows[0]?.actorName, rows[0]?.actorEmail], ["someone@playmatchday.com", "someone@playmatchday.com"]);
+    eq("the backend is told who did it", sentStaff[0], "someone@playmatchday.com");
     eq("one row was logged, under the configured env", [rows.length, rows[0]?.env], [1, "staging"]);
     eq("the row has the count", rows[0]?.body, { name: "x", playerCount: 3 });
     eq("no ids anywhere in the row, changes included", /\b[789],[789]\b/.test(JSON.stringify(rows[0])) || JSON.stringify(rows[0]).includes("playerIds"), false);

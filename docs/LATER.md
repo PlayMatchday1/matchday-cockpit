@@ -6,8 +6,7 @@ Changes that are decided but not done. Each one ships on its own, by pushing to 
 ## Growth › Offers: what the Clubhouse needs at release
 
 **Decided by Ryan, 2026-10-30.** Ships by pushing feature/offers to main, never `vercel deploy --prod`.
-Goes in the backend's `docs/offers/RELEASE-CHECKLIST.md` too. Read at `src/lib/offersConfig.ts` and
-`src/lib/offersAccess.ts`. Every one is server-only (none has a `NEXT_PUBLIC_` prefix). Anything unset or
+Goes in the backend's `docs/offers/RELEASE-CHECKLIST.md` too. Read at `src/lib/offersConfig.ts`. Who may use it is not a variable: anyone with Match Ops access. Every one is server-only (none has a `NEXT_PUBLIC_` prefix). Anything unset or
 wrong closes the whole page for everyone: every `/api/offers/*` route answers 503.
 
 | Variable | Value | Notes |
@@ -15,7 +14,6 @@ wrong closes the whole page for everyone: every `/api/offers/*` route answers 50
 | `OFFERS_ENV` | `local`, `staging` or `production` | No default. `local` needs local mode on; the other two need it off. |
 | `OFFERS_API_BASE_URL` | `https://playmatchday.herokuapp.com` on production, `https://matchday-stage.herokuapp.com` on staging, `http://localhost:3070` on local | Bare origin. Its host must be the write client's own allowlisted host for that environment (`MATCHDAY_HOSTS`), so a new backend host is a code change, not a variable. |
 | `OFFERS_UPLOAD_HOST` | The exact host in the backend's upload links, such as the S3 bucket's host. `localhost:3070` on local | Bare host, no scheme, path or wildcard. **The production value is UNKNOWN from here:** take it from the host in a real `POST /admin/offers/photo-uploads` answer on that environment. |
-| `OFFERS_ALLOWLIST` | Comma-separated emails | Already exists. Unset means nobody. |
 
 Also needed, none of them new variables:
 

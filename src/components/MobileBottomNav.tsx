@@ -14,6 +14,7 @@
 // All routes are gated by the same canAccess() / is_admin predicates
 // that govern TopNav, so the mobile surface mirrors desktop access.
 
+import { canUseOffers } from "@/lib/offersCanUse";
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -79,7 +80,7 @@ const MOBILE_PRIMARY: MobilePrimary[] = [
     href: "/growth",
     label: "Growth",
     icon: Sprout,
-    visible: (u) => canAccess(u, "growth"),
+    visible: (u) => canAccess(u, "growth") || canUseOffers(u), // Offers follows Match Ops; GrowthShell sends them there
     isActive: (p) => p.startsWith("/growth"),
   },
   {

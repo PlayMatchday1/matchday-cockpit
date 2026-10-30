@@ -1,5 +1,6 @@
 "use client";
 
+import { canUseOffers } from "@/lib/offersCanUse";
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import MatchdayClubhouseLogo from "@/components/MatchdayClubhouseLogo";
@@ -63,7 +64,7 @@ const PRIMARY_TABS: PrimaryTab[] = [
     // can_access_growth belonged to Player Lifecycle until 2026-08-23; both now mean this.
     label: "Growth",
     href: "/growth",
-    visible: (u) => canAccess(u, "growth"),
+    visible: (u) => canAccess(u, "growth") || canUseOffers(u), // Offers follows Match Ops; GrowthShell sends them there
     match: (p) => p.startsWith("/growth"),
   },
   {

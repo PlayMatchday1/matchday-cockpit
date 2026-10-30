@@ -10,6 +10,7 @@ import ChatsRail from "../match-ops/ChatsRail";
 import { useSectionNav } from "@/components/SectionNav";
 import { GROWTH_SECTIONS } from "./growthSections";
 import { useOffersAccess } from "@/components/offers/useOffersAccess";
+import { canAccess, useAuth } from "@/lib/useAuth";
 
 // Growth's own key. Collapsing a rail in one section must not collapse another's.
 const COLLAPSE_KEY = "growth:rail-collapsed";
@@ -19,11 +20,13 @@ const LABEL = "Growth";
 export default function GrowthRail({ children }: { children: React.ReactNode }) {
   /* PUBLISHED TO THE SHELL'S ONE APP BAR instead of rendering a second one inside <main>.
    * See src/components/SectionNav.tsx for why the bar cannot live in here. */
-  // OFFERS IS THE ONE EXCEPTION to "gated on growth and nothing else": until release it is drawn only
-  // when the server says this user is on OFFERS_ALLOWLIST. No answer yet is no.
+  // OFFERS IS THE ONE EXCEPTION to "gated on growth and nothing else": it follows Match Ops access, as
+  // the server answers it, and the rest follows Growth. No answer yet is no.
   const offersOk = useOffersAccess() === true;
+  const { appUser } = useAuth();
+  const growthOk = canAccess(appUser, "growth");
   // MEMOISED: useSectionNav depends on the array's identity, and a fresh filter each render loops.
-  const items = useMemo(() => (offersOk ? GROWTH_SECTIONS : GROWTH_SECTIONS.filter((s) => s.key !== "offers")), [offersOk]);
+  const items = useMemo(() => GROWTH_SECTIONS.filter((s) => (s.key === "offers" ? offersOk : growthOk)), [offersOk, growthOk]);
   useSectionNav({ items, label: LABEL, showSwitch: false });
   const [collapsed, setCollapsed] = useState(false);
   useEffect(() => {
@@ -36,9 +39,8 @@ export default function GrowthRail({ children }: { children: React.ReactNode }) 
       return next;
     });
 
-  // EVERY ITEM HERE IS GATED ON `growth` AND NOTHING ELSE, so the shell's guard has already decided
-  // and there is no per-item filter to get wrong. When a Growth page needs its own permission, it
-  // gets filtered here the way LifecycleRail filters Membership — not by hiding it somewhere else.
+  // EVERY OTHER ITEM IS GATED ON `growth`. When a Growth page needs its own permission, it gets
+  // filtered here the way LifecycleRail filters Membership, not by hiding it somewhere else.
   const railW = collapsed ? "60px" : "212px";
 
   return (

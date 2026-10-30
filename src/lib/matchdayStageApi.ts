@@ -125,7 +125,7 @@ export class NotAuthorizedError extends Error {
 // Who is performing a write, and whether they may. Derived server-side from the
 // authenticated user's app_users row (can_edit_matches AND can_access_matchops) — never
 // from client state. Reads (apiGet) need no actor; only writes do.
-export type WriteActor = { canEditMatches: boolean; isAdmin?: boolean; canManagePlayers?: boolean; canManagePromos?: boolean; canEditCredits?: boolean; canEditMemberships?: boolean; email?: string; userId?: string;
+export type WriteActor = { canEditMatches: boolean; isAdmin?: boolean; canUseOffers?: boolean; canManagePlayers?: boolean; canManagePromos?: boolean; canEditCredits?: boolean; canEditMemberships?: boolean; email?: string; userId?: string;
   // Phase 25 — a CITY MANAGER's scope. A FOURTH authority, not a variant of EDIT MATCHES: it
   // permits exactly one field (managerId) on matches the route has already proven are in this
   // city. Set only by the city-manager route, from the DB row, never from client state.
@@ -234,6 +234,15 @@ export function __setCreditsGuardForTest(fn: (a: WriteActor | undefined) => void
   const prev = creditsGuard; creditsGuard = fn; return () => { creditsGuard = prev; };
 }
 let adminGuard: (a: WriteActor | undefined) => void = assertIsAdmin;
+// GROWTH › OFFERS: set only by offersGate, from the same Match Ops check every Offers route passes.
+function assertCanUseOffers(actor: WriteActor | undefined): void {
+  if (!actor || actor.canUseOffers !== true) {
+    throw new NotAuthorizedError(
+      `Refusing write: the caller does not have Match Ops access for Offers. No request was sent to MatchDay. ` +
+      `(actor: ${actor?.email ? JSON.stringify(actor.email) : "none"})`,
+    );
+  }
+}
 let membershipsGuard: (a: WriteActor | undefined) => void = assertCanEditMemberships;
 export function __setMembershipsGuardForTest(fn: (a: WriteActor | undefined) => void): () => void {
   const prev = membershipsGuard; membershipsGuard = fn; return () => { membershipsGuard = prev; };
@@ -478,7 +487,7 @@ export async function apiGet<T = unknown>(env: ClientEnv, path: string, query?: 
 // WRITES — env-explicit, single-shot, host-allowlisted, deny-listed, prod-bolted.
 // `actingStaffEmail`: X-Acting-Staff-Email (src/lib/staffIdentity.ts), the signed-in person behind the
 // shared service account. Only the Offers proxy (offersApiWrite) passes it.
-export async function apiWrite<T = unknown>(env: ClientEnv, method: "POST" | "PUT" | "PATCH" | "DELETE", path: string, body?: unknown, actor?: WriteActor, requires: "edit" | "manage" | "promos" | "city" | "credits" | "memberships" | "admin" = "edit", unlock?: WriteUnlock, actingStaffEmail?: string, base?: string): Promise<T> {
+export async function apiWrite<T = unknown>(env: ClientEnv, method: "POST" | "PUT" | "PATCH" | "DELETE", path: string, body?: unknown, actor?: WriteActor, requires: "edit" | "manage" | "promos" | "city" | "credits" | "memberships" | "admin" | "offers" = "edit", unlock?: WriteUnlock, actingStaffEmail?: string, base?: string): Promise<T> {
   // STEP 2 in the write pipeline (authenticated is step 1, in the route): does the caller
   // hold the required authority — EDIT MATCHES for match/roster writes, MANAGE PLAYERS for
   // ban writes, MANAGE PROMOS for promo writes? These are INDEPENDENT grants; each path names
@@ -487,7 +496,7 @@ export async function apiWrite<T = unknown>(env: ClientEnv, method: "POST" | "PU
   // unbypassable chokepoint; a route that forgets its own early check is still stopped here.
   (requires === "promos" ? promoGuard : requires === "manage" ? manageGuard : requires === "city" ? cityGuard
     : requires === "credits" ? creditsGuard : requires === "memberships" ? membershipsGuard
-    : requires === "admin" ? adminGuard : editGuard)(actor);
+    : requires === "admin" ? adminGuard : requires === "offers" ? assertCanUseOffers : editGuard)(actor);
   // The bolt fires next, before creds are even loaded — production is refused
   // regardless of whether prod credentials happen to be configured. Nothing about
   // a production write can proceed while the bolt is engaged.

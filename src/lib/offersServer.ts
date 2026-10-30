@@ -4,17 +4,20 @@ import "server-only";
 // WHERE IT TALKS TO comes from the environment (src/lib/offersConfig.ts): OFFERS_ENV, the backend's
 // base URL and the allowed upload host. Anything unset or wrong answers 503, for everyone.
 //
-// THREE GATES, in order, each on top of the last: the config (503), admin (authenticateAdmin, read
-// fresh from app_users on every request), OFFERS_ALLOWLIST (404). The backend's ADMIN-only rule is a
-// separate check on the service account; it says nothing about which Clubhouse user is asking.
+// TWO GATES, in order: the config (503), then Match Ops access (authenticateMatchOpsRead, the same check
+// the Match Ops section uses, read fresh from app_users on every request). A signed-in person without
+// it gets the same answer as a route that doesn't exist (404). No session stays 401, so the page can
+// tell an ended sign-in from no access. The backend's ADMIN-only rule is a separate check on the service
+// account; it says nothing about which Clubhouse user is asking. Who did a write is in change_log and in
+// X-Acting-Staff-Email, both from the session.
 
 import { randomUUID } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { authenticateAdmin } from "@/lib/adminAuth";
+import { authenticateMatchOpsRead } from "@/lib/matchOpsAuth";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
 import { PACE_MS } from "@/lib/matchdayApi";
 import { StageConfigError, apiGet, apiWrite, WriteFailedError, type WriteActor } from "@/lib/matchdayStageApi";
-import { OFFERS_NOT_FOUND, onOffersAllowlist } from "@/lib/offersAccess";
+import { OFFERS_NOT_FOUND } from "@/lib/offersAccess";
 import { readOffersConfig, type OffersConfig, type OffersConfigResult } from "@/lib/offersConfig";
 import { chicagoWallNow, offerMatchOpt, offersLogBody, photoUrlOk, pickerRange, wallFromMatch, type ApiOfferMatch, type Campaign, type City, type FieldOpt, type MatchOpt } from "@/lib/offersModel";
 import { READS_STOPPED, makePacer } from "@/lib/offersPacing";
@@ -26,8 +29,8 @@ export const PHOTO_UPLOADS = "/admin/offers/photo-uploads";
 
 export type OffersAuth = { email: string; actor: WriteActor; supabase: SupabaseClient };
 
-type GateDeps = { config: () => OffersConfigResult; authenticateAdmin: (req: Request) => ReturnType<typeof authenticateAdmin>; logStore: typeof supabaseLogStore };
-const realDeps: GateDeps = { config: readOffersConfig, authenticateAdmin, logStore: supabaseLogStore };
+type GateDeps = { config: () => OffersConfigResult; authenticate: (req: Request) => ReturnType<typeof authenticateMatchOpsRead>; logStore: typeof supabaseLogStore };
+const realDeps: GateDeps = { config: readOffersConfig, authenticate: authenticateMatchOpsRead, logStore: supabaseLogStore };
 let gateDeps: GateDeps = realDeps;
 // FOR scripts/offers-model-test.ts ONLY: run the real gate and the real writes as each kind of caller, offline.
 export function _setOffersGateDepsForTest(d: Partial<GateDeps> | null) { gateDeps = d ? { ...realDeps, ...d } : realDeps; }
@@ -46,12 +49,11 @@ export async function offersGate(req: Request): Promise<OffersAuth | Response> {
     console.error(`[offers] closed: ${config.problem}`);
     return Response.json({ error: "Offers isn't set up on this server." }, { status: 503 });
   }
-  const auth = await gateDeps.authenticateAdmin(req);
-  if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
-  if (!onOffersAllowlist(auth.email)) return Response.json(OFFERS_NOT_FOUND, { status: 404 });
+  const auth = await gateDeps.authenticate(req);
+  if (!auth.ok) return auth.status === 403 ? Response.json(OFFERS_NOT_FOUND, { status: 404 }) : Response.json({ error: auth.error }, { status: auth.status });
   // Every write carries the session's person; without a usable email it is refused here, before the backend.
   if (req.method !== "GET" && !staffEmailOf(auth.email)) return Response.json({ error: WHO_ARE_YOU }, { status: 401 });
-  return { email: auth.email, supabase: auth.supabase, actor: { canEditMatches: false, isAdmin: true, email: auth.email, userId: auth.appUserId } };
+  return { email: auth.email, supabase: auth.supabase, actor: { canEditMatches: false, canUseOffers: true, email: auth.email, userId: auth.appUserId } };
 }
 
 // ── PLAIN WORDS for the backend's refusals ──────────────────────────────────────────────────────
@@ -153,7 +155,7 @@ export async function readMatchesForCities(cityIds: number[]): Promise<MatchList
 export type AudienceCount = { count: number; heldBack: number; players: number; mostItCanCost: number | null };
 export const readAudienceCount = (auth: OffersAuth, body: Record<string, unknown>) => paced(() => {
   const { env, baseUrl } = cfg();
-  return apiWrite<AudienceCount>(env, "POST", `${CAMPAIGNS}/audience-count`, body, auth.actor, "admin", undefined, undefined, baseUrl);
+  return apiWrite<AudienceCount>(env, "POST", `${CAMPAIGNS}/audience-count`, body, auth.actor, "offers", undefined, undefined, baseUrl);
 });
 
 // Every field, cut down to what the photo picker and Played at need (title, city, cover URL).
@@ -178,7 +180,7 @@ export function offersApiWrite<T = unknown>(auth: OffersAuth, method: "POST" | "
   const staff = staffEmailOf(auth.email);
   if (!staff) return Promise.reject(new Error(WHO_ARE_YOU));
   const { env, baseUrl } = cfg();
-  return apiWrite<T>(env, method, path, body, auth.actor, "admin", undefined, staff, baseUrl);
+  return apiWrite<T>(env, method, path, body, auth.actor, "offers", undefined, staff, baseUrl);
 }
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
@@ -340,5 +342,5 @@ export async function registerPhoto(auth: OffersAuth, fileKey: string): Promise<
 export type PlayerLookup = { players: { id: number; name: string | null; city: string | null; matchesPlayed: number }[]; notFound: number[] };
 export const readPlayerLookup = (auth: OffersAuth, ids: number[]) => paced(() => {
   const { env, baseUrl } = cfg();
-  return apiWrite<PlayerLookup>(env, "POST", "/admin/offers/players/lookup", { ids }, auth.actor, "admin", undefined, undefined, baseUrl);
+  return apiWrite<PlayerLookup>(env, "POST", "/admin/offers/players/lookup", { ids }, auth.actor, "offers", undefined, undefined, baseUrl);
 });

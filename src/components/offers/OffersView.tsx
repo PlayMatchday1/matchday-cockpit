@@ -1,6 +1,6 @@
 "use client";
 
-// GROWTH › OFFERS (Figma 20571:44; backend feature/offers on the LOCAL backend, admin + OFFERS_ALLOWLIST).
+// GROWTH › OFFERS (Figma 20571:44; backend feature/offers on the LOCAL backend, Match Ops access).
 //
 // Recruiting's layout: the list on the left, one panel on the right. Picking an offer opens its panel
 // and, once it has launched, its results card under the list: saw, used, discount given, came back
