@@ -12,9 +12,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  FIRST_NAME_TOKEN, MAX_TEST_IDS, MAX_USES_PER_PLAYER, notFoundLine, parsePlayerIds, playerLine, prefillField, PREVIEW_FIRST_NAME, amountText, limitLine, stepLimit, stepUses, usesLine, audienceBody, buttonMatchNote, buttonOf, matchDay, opensText, chicagoWallNow, copyOf, createBody, defaultRun, endsTicket, formOf, formProblem, fromInput, matchInfo,
+  FIRST_NAME_TOKEN, MAX_TEST_IDS, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, MAX_USES_PER_PLAYER, notFoundLine, parsePlayerIds, playerLine, prefillField, PREVIEW_FIRST_NAME, amountText, limitLine, stepLimit, stepUses, usesLine, audienceBody, buttonMatchNote, buttonOf, matchDay, opensText, chicagoWallNow, copyOf, createBody, defaultRun, endsTicket, formOf, formProblem, fromInput, matchInfo,
   matchShort, newForm, patchBody, pickedMatch, startLabel, STEPPER, summary, toInput, wallLabel,
-  type Campaign, type City, type Count, type FieldOpt, type Lookup, type CopyKey, type DealType, type Form, type MatchOpt,
+  type Campaign, type City, type Count, type FieldOpt, type Lookup, type UploadedPhoto, type CopyKey, type DealType, type Form, type MatchOpt,
 } from "@/lib/offersModel";
 import OfferPopupPreview from "./OfferPopupPreview";
 import {
@@ -25,6 +25,24 @@ type Data = { campaigns: Campaign[]; cities: City[]; fields: FieldOpt[]; matches
 const DEALS: { type: DealType; label: string }[] = [
   { type: "PERCENT_OFF", label: "% off" }, { type: "AMOUNT_OFF", label: "$ off" }, { type: "SET_PRICE", label: "Set price" }, { type: "FREE_MATCH", label: "Free match" },
 ];
+const uploadsKey = (id: number) => `offers:uploaded-photos:${id}`;
+function readUploads(id: number): UploadedPhoto[] {
+  try { const v = JSON.parse(window.localStorage.getItem(uploadsKey(id)) ?? "[]"); return Array.isArray(v) ? v.filter((p) => typeof p?.url === "string" && photoUrlOk(p.url)) : []; } catch { return []; }
+}
+const keepUploads = (id: number, list: UploadedPhoto[]) => { try { window.localStorage.setItem(uploadsKey(id), JSON.stringify(list)); } catch { /* private mode */ } };
+// The PUT, from the browser, so progress can be shown and a 5 MB file never passes through a route.
+function putPhoto(url: string, headers: [string, string][], file: File, onProgress: (f: number) => void): Promise<{ ok: boolean; status: number; text: string }> {
+  return new Promise((resolve) => {
+    const x = new XMLHttpRequest();
+    x.open("PUT", url);
+    for (const [k, v] of headers) x.setRequestHeader(k, v);
+    x.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded / e.total); };
+    x.onload = () => resolve({ ok: x.status >= 200 && x.status < 300, status: x.status, text: x.responseText.slice(0, 200) });
+    x.onerror = () => resolve({ ok: false, status: 0, text: "network or CORS" });
+    x.onabort = () => resolve({ ok: false, status: 0, text: "stopped" });
+    x.send(file);
+  });
+}
 const TEST_IDS_KEY = "offers:last-test-ids";
 const readTestIds = () => { try { return window.localStorage.getItem(TEST_IDS_KEY) ?? ""; } catch { return ""; } };
 const keepTestIds = (text: string) => { try { window.localStorage.setItem(TEST_IDS_KEY, text); } catch { /* private mode */ } };
@@ -78,6 +96,8 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
   async function save(): Promise<{ o: WriteOutcome; id: number | null }> {
     if (c === null) {
       const { o, after } = await send("/api/offers", "POST", createBody(f, data.matches, data.cities), `Saved "${f.name.trim()}" as a draft.`);
+      // A new offer's uploads move to its id, so they are still tiles when it reopens.
+      if (after?.id) keepUploads(after.id, uploaded);
       return { o, id: after?.id ?? null };
     }
     if (!dirty) return { o: { verdict: "LANDED", text: "Nothing to save." }, id: c.id };
@@ -220,25 +240,77 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
   // A specific match's own field cover is the default for that offer. Editable after launch.
   const coverFields = data.fields.filter((x) => x.cover && (f.cityIds.length === 0 || (x.cityId !== null && f.cityIds.includes(x.cityId))));
   const cityName = (id: number | null) => data.cities.find((x) => x.id === id)?.name ?? "";
+  // UPLOAD: the tile after the covers (click or drop). The file goes straight from this browser to the
+  // backend's link, with progress, then is registered and selected. The backend keeps no list of an
+  // offer's uploads, so they are remembered per offer in this browser (a convenience); the offer's
+  // saved photo always shows as a tile whatever this browser remembers.
+  const [uploaded, setUploaded] = useState<UploadedPhoto[]>(() => (c ? readUploads(c.id) : []));
+  const [upPct, setUpPct] = useState<number | null>(null);
+  const [upErr, setUpErr] = useState<string | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const fileInput = useRef<HTMLInputElement>(null);
+  async function uploadPhoto(file: File | undefined) {
+    if (!file || upPct !== null) return;
+    setUpErr(null);
+    const problem = photoFileProblem(file);
+    if (problem) { setUpErr(problem); return; }
+    setUpPct(0);
+    try {
+      const contentType = photoContentType(file)!;
+      const link = await authed("/api/offers/photos", { method: "POST", body: JSON.stringify({ contentType, sizeBytes: file.size }) });
+      if (!link.ok) { setUpErr(String(link.json.error)); return; }
+      const put = await putPhoto(String(link.json.uploadURL), settableHeaders(link.json.headers as Record<string, string>), file, setUpPct);
+      if (!put.ok) { console.error(`[offers] photo PUT failed: HTTP ${put.status} ${put.text}`); setUpErr("The upload didn't finish. Try again."); return; }
+      const reg = await authed("/api/offers/photos/register", { method: "POST", body: JSON.stringify({ fileKey: link.json.fileKey }) });
+      if (reg.json.verdict !== "LANDED") { setUpErr(String(reg.json.error ?? reg.json.detail ?? "The upload didn't finish. Try again.")); return; }
+      const url = String(reg.json.url);
+      const next = [...uploaded, { url, name: file.name }];
+      setUploaded(next);
+      if (c) keepUploads(c.id, next);
+      setF((v) => ({ ...v, copy: { ...v.copy, photoUrl: url } }));
+    } finally { setUpPct(null); }
+  }
+  const coverUrls = coverFields.map((x) => x.cover as string);
+  const photoTile = (key: string | number, url: string | null, title: string, sub: string) => {
+    const on = (copy.photoUrl ?? null) === url;
+    return (
+      <button key={key} type="button" data-testid={`offers-photo-${key}`} data-on={on ? "1" : "0"} disabled={ended}
+        onClick={() => setF((v) => ({ ...v, copy: { ...v.copy, photoUrl: url } }))}
+        className="flex flex-col overflow-hidden rounded-[8px] border-2 text-left" style={{ borderColor: on ? O.chipOn : O.line }}>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img alt="" src={url ?? "/offers/offer-popup-photo.jpg"} className="h-[48px] w-full object-cover" />
+        <span className="truncate px-1.5 pt-1 text-[11px] font-medium" style={{ color: O.ink }}>{title}</span>
+        <span className="truncate px-1.5 pb-1 text-[10.5px]" style={{ color: O.muted }}>{sub}</span>
+      </button>
+    );
+  };
   const photoPicker = () => (
     <div data-testid="offers-photo" className="flex flex-col gap-1.5">
       <div className="text-[12px] font-medium" style={{ color: O.ink }}>Photo</div>
       <div className="grid grid-cols-2 gap-2">
-        {[{ id: 0, title: "MatchDay photo", cityId: null, cover: null as string | null }, ...coverFields].map((x) => {
-          const on = (copy.photoUrl ?? null) === x.cover;
-          return (
-            <button key={x.id} type="button" data-testid={`offers-photo-${x.id}`} data-on={on ? "1" : "0"} disabled={ended}
-              onClick={() => setF((v) => ({ ...v, copy: { ...v.copy, photoUrl: x.cover } }))}
-              className="flex flex-col overflow-hidden rounded-[8px] border-2 text-left" style={{ borderColor: on ? O.chipOn : O.line }}>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img alt="" src={x.cover ?? "/offers/offer-popup-photo.jpg"} className="h-[48px] w-full object-cover" />
-              <span className="truncate px-1.5 pt-1 text-[11px] font-medium" style={{ color: O.ink }}>{x.title}</span>
-              <span className="truncate px-1.5 pb-1 text-[10.5px]" style={{ color: O.muted }}>{x.cover ? cityName(x.cityId) : "Default"}</span>
-            </button>
-          );
-        })}
+        {photoTile("default", null, "MatchDay photo", "Default")}
+        {coverFields.map((x) => photoTile(`field-${x.id}`, x.cover, x.title, cityName(x.cityId)))}
+        {uploadTiles(uploaded, c?.photoUrl ?? null, coverUrls).map((p, i) => photoTile(`upload-${i}`, p.url, p.name, "Uploaded"))}
+        {!ended && (
+          <button type="button" data-testid="offers-photo-upload" disabled={upPct !== null}
+            onClick={() => fileInput.current?.click()}
+            onDragOver={(e) => { e.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)}
+            onDrop={(e) => { e.preventDefault(); setDragging(false); uploadPhoto(e.dataTransfer.files[0]); }}
+            className="flex min-h-[82px] flex-col items-center justify-center gap-1 rounded-[8px] border-2 border-dashed px-1.5 text-center"
+            style={{ borderColor: dragging ? O.chipOn : O.line, background: dragging ? O.mint : O.surface }}>
+            {upPct === null
+              ? <><span className="text-[12px] font-semibold" style={{ color: O.ink }}>Upload</span><span className="text-[10.5px]" style={{ color: O.muted }}>Click or drop an image</span></>
+              : <>
+                  <span data-testid="offers-upload-pct" className="text-[11px] font-medium" style={{ color: O.ink }}>{upPct >= 1 ? "Finishing…" : `Uploading ${Math.round(upPct * 100)}%`}</span>
+                  <span className="h-1 w-4/5 overflow-hidden rounded-full" style={{ background: O.line }}><span className="block h-full" style={{ width: `${Math.round(upPct * 100)}%`, background: O.chipOn }} /></span>
+                </>}
+          </button>
+        )}
       </div>
-      {coverFields.length === 0 && <div data-testid="offers-nophoto" className="text-[11.5px]" style={{ color: O.muted }}>No field in {f.cityIds.length ? "these cities" : "any city"} has a cover photo yet.</div>}
+      <input ref={fileInput} data-testid="offers-photo-file" type="file" accept="image/jpeg,image/png,image/webp" className="hidden"
+        onChange={(e) => { uploadPhoto(e.target.files?.[0]); e.target.value = ""; }} />
+      {upErr && <div data-testid="offers-upload-error" className="text-[11.5px] font-medium" style={{ color: O.critInk }}>{upErr}</div>}
+      <div className="text-[11.5px] leading-[16px]" style={{ color: O.muted }}>Best at 1200 × 650, landscape. Text on the image may be covered by the tag and line.</div>
     </div>
   );
   const buttonOpens = () => {

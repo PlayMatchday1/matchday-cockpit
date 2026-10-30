@@ -9,6 +9,8 @@
 //
 // MONEY: cents. dealAmount is a percent (PERCENT_OFF), cents (AMOUNT_OFF, SET_PRICE) or 0 (FREE_MATCH).
 
+import { LOCAL_MDAPI_HOST } from "./localMode";
+
 export type DealType = "PERCENT_OFF" | "AMOUNT_OFF" | "SET_PRICE" | "FREE_MATCH";
 export type LastPlayed = "ANY" | "LAPSED" | "NEVER";
 export type Membership = "ANYONE" | "MEMBERS" | "NON_MEMBERS";
@@ -318,6 +320,46 @@ export function copyOf(f: Form, matches: MatchOpt[], cities: City[]): Copy {
   return out;
 }
 
+// ── THE PHOTO ────────────────────────────────────────────────────────────────────────────────────
+// photoUrl must be https. The one exception is the local backend's own files (seeded covers and local
+// uploads), judged on the PARSED host, so http://localhost:3070.evil.com does not pass. The backend
+// refuses that address outside local mode anyway.
+export function photoUrlOk(url: string): boolean {
+  let u: URL;
+  try { u = new URL(url); } catch { return false; }
+  if (u.protocol === "https:") return true;
+  return u.protocol === "http:" && u.host === LOCAL_MDAPI_HOST && u.pathname.startsWith("/dev/uploads/");
+}
+
+// UPLOADS (backend f34bb7a): 1. POST photo-uploads { contentType, sizeBytes } gives a 15-minute link.
+// 2. The BROWSER PUTs the raw file there with the returned headers (locally the API, later S3).
+// 3. POST photo-uploads/register { fileKey } gives the url to save as photoUrl. Each key registers once.
+export const MAX_PHOTO_BYTES = 5_242_880; // 5 MB, the backend's limit
+export type PhotoContentType = "image/jpeg" | "image/png" | "image/webp";
+const PHOTO_TYPES: PhotoContentType[] = ["image/jpeg", "image/png", "image/webp"];
+export function photoContentType(file: { type: string; name: string }): PhotoContentType | null {
+  if ((PHOTO_TYPES as string[]).includes(file.type)) return file.type as PhotoContentType;
+  if (file.type) return null;
+  return /\.jpe?g$/i.test(file.name) ? "image/jpeg" : /\.png$/i.test(file.name) ? "image/png" : /\.webp$/i.test(file.name) ? "image/webp" : null;
+}
+export function photoFileProblem(file: { type: string; name: string; size: number }): string | null {
+  if (!photoContentType(file)) return "Only JPG, PNG or WebP images can be uploaded.";
+  if (file.size <= 0) return "That file is empty.";
+  if (file.size > MAX_PHOTO_BYTES) return "That image is over 5 MB, the most that can be uploaded.";
+  return null;
+}
+// Headers a page may not set; the browser sends its own correct values for these.
+const FORBIDDEN_HEADERS = new Set(["content-length", "host", "connection", "transfer-encoding"]);
+export const settableHeaders = (h: Record<string, string>) => Object.entries(h).filter(([k]) => !FORBIDDEN_HEADERS.has(k.toLowerCase()));
+// The tiles after the field covers: this offer's uploads, then the saved photo if it is neither a
+// cover shown here nor one of those uploads (so a stored photo can always be switched back to).
+export type UploadedPhoto = { url: string; name: string };
+export function uploadTiles(uploaded: UploadedPhoto[], stored: string | null, coverUrls: string[]): UploadedPhoto[] {
+  const out = uploaded.filter((p, i) => !coverUrls.includes(p.url) && uploaded.findIndex((x) => x.url === p.url) === i);
+  if (stored && !coverUrls.includes(stored) && !out.some((p) => p.url === stored)) out.push({ url: stored, name: "Saved photo" });
+  return out;
+}
+
 // ── REQUEST BODIES ───────────────────────────────────────────────────────────────────────────────
 // Everything the campaign would hold, as the backend's field names.
 export function fullBody(f: Form, matches: MatchOpt[], cities: City[]): Record<string, unknown> {
@@ -378,7 +420,7 @@ export function formProblem(f: Form, matches: MatchOpt[]): string | null {
   if (f.maxRedemptions !== null && (!Number.isInteger(f.maxRedemptions) || f.maxRedemptions < 1)) return "The total limit must be 1 or more.";
   if (f.audienceMode === "PLAYERS" && f.playerIds.length === 0) return "Add at least one player ID.";
   const photo = copyOf(f, matches, [])["photoUrl"];
-  if (photo !== null && !/^https:\/\//.test(photo)) return "The photo must be an https link.";
+  if (photo !== null && !photoUrlOk(photo)) return "The photo must be an https link.";
   return null;
 }
 

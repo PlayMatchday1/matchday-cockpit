@@ -13,9 +13,9 @@ import { offersAccessState, onOffersAllowlist } from "../src/lib/offersAccess";
 import {
   audienceBody, chicagoWallNow, comparisonLine, costCeiling, createBody, defaultRun, endsTicket, formOf, newForm, patchBody, priceWithDeal,
   summary, wallFromMatch, withPreviewName, buttonOf, opensText, formProblem, stepUses, usesLine, stepLimit, limitLine, copyOf,
-  extraBookingsLine, prefillField, audienceText, parsePlayerIds, playerLine, notFoundLine, usedOfLimit, resultsLines, type Campaign, type City, type MatchOpt, type Results,
+  extraBookingsLine, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, prefillField, audienceText, parsePlayerIds, playerLine, notFoundLine, usedOfLimit, resultsLines, type Campaign, type City, type MatchOpt, type Results,
 } from "../src/lib/offersModel";
-import { _setOffersGateDepsForTest, mismatches, offersGate } from "../src/lib/offersServer";
+import { _setOffersGateDepsForTest, mismatches, offersGate, photoLinkProblem } from "../src/lib/offersServer";
 
 let pass = 0, fail = 0;
 const eq = (name: string, got: unknown, want: unknown) => {
@@ -174,6 +174,26 @@ eq("...and keeps the plain count without a limit", resultsLines(draftFrom({ stat
 
 console.log("photo rule:");
 eq("an http photo stops the save", formProblem({ ...nowF, name: "x", copy: { photoUrl: "http://covers.local/a.jpg" } }, matches), "The photo must be an https link.");
+eq("the local backend's own files pass (seeded covers and local uploads)", [photoUrlOk("http://localhost:3070/dev/uploads/fields/1/cover.png"), photoUrlOk("http://localhost:3070/dev/uploads/offers/photos/a.jpg")], [true, true]);
+eq("a spoofed or other local address does not", [photoUrlOk("http://localhost:3070.evil.com/dev/uploads/a.jpg"), photoUrlOk("http://localhost:3000/dev/uploads/a.jpg"), photoUrlOk("http://localhost:3070/other/a.jpg"), photoUrlOk("javascript:alert(1)"), photoUrlOk("offers/photos/a.jpg")], [false, false, false, false, false]);
+
+console.log("photo upload:");
+eq("JPG, PNG and WebP, by type or by name when the browser gives no type", [photoContentType({ type: "image/jpeg", name: "a" }), photoContentType({ type: "image/webp", name: "a" }), photoContentType({ type: "", name: "a.PNG" }), photoContentType({ type: "", name: "a.jpeg" })], ["image/jpeg", "image/webp", "image/png", "image/jpeg"]);
+eq("anything else is refused, even with a good name", [photoContentType({ type: "image/gif", name: "a.png" }), photoContentType({ type: "", name: "a.gif" })], [null, null]);
+eq("exactly 5 MB is fine, a byte more is not, and empty is not", [photoFileProblem({ type: "image/png", name: "a", size: 5242880 }), photoFileProblem({ type: "image/png", name: "a", size: 5242881 }), photoFileProblem({ type: "image/png", name: "a", size: 0 })], [null, "That image is over 5 MB, the most that can be uploaded.", "That file is empty."]);
+eq("the wrong type says so", photoFileProblem({ type: "application/pdf", name: "a.pdf", size: 10 }), "Only JPG, PNG or WebP images can be uploaded.");
+eq("headers a page may not set are dropped", settableHeaders({ "Content-Type": "image/png", "Content-Length": "9", Host: "x", "If-None-Match": "*" }), [["Content-Type", "image/png"], ["If-None-Match", "*"]]);
+const lk = { method: "PUT", fileKey: "k", headers: {}, expiresAt: "" };
+eq("the link must be a PUT to the local backend (the control)", photoLinkProblem({ ...lk, uploadURL: "http://localhost:3070/dev/uploads/offers/photos/a.jpg" }), null);
+eq("a spoofed host is refused on the parsed host", photoLinkProblem({ ...lk, uploadURL: "http://localhost:3070.evil.com/a.jpg" }) !== null, true);
+eq("another host, a POST and no key are refused", [photoLinkProblem({ ...lk, uploadURL: "https://evil.com/a.jpg" }) !== null, photoLinkProblem({ ...lk, method: "POST", uploadURL: "http://localhost:3070/a" }) !== null, photoLinkProblem({ ...lk, fileKey: "", uploadURL: "http://localhost:3070/a" }) !== null, photoLinkProblem({ ...lk }) !== null], [true, true, true, true]);
+{
+  const up = [{ url: "https://x/a.jpg", name: "a.jpg" }, { url: "https://x/b.jpg", name: "b.jpg" }];
+  eq("uploads stay as tiles", uploadTiles(up, null, []).map((p) => p.url), ["https://x/a.jpg", "https://x/b.jpg"]);
+  eq("the saved photo is a tile even if this browser never saw it", uploadTiles(up, "https://x/c.jpg", []).map((p) => p.name), ["a.jpg", "b.jpg", "Saved photo"]);
+  eq("a saved photo that is a cover or an upload is not doubled", [uploadTiles(up, "https://x/a.jpg", []).length, uploadTiles([], "https://x/cover.jpg", ["https://x/cover.jpg"]).length], [2, 0]);
+  eq("a stored local photo saves", formProblem({ ...nowF, name: "x", copy: { photoUrl: "http://localhost:3070/dev/uploads/offers/photos/a.jpg" } }, matches), null);
+}
 eq("an https photo is fine (the control)", formProblem({ ...nowF, name: "x", copy: { photoUrl: "https://covers.local/a.jpg" } }, matches), null);
 
 console.log("money, in cents, as the backend's applyOfferDeal:");

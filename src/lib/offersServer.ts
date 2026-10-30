@@ -13,14 +13,15 @@ import { randomUUID } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { authenticateAdmin } from "@/lib/adminAuth";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
-import { localModeOn } from "@/lib/localMode";
+import { LOCAL_MDAPI_HOST, localModeOn } from "@/lib/localMode";
 import { apiGet, apiWrite, WriteFailedError, type ClientEnv, type WriteActor } from "@/lib/matchdayStageApi";
 import { OFFERS_NOT_FOUND, onOffersAllowlist } from "@/lib/offersAccess";
-import { wallFromMatch, type Campaign, type FieldOpt, type MatchOpt } from "@/lib/offersModel";
+import { photoUrlOk, wallFromMatch, type Campaign, type FieldOpt, type MatchOpt } from "@/lib/offersModel";
 import { STAFF_NOT_ALLOWED_PLAIN, WHO_ARE_YOU, staffEmailOf, staffErrorKind } from "@/lib/staffIdentity";
 
 export const OFFERS_ENV: ClientEnv = "local";
 export const CAMPAIGNS = "/admin/offers/campaigns";
+export const PHOTO_UPLOADS = "/admin/offers/photo-uploads";
 
 export type OffersAuth = { email: string; actor: WriteActor; supabase: SupabaseClient };
 
@@ -242,6 +243,52 @@ export async function sendPreview(auth: OffersAuth, id: number, userIds: number[
   const a = answer as { sent?: number[]; notFound?: number[] } | null;
   if (!a || !Array.isArray(a.sent)) return Response.json({ verdict: "UNKNOWN", detail: "The backend answered without saying who it sent to. Check the phones before sending again." });
   return Response.json({ verdict: "SENT", sent: a.sent, notFound: a.notFound ?? [] });
+}
+
+// ── PHOTO UPLOADS (POST admin/offers/photo-uploads, then .../register) ─────────────────────────
+// Step 1 is a link and changes no record, so there is nothing to log or read back. THE LINK'S HOST IS
+// CHECKED ON THE PARSED URL before the browser is told to PUT a file there: only the local backend
+// passes, which is also all this page can reach until release. At release this must name the S3 or
+// CDN upload host, and the bucket needs CORS for the Clubhouse origin. It fails closed until then.
+export type PhotoLink = { uploadURL: string; method: string; headers: Record<string, string>; fileKey: string; expiresAt: string };
+export function photoLinkProblem(link: Partial<PhotoLink>): string | null {
+  let host = "";
+  try { host = new URL(link.uploadURL ?? "").host; } catch { /* no host: refused below */ }
+  if (link.method !== "PUT" || !link.fileKey || host !== LOCAL_MDAPI_HOST) return `The upload link was not the expected one (${link.method ?? "no method"} to ${host || "no host"}); nothing was uploaded.`;
+  return null;
+}
+export const askPhotoLink = (auth: OffersAuth, contentType: string, sizeBytes: number) =>
+  offersApiWrite<PhotoLink>(auth, "POST", `${PHOTO_UPLOADS}`, { contentType, sizeBytes });
+
+// Step 3 is a write (the file becomes usable and its key is spent), so it goes through recordWrite.
+// There is no admin read for it, so LANDED rests on the answer: a url this page would accept.
+export async function registerPhoto(auth: OffersAuth, fileKey: string): Promise<Response> {
+  const path = `${PHOTO_UPLOADS}/register`;
+  let answer: { url?: string } | null = null;
+  const { outcome, error } = await recordWrite(
+    {
+      env: OFFERS_ENV, source: "offers:photo-register", actorName: auth.email, actorEmail: auth.email, saveId: randomUUID(),
+      matchId: null, matchName: null, method: "POST", path, body: { fileKey }, keys: [], label: (k) => k,
+      applied: () => typeof answer?.url === "string",
+    },
+    {
+      readResource: async () => ({}),
+      write: async () => { const r = await offersApiWrite<{ url?: string }>(auth, "POST", path, { fileKey }); answer = r ?? null; return r; },
+      now: () => new Date().toISOString(),
+    },
+    supabaseLogStore(),
+  );
+  if (error) {
+    const { code } = backendMessage(error);
+    const text = code === "OFFER_PHOTO_INVALID" ? "That file isn't really a JPG, PNG or WebP image, so it wasn't kept."
+      : code === "OFFER_PHOTO_NOT_UPLOADED" ? "The upload didn't finish. Try again."
+      : code === "OFFER_PHOTO_ALREADY_USED" ? "That upload was already used. Try again."
+      : errorText(error);
+    return Response.json({ verdict: outcome === "unknown" ? "UNKNOWN" : "FAILED", error: text }, { status: outcome === "unknown" ? 200 : 502 });
+  }
+  const url = (answer as { url?: string } | null)?.url;
+  if (typeof url !== "string" || !photoUrlOk(url)) return Response.json({ verdict: "UNKNOWN", detail: "The backend answered without a usable photo address. Nothing was selected." });
+  return Response.json({ verdict: "LANDED", url });
 }
 
 // ── PLAYER LOOKUP (POST admin/offers/players/lookup) ───────────────────────────────────────────
