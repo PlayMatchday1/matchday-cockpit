@@ -1,6 +1,6 @@
 /* STAFF APP PUSH: who is notified, what it says, and when a match is at risk (src/lib/appPush.ts).
  * Ryan, 2026-10-30. Pure rules, asserted offline; every refusal has a presence control beside it. */
-import { atRiskNow, chatPushText, chatRecipients, finalRecipients, matchRecipients, matchRiskText, wallClockOf, type StaffRow } from "../src/lib/appPush";
+import { atRiskNow, chatPushText, chatRecipients, finalRecipients, matchRecipients, matchRiskText, waitingCounts, wallClockOf, type StaffRow } from "../src/lib/appPush";
 
 let pass = 0, fail = 0;
 const ok = (m: string) => { pass++; console.log(`  ok  ${m}`); };
@@ -59,6 +59,12 @@ is("a cancelled match is not", atRiskNow({ ...m, isCancelled: true }, at("2026-1
 is("a match that does not auto-cancel is not", atRiskNow({ ...m, autoCanceled: false }, at("2026-10-30T21:00:00Z")), false);
 is("a match with no capacity is not", atRiskNow({ ...m, capacity: null }, at("2026-10-30T21:00:00Z")), false);
 void start;
+
+console.log("\nthe badge: each person's waiting chats, by the listing's scope");
+const counts = waitingCounts(staff, [null, null, "waw2"], ["admin", "waw", "noaccess"]);
+is("unconfined admin: every waiting thread (3)", counts.get("admin"), 3);
+is("Warsaw: only the thread assigned in Warsaw (1)", counts.get("waw"), 1);
+is("no Chats access: 0", counts.get("noaccess"), 0);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

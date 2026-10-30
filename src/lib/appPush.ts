@@ -19,6 +19,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { confinedCity } from "./cityConfinement";
 import { cityNameFor } from "./cityScope";
 import { appAccess, cityAllowed } from "./appModel";
+import { isAwaitingReply } from "./awaitingReply";
 
 export type PushEvent = "player_chat" | "match_at_risk";
 const PREF_COLUMN: Record<PushEvent, "player_chats" | "matches_at_risk"> = { player_chat: "player_chats", match_at_risk: "matches_at_risk" };
@@ -93,6 +94,23 @@ export function atRiskNow(m: RiskRow, nowMs: number): boolean {
   return nowMs >= cancelAt - 60 * 60_000 && nowMs < cancelAt;
 }
 
+/** PURE. Each staff member's waiting Player chats, by the listing's scope rule (the app's red badge). */
+export function waitingCounts(staff: StaffRow[], waitingAssignees: (string | null)[], ids: string[]): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const id of ids) out.set(id, 0);
+  for (const assignee of waitingAssignees) for (const id of chatRecipients(staff, assignee)) if (out.has(id)) out.set(id, (out.get(id) ?? 0) + 1);
+  return out;
+}
+
+/** The badge for each recipient: their waiting Player chats right now. Null when it cannot be read. */
+async function badgesFor(sb: SupabaseClient, ids: string[]): Promise<Map<string, number> | null> {
+  const staff = await sb.from("app_users").select("id, email, is_admin, can_access_chats, can_access_matchops, is_city_manager, is_service_account, city_identifier");
+  const open = await sb.from("crm_threads").select("assigned_to_user_id, last_message_preview, last_message_at, no_reply_needed_at").eq("status", "open").eq("last_message_direction", "inbound").limit(2000);
+  if (staff.error || open.error) return null;
+  const waiting = (open.data ?? []).filter((t) => isAwaitingReply({ ...t, status: "open", last_message_direction: "inbound" }));
+  return waitingCounts((staff.data ?? []) as StaffRow[], waiting.map((t) => (t.assigned_to_user_id as string | null) ?? null), ids);
+}
+
 /* ── SENDING ─────────────────────────────────────────────────────────────────────────────────── */
 
 const EXPO_SEND = "https://exp.host/--/api/v2/push/send";
@@ -138,10 +156,17 @@ export async function sendAppPush(sb: SupabaseClient, args: {
     res.tokens = rows.length;
     if (rows.length === 0) return { ...res, skipped: "no registered devices" };
     const withToken = await tokenColumn(sb);
+    const badges = await badgesFor(sb, ids);
 
     for (let i = 0; i < rows.length; i += 100) {
       const batch = rows.slice(i, i + 100);
-      const messages = batch.map((r) => ({ to: r.token, title: args.title, body: args.body, data: args.data, sound: "default", priority: "high" }));
+      // Shown and heard (Ryan, 2026-10-30): default sound, high priority, interruption level active, and
+      // the recipient's own waiting chat count as the badge.
+      const messages = batch.map((r) => ({
+        to: r.token, title: args.title, body: args.body, data: args.data,
+        sound: "default", priority: "high", interruptionLevel: "active",
+        ...(badges?.has(r.app_user_id) ? { badge: badges.get(r.app_user_id) } : {}),
+      }));
       let tickets: Ticket[] = [];
       try {
         const r = await fetch(EXPO_SEND, { method: "POST", headers: { "content-type": "application/json", accept: "application/json" }, body: JSON.stringify(messages), signal: AbortSignal.timeout(5000) });
