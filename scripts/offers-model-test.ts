@@ -13,7 +13,7 @@ import { offersAccessState, onOffersAllowlist } from "../src/lib/offersAccess";
 import {
   audienceBody, chicagoWallNow, comparisonLine, costCeiling, createBody, defaultRun, endsTicket, formOf, newForm, patchBody, priceWithDeal,
   summary, wallFromMatch, withPreviewName, buttonOf, opensText, formProblem, stepUses, usesLine, stepLimit, limitLine, copyOf,
-  extraBookingsLine, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, prefillField, audienceText, parsePlayerIds, playerLine, notFoundLine, usedOfLimit, resultsLines, type Campaign, type City, type MatchOpt, type Results,
+  canHidePhoto, copyAfterHide, hideUpload, extraBookingsLine, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, prefillField, audienceText, parsePlayerIds, playerLine, notFoundLine, usedOfLimit, resultsLines, type Campaign, type City, type MatchOpt, type Results,
 } from "../src/lib/offersModel";
 import { _setOffersGateDepsForTest, mismatches, offersGate, photoLinkProblem } from "../src/lib/offersServer";
 
@@ -192,6 +192,15 @@ eq("another host, a POST and no key are refused", [photoLinkProblem({ ...lk, upl
   eq("uploads stay as tiles", uploadTiles(up, null, []).map((p) => p.url), ["https://x/a.jpg", "https://x/b.jpg"]);
   eq("the saved photo is a tile even if this browser never saw it", uploadTiles(up, "https://x/c.jpg", []).map((p) => p.name), ["a.jpg", "b.jpg", "Saved photo"]);
   eq("a saved photo that is a cover or an upload is not doubled", [uploadTiles(up, "https://x/a.jpg", []).length, uploadTiles([], "https://x/cover.jpg", ["https://x/cover.jpg"]).length], [2, 0]);
+  eq("the × takes only that tile off", hideUpload(up, "https://x/a.jpg").map((p) => p.name), ["b.jpg"]);
+  eq("the saved photo has no ×, every other upload does", [canHidePhoto("https://x/a.jpg", "https://x/a.jpg"), canHidePhoto("https://x/b.jpg", "https://x/a.jpg"), canHidePhoto("https://x/b.jpg", null)], [false, true, true]);
+  eq("a hidden saved-with photo would still be a tile (why it has no ×)", uploadTiles(hideUpload(up, "https://x/a.jpg"), "https://x/a.jpg", []).map((p) => p.url), ["https://x/b.jpg", "https://x/a.jpg"]);
+  eq("hiding the selected, unsaved photo falls back to the default", copyOf({ ...nowF, copy: copyAfterHide({ photoUrl: "https://x/a.jpg", headline: "HI" }, "https://x/a.jpg") }, matches, cities).photoUrl, null);
+  eq("...and leaves the other typed text alone", copyAfterHide({ photoUrl: "https://x/a.jpg", headline: "HI" }, "https://x/a.jpg"), { headline: "HI" });
+  eq("...on a specific match the default is its field cover", copyOf({ ...nowF, scope: "MATCH", matchId: 116, copy: copyAfterHide({ photoUrl: "https://x/a.jpg" }, "https://x/a.jpg") }, matches, cities).photoUrl, "https://covers.local/riverside.jpg");
+  eq("hiding a photo that is not selected changes nothing", copyAfterHide({ photoUrl: "https://x/b.jpg" }, "https://x/a.jpg"), { photoUrl: "https://x/b.jpg" });
+  const onDraft = draftFrom({ photoUrl: null });
+  eq("a draft with no saved photo: picking then hiding an upload sends nothing", patchBody(onDraft, { ...formOf(onDraft, matches, cities), copy: copyAfterHide({ photoUrl: "https://x/a.jpg" }, "https://x/a.jpg") }, matches, cities), {});
   eq("a stored local photo saves", formProblem({ ...nowF, name: "x", copy: { photoUrl: "http://localhost:3070/dev/uploads/offers/photos/a.jpg" } }, matches), null);
 }
 eq("an https photo is fine (the control)", formProblem({ ...nowF, name: "x", copy: { photoUrl: "https://covers.local/a.jpg" } }, matches), null);

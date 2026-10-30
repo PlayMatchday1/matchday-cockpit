@@ -12,7 +12,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  FIRST_NAME_TOKEN, MAX_TEST_IDS, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, MAX_USES_PER_PLAYER, notFoundLine, parsePlayerIds, playerLine, prefillField, PREVIEW_FIRST_NAME, amountText, limitLine, stepLimit, stepUses, usesLine, audienceBody, buttonMatchNote, buttonOf, matchDay, opensText, chicagoWallNow, copyOf, createBody, defaultRun, endsTicket, formOf, formProblem, fromInput, matchInfo,
+  FIRST_NAME_TOKEN, MAX_TEST_IDS, canHidePhoto, copyAfterHide, hideUpload, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, MAX_USES_PER_PLAYER, notFoundLine, parsePlayerIds, playerLine, prefillField, PREVIEW_FIRST_NAME, amountText, limitLine, stepLimit, stepUses, usesLine, audienceBody, buttonMatchNote, buttonOf, matchDay, opensText, chicagoWallNow, copyOf, createBody, defaultRun, endsTicket, formOf, formProblem, fromInput, matchInfo,
   matchShort, newForm, patchBody, pickedMatch, startLabel, STEPPER, summary, toInput, wallLabel,
   type Campaign, type City, type Count, type FieldOpt, type Lookup, type UploadedPhoto, type CopyKey, type DealType, type Form, type MatchOpt,
 } from "@/lib/offersModel";
@@ -271,17 +271,30 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
     } finally { setUpPct(null); }
   }
   const coverUrls = coverFields.map((x) => x.cover as string);
-  const photoTile = (key: string | number, url: string | null, title: string, sub: string) => {
+  // The × hides an upload from this offer's tiles in this browser. The file itself is not deleted.
+  function hidePhoto(url: string) {
+    const next = hideUpload(uploaded, url);
+    setUploaded(next);
+    if (c) keepUploads(c.id, next);
+    setF((v) => ({ ...v, copy: copyAfterHide(v.copy, url) }));
+  }
+  const photoTile = (key: string | number, url: string | null, title: string, sub: string, onHide?: () => void) => {
     const on = (copy.photoUrl ?? null) === url;
     return (
-      <button key={key} type="button" data-testid={`offers-photo-${key}`} data-on={on ? "1" : "0"} disabled={ended}
+      <div key={key} className="relative flex">
+      <button type="button" data-testid={`offers-photo-${key}`} data-on={on ? "1" : "0"} disabled={ended}
         onClick={() => setF((v) => ({ ...v, copy: { ...v.copy, photoUrl: url } }))}
-        className="flex flex-col overflow-hidden rounded-[8px] border-2 text-left" style={{ borderColor: on ? O.chipOn : O.line }}>
+        className="flex w-full flex-col overflow-hidden rounded-[8px] border-2 text-left" style={{ borderColor: on ? O.chipOn : O.line }}>
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img alt="" src={url ?? "/offers/offer-popup-photo.jpg"} className="h-[48px] w-full object-cover" />
         <span className="truncate px-1.5 pt-1 text-[11px] font-medium" style={{ color: O.ink }}>{title}</span>
         <span className="truncate px-1.5 pb-1 text-[10.5px]" style={{ color: O.muted }}>{sub}</span>
       </button>
+      {onHide && !ended && (
+        <button type="button" data-testid={`offers-hide-${key}`} aria-label={`Hide ${title}`} title="Hide this photo" onClick={onHide}
+          className="absolute right-1 top-1 flex h-[18px] w-[18px] items-center justify-center rounded-full text-[12px] leading-none text-white" style={{ background: "rgba(6,61,44,.85)" }}>×</button>
+      )}
+      </div>
     );
   };
   const photoPicker = () => (
@@ -290,7 +303,7 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
       <div className="grid grid-cols-2 gap-2">
         {photoTile("default", null, "MatchDay photo", "Default")}
         {coverFields.map((x) => photoTile(`field-${x.id}`, x.cover, x.title, cityName(x.cityId)))}
-        {uploadTiles(uploaded, c?.photoUrl ?? null, coverUrls).map((p, i) => photoTile(`upload-${i}`, p.url, p.name, "Uploaded"))}
+        {uploadTiles(uploaded, c?.photoUrl ?? null, coverUrls).map((p, i) => photoTile(`upload-${i}`, p.url, p.name, "Uploaded", canHidePhoto(p.url, c?.photoUrl ?? null) ? () => hidePhoto(p.url) : undefined))}
         {!ended && (
           <button type="button" data-testid="offers-photo-upload" disabled={upPct !== null}
             onClick={() => fileInput.current?.click()}

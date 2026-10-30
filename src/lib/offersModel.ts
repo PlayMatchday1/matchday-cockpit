@@ -360,6 +360,18 @@ export function uploadTiles(uploaded: UploadedPhoto[], stored: string | null, co
   return out;
 }
 
+// HIDING AN UPLOAD (the × on its tile): off this offer's tiles in this browser, nothing more. The file
+// stays on the server. The photo the offer is saved with has no ×: the offer is still using it. A
+// hidden photo that was selected but not saved stops being selected, so the offer follows its default
+// again (a specific match's field cover, else the MatchDay photo).
+export const canHidePhoto = (url: string, stored: string | null) => url !== stored;
+export const hideUpload = (uploaded: UploadedPhoto[], url: string) => uploaded.filter((p) => p.url !== url);
+export function copyAfterHide(copy: Form["copy"], url: string): Form["copy"] {
+  if (copy.photoUrl !== url) return copy;
+  const { photoUrl: _gone, ...rest } = copy;
+  return rest;
+}
+
 // ── REQUEST BODIES ───────────────────────────────────────────────────────────────────────────────
 // Everything the campaign would hold, as the backend's field names.
 export function fullBody(f: Form, matches: MatchOpt[], cities: City[]): Record<string, unknown> {
