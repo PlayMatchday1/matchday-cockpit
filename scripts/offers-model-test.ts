@@ -112,6 +112,11 @@ eq("the holdout line", comparisonLine(results), "With the offer, 9% booked. The 
 eq("nobody held back", comparisonLine({ ...results, booked: { ...results.booked, heldBack: { players: 0, booked: 0, rate: null } } }),
   "With the offer, 9% booked. Nobody was held back, so there is nothing to compare it with.");
 
+const heldBack = (players: number, booked: number) => ({ ...results, booked: { ...results.booked, heldBack: { players, booked, rate: booked / players } } });
+eq("3 held back is too few: no rates", comparisonLine(heldBack(3, 1)), "Too few players held back to compare yet (3 so far)");
+eq("29 held back is still too few", comparisonLine(heldBack(29, 1)), "Too few players held back to compare yet (29 so far)");
+eq("30 held back compares (the control for the two above)", comparisonLine(heldBack(30, 3)), "With the offer, 9% booked. The 30 players held back with no offer: 10% booked.");
+
 console.log("access:");
 eq("unset list is nobody", onOffersAllowlist("rmancuso@playmatchday.com", {}), false);
 eq("on the list, any case", onOffersAllowlist("RMancuso@PlayMatchday.com", { OFFERS_ALLOWLIST: " rmancuso@playmatchday.com " }), true);

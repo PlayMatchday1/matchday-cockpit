@@ -367,7 +367,7 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
             {c?.status === "LAUNCHED" && <Btn testId="offers-pause" disabled={busy} onClick={() => setConfirm("pause")}>Pause</Btn>}
             {(c?.status === "LAUNCHED" || c?.status === "PAUSED") && <Btn kind="danger" testId="offers-end" disabled={busy} onClick={() => setConfirm("end")}>End</Btn>}
             {c?.status === "DRAFT" && <Btn kind="danger" testId="offers-delete" disabled={busy} onClick={() => setConfirm("delete")}>Delete</Btn>}
-            <Btn testId="offers-phone" disabled={busy || c === null || (c.status === "DRAFT" && dirty)} title={c === null ? "Save it as a draft first" : c.status === "DRAFT" && dirty ? "Save your changes first, so the phone shows what you see" : undefined} onClick={sendToPhone}>Send to my phone</Btn>
+            <Btn testId="offers-phone" disabled={busy || outcome?.verdict === "SENT" || c === null || (c.status === "DRAFT" && dirty)} title={c === null ? "Save it as a draft first" : c.status === "DRAFT" && dirty ? "Save your changes first, so the phone shows what you see" : undefined} onClick={sendToPhone}>Send to my phone</Btn>
           </div>
         )}
         {!ended && c === null && <div data-testid="offers-phone-note" className="text-[11.5px]" style={{ color: O.muted }}>Save it as a draft to send it to your phone.</div>}

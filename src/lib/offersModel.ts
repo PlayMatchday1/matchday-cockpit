@@ -374,6 +374,8 @@ export function progressText(c: Campaign, nowWall: string): string {
 }
 
 const pct = (r: number) => `${Math.round(r * 100)}%`;
+// Below this many held-back players the comparison line shows no rates (Ryan, 2026-10-29).
+export const MIN_HELD_BACK_TO_COMPARE = 30;
 export function usedPct(r: Results): string | null {
   return r.saw > 0 ? pct(r.used / r.saw) : null;
 }
@@ -382,5 +384,7 @@ export function comparisonLine(r: Results): string {
   const w = r.booked.withOffer, h = r.booked.heldBack;
   if (w.players === 0) return "Nobody has been given the offer yet, so there is nothing to compare.";
   if (h.players === 0 || h.rate === null) return `With the offer, ${pct(w.rate ?? 0)} booked. Nobody was held back, so there is nothing to compare it with.`;
+  // A handful of held-back players is noise, not a result: no rates until there are enough.
+  if (h.players < MIN_HELD_BACK_TO_COMPARE) return `Too few players held back to compare yet (${h.players.toLocaleString("en-US")} so far)`;
   return `With the offer, ${pct(w.rate ?? 0)} booked. The ${h.players.toLocaleString("en-US")} ${h.players === 1 ? "player" : "players"} held back with no offer: ${pct(h.rate)} booked.`;
 }
