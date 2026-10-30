@@ -12,7 +12,7 @@ import "server-only"; // no-op under --conditions=react-server
 import { onOffersAllowlist } from "../src/lib/offersAccess";
 import {
   audienceBody, chicagoWallNow, comparisonLine, costCeiling, createBody, defaultRun, endsTicket, formOf, newForm, patchBody, priceWithDeal,
-  summary, wallFromMatch, withPreviewName, type Campaign, type City, type MatchOpt, type Results,
+  summary, wallFromMatch, withPreviewName, buttonOf, opensText, formProblem, type Campaign, type City, type MatchOpt, type Results,
 } from "../src/lib/offersModel";
 import { _setOffersGateDepsForTest, offersGate } from "../src/lib/offersServer";
 
@@ -78,6 +78,27 @@ console.log("create bodies:");
   const back = createBody({ ...nowF, name: "x", playedAtMatchField: true }, matches, cities);
   eq("played-here is never sent without a match", back.playedAtMatchField, false);
   eq("the live count sends the audience and the deal, never the copy", Object.keys(audienceBody({ ...nowF, name: "x" }, matches, cities)).some((k) => ["headline", "name", "body"].includes(k)), false);
+}
+
+console.log("button opens:");
+{
+  const any = createBody({ ...nowF, name: "x" }, matches, cities);
+  eq("default is Find a match, with no buttonMatchId", [any.buttonTarget, "buttonMatchId" in any], ["FIND_MATCH", false]);
+  eq("default opens line", opensText({ ...nowF, name: "x" }, matches), "↳ Opens Find a match");
+  const scoped = { ...nowF, name: "x", scope: "MATCH" as const, matchId: 116, buttonTarget: "MATCH" as const, buttonMatchId: 117 };
+  eq("a specific-match deal forces the button to that match and locks it", buttonOf(scoped, matches), { target: "MATCH", matchId: 116, locked: true });
+  eq("...and that is what is sent, whatever the form held", [createBody(scoped, matches, cities).buttonTarget, createBody(scoped, matches, cities).buttonMatchId], ["MATCH", 116]);
+  eq("an any-match offer may open one match, unlocked", buttonOf({ ...nowF, buttonTarget: "MATCH", buttonMatchId: 117 }, matches), { target: "MATCH", matchId: 117, locked: false });
+  eq("its opens line", opensText({ ...nowF, buttonTarget: "MATCH", buttonMatchId: 117 }, matches), "↳ Opens Tue 7:00 PM · Mueller Park");
+  eq("a button match not picked yet stops the save", formProblem({ ...nowF, name: "x", buttonTarget: "MATCH", buttonMatchId: null }, matches), "Pick the match the button opens.");
+  const live = draftFrom({ status: "LAUNCHED", state: "LIVE" });
+  const lf = formOf(live, matches, cities);
+  eq("after launch, pointing the button at a match sends only the target fields",
+    patchBody(live, { ...lf, buttonTarget: "MATCH", buttonMatchId: 117 }, matches, cities), { buttonTarget: "MATCH", buttonMatchId: 117 });
+  const live2 = { ...live, buttonTarget: "MATCH" as const, buttonMatchId: 117 };
+  eq("after launch, back to Find a match clears buttonMatchId and sends nothing else",
+    patchBody(live2, { ...formOf(live2, matches, cities), buttonTarget: "FIND_MATCH", buttonMatchId: null }, matches, cities), { buttonTarget: "FIND_MATCH", buttonMatchId: null });
+  eq("a launched offer with a match button loads and sends nothing", patchBody(live2, formOf(live2, matches, cities), matches, cities), {});
 }
 
 console.log("money, in cents, as the backend's applyOfferDeal:");

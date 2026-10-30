@@ -194,6 +194,9 @@ export type Form = {
   cityIds: number[]; lastPlayed: LastPlayed; lastPlayedDays: number | null; membership: Membership; playedAtMatchField: boolean;
   minMatches: number; maxMatches: number | null;
   startsLocal: string; endsLocal: string; holdoutPercent: number; maxRedemptions: number | null;
+  // Where the popup's button goes (Edit text › Button opens). Forced to the deal's match when the
+  // offer is for a specific match; see buttonOf.
+  buttonTarget: ButtonTarget; buttonMatchId: number | null;
   // Copy the person typed. A key that is absent (or cleared back to empty) follows the deal. null is
   // "none" for an optional line, kept from a stored campaign so loading it never invents a change.
   copy: Partial<Record<CopyKey, string | null>>;
@@ -203,7 +206,8 @@ export function newForm(nowWall: string): Form {
   return {
     name: "", dealType: "PERCENT_OFF", dealAmount: 50, usesPerPlayer: 1, matchId: null, scope: "ANY",
     cityIds: [], lastPlayed: "ANY", lastPlayedDays: null, membership: "ANYONE", playedAtMatchField: false,
-    minMatches: 0, maxMatches: null, ...defaultRun(nowWall), holdoutPercent: 10, maxRedemptions: null, copy: {},
+    minMatches: 0, maxMatches: null, ...defaultRun(nowWall), holdoutPercent: 10, maxRedemptions: null,
+    buttonTarget: "FIND_MATCH", buttonMatchId: null, copy: {},
   };
 }
 
@@ -213,7 +217,8 @@ export function formOf(c: Campaign, matches: MatchOpt[], cities: City[]): Form {
     matchId: c.matchIds[0] ?? null, scope: c.matchScoped ? "MATCH" : "ANY",
     cityIds: c.cityIds, lastPlayed: c.lastPlayed, lastPlayedDays: c.lastPlayedDays, membership: c.membership, playedAtMatchField: c.playedAtMatchField,
     minMatches: c.minMatches, maxMatches: c.maxMatches,
-    startsLocal: c.startsLocal, endsLocal: c.endsLocal, holdoutPercent: c.holdoutPercent, maxRedemptions: c.maxRedemptions, copy: {},
+    startsLocal: c.startsLocal, endsLocal: c.endsLocal, holdoutPercent: c.holdoutPercent, maxRedemptions: c.maxRedemptions,
+    buttonTarget: c.buttonTarget, buttonMatchId: c.buttonMatchId, copy: {},
   };
   // Stored copy that differs from what the deal would write was typed by someone: keep it as typed.
   const auto = autoCopy(f, matches, cities);
@@ -223,6 +228,31 @@ export function formOf(c: Campaign, matches: MatchOpt[], cities: City[]): Form {
 
 export const pickedMatch = (f: Pick<Form, "scope" | "matchId">, matches: MatchOpt[]) =>
   f.scope === "MATCH" && f.matchId !== null ? matches.find((m) => m.id === f.matchId) ?? null : null;
+
+// ── WHERE THE BUTTON GOES ─────────────────────────────────────────────────────────────────────────
+// An offer for a specific match always opens that match (locked). Otherwise it is the person's pick:
+// Find a match, or one match of their choosing (the offer still works on any match). A stored
+// MEMBERSHIP target is kept as it is; this page does not offer it.
+export type ButtonDest = { target: ButtonTarget; matchId: number | null; locked: boolean };
+export function buttonOf(f: Form, matches: MatchOpt[]): ButtonDest {
+  const m = pickedMatch(f, matches);
+  if (m) return { target: "MATCH", matchId: m.id, locked: true };
+  if (f.buttonTarget === "MATCH") return { target: "MATCH", matchId: f.buttonMatchId, locked: false };
+  return { target: f.buttonTarget, matchId: null, locked: false };
+}
+// "Thu 7:00 PM · Mueller Park"
+export const matchDay = (m: MatchOpt) =>
+  `${fmt(wallMs(m.startLocal), { weekday: "short" })} ${fmt(wallMs(m.startLocal), { hour: "numeric", minute: "2-digit" })}${m.fieldTitle ? ` · ${m.fieldTitle}` : ""}`;
+// The line under the preview: "↳ Opens Find a match" / "↳ Opens Thu 7:00 PM · Mueller Park".
+export function opensText(f: Form, matches: MatchOpt[]): string {
+  const b = buttonOf(f, matches);
+  if (b.target === "MEMBERSHIP") return "↳ Opens Membership";
+  if (b.target === "FIND_MATCH") return "↳ Opens Find a match";
+  const bm = matches.find((x) => x.id === b.matchId);
+  return bm ? `↳ Opens ${matchDay(bm)}` : "↳ Opens a match (pick one)";
+}
+// The mint note under the button's own match: "Normally $9 · 11 of 16 spots taken. The offer still works on any match."
+export const buttonMatchNote = (m: MatchOpt) => `Normally ${money(m.price)} · ${m.players} of ${m.maxPlayers} spots taken. The offer still works on any match.`;
 
 // ── THE POPUP TEXT, written from the deal ─────────────────────────────────────────────────────────
 // The app (OfferPopup.tsx) renders exactly these fields. {firstName} in any of them is filled in by
@@ -271,7 +301,7 @@ export function fullBody(f: Form, matches: MatchOpt[], cities: City[]): Record<s
     minMatches: f.minMatches, maxMatches: f.maxMatches, membership: f.membership,
     playedAtMatchField: m ? f.playedAtMatchField : false, matchIds: m ? [m.id] : [],
     startsLocal: f.startsLocal, endsLocal: f.endsLocal, holdoutPercent: f.holdoutPercent, maxRedemptions: f.maxRedemptions,
-    ...copy, buttonTarget: m ? "MATCH" : "FIND_MATCH", buttonMatchId: m ? m.id : null,
+    ...copy, buttonTarget: buttonOf(f, matches).target, buttonMatchId: buttonOf(f, matches).matchId,
   };
 }
 
@@ -308,6 +338,8 @@ export function formProblem(f: Form, matches: MatchOpt[]): string | null {
   if (f.scope === "MATCH" && !pickedMatch(f, matches)) return "Pick the match.";
   if (!Number.isFinite(wallMs(f.startsLocal)) || !Number.isFinite(wallMs(f.endsLocal))) return "Set when it starts and ends.";
   if (wallMs(f.endsLocal) <= wallMs(f.startsLocal)) return "It has to end after it starts.";
+  const b = buttonOf(f, matches);
+  if (b.target === "MATCH" && !matches.some((x) => x.id === b.matchId)) return "Pick the match the button opens.";
   if (f.maxRedemptions !== null && (!Number.isInteger(f.maxRedemptions) || f.maxRedemptions < 1)) return "The use cap must be 1 or more, or empty for no cap.";
   return null;
 }

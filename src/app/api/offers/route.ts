@@ -19,9 +19,9 @@ export async function GET(req: Request) {
       readUpcomingMatches(),
     ]);
     const cities: City[] = citiesRaw.map((c) => ({ id: c.id, name: c.name })).sort((a, b) => a.name.localeCompare(b.name));
-    // Matches a campaign is scoped to that are no longer upcoming, so their labels still show.
+    // Matches a campaign is scoped to (or its button opens) that are no longer upcoming, so their labels still show.
     const known = new Set(upcoming.map((m) => m.id));
-    const missing = [...new Set(campaigns.flatMap((c) => c.matchIds))].filter((id) => !known.has(id));
+    const missing = [...new Set(campaigns.flatMap((c) => [...c.matchIds, ...(c.buttonMatchId ? [c.buttonMatchId] : [])]))].filter((id) => !known.has(id));
     const past = (await Promise.all(missing.map(readMatch))).filter((m) => m !== null);
     return Response.json({ campaigns, cities, matches: [...upcoming, ...past] });
   } catch (e) {

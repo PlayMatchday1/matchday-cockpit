@@ -11,7 +11,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  FIRST_NAME_TOKEN, PREVIEW_FIRST_NAME, amountText, audienceBody, chicagoWallNow, copyOf, createBody, defaultRun, endsTicket, formOf, formProblem, fromInput, matchInfo,
+  FIRST_NAME_TOKEN, PREVIEW_FIRST_NAME, amountText, audienceBody, buttonMatchNote, buttonOf, matchDay, opensText, chicagoWallNow, copyOf, createBody, defaultRun, endsTicket, formOf, formProblem, fromInput, matchInfo,
   matchShort, newForm, patchBody, pickedMatch, startLabel, STEPPER, summary, toInput, wallLabel,
   type Campaign, type City, type Count, type CopyKey, type DealType, type Form, type MatchOpt,
 } from "@/lib/offersModel";
@@ -149,6 +149,45 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
   const setCopy = (k: CopyKey, v: string) => setF((x) => ({ ...x, copy: { ...x.copy, [k]: v } }));
   const [more, setMore] = useState(false);
   const ends = endsTicket(f.endsLocal, nowWall);
+  // ── Button opens (Figma 20612:47 / 92 / 142). Editable after launch like the rest of the text;
+  // forced and locked to the deal's match when the offer is for a specific match.
+  const btn = buttonOf(f, data.matches);
+  const btnMatch = data.matches.find((x) => x.id === btn.matchId) ?? null;
+  const btnChoices = btnMatch && !upcoming.some((x) => x.id === btnMatch.id) ? [btnMatch, ...upcoming] : upcoming;
+  const buttonOpens = () => {
+    const off = btn.locked || ended;
+    const chip = (on: boolean) => btn.locked
+      ? (on ? { background: O.muted, borderColor: O.muted, color: "#fff" } : { background: "#eef0ee", borderColor: O.line, color: O.label })
+      : undefined;
+    return (
+      <div data-testid="offers-button-opens" data-locked={btn.locked ? "1" : "0"} className="flex flex-col gap-2">
+        <div className="text-[12px] font-medium" style={{ color: O.ink }}>Button opens</div>
+        <div className="flex flex-wrap gap-1.5">
+          {([["FIND_MATCH", "Find a match"], ["MATCH", "A specific match"]] as const).map(([t, label]) => (
+            btn.locked
+              ? <span key={t} data-testid={`offers-btn-${t}`} data-on={btn.target === t ? "1" : "0"} className="inline-flex items-center rounded-full border px-3 py-[6px] text-[12px] font-medium" style={chip(btn.target === t)}>{label}</span>
+              : <Chip key={t} testId={`offers-btn-${t}`} on={btn.target === t} disabled={off} onClick={() => set(t === "MATCH" ? { buttonTarget: "MATCH" } : { buttonTarget: "FIND_MATCH", buttonMatchId: null })}>{label}</Chip>
+          ))}
+        </div>
+        {btn.target === "MATCH" && (
+          <>
+            <div className="relative">
+              <select data-testid="offers-btn-match" className={`${inputCls} appearance-none pr-8 font-medium`} disabled={off}
+                style={btn.locked ? { ...inputStyle, background: "#eef0ee", color: O.muted, opacity: 1 } : inputStyle}
+                value={btn.matchId ?? ""} onChange={(e) => set({ buttonMatchId: e.target.value ? Number(e.target.value) : null })}>
+                <option value="">{btnChoices.length ? "Pick a match" : "No upcoming matches in these cities"}</option>
+                {btnChoices.map((x) => <option key={x.id} value={x.id}>{matchDay(x)}</option>)}
+              </select>
+              <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[12px]" style={{ color: O.muted }}>{btn.locked ? "🔒" : "⌄"}</span>
+            </div>
+            {btn.locked
+              ? <div data-testid="offers-btn-note" className="rounded-[8px] px-2.5 py-2 text-[12px]" style={{ background: O.subtle, color: O.muted }}>Opens the match this offer is for.</div>
+              : btnMatch && <div data-testid="offers-btn-note" className="rounded-[8px] px-2.5 py-2 text-[12px]" style={{ background: O.mint, color: O.ok }}>{buttonMatchNote(btnMatch)}</div>}
+          </>
+        )}
+      </div>
+    );
+  };
   const dl = locked || ended; // deal, audience and run locked
 
   const title = c ? c.name || "Untitled offer" : f.name.trim() || "New offer";
@@ -276,43 +315,50 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
       </PanelSection>
 
       {/* POPUP */}
-      <PanelSection title="Popup" testId="offers-popup">
+      <PanelSection title={editText && !ended ? "Popup · Edit text" : "Popup"} testId="offers-popup">
+        {/* Figma 20612:47: with Edit text open the fields take the summary's place beside the preview. */}
         <div className="flex items-start gap-3.5">
-          <OfferPopupPreview copy={copy} ends={ends} />
-          <div className="flex min-w-0 flex-1 flex-col gap-2">
-            <div className="text-[12px] leading-[17px]" style={{ color: O.muted }}>Written for you from the deal. Change any line if you want.</div>
-            {([["Headline", copy.headline], ["Line", copy.line], ["Photo", copy.photoUrl ? "Custom photo" : "MatchDay field photo"], ["Button", copy.buttonLabel]] as const).map(([k, v]) => (
-              <div key={k} className="flex flex-col gap-[3px] font-medium">
-                <div className="text-[11px]" style={{ color: O.label }}>{k}</div>
-                <div className="break-words text-[13px]" style={{ color: O.ink }}>{v || "None"}</div>
+          <div className="flex shrink-0 flex-col gap-2">
+            <OfferPopupPreview copy={copy} ends={ends} />
+            <div data-testid="offers-opens" className="max-w-[156px] text-[11px] font-medium" style={{ color: O.muted }}>{opensText(f, data.matches)}</div>
+          </div>
+          {editText && !ended ? (
+            <div data-testid="offers-text-fields" className="flex min-w-0 flex-1 flex-col gap-3">
+              {([["buttonLabel", "Button label", 64], ["eyebrow", "Tag on the photo", 64], ["caption", "Line on the photo", 64], ["headline", "Headline (last word in green)", 64], ["line", "Line", 64], ["body", "Body", 300], ["dismissLabel", "Dismiss link", 64]] as const).map(([k, label, max]) => {
+                const auto = copyOf({ ...f, copy: {} }, data.matches, data.cities)[k] ?? "";
+                return (
+                  <div key={k} className="flex flex-col gap-3">
+                    <label className="flex flex-col gap-1.5">
+                      <span className="text-[12px] font-medium" style={{ color: O.ink }}>{label}</span>
+                      {k === "body"
+                        ? <textarea data-testid={`offers-copy-${k}`} rows={3} maxLength={max} className={inputCls} style={inputStyle} placeholder={auto} value={f.copy[k] ?? ""} onChange={(e) => setCopy(k, e.target.value)} />
+                        : <input data-testid={`offers-copy-${k}`} maxLength={max} className={inputCls} style={inputStyle} placeholder={auto} value={f.copy[k] ?? ""} onChange={(e) => setCopy(k, e.target.value)} />}
+                    </label>
+                    {k === "buttonLabel" && buttonOpens()}
+                  </div>
+                );
+              })}
+              <div className="text-[11.5px]" style={{ color: O.muted }}>An empty line goes back to the text written from the deal.</div>
+              <div data-testid="offers-firstname-hint" className="text-[11.5px]" style={{ color: O.muted }}>
+                <code className="rounded px-1" style={{ background: O.subtle, color: O.ink }}>{FIRST_NAME_TOKEN}</code> becomes the player&apos;s first name (shown here as {PREVIEW_FIRST_NAME}). With no first name on file it is left out.
               </div>
-            ))}
-            {!ended && (
-              <button type="button" data-testid="offers-edit-text" onClick={() => setEditText((v) => !v)} className="self-start text-[12px] font-semibold" style={{ color: O.ok }}>
-                {editText ? "Done ‹" : "Edit text ›"}
-              </button>
-            )}
-          </div>
-        </div>
-        {editText && !ended && (
-          <div data-testid="offers-text-fields" className="flex flex-col gap-2 rounded-[8px] p-3" style={{ background: O.subtle }}>
-            <div className="text-[11.5px]" style={{ color: O.muted }}>An empty line goes back to the text written from the deal.</div>
-            <div data-testid="offers-firstname-hint" className="text-[11.5px]" style={{ color: O.muted }}>
-              <code className="rounded px-1" style={{ background: O.surface, color: O.ink }}>{FIRST_NAME_TOKEN}</code> becomes the player&apos;s first name (shown here as {PREVIEW_FIRST_NAME}). With no first name on file it is left out.
+              <button type="button" data-testid="offers-edit-text" onClick={() => setEditText(false)} className="self-start text-[12px] font-semibold" style={{ color: O.ok }}>Done ‹</button>
             </div>
-            {([["eyebrow", "Tag on the photo", 64], ["caption", "Line on the photo", 64], ["headline", "Headline (last word in green)", 64], ["line", "Line", 64], ["body", "Body", 300], ["buttonLabel", "Button", 64], ["dismissLabel", "Dismiss link", 64]] as const).map(([k, label, max]) => {
-              const auto = copyOf({ ...f, copy: {} }, data.matches, data.cities)[k] ?? "";
-              return (
-                <label key={k} className="flex flex-col gap-1">
-                  <span className="text-[11px] font-medium" style={{ color: O.label }}>{label}</span>
-                  {k === "body"
-                    ? <textarea data-testid={`offers-copy-${k}`} rows={2} maxLength={max} className={inputCls} style={inputStyle} placeholder={auto} value={f.copy[k] ?? ""} onChange={(e) => setCopy(k, e.target.value)} />
-                    : <input data-testid={`offers-copy-${k}`} maxLength={max} className={inputCls} style={inputStyle} placeholder={auto} value={f.copy[k] ?? ""} onChange={(e) => setCopy(k, e.target.value)} />}
-                </label>
-              );
-            })}
-          </div>
-        )}
+          ) : (
+            <div className="flex min-w-0 flex-1 flex-col gap-2">
+              <div className="text-[12px] leading-[17px]" style={{ color: O.muted }}>Written for you from the deal. Change any line if you want.</div>
+              {([["Headline", copy.headline], ["Line", copy.line], ["Photo", copy.photoUrl ? "Custom photo" : "MatchDay field photo"], ["Button", copy.buttonLabel]] as const).map(([k, v]) => (
+                <div key={k} className="flex flex-col gap-[3px] font-medium">
+                  <div className="text-[11px]" style={{ color: O.label }}>{k}</div>
+                  <div className="break-words text-[13px]" style={{ color: O.ink }}>{v || "None"}</div>
+                </div>
+              ))}
+              {!ended && (
+                <button type="button" data-testid="offers-edit-text" onClick={() => setEditText(true)} className="self-start text-[12px] font-semibold" style={{ color: O.ok }}>Edit text ›</button>
+              )}
+            </div>
+          )}
+        </div>
       </PanelSection>
 
       {/* RUNS */}
