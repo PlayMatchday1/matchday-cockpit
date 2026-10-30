@@ -3,15 +3,15 @@
 // THE POPUP AS A PLAYER SEES IT, at half size (Figma 20571:400). It draws exactly what the app's
 // OfferPopup.tsx draws (frontend feature/offers): photo with the eyebrow pill, headline with its last
 // word in green italic, the spaced line, the body, the dashed ticket (end time, Auto-applied), the
-// button (upper-cased by the app) and the dismiss link. The mock's caption on the photo is not in the
-// app, so it is not drawn here. No photoUrl: the app's own default photo, which is this one.
+// button (upper-cased by the app) and the dismiss link, with the caption on the photo. {firstName}
+// shows as "Luis"; the backend fills in each player's own. No photoUrl: the app's default photo.
 
 import Image from "next/image";
 import { Heebo, Titillium_Web } from "next/font/google";
-import type { Copy } from "@/lib/offersModel";
+import { withPreviewName, type Copy } from "@/lib/offersModel";
 
 const titillium = Titillium_Web({ subsets: ["latin"], weight: ["700"], style: ["normal", "italic"], display: "swap" });
-const heebo = Heebo({ subsets: ["latin"], weight: ["400", "500"], display: "swap" });
+const heebo = Heebo({ subsets: ["latin"], weight: ["400", "500", "700"], display: "swap" });
 
 // The app's split: the headline's last word is the italic green one ("50% *OFF*").
 function splitHeadline(headline: string) {
@@ -20,7 +20,8 @@ function splitHeadline(headline: string) {
   return { lead: words.slice(0, -1).join(" "), accent: words[words.length - 1] };
 }
 
-export default function OfferPopupPreview({ copy, ends }: { copy: Copy; ends: string | null }) {
+export default function OfferPopupPreview({ copy: raw, ends }: { copy: Copy; ends: string | null }) {
+  const copy = Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, k === "photoUrl" ? v : withPreviewName(v as string | null)])) as Copy;
   const { lead, accent } = splitHeadline(copy.headline);
   return (
     <div data-testid="offers-popup-preview" className="flex w-[156px] shrink-0 flex-col overflow-hidden rounded-[7.5px]" style={{ background: "#f4eee1" }}>
@@ -30,6 +31,9 @@ export default function OfferPopupPreview({ copy, ends }: { copy: Copy; ends: st
           ? <img alt="" src={copy.photoUrl} className="absolute inset-0 size-full object-cover" />
           : <Image alt="" src="/offers/popup-photo.png" fill sizes="156px" className="object-cover" />}
         <div className="absolute inset-0" style={{ background: "linear-gradient(180deg, rgba(0,51,38,0) 30%, rgba(0,51,38,0.85) 100%)" }} />
+        {copy.caption ? (
+          <p data-testid="offers-preview-caption" className={`${heebo.className} absolute bottom-[8px] left-[8px] right-[8px] text-[7.5px] font-bold leading-[9.5px] text-white`}>{copy.caption}</p>
+        ) : null}
         {copy.eyebrow ? (
           <div className="absolute left-[7px] top-[7px] rounded-full px-[5px] py-[2.5px]" style={{ background: "#003326" }}>
             <p className={`${titillium.className} whitespace-nowrap text-[6px] font-bold tracking-[0.75px]`} style={{ color: "#2cdb87" }}>{copy.eyebrow}</p>

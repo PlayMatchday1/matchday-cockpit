@@ -12,7 +12,7 @@ import "server-only"; // no-op under --conditions=react-server
 import { onOffersAllowlist } from "../src/lib/offersAccess";
 import {
   audienceBody, chicagoWallNow, comparisonLine, costCeiling, createBody, defaultRun, endsTicket, formOf, newForm, patchBody, priceWithDeal,
-  summary, wallFromMatch, type Campaign, type City, type MatchOpt, type Results,
+  summary, wallFromMatch, withPreviewName, type Campaign, type City, type MatchOpt, type Results,
 } from "../src/lib/offersModel";
 import { _setOffersGateDepsForTest, offersGate } from "../src/lib/offersServer";
 
@@ -46,11 +46,15 @@ console.log("the diff is the request body:");
   const f = formOf(c, matches, cities);
   eq("changing the percent sends dealAmount only", patchBody(c, { ...f, dealAmount: 40 }, matches, cities), { dealAmount: 40, headline: "40% OFF" });
   eq("LAPSED to Any time clears lastPlayedDays explicitly (else the merged row is invalid)",
-    patchBody(c, { ...f, lastPlayed: "ANY", lastPlayedDays: null }, matches, cities), { lastPlayed: "ANY", lastPlayedDays: null, eyebrow: "JUST FOR YOU" });
+    patchBody(c, { ...f, lastPlayed: "ANY", lastPlayedDays: null }, matches, cities), { lastPlayed: "ANY", lastPlayedDays: null, eyebrow: "JUST FOR YOU", caption: null });
   const typed = { ...f, copy: { headline: "HALF OFF" } };
   const c2 = { ...c, headline: "HALF OFF" };
   eq("typed copy survives a reload and is not re-sent", patchBody(c2, formOf(c2, matches, cities), matches, cities), {});
   eq("typed copy is sent as typed", patchBody(c, typed, matches, cities), { headline: "HALF OFF" });
+  const old = { ...c, caption: null };
+  eq("a stored 'no caption' (saved before captions) loads and sends nothing", patchBody(old, formOf(old, matches, cities), matches, cities), {});
+  eq("the lapsed eyebrow carries {firstName} for the backend to fill", createBody(f, matches, cities).eyebrow, "WE MISS YOU, {firstName}");
+  eq("the preview shows {firstName} as Luis", withPreviewName("WE MISS YOU, {firstName}"), "WE MISS YOU, Luis");
   eq("an emptied box goes back to the deal's text, which is no change", patchBody(c2, { ...formOf(c2, matches, cities), copy: { headline: "" } }, matches, cities), { headline: "50% OFF" });
 }
 {

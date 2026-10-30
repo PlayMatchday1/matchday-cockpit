@@ -24,10 +24,10 @@ export type Results = {
 };
 
 export type Copy = {
-  eyebrow: string | null; headline: string; line: string | null; body: string | null;
+  eyebrow: string | null; caption: string | null; headline: string; line: string | null; body: string | null;
   photoUrl: string | null; buttonLabel: string; dismissLabel: string | null;
 };
-export const COPY_KEYS = ["eyebrow", "headline", "line", "body", "photoUrl", "buttonLabel", "dismissLabel"] as const;
+export const COPY_KEYS = ["eyebrow", "caption", "headline", "line", "body", "photoUrl", "buttonLabel", "dismissLabel"] as const;
 export type CopyKey = (typeof COPY_KEYS)[number];
 
 export type Campaign = Copy & {
@@ -50,7 +50,7 @@ export type MatchOpt = {
 
 // Fields a launched or paused campaign may still change (the backend's EDITABLE_AFTER_LAUNCH).
 export const EDITABLE_AFTER_LAUNCH = new Set<string>([
-  "name", "eyebrow", "headline", "line", "body", "photoUrl", "buttonLabel", "buttonTarget", "buttonMatchId", "dismissLabel", "maxRedemptions",
+  "name", "eyebrow", "caption", "headline", "line", "body", "photoUrl", "buttonLabel", "buttonTarget", "buttonMatchId", "dismissLabel", "maxRedemptions",
 ]);
 // Every key the Clubhouse may send on create or edit. The routes drop anything else.
 export const BODY_KEYS = new Set<string>([
@@ -194,8 +194,9 @@ export type Form = {
   cityIds: number[]; lastPlayed: LastPlayed; lastPlayedDays: number | null; membership: Membership; playedAtMatchField: boolean;
   minMatches: number; maxMatches: number | null;
   startsLocal: string; endsLocal: string; holdoutPercent: number; maxRedemptions: number | null;
-  // Copy the person typed. A key that is absent (or cleared back to empty) follows the deal.
-  copy: Partial<Record<CopyKey, string>>;
+  // Copy the person typed. A key that is absent (or cleared back to empty) follows the deal. null is
+  // "none" for an optional line, kept from a stored campaign so loading it never invents a change.
+  copy: Partial<Record<CopyKey, string | null>>;
 };
 
 export function newForm(nowWall: string): Form {
@@ -216,7 +217,7 @@ export function formOf(c: Campaign, matches: MatchOpt[], cities: City[]): Form {
   };
   // Stored copy that differs from what the deal would write was typed by someone: keep it as typed.
   const auto = autoCopy(f, matches, cities);
-  for (const k of COPY_KEYS) if ((c[k] ?? null) !== (auto[k] ?? null) && c[k] !== null) f.copy[k] = c[k] as string;
+  for (const k of COPY_KEYS) if ((c[k] ?? null) !== (auto[k] ?? null)) f.copy[k] = c[k] ?? null;
   return f;
 }
 
@@ -224,8 +225,13 @@ export const pickedMatch = (f: Pick<Form, "scope" | "matchId">, matches: MatchOp
   f.scope === "MATCH" && f.matchId !== null ? matches.find((m) => m.id === f.matchId) ?? null : null;
 
 // ── THE POPUP TEXT, written from the deal ─────────────────────────────────────────────────────────
-// The app (OfferPopup.tsx) renders exactly these fields; it does not template names, so the eyebrow
-// cannot say a player's first name.
+// The app (OfferPopup.tsx) renders exactly these fields. {firstName} in any of them is filled in by
+// the backend for each player (GET /offers/popup); with no first name it drops the token and the
+// comma or space left hanging. The preview shows it as PREVIEW_FIRST_NAME.
+export const FIRST_NAME_TOKEN = "{firstName}";
+export const PREVIEW_FIRST_NAME = "Luis";
+export const withPreviewName = <T extends string | null>(text: T): T =>
+  (text === null ? text : text.split(FIRST_NAME_TOKEN).join(PREVIEW_FIRST_NAME)) as T;
 export function autoCopy(f: Form, matches: MatchOpt[], cities: City[] = []): Copy {
   const m = pickedMatch(f, matches);
   const n = f.usesPerPlayer;
@@ -238,15 +244,17 @@ export function autoCopy(f: Form, matches: MatchOpt[], cities: City[] = []): Cop
   const body = m
     ? `${m.name}, normally ${money(m.price)}. The discount is already on your account.`
     : `${n === 1 ? "Any match" : `Any ${n} matches`}${where}. The discount is already on your account.`;
-  const eyebrow = f.lastPlayed === "LAPSED" ? "WE MISS YOU" : f.lastPlayed === "NEVER" ? "YOUR FIRST MATCH" : m && f.playedAtMatchField ? "YOUR FIELD" : "JUST FOR YOU";
-  return { eyebrow, headline, line, body, photoUrl: null, buttonLabel: m ? "Join this match" : "Find a match", dismissLabel: "Not now" };
+  const eyebrow = f.lastPlayed === "LAPSED" ? `WE MISS YOU, ${FIRST_NAME_TOKEN}` : f.lastPlayed === "NEVER" ? "YOUR FIRST MATCH" : m && f.playedAtMatchField ? "YOUR FIELD" : "JUST FOR YOU";
+  const caption = m ? `Your spot at ${m.fieldTitle ?? "the field"} is waiting.` : f.lastPlayed === "LAPSED" ? "Your spot at the field is waiting." : null;
+  return { eyebrow, caption, headline, line, body, photoUrl: null, buttonLabel: m ? "Join this match" : "Find a match", dismissLabel: "Not now" };
 }
 export function copyOf(f: Form, matches: MatchOpt[], cities: City[]): Copy {
   const auto = autoCopy(f, matches, cities);
   const out = { ...auto };
   for (const k of COPY_KEYS) {
     const typed = f.copy[k];
-    if (typed !== undefined && typed.trim() !== "") (out as Record<CopyKey, string | null>)[k] = typed;
+    const optional = k !== "headline" && k !== "buttonLabel";
+    if (typed === null ? optional : typed !== undefined && typed.trim() !== "") (out as Record<CopyKey, string | null>)[k] = typed ?? null;
   }
   return out;
 }

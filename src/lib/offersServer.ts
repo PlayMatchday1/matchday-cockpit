@@ -123,7 +123,7 @@ export async function readMatch(id: number): Promise<MatchOpt | null> {
 // LANDED / FAILED / NOT APPLIED / UNKNOWN. A 2xx alone is never reported as landed.
 export type Verdict = "LANDED" | "FAILED" | "NOT APPLIED" | "UNKNOWN";
 
-export function offersApiWrite<T = unknown>(auth: OffersAuth, method: "POST" | "PATCH", path: string, body?: unknown): Promise<T> {
+export function offersApiWrite<T = unknown>(auth: OffersAuth, method: "POST" | "PATCH" | "DELETE", path: string, body?: unknown): Promise<T> {
   const staff = staffEmailOf(auth.email);
   if (!staff) return Promise.reject(new Error(WHO_ARE_YOU));
   return apiWrite<T>(OFFERS_ENV, method, path, body, auth.actor, "admin", undefined, staff);
@@ -138,13 +138,15 @@ export function mismatches(expected: Record<string, unknown>, after: Record<stri
 export type WriteResult = { verdict: Verdict; after: Campaign | null; error?: string; detail?: string };
 
 export async function offersWrite(opts: {
-  auth: OffersAuth; source: string; method: "POST" | "PATCH"; path: string;
+  auth: OffersAuth; source: string; method: "POST" | "PATCH" | "DELETE"; path: string;
   // undefined = a bodyless write (launch, pause, end): no body and no content-type, which the
   // backend requires (Fastify rejects an empty JSON body).
   body?: Record<string, unknown>;
   // The campaign the write is about, or null for a create (read by the id the response carries).
   id: number | null;
   expect: Record<string, unknown>;
+  // A delete: LANDED only when the read-back finds no campaign at all.
+  expectGone?: boolean;
 }): Promise<WriteResult> {
   let createdId: number | null = opts.id;
   const read = async () => (createdId === null ? null : await readCampaign(createdId));
@@ -153,7 +155,7 @@ export async function offersWrite(opts: {
       env: OFFERS_ENV, source: opts.source, actorName: opts.auth.email, actorEmail: opts.auth.email, saveId: randomUUID(),
       matchId: null, matchName: null, method: opts.method, path: opts.path,
       body: opts.body ?? {}, keys: Object.keys(opts.expect), label: (k) => k,
-      applied: (_b, after) => mismatches(opts.expect, after).length === 0,
+      applied: (_b, after) => (opts.expectGone ? after.missing === true : mismatches(opts.expect, after).length === 0),
     },
     {
       readResource: async () => ((await read()) as unknown as Record<string, unknown>) ?? { missing: true },
@@ -171,8 +173,9 @@ export async function offersWrite(opts: {
   const verdict: Verdict = error
     ? (outcome === "unknown" ? "UNKNOWN" : "FAILED")
     : after === undefined ? "UNKNOWN"
+    : opts.expectGone ? (after === null ? "LANDED" : "NOT APPLIED")
     : missing.length === 0 ? "LANDED" : "NOT APPLIED";
-  if (verdict === "NOT APPLIED") console.error(`[offers] ${opts.source}: NOT APPLIED, the read-back does not show ${missing.join(", ")}`);
+  if (verdict === "NOT APPLIED") console.error(`[offers] ${opts.source}: NOT APPLIED, the read-back does not show ${opts.expectGone ? "it gone" : missing.join(", ")}`);
   return {
     verdict, after: after ?? null,
     error: error ? errorText(error) : undefined,

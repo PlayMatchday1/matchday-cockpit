@@ -6,11 +6,11 @@
 // then Launch. After launch the deal, the audience and the dates are locked (the backend refuses
 // them); the name, the popup text and the use cap can still change, and Pause and End appear.
 //
-// SEND TO MY PHONE is shown disabled: the backend has no endpoint that puts one offer on one phone.
+// SEND TO MY PHONE stays disabled until the backend's POST .../send-to-me exists (SEND_TO_ME_READY).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  amountText, audienceBody, chicagoWallNow, copyOf, createBody, defaultRun, endsTicket, formOf, formProblem, fromInput, matchInfo,
+  FIRST_NAME_TOKEN, PREVIEW_FIRST_NAME, amountText, audienceBody, chicagoWallNow, copyOf, createBody, defaultRun, endsTicket, formOf, formProblem, fromInput, matchInfo,
   matchShort, newForm, patchBody, pickedMatch, startLabel, STEPPER, summary, toInput, wallLabel,
   type Campaign, type City, type Count, type CopyKey, type DealType, type Form, type MatchOpt,
 } from "@/lib/offersModel";
@@ -23,7 +23,8 @@ type Data = { campaigns: Campaign[]; cities: City[]; matches: MatchOpt[] };
 const DEALS: { type: DealType; label: string }[] = [
   { type: "PERCENT_OFF", label: "% off" }, { type: "AMOUNT_OFF", label: "$ off" }, { type: "SET_PRICE", label: "Set price" }, { type: "FREE_MATCH", label: "Free match" },
 ];
-const NO_PHONE = "Not built yet: the backend has no endpoint that sends one offer to one phone.";
+const SEND_TO_ME_READY = false;
+const NO_PHONE = "Not on yet: waiting for the backend's send-to-me endpoint.";
 
 export default function OfferPanel({ c, data, onClose, onLanded }: {
   c: Campaign | null; data: Data; onClose: () => void; onLanded: (o: WriteOutcome, selectId?: number) => void;
@@ -58,7 +59,7 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
   // ── writes ──
   const [busy, setBusy] = useState(false);
   const [outcome, setOutcome] = useState<WriteOutcome | null>(null);
-  const [confirm, setConfirm] = useState<null | "launch" | "pause" | "end">(null);
+  const [confirm, setConfirm] = useState<null | "launch" | "pause" | "end" | "delete">(null);
   const inFlight = useRef(false);
   const send = useCallback(async (path: string, method: "POST" | "PATCH", body: unknown, landed: string) => {
     const r = await authed(path, { method, body: body === undefined ? undefined : JSON.stringify(body) });
@@ -99,6 +100,12 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
     const { o } = await send(`/api/offers/${id}/launch`, "POST", undefined, resume ? `Resumed "${f.name.trim()}".` : `Launched "${f.name.trim()}".`);
     if (o.verdict !== "LANDED" && c === null) return { ...o, text: `Saved as a draft, but the launch did not land: ${o.text}` };
     if (o.verdict === "LANDED") onLanded(o, id ?? undefined);
+    return o;
+  }
+  async function discard(): Promise<WriteOutcome> {
+    const r = await authed(`/api/offers/${c!.id}`, { method: "DELETE" });
+    const o = outcomeOf(r, `Deleted the draft "${c!.name}".`);
+    if (o.verdict === "LANDED") { onLanded(o); onClose(); }
     return o;
   }
   async function move(action: "pause" | "end"): Promise<WriteOutcome> {
@@ -286,7 +293,10 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
         {editText && !ended && (
           <div data-testid="offers-text-fields" className="flex flex-col gap-2 rounded-[8px] p-3" style={{ background: O.subtle }}>
             <div className="text-[11.5px]" style={{ color: O.muted }}>An empty line goes back to the text written from the deal.</div>
-            {([["eyebrow", "Tag on the photo", 64], ["headline", "Headline (last word in green)", 64], ["line", "Line", 64], ["body", "Body", 300], ["buttonLabel", "Button", 64], ["dismissLabel", "Dismiss link", 64]] as const).map(([k, label, max]) => {
+            <div data-testid="offers-firstname-hint" className="text-[11.5px]" style={{ color: O.muted }}>
+              <code className="rounded px-1" style={{ background: O.surface, color: O.ink }}>{FIRST_NAME_TOKEN}</code> becomes the player&apos;s first name (shown here as {PREVIEW_FIRST_NAME}). With no first name on file it is left out.
+            </div>
+            {([["eyebrow", "Tag on the photo", 64], ["caption", "Line on the photo", 64], ["headline", "Headline (last word in green)", 64], ["line", "Line", 64], ["body", "Body", 300], ["buttonLabel", "Button", 64], ["dismissLabel", "Dismiss link", 64]] as const).map(([k, label, max]) => {
               const auto = copyOf({ ...f, copy: {} }, data.matches, data.cities)[k] ?? "";
               return (
                 <label key={k} className="flex flex-col gap-1">
@@ -352,10 +362,11 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
             )}
             {c?.status === "LAUNCHED" && <Btn testId="offers-pause" disabled={busy} onClick={() => setConfirm("pause")}>Pause</Btn>}
             {(c?.status === "LAUNCHED" || c?.status === "PAUSED") && <Btn kind="danger" testId="offers-end" disabled={busy} onClick={() => setConfirm("end")}>End</Btn>}
-            <Btn testId="offers-phone" disabled title={NO_PHONE}>Send to my phone</Btn>
+            {c?.status === "DRAFT" && <Btn kind="danger" testId="offers-delete" disabled={busy} onClick={() => setConfirm("delete")}>Delete</Btn>}
+            <Btn testId="offers-phone" disabled={!SEND_TO_ME_READY} title={NO_PHONE}>Send to my phone</Btn>
           </div>
         )}
-        {!ended && <div data-testid="offers-phone-note" className="text-[11.5px]" style={{ color: O.muted }}>{NO_PHONE}</div>}
+        {!ended && !SEND_TO_ME_READY && <div data-testid="offers-phone-note" className="text-[11.5px]" style={{ color: O.muted }}>{NO_PHONE}</div>}
       </section>
 
       {confirm === "launch" && (
@@ -363,6 +374,11 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
           note={c?.status === "PAUSED" ? "Players who match start getting it again the next time they open the app." : `${summary(f, count, data.matches, data.cities, nowWall)} After launch the deal, who gets it and when it runs can't change.`}
           action={c?.status === "PAUSED" ? "Resume" : "Launch"} onCancel={() => setConfirm(null)}
           onConfirm={async () => { const o = await once(launch); if (o) { setOutcome(o); if (o.verdict === "LANDED") setConfirm(null); } return o; }} />
+      )}
+      {confirm === "delete" && (
+        <ConfirmDialog title={`Delete the draft ${c!.name}?`} kind="dangerSolid" note="It was never launched, so no player has it. This can't be undone."
+          action="Delete" onCancel={() => setConfirm(null)}
+          onConfirm={async () => { const o = await once(discard); if (o) { setOutcome(o); if (o.verdict === "LANDED") setConfirm(null); } return o; }} />
       )}
       {confirm === "pause" && (
         <ConfirmDialog title={`Pause ${c!.name}?`} note="Nobody new gets it and no popup shows. Players who already have it can still use it until it expires. You can resume it."
