@@ -6,7 +6,8 @@
 // then Launch. After launch the deal, the audience and the dates are locked (the backend refuses
 // them); the name, the popup text and the use cap can still change, and Pause and End appear.
 //
-// SEND TO MY PHONE stays disabled until the backend's POST .../send-to-me exists (SEND_TO_ME_READY).
+// SEND TO MY PHONE (backend POST .../send-to-me): the popup on your own phone, next app open. It needs
+// a saved offer (any status, drafts included). Reported as "Sent", never as arrived.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -23,8 +24,7 @@ type Data = { campaigns: Campaign[]; cities: City[]; matches: MatchOpt[] };
 const DEALS: { type: DealType; label: string }[] = [
   { type: "PERCENT_OFF", label: "% off" }, { type: "AMOUNT_OFF", label: "$ off" }, { type: "SET_PRICE", label: "Set price" }, { type: "FREE_MATCH", label: "Free match" },
 ];
-const SEND_TO_ME_READY = false;
-const NO_PHONE = "Not on yet: waiting for the backend's send-to-me endpoint.";
+const SENT_TEXT = "Sent. Open the app on your phone to see it.";
 
 export default function OfferPanel({ c, data, onClose, onLanded }: {
   c: Campaign | null; data: Data; onClose: () => void; onLanded: (o: WriteOutcome, selectId?: number) => void;
@@ -107,6 +107,10 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
     const o = outcomeOf(r, `Deleted the draft "${c!.name}".`);
     if (o.verdict === "LANDED") { onLanded(o); onClose(); }
     return o;
+  }
+  async function sendToPhone() {
+    const r = await once(async () => outcomeOf(await authed(`/api/offers/${c!.id}/send-to-me`, { method: "POST" }), SENT_TEXT));
+    if (r) setOutcome(r);
   }
   async function move(action: "pause" | "end"): Promise<WriteOutcome> {
     const { o } = await send(`/api/offers/${c!.id}/${action}`, "POST", undefined, action === "pause" ? `Paused "${c!.name}".` : `Ended "${c!.name}".`);
@@ -363,10 +367,10 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
             {c?.status === "LAUNCHED" && <Btn testId="offers-pause" disabled={busy} onClick={() => setConfirm("pause")}>Pause</Btn>}
             {(c?.status === "LAUNCHED" || c?.status === "PAUSED") && <Btn kind="danger" testId="offers-end" disabled={busy} onClick={() => setConfirm("end")}>End</Btn>}
             {c?.status === "DRAFT" && <Btn kind="danger" testId="offers-delete" disabled={busy} onClick={() => setConfirm("delete")}>Delete</Btn>}
-            <Btn testId="offers-phone" disabled={!SEND_TO_ME_READY} title={NO_PHONE}>Send to my phone</Btn>
+            <Btn testId="offers-phone" disabled={busy || c === null || (c.status === "DRAFT" && dirty)} title={c === null ? "Save it as a draft first" : c.status === "DRAFT" && dirty ? "Save your changes first, so the phone shows what you see" : undefined} onClick={sendToPhone}>Send to my phone</Btn>
           </div>
         )}
-        {!ended && !SEND_TO_ME_READY && <div data-testid="offers-phone-note" className="text-[11.5px]" style={{ color: O.muted }}>{NO_PHONE}</div>}
+        {!ended && c === null && <div data-testid="offers-phone-note" className="text-[11.5px]" style={{ color: O.muted }}>Save it as a draft to send it to your phone.</div>}
       </section>
 
       {confirm === "launch" && (

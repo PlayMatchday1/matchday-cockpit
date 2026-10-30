@@ -194,3 +194,39 @@ export async function readJson(req: Request): Promise<Record<string, unknown> | 
     return b as Record<string, unknown>;
   } catch { return Response.json({ error: "Body must be JSON" }, { status: 400 }); }
 }
+
+// ── SEND TO MY PHONE (POST admin/offers/campaigns/{id}/send-to-me) ─────────────────────────────
+// The popup goes to the player account with the staff person's own email, on its next app open.
+// Nothing in the admin API reads a preview back, so a 2xx is reported as SENT (the backend took
+// it), never LANDED and never "arrived": whether it reached the phone is checked on the phone.
+// It is a write (it stores a preview), so it goes through recordWrite like the rest.
+export async function sendToMe(auth: OffersAuth, id: number): Promise<Response> {
+  const path = `${CAMPAIGNS}/${id}/send-to-me`;
+  let popup: unknown = null;
+  const { outcome, error } = await recordWrite(
+    {
+      env: OFFERS_ENV, source: "offers:send-to-me", actorName: auth.email, actorEmail: auth.email, saveId: randomUUID(),
+      matchId: null, matchName: null, method: "POST", path, body: {}, keys: [], label: (k) => k,
+      applied: () => popup !== null,
+    },
+    {
+      readResource: async () => ({}),
+      write: async () => {
+        const r = await offersApiWrite<{ userId?: number; popup?: unknown }>(auth, "POST", path);
+        popup = r?.popup ?? null;
+        return r;
+      },
+      now: () => new Date().toISOString(),
+    },
+    supabaseLogStore(),
+  );
+  if (error) {
+    const { code } = backendMessage(error);
+    const text = code === "NOT_FOUND_PREVIEW_PLAYER"
+      ? `No player account in the app uses ${auth.email}. Sign up in the app with that email, then send it again.`
+      : errorText(error);
+    return Response.json({ verdict: outcome === "unknown" ? "UNKNOWN" : "FAILED", error: text }, { status: outcome === "unknown" ? 200 : 502 });
+  }
+  if (popup === null) return Response.json({ verdict: "UNKNOWN", detail: "The backend answered without the popup it says it sends. Check your phone before sending again." });
+  return Response.json({ verdict: "SENT" });
+}

@@ -94,6 +94,8 @@ eq("set price above the normal price is charged as set (the backend does not cap
   eq("the use cap bounds the ceiling", costCeiling({ ...f, maxRedemptions: 10 }, { count: 458, heldBack: 46, players: 412, mostItCanCost: null }, matches)?.cents, 7500);
   eq("the summary", summary({ ...f, lastPlayed: "LAPSED", lastPlayedDays: 30 }, { count: 458, heldBack: 46, players: 412, mostItCanCost: null }, matches, cities, NOW),
     "412 Austin players who haven't played in 30+ days get 50% off one match until Sun 11:59 PM (46 more held back to measure). Most it can cost: $3,090 at today's top price of $15.");
+  eq("the summary for one player", summary({ ...f, lastPlayed: "LAPSED", lastPlayedDays: 30 }, { count: 1, heldBack: 0, players: 1, mostItCanCost: null }, matches, cities, NOW),
+    "1 Austin player who hasn't played in 30+ days gets 50% off one match until Sun 11:59 PM. Most it can cost: $7.50 at today's top price of $15.");
 }
 
 console.log("wall clock:");

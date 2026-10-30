@@ -29,6 +29,8 @@ export default function OffersView() {
   const [key, setKey] = useState(0);
   const [ver, setVer] = useState(0);
   const [open, setOpen] = useState<number | "new" | null>(null);
+  // Bumped on every + New offer, so a second click starts a fresh form instead of keeping the last one.
+  const [newN, setNewN] = useState(0);
   const [banner, setBanner] = useState<WriteOutcome | null>(null);
 
   useEffect(() => {
@@ -59,9 +61,7 @@ export default function OffersView() {
     <div className="min-w-0 px-1 pb-16" style={{ color: O.ink }}>
       <div className="mb-5 flex flex-wrap items-center gap-3">
         <h1 className="m-0 text-[25px] font-bold" style={{ color: O.ink }}>Offers</h1>
-        <span data-testid="offers-source" className="ml-auto inline-flex items-center gap-1.5 rounded-full px-3 py-[5px] text-[10.5px] font-bold tracking-[0.04em]" style={{ background: O.warnBg, color: O.warnInk }}>
-          LOCAL BACKEND · SEED DATA
-        </span>
+        <div className="ml-auto" />
         <Btn onClick={() => setKey((k) => k + 1)}>Refresh</Btn>
       </div>
       {banner && <Banner outcome={banner} onDismiss={() => setBanner(null)} />}
@@ -70,14 +70,14 @@ export default function OffersView() {
       ) : !data ? <div className="py-6 text-[13px]" style={{ color: O.muted }}>Loading…</div> : (
         <Split
           panel={open !== null && (open === "new" || current) ? (
-            <OfferPanel key={`${open}:${ver}`} c={current} data={data} onClose={() => setOpen(null)} onLanded={landed} />
+            <OfferPanel key={`${open}:${ver}:${open === "new" ? newN : ""}`} c={current} data={data} onClose={() => setOpen(null)} onLanded={landed} />
           ) : null}
           main={
             <div className="flex flex-col gap-5">
               <div data-testid="offers-list" className="overflow-hidden rounded-[12px] border" style={{ background: O.surface, borderColor: O.line }}>
                 <div className="flex items-center justify-between px-4 py-3.5">
                   <div className="text-[16px] font-bold" style={{ color: O.ink }}>Offers</div>
-                  <Btn kind="primary" testId="offers-new" onClick={() => setOpen("new")}>+ New offer</Btn>
+                  <Btn kind="primary" testId="offers-new" onClick={() => { setOpen("new"); setNewN((n) => n + 1); }}>+ New offer</Btn>
                 </div>
                 <div className={`${COLS} border-y px-4 py-[9px] text-[10px] font-semibold tracking-[0.6px]`} style={{ borderColor: O.line, background: O.subtle, color: O.label }}>
                   <div>OFFER</div><div>DEAL</div><div>RESULTS</div><div />

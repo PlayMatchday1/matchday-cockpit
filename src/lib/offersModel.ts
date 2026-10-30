@@ -332,12 +332,13 @@ export function summary(f: Form, count: Count | null, matches: MatchOpt[], citie
   const m = pickedMatch(f, matches);
   const n = m ? 1 : f.usesPerPlayer;
   const where = f.cityIds.length ? `${andList(cityNames(f.cityIds, cities))} ` : "";
+  const one1 = count.players === 1;
   const who: string[] = [];
-  if (f.lastPlayed === "LAPSED") who.push(`haven't played in ${f.lastPlayedDays}+ days`);
-  if (f.lastPlayed === "NEVER") who.push("have never played");
-  if (f.membership === "MEMBERS") who.push("are members");
-  if (f.membership === "NON_MEMBERS") who.push("aren't members");
-  if (m && f.playedAtMatchField) who.push(`have played at ${m.fieldTitle ?? "this field"}`);
+  if (f.lastPlayed === "LAPSED") who.push(`${one1 ? "hasn't" : "haven't"} played in ${f.lastPlayedDays}+ days`);
+  if (f.lastPlayed === "NEVER") who.push(`${one1 ? "has" : "have"} never played`);
+  if (f.membership === "MEMBERS") who.push(one1 ? "is a member" : "are members");
+  if (f.membership === "NON_MEMBERS") who.push(one1 ? "isn't a member" : "aren't members");
+  if (m && f.playedAtMatchField) who.push(`${one1 ? "has" : "have"} played at ${m.fieldTitle ?? "this field"}`);
   const one = n === 1 ? "one match" : `${n} matches`;
   const deal = m
     ? (f.dealType === "FREE_MATCH" ? `${m.name} free` : f.dealType === "SET_PRICE" ? `a ${money(f.dealAmount)} spot in ${m.name}` : `${dealText(f.dealType, f.dealAmount)} ${m.name}`)
@@ -349,7 +350,7 @@ export function summary(f: Form, count: Count | null, matches: MatchOpt[], citie
   const held = count.heldBack > 0 ? ` (${count.heldBack.toLocaleString("en-US")} more held back to measure)` : "";
   const ceiling = costCeiling(f, count, matches);
   const cost = ceiling ? `Most it can cost: ${money(ceiling.cents)}${ceiling.basis ? ` ${ceiling.basis}` : ""}.` : "Most it can cost: not known until matches are listed.";
-  return `${people}${who.length ? ` who ${andList(who)}` : ""} get ${deal} ${until}${held}. ${cost}`;
+  return `${people}${who.length ? ` who ${andList(who)}` : ""} ${one1 ? "gets" : "get"} ${deal} ${until}${held}. ${cost}`;
 }
 
 // ── THE LIST AND THE RESULTS ─────────────────────────────────────────────────────────────────────
