@@ -2,18 +2,19 @@
 
 // ONE OFFER, top to bottom (Figma 20571:334; the specific-match state is 20581:54): Name, The deal,
 // Who gets it (with the live count), Popup (live preview, text written from the deal and editable
-// behind Edit text), Runs, More options (holdout, use cap), the summary with the most it can cost,
+// behind Edit text), Runs, More options (holdout), the summary with the most it can cost,
 // then Launch. After launch the deal, the audience and the dates are locked (the backend refuses
-// them); the name, the popup text and the use cap can still change, and Pause and End appear.
+// them); the name, the popup text and the total limit can still change, and Pause and End appear.
 //
-// SEND TO MY PHONE (backend POST .../send-to-me): the popup on your own phone, next app open. It needs
-// a saved offer (any status, drafts included). Reported as "Sent", never as arrived.
+// SEND TEST (backend POST .../send-preview): the popup on up to 20 players' phones on their next app
+// open, or on your own with Use my email. Needs a saved offer (any status, drafts included). Reported
+// as "Sent to N", never as arrived. The last ids are remembered in this browser as a convenience.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  FIRST_NAME_TOKEN, MAX_USES_PER_PLAYER, PREVIEW_FIRST_NAME, amountText, limitLine, stepLimit, stepUses, usesLine, audienceBody, buttonMatchNote, buttonOf, matchDay, opensText, chicagoWallNow, copyOf, createBody, defaultRun, endsTicket, formOf, formProblem, fromInput, matchInfo,
+  FIRST_NAME_TOKEN, MAX_TEST_IDS, MAX_USES_PER_PLAYER, notFoundLine, parsePlayerIds, playerLine, prefillField, PREVIEW_FIRST_NAME, amountText, limitLine, stepLimit, stepUses, usesLine, audienceBody, buttonMatchNote, buttonOf, matchDay, opensText, chicagoWallNow, copyOf, createBody, defaultRun, endsTicket, formOf, formProblem, fromInput, matchInfo,
   matchShort, newForm, patchBody, pickedMatch, startLabel, STEPPER, summary, toInput, wallLabel,
-  type Campaign, type City, type Count, type FieldOpt, type CopyKey, type DealType, type Form, type MatchOpt,
+  type Campaign, type City, type Count, type FieldOpt, type Lookup, type CopyKey, type DealType, type Form, type MatchOpt,
 } from "@/lib/offersModel";
 import OfferPopupPreview from "./OfferPopupPreview";
 import {
@@ -24,7 +25,9 @@ type Data = { campaigns: Campaign[]; cities: City[]; fields: FieldOpt[]; matches
 const DEALS: { type: DealType; label: string }[] = [
   { type: "PERCENT_OFF", label: "% off" }, { type: "AMOUNT_OFF", label: "$ off" }, { type: "SET_PRICE", label: "Set price" }, { type: "FREE_MATCH", label: "Free match" },
 ];
-const SENT_TEXT = "Sent. Open the app on your phone to see it.";
+const TEST_IDS_KEY = "offers:last-test-ids";
+const readTestIds = () => { try { return window.localStorage.getItem(TEST_IDS_KEY) ?? ""; } catch { return ""; } };
+const keepTestIds = (text: string) => { try { window.localStorage.setItem(TEST_IDS_KEY, text); } catch { /* private mode */ } };
 
 export default function OfferPanel({ c, data, onClose, onLanded }: {
   c: Campaign | null; data: Data; onClose: () => void; onLanded: (o: WriteOutcome, selectId?: number) => void;
@@ -108,9 +111,32 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
     if (o.verdict === "LANDED") { onLanded(o); onClose(); }
     return o;
   }
-  async function sendToPhone() {
-    const r = await once(async () => outcomeOf(await authed(`/api/offers/${c!.id}/send-to-me`, { method: "POST" }), SENT_TEXT));
-    if (r) setOutcome(r);
+  // ── send test ──
+  const [testOpen, setTestOpen] = useState(false);
+  const [testText, setTestText] = useState("");
+  const testParsed = useMemo(() => parsePlayerIds(testText), [testText]);
+  const [testLookup, setTestLookup] = useState<Lookup | null>(null);
+  const testKey = testParsed.ids.join(",");
+  useEffect(() => {
+    if (!testOpen || testParsed.ids.length === 0 || testParsed.ids.length > MAX_TEST_IDS) { setTestLookup(null); return; }
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      const r = await authed("/api/offers/players", { method: "POST", body: JSON.stringify({ ids: testParsed.ids }) });
+      if (!cancelled) setTestLookup(r.ok ? (r.json as unknown as Lookup) : null);
+    }, 350);
+    return () => { cancelled = true; clearTimeout(t); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [testOpen, testKey]);
+  const testIds = testParsed.ids.filter((id) => !(testLookup?.notFound ?? []).includes(id));
+  async function sendTest(toMe: boolean) {
+    const userIds = toMe ? [] : testIds;
+    const r = await once(async () => authed(`/api/offers/${c!.id}/send-preview`, { method: "POST", body: JSON.stringify({ userIds }) }));
+    if (!r) return;
+    const sent = Array.isArray(r.json.sent) ? (r.json.sent as number[]) : [];
+    const skipped = Array.isArray(r.json.notFound) ? (r.json.notFound as number[]) : [];
+    const o = outcomeOf(r, `Sent to ${sent.length}. Open the app to see it.${skipped.length ? ` ${notFoundLine(skipped)}` : ""}`);
+    setOutcome(o);
+    if (o.verdict === "SENT") { if (!toMe) keepTestIds(testText); setTestOpen(false); }
   }
   async function move(action: "pause" | "end"): Promise<WriteOutcome> {
     const { o } = await send(`/api/offers/${c!.id}/${action}`, "POST", undefined, action === "pause" ? `Paused "${c!.name}".` : `Ended "${c!.name}".`);
@@ -127,13 +153,14 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
   };
   const pickScope = (scope: "ANY" | "MATCH") => {
     if (scope === f.scope) return;
-    if (scope === "ANY") set({ scope, matchId: null, playedAtMatchField: false, endsLocal: defaultRun(nowWall).endsLocal });
+    if (scope === "ANY") set({ scope, matchId: null, endsLocal: defaultRun(nowWall).endsLocal });
     else set({ scope, usesPerPlayer: 1 });
   };
   const pickMatch = (id: number | null) => {
     const mm = data.matches.find((x) => x.id === id) ?? null;
-    // A specific match's offer ends at its kickoff unless someone moves it.
-    set({ matchId: id, ...(mm ? { endsLocal: mm.startLocal } : {}) });
+    // A specific match's offer ends at its kickoff unless someone moves it, and Played at is
+    // prefilled with that match's field (the person can take it off).
+    set({ matchId: id, ...(mm ? { endsLocal: mm.startLocal, fieldIds: prefillField(f.fieldIds, mm) } : {}) });
   };
   const upcoming = data.matches.filter((x) => x.upcoming && (f.cityIds.length === 0 || (x.cityId !== null && f.cityIds.includes(x.cityId))));
   const matchChoices = m && !upcoming.some((x) => x.id === m.id) ? [m, ...upcoming] : upcoming;
@@ -143,6 +170,35 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
   const otherCities = data.cities.filter((x) => !f.cityIds.includes(x.id));
   const lastPlayedOn = (lp: Form["lastPlayed"], days: number | null) => f.lastPlayed === lp && (lp !== "LAPSED" || f.lastPlayedDays === days);
   const oddLapse = f.lastPlayed === "LAPSED" && f.lastPlayedDays !== 30 && f.lastPlayedDays !== 60;
+  const [addingField, setAddingField] = useState(false);
+  const fieldsInCities = data.fields.filter((x) => f.cityIds.length === 0 || (x.cityId !== null && f.cityIds.includes(x.cityId)));
+  const otherFields = fieldsInCities.filter((x) => !f.fieldIds.includes(x.id));
+  const fieldTitle = (id: number) => data.fields.find((x) => x.id === id)?.title ?? `Field ${id}`;
+  const players = f.audienceMode === "PLAYERS";
+
+  // ── specific players: look the ids up as they are typed (debounced) ──
+  const parsed = useMemo(() => parsePlayerIds(f.playerIdsText), [f.playerIdsText]);
+  const [lookup, setLookup] = useState<Lookup | null>(null);
+  const [lookupErr, setLookupErr] = useState<string | null>(null);
+  const idsKey = parsed.ids.join(",");
+  useEffect(() => {
+    if (!players || parsed.ids.length === 0) { setLookup(null); setLookupErr(null); return; }
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      const r = await authed("/api/offers/players", { method: "POST", body: JSON.stringify({ ids: parsed.ids }) });
+      if (cancelled) return;
+      if (!r.ok) { setLookupErr(String(r.json.error)); setLookup(null); return; }
+      setLookupErr(null); setLookup(r.json as unknown as Lookup);
+    }, 350);
+    return () => { cancelled = true; clearTimeout(t); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [players, idsKey]);
+  // The ids sent are the ones typed, less any the lookup says are not players (the backend refuses those).
+  useEffect(() => {
+    const keep = parsed.ids.filter((id) => !(lookup?.notFound ?? []).includes(id));
+    setF((x) => (x.playerIds.join(",") === keep.join(",") ? x : { ...x, playerIds: keep }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [idsKey, lookup]);
 
   // ── popup text ──
   const [editText, setEditText] = useState(false);
@@ -175,7 +231,7 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
               onClick={() => setF((v) => ({ ...v, copy: { ...v.copy, photoUrl: x.cover } }))}
               className="flex flex-col overflow-hidden rounded-[8px] border-2 text-left" style={{ borderColor: on ? O.chipOn : O.line }}>
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img alt="" src={x.cover ?? "/offers/popup-photo.png"} className="h-[48px] w-full object-cover" />
+              <img alt="" src={x.cover ?? "/offers/offer-popup-photo.jpg"} className="h-[48px] w-full object-cover" />
               <span className="truncate px-1.5 pt-1 text-[11px] font-medium" style={{ color: O.ink }}>{x.title}</span>
               <span className="truncate px-1.5 pb-1 text-[10.5px]" style={{ color: O.muted }}>{x.cover ? cityName(x.cityId) : "Default"}</span>
             </button>
@@ -236,7 +292,7 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
         </Labeled>
         {locked && !ended && (
           <div data-testid="offers-locked-note" className="rounded-[8px] px-3 py-2 text-[12px]" style={{ background: O.subtle, color: O.muted }}>
-            Launched, so the deal, who gets it and when it runs are locked. The name, the popup text and the use cap can still change.
+            Launched, so the deal, who gets it and when it runs are locked. The name, the popup text and the total limit can still change.
           </div>
         )}
         {ended && <div className="rounded-[8px] px-3 py-2 text-[12px]" style={{ background: O.subtle, color: O.muted }}>Ended. Nothing about it can change.</div>}
@@ -320,54 +376,102 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
 
       {/* WHO GETS IT */}
       <PanelSection title="Who gets it" testId="offers-who">
-        <Labeled label="City">
-          <div className="flex flex-wrap gap-1.5">
-            {f.cityIds.map((id) => (
-              <Chip key={id} on disabled={dl} title={dl ? undefined : "Remove"} onClick={() => set({ cityIds: f.cityIds.filter((x) => x !== id) })}>
-                {`${data.cities.find((x) => x.id === id)?.name ?? `City ${id}`}  ×`}
-              </Chip>
-            ))}
-            {f.cityIds.length === 0 && <span className="self-center text-[12px]" style={{ color: O.muted }}>All cities</span>}
-            {!dl && otherCities.length > 0 && <Chip testId="offers-add-city" on={false} onClick={() => setAddingCity((v) => !v)}>+ City</Chip>}
-          </div>
-          {addingCity && !dl && (
-            <div className="flex flex-wrap gap-1.5 rounded-[8px] p-2" style={{ background: O.subtle }}>
-              {otherCities.map((x) => <Chip key={x.id} testId={`offers-city-${x.id}`} on={false} onClick={() => { set({ cityIds: [...f.cityIds, x.id] }); setAddingCity(false); }}>{x.name}</Chip>)}
+        {/* Figma 20620:75 (filters + fields) and 20620:128 (specific players). */}
+        <div className="flex flex-wrap gap-1.5">
+          <Chip testId="offers-mode-FILTERS" on={!players} disabled={dl} onClick={() => set({ audienceMode: "FILTERS" })}>Filters</Chip>
+          <Chip testId="offers-mode-PLAYERS" on={players} disabled={dl} onClick={() => set({ audienceMode: "PLAYERS" })}>Specific players</Chip>
+        </div>
+        {players ? (
+          <>
+            <div className="flex flex-col gap-1.5">
+              <div className="flex items-center gap-1.5">
+                <span className="text-[12px] font-medium" style={{ color: O.ink }}>Player IDs</span>
+                <span className="text-[11px]" style={{ color: O.label }}>commas, spaces or one per line</span>
+              </div>
+              <textarea data-testid="offers-player-ids" rows={4} disabled={dl} className={`${inputCls} leading-[19px]`} style={inputStyle}
+                value={f.playerIdsText} onChange={(e) => set({ playerIdsText: e.target.value })} placeholder="10482, 10511, 9877" />
             </div>
-          )}
-        </Labeled>
-        <Labeled label="Last played">
-          <div className="flex flex-wrap gap-1.5">
-            <Chip testId="offers-lp-any" on={lastPlayedOn("ANY", null)} disabled={dl} onClick={() => set({ lastPlayed: "ANY", lastPlayedDays: null })}>Any time</Chip>
-            <Chip testId="offers-lp-30" on={lastPlayedOn("LAPSED", 30)} disabled={dl} onClick={() => set({ lastPlayed: "LAPSED", lastPlayedDays: 30 })}>30+ days ago</Chip>
-            <Chip testId="offers-lp-60" on={lastPlayedOn("LAPSED", 60)} disabled={dl} onClick={() => set({ lastPlayed: "LAPSED", lastPlayedDays: 60 })}>60+ days ago</Chip>
-            {oddLapse && <Chip on>{`${f.lastPlayedDays}+ days ago`}</Chip>}
-            <Chip testId="offers-lp-never" on={lastPlayedOn("NEVER", null)} disabled={dl} onClick={() => set({ lastPlayed: "NEVER", lastPlayedDays: null })}>Never</Chip>
-          </div>
-        </Labeled>
-        {m && (
-          <Labeled label="Played here before">
-            <div className="flex flex-wrap gap-1.5">
-              <Chip testId="offers-field-any" on={!f.playedAtMatchField} disabled={dl} onClick={() => set({ playedAtMatchField: false })}>{f.cityIds.length ? "Anyone in the city" : "Anyone"}</Chip>
-              <Chip testId="offers-field-yes" on={f.playedAtMatchField} disabled={dl} onClick={() => set({ playedAtMatchField: true })}>{`Played at ${m.fieldTitle ?? "this field"} before`}</Chip>
+            {parsed.bad.length > 0 && <div data-testid="offers-ids-bad" className="self-start rounded-[8px] px-2.5 py-1.5 text-[12px] font-medium" style={{ background: O.warnBg, color: O.warnInk }}>Not an ID: {parsed.bad.slice(0, 5).join(", ")}{parsed.bad.length > 5 ? "…" : ""}. It will be skipped.</div>}
+            {parsed.tooMany && <div className="self-start rounded-[8px] px-2.5 py-1.5 text-[12px] font-medium" style={{ background: O.warnBg, color: O.warnInk }}>Only the first 2,000 IDs are used.</div>}
+            {lookupErr && <div className="self-start rounded-[8px] px-2.5 py-1.5 text-[12px]" style={{ background: O.critBg, color: O.critInk }}>Couldn&apos;t look them up: {lookupErr}</div>}
+            {lookup && (
+              <>
+                <div data-testid="offers-found" className="flex gap-1.5 self-start rounded-[8px] px-2.5 py-1.5 text-[12px]" style={{ background: O.mint, color: O.ok }}>
+                  <b>{lookup.players.length.toLocaleString("en-US")} {lookup.players.length === 1 ? "player" : "players"}</b><span>found</span>
+                </div>
+                {lookup.notFound.length > 0 && <div data-testid="offers-not-found" className="self-start rounded-[8px] px-2.5 py-1.5 text-[12px] font-medium" style={{ background: O.warnBg, color: O.warnInk }}>{notFoundLine(lookup.notFound)}</div>}
+                {lookup.players.length > 0 && (
+                  <div data-testid="offers-found-list" className="flex flex-col gap-1 rounded-[8px] px-3 py-2.5 text-[12px]" style={{ background: O.subtle }}>
+                    {lookup.players.slice(0, 3).map((p) => <div key={p.id} style={{ color: O.ink }}>{playerLine(p)}</div>)}
+                    {lookup.players.length > 3 && <div style={{ color: O.ok }}>+ {(lookup.players.length - 3).toLocaleString("en-US")} more</div>}
+                  </div>
+                )}
+              </>
+            )}
+            <div className="text-[12px] leading-[17px]" style={{ color: O.muted }}>Only these players get it. City and other filters don&apos;t apply, and nobody is held back.</div>
+          </>
+        ) : (
+          <>
+            <Labeled label="City">
+              <div className="flex flex-wrap gap-1.5">
+                {f.cityIds.map((id) => (
+                  <Chip key={id} on disabled={dl} title={dl ? undefined : "Remove"} onClick={() => set({ cityIds: f.cityIds.filter((x) => x !== id) })}>
+                    {`${data.cities.find((x) => x.id === id)?.name ?? `City ${id}`}  ×`}
+                  </Chip>
+                ))}
+                {f.cityIds.length === 0 && <span className="self-center text-[12px]" style={{ color: O.muted }}>All cities</span>}
+                {!dl && otherCities.length > 0 && <Chip testId="offers-add-city" on={false} onClick={() => setAddingCity((v) => !v)}>+ City</Chip>}
+              </div>
+              {addingCity && !dl && (
+                <div className="flex flex-wrap gap-1.5 rounded-[8px] p-2" style={{ background: O.subtle }}>
+                  {otherCities.map((x) => <Chip key={x.id} testId={`offers-city-${x.id}`} on={false} onClick={() => { set({ cityIds: [...f.cityIds, x.id] }); setAddingCity(false); }}>{x.name}</Chip>)}
+                </div>
+              )}
+            </Labeled>
+            <div data-testid="offers-played-at" className="flex flex-col gap-1.5">
+              <div className="flex items-center gap-1.5">
+                <span className="text-[12px] font-medium" style={{ color: O.ink }}>Played at</span>
+                <span className="text-[11px]" style={{ color: O.label }}>any of these fields · leave empty for all</span>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {f.fieldIds.map((id) => (
+                  <Chip key={id} on testId={`offers-pf-${id}`} disabled={dl} title={dl ? undefined : "Remove"} onClick={() => set({ fieldIds: f.fieldIds.filter((x) => x !== id) })}>{`${fieldTitle(id)}  ×`}</Chip>
+                ))}
+                {!dl && otherFields.length > 0 && <Chip testId="offers-add-field" on={false} onClick={() => setAddingField((v) => !v)}>+ Field</Chip>}
+                {f.fieldIds.length === 0 && (dl || otherFields.length === 0) && <span className="self-center text-[12px]" style={{ color: O.muted }}>Any field</span>}
+              </div>
+              {addingField && !dl && (
+                <div className="flex flex-wrap gap-1.5 rounded-[8px] p-2" style={{ background: O.subtle }}>
+                  {otherFields.map((x) => <Chip key={x.id} testId={`offers-field-${x.id}`} on={false} onClick={() => { set({ fieldIds: [...f.fieldIds, x.id] }); setAddingField(false); }}>{x.title}</Chip>)}
+                </div>
+              )}
             </div>
-          </Labeled>
+            <Labeled label="Last played">
+              <div className="flex flex-wrap gap-1.5">
+                <Chip testId="offers-lp-any" on={lastPlayedOn("ANY", null)} disabled={dl} onClick={() => set({ lastPlayed: "ANY", lastPlayedDays: null })}>Any time</Chip>
+                <Chip testId="offers-lp-30" on={lastPlayedOn("LAPSED", 30)} disabled={dl} onClick={() => set({ lastPlayed: "LAPSED", lastPlayedDays: 30 })}>30+ days ago</Chip>
+                <Chip testId="offers-lp-60" on={lastPlayedOn("LAPSED", 60)} disabled={dl} onClick={() => set({ lastPlayed: "LAPSED", lastPlayedDays: 60 })}>60+ days ago</Chip>
+                {oddLapse && <Chip on>{`${f.lastPlayedDays}+ days ago`}</Chip>}
+                <Chip testId="offers-lp-never" on={lastPlayedOn("NEVER", null)} disabled={dl} onClick={() => set({ lastPlayed: "NEVER", lastPlayedDays: null })}>Never</Chip>
+              </div>
+            </Labeled>
+            <Labeled label="Membership">
+              <div className="flex flex-wrap gap-1.5">
+                <Chip testId="offers-mem-ANYONE" on={f.membership === "ANYONE"} disabled={dl} onClick={() => set({ membership: "ANYONE" })}>Anyone</Chip>
+                <Chip testId="offers-mem-MEMBERS" on={f.membership === "MEMBERS"} disabled={dl} onClick={() => set({ membership: "MEMBERS" })}>Members</Chip>
+                <Chip testId="offers-mem-NON_MEMBERS" on={f.membership === "NON_MEMBERS"} disabled={dl} onClick={() => set({ membership: "NON_MEMBERS" })}>Not members</Chip>
+              </div>
+            </Labeled>
+            {(f.minMatches > 0 || f.maxMatches !== null) && (
+              <div className="text-[12px]" style={{ color: O.muted }}>Also: {f.maxMatches === f.minMatches ? `played exactly ${f.minMatches}` : f.maxMatches !== null ? `played ${f.minMatches} to ${f.maxMatches}` : `played ${f.minMatches}+`} matches (set outside this page).</div>
+            )}
+          </>
         )}
-        <Labeled label="Membership">
-          <div className="flex flex-wrap gap-1.5">
-            <Chip testId="offers-mem-ANYONE" on={f.membership === "ANYONE"} disabled={dl} onClick={() => set({ membership: "ANYONE" })}>Anyone</Chip>
-            <Chip testId="offers-mem-MEMBERS" on={f.membership === "MEMBERS"} disabled={dl} onClick={() => set({ membership: "MEMBERS" })}>Members</Chip>
-            <Chip testId="offers-mem-NON_MEMBERS" on={f.membership === "NON_MEMBERS"} disabled={dl} onClick={() => set({ membership: "NON_MEMBERS" })}>Not members</Chip>
-          </div>
-        </Labeled>
-        {(f.minMatches > 0 || f.maxMatches !== null) && (
-          <div className="text-[12px]" style={{ color: O.muted }}>Also: {f.maxMatches === f.minMatches ? `played exactly ${f.minMatches}` : f.maxMatches !== null ? `played ${f.minMatches} to ${f.maxMatches}` : `played ${f.minMatches}+`} matches (set outside this page).</div>
-        )}
-        <div data-testid="offers-count" className="flex gap-1.5 self-start rounded-[8px] px-2.5 py-1.5 text-[12px]" style={{ background: countErr ? O.critBg : O.mint, color: countErr ? O.critInk : O.ok }}>
+        {!players && <div data-testid="offers-count" className="flex gap-1.5 self-start rounded-[8px] px-2.5 py-1.5 text-[12px]" style={{ background: countErr ? O.critBg : O.mint, color: countErr ? O.critInk : O.ok }}>
           {countErr ? <span>Couldn&apos;t count: {countErr}</span>
             : count ? <><b>≈ {count.count.toLocaleString("en-US")} {count.count === 1 ? "player" : "players"}</b><span>match right now</span></>
             : <span>Counting…</span>}
-        </div>
+        </div>}
       </PanelSection>
 
       {/* POPUP */}
@@ -426,11 +530,11 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
           <WallInput testId="offers-ends" label={m && f.endsLocal === m.startLocal ? `Kickoff · ${wallLabel(f.endsLocal)}` : wallLabel(f.endsLocal)} value={f.endsLocal} disabled={dl} onChange={(v) => set({ endsLocal: v })} />
         </div>
         <div className="text-[11.5px]" style={{ color: O.muted }}>Times are each player&apos;s own city time.</div>
-        <button type="button" data-testid="offers-more" onClick={() => setMore((v) => !v)} className="flex w-full items-center justify-between gap-2 rounded-[8px] px-3 py-[9px] text-left text-[12px]" style={{ background: O.subtle }}>
+        {!players && <button type="button" data-testid="offers-more" onClick={() => setMore((v) => !v)} className="flex w-full items-center justify-between gap-2 rounded-[8px] px-3 py-[9px] text-left text-[12px]" style={{ background: O.subtle }}>
           <span className="font-medium" style={{ color: O.ink }}>More options</span>
           <span style={{ color: O.muted }}>{f.holdoutPercent > 0 ? `${f.holdoutPercent}% held back to measure` : "Nobody held back"} {more ? "‹" : "›"}</span>
-        </button>
-        {more && (
+        </button>}
+        {more && !players && (
           <div data-testid="offers-more-fields" className="flex flex-col gap-3 rounded-[8px] border p-3" style={{ borderColor: O.line }}>
             <Labeled label="Held back to measure">
               <div className="flex items-center gap-2.5">
@@ -449,7 +553,7 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
       {/* LAUNCH */}
       <section className="flex flex-col gap-2.5 border-t p-4" style={{ borderColor: O.line }}>
         <p data-testid="offers-summary" className="text-[13px] font-medium leading-[19px]" style={{ color: O.ink }}>
-          {summary(f, count, data.matches, data.cities, nowWall)}
+          {summary(f, count, data.matches, data.cities, nowWall, data.fields)}
         </p>
         {outcome && <VerdictLine outcome={outcome} />}
         {problem && !ended && dirty && <div data-testid="offers-problem" className="text-[12px]" style={{ color: O.warnInk }}>{problem}</div>}
@@ -465,15 +569,39 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
             {c?.status === "LAUNCHED" && <Btn testId="offers-pause" disabled={busy} onClick={() => setConfirm("pause")}>Pause</Btn>}
             {(c?.status === "LAUNCHED" || c?.status === "PAUSED") && <Btn kind="danger" testId="offers-end" disabled={busy} onClick={() => setConfirm("end")}>End</Btn>}
             {c?.status === "DRAFT" && <Btn kind="danger" testId="offers-delete" disabled={busy} onClick={() => setConfirm("delete")}>Delete</Btn>}
-            <Btn testId="offers-phone" disabled={busy || outcome?.verdict === "SENT" || c === null || (c.status === "DRAFT" && dirty)} title={c === null ? "Save it as a draft first" : c.status === "DRAFT" && dirty ? "Save your changes first, so the phone shows what you see" : undefined} onClick={sendToPhone}>Send to my phone</Btn>
+            <Btn testId="offers-test" disabled={busy || c === null || (c.status === "DRAFT" && dirty)} title={c === null ? "Save it as a draft first" : c.status === "DRAFT" && dirty ? "Save your changes first, so the phone shows what you see" : undefined}
+              onClick={() => { if (!testOpen) setTestText(readTestIds()); setTestOpen((v) => !v); }}>Send test</Btn>
           </div>
         )}
-        {!ended && c === null && <div data-testid="offers-phone-note" className="text-[11.5px]" style={{ color: O.muted }}>Save it as a draft to send it to your phone.</div>}
+        {testOpen && c !== null && !ended && (
+          <div data-testid="offers-test-pop" className="flex flex-col gap-2 rounded-[10px] border p-3 shadow-[0_6px_20px_rgba(0,51,38,0.10)]" style={{ borderColor: O.line, background: O.surface }}>
+            <div className="flex items-center gap-1.5">
+              <span className="text-[12px] font-medium" style={{ color: O.ink }}>Player IDs</span>
+              <span className="text-[11px]" style={{ color: O.label }}>up to {MAX_TEST_IDS} · commas, spaces or one per line</span>
+            </div>
+            <textarea data-testid="offers-test-ids" rows={2} className={inputCls} style={inputStyle} value={testText} onChange={(e) => setTestText(e.target.value)} placeholder="10482, 10511" />
+            {testParsed.ids.length > MAX_TEST_IDS && <div className="text-[12px] font-medium" style={{ color: O.warnInk }}>A test goes to {MAX_TEST_IDS} players at most ({testParsed.ids.length} here).</div>}
+            {testLookup && (
+              <div data-testid="offers-test-found" className="flex flex-col gap-1 rounded-[8px] px-3 py-2 text-[12px]" style={{ background: O.subtle }}>
+                {testLookup.players.map((p) => <div key={p.id} style={{ color: O.ink }}>{playerLine(p)}</div>)}
+                {testLookup.notFound.length > 0 && <div style={{ color: O.warnInk }}>{notFoundLine(testLookup.notFound)}</div>}
+                {testLookup.players.length === 0 && <div style={{ color: O.muted }}>No players found.</div>}
+              </div>
+            )}
+            <div className="flex flex-wrap gap-2">
+              <Btn kind="primary" testId="offers-test-send" disabled={busy || testIds.length === 0 || testParsed.ids.length > MAX_TEST_IDS || !testLookup}
+                onClick={() => sendTest(false)}>{testIds.length ? `Send to ${testIds.length}` : "Send"}</Btn>
+              <Btn testId="offers-test-me" disabled={busy} onClick={() => sendTest(true)}>Use my email</Btn>
+            </div>
+            <div className="text-[11.5px] leading-[16px]" style={{ color: O.muted }}>Test popups don&apos;t apply at checkout. Only send them to people who know it&apos;s a test.</div>
+          </div>
+        )}
+        {!ended && c === null && <div data-testid="offers-phone-note" className="text-[11.5px]" style={{ color: O.muted }}>Save it as a draft to send a test.</div>}
       </section>
 
       {confirm === "launch" && (
         <ConfirmDialog title={c?.status === "PAUSED" ? `Resume ${f.name.trim()}?` : `Launch ${f.name.trim()}?`}
-          note={c?.status === "PAUSED" ? "Players who match start getting it again the next time they open the app." : `${summary(f, count, data.matches, data.cities, nowWall)} After launch the deal, who gets it and when it runs can't change.`}
+          note={c?.status === "PAUSED" ? "Players who match start getting it again the next time they open the app." : `${summary(f, count, data.matches, data.cities, nowWall, data.fields)} After launch the deal, who gets it and when it runs can't change.`}
           action={c?.status === "PAUSED" ? "Resume" : "Launch"} onCancel={() => setConfirm(null)}
           onConfirm={async () => { const o = await once(launch); if (o) { setOutcome(o); if (o.verdict === "LANDED") setConfirm(null); } return o; }} />
       )}

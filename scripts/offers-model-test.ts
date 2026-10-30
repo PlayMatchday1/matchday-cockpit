@@ -12,9 +12,10 @@ import "server-only"; // no-op under --conditions=react-server
 import { onOffersAllowlist } from "../src/lib/offersAccess";
 import {
   audienceBody, chicagoWallNow, comparisonLine, costCeiling, createBody, defaultRun, endsTicket, formOf, newForm, patchBody, priceWithDeal,
-  summary, wallFromMatch, withPreviewName, buttonOf, opensText, formProblem, stepUses, usesLine, stepLimit, limitLine, copyOf, type Campaign, type City, type MatchOpt, type Results,
+  summary, wallFromMatch, withPreviewName, buttonOf, opensText, formProblem, stepUses, usesLine, stepLimit, limitLine, copyOf,
+  prefillField, audienceText, parsePlayerIds, playerLine, notFoundLine, usedOfLimit, resultsLines, type Campaign, type City, type MatchOpt, type Results,
 } from "../src/lib/offersModel";
-import { _setOffersGateDepsForTest, offersGate } from "../src/lib/offersServer";
+import { _setOffersGateDepsForTest, mismatches, offersGate } from "../src/lib/offersServer";
 
 let pass = 0, fail = 0;
 const eq = (name: string, got: unknown, want: unknown) => {
@@ -35,7 +36,7 @@ const draftFrom = (over: Partial<Campaign> = {}): Campaign => {
   // A campaign exactly as the backend would hold what createBody sent.
   const f = { ...nowF, name: "Austin win-back", cityIds: [1], lastPlayed: "LAPSED" as const, lastPlayedDays: 30 };
   const b = createBody(f, matches, cities) as unknown as Campaign;
-  return { lastPlayedDays: null, maxMatches: null, maxRedemptions: null, buttonMatchId: null, photoUrl: null, matchIds: [], ...b, id: 9, matchScoped: false,
+  return { lastPlayedDays: null, maxMatches: null, maxRedemptions: null, buttonMatchId: null, photoUrl: null, matchIds: [], playerIds: [], fieldIds: [], ...b, id: 9, matchScoped: false,
     status: "DRAFT", state: "DRAFT", createdByStaffEmail: "rmancuso@playmatchday.com", launchedByStaffEmail: null, launchedAt: null, results, ...over } as Campaign;
 };
 
@@ -72,11 +73,11 @@ console.log("create bodies:");
     [any.dealType, any.dealAmount, any.usesPerPlayer, any.buttonTarget, "buttonMatchId" in any, any.matchIds], ["FREE_MATCH", 0, 3, "FIND_MATCH", false, []]);
   eq("nulls are left out of a create (lastPlayedDays, maxMatches, maxRedemptions, photoUrl)",
     ["lastPlayedDays", "maxMatches", "maxRedemptions", "photoUrl"].filter((k) => k in any), []);
-  const one = createBody({ ...nowF, name: "Riverside $5", dealType: "SET_PRICE", dealAmount: 500, usesPerPlayer: 3, scope: "MATCH", matchId: 116, playedAtMatchField: true, endsLocal: "2026-11-02 19:00:00" }, matches, cities);
+  const one = createBody({ ...nowF, name: "Riverside $5", dealType: "SET_PRICE", dealAmount: 500, usesPerPlayer: 3, scope: "MATCH", matchId: 116, endsLocal: "2026-11-02 19:00:00" }, matches, cities);
   eq("a specific match is one use, scoped, MATCH to that match, ending at kickoff",
-    [one.usesPerPlayer, one.matchIds, one.buttonTarget, one.buttonMatchId, one.playedAtMatchField, one.endsLocal], [1, [116], "MATCH", 116, true, "2026-11-02 19:00:00"]);
-  const back = createBody({ ...nowF, name: "x", playedAtMatchField: true }, matches, cities);
-  eq("played-here is never sent without a match", back.playedAtMatchField, false);
+    [one.usesPerPlayer, one.matchIds, one.buttonTarget, one.buttonMatchId, one.endsLocal], [1, [116], "MATCH", 116, "2026-11-02 19:00:00"]);
+  // playedAtMatchField left the backend (5f86e46, 400 "should not exist"); fieldIds replaces it.
+  eq("no body ever carries playedAtMatchField", ["playedAtMatchField" in one, "playedAtMatchField" in createBody({ ...nowF, name: "x" }, matches, cities), "playedAtMatchField" in audienceBody(nowF, matches, cities)], [false, false, false]);
   eq("the live count sends the audience and the deal, never the copy", Object.keys(audienceBody({ ...nowF, name: "x" }, matches, cities)).some((k) => ["headline", "name", "body"].includes(k)), false);
 }
 
@@ -135,6 +136,45 @@ eq("picking MatchDay photo on a specific match sends no photo (null), not the co
   const withPhoto = { ...live, photoUrl: "https://covers.local/mueller.jpg" };
   eq("a stored photo loads and sends nothing", patchBody(withPhoto, formOf(withPhoto, matches, cities), matches, cities), {});
 }
+
+console.log("played at:");
+eq("picking a specific match prefills its field", prefillField([], matches[0]), [1]);
+eq("...and keeps fields already there, without doubling", [prefillField([2], matches[0]), prefillField([1, 2], matches[0])], [[2, 1], [1, 2]]);
+eq("fields are sent with or without a match", [createBody({ ...nowF, name: "x", fieldIds: [1, 2] }, matches, cities).fieldIds, audienceBody({ ...nowF, fieldIds: [2] }, matches, cities).fieldIds], [[1, 2], [2]]);
+eq("the list line names them", audienceText({ ...draftFrom(), fieldIds: [1, 2], cityIds: [1] }, cities, [{ id: 1, title: "Riverside Fields", cityId: 1, cover: null }, { id: 2, title: "Mueller Park", cityId: 1, cover: null }]),
+  "Austin · Not played in 30+ days · Played at Riverside Fields or Mueller Park");
+
+console.log("specific players:");
+eq("ids from commas, spaces and lines, first kept, junk set aside", parsePlayerIds("10482, 10511\n9877  10482,abc,0,-3"), { ids: [10482, 10511, 9877], bad: ["abc", "0", "-3"], tooMany: false });
+eq("over the cap is flagged", parsePlayerIds("1 2 3", 2), { ids: [1, 2], bad: [], tooMany: true });
+{
+  const pf = { ...nowF, name: "x", audienceMode: "PLAYERS" as const, playerIdsText: "7, 8", playerIds: [7, 8], cityIds: [1], fieldIds: [2], lastPlayed: "LAPSED" as const, lastPlayedDays: 30, membership: "MEMBERS" as const, holdoutPercent: 10 };
+  const b = createBody(pf, matches, cities);
+  eq("players mode sends the ids, the filters at their defaults and nobody held back",
+    [b.audienceMode, b.playerIds, b.cityIds, b.fieldIds, b.lastPlayed, "lastPlayedDays" in b, b.membership, b.holdoutPercent], ["PLAYERS", [7, 8], [], [], "ANY", false, "ANYONE", 0]);
+  eq("ids are sent in id order, as the backend stores them", createBody({ ...pf, playerIds: [83, 2, 6] }, matches, cities).playerIds, [2, 6, 83]);
+  eq("the read-back ignores the order of id sets (a typed order is not NOT APPLIED)", mismatches({ playerIds: [83, 2], fieldIds: [2, 1], name: "x" }, { playerIds: [2, 83], fieldIds: [1, 2], name: "x" }), []);
+  eq("...but still catches a real difference (the control)", mismatches({ playerIds: [83, 2], name: "x" }, { playerIds: [2], name: "y" }), ["playerIds", "name"]);
+  eq("the live count asks about the same ids", [audienceBody(pf, matches, cities).audienceMode, audienceBody(pf, matches, cities).playerIds], ["PLAYERS", [7, 8]]);
+  eq("no ids stops the save", formProblem({ ...pf, playerIds: [] }, matches), "Add at least one player ID.");
+  eq("the summary speaks of chosen players, no city", summary(pf, { count: 2, heldBack: 0, players: 2, mostItCanCost: null }, matches, cities, NOW).startsWith("2 chosen players get 50% off one match"), true);
+  eq("the list line", audienceText({ ...draftFrom(), audienceMode: "PLAYERS", playerIds: [7, 8, 9] }, cities, []), "3 chosen players");
+  const stored = draftFrom({ audienceMode: "PLAYERS", playerIds: [7, 8], cityIds: [], lastPlayed: "ANY", lastPlayedDays: null, holdoutPercent: 0, eyebrow: "JUST FOR YOU", caption: null, body: "Any match. The discount is already on your account." });
+  eq("a stored players offer loads and sends nothing", patchBody(stored, formOf(stored, matches, cities), matches, cities), {});
+  eq("found and not-found lines", [playerLine({ id: 7, name: "Luis Ortega", city: "Austin", matchesPlayed: 3 }), notFoundLine([99999]), notFoundLine([1, 2])],
+    ["Luis Ortega · Austin · 3 matches", "1 ID not found: 99999. It will be skipped.", "2 IDs not found: 1, 2. They will be skipped."]);
+}
+
+console.log("uses taken against the limit:");
+eq("N of M used when a limit is set", usedOfLimit({ ...results, usesTaken: 10, maxRedemptions: 10 }), "10 of 10 used");
+eq("nothing when there is no limit", usedOfLimit({ ...results, usesTaken: 3, maxRedemptions: null }), null);
+eq("nothing when the backend sent no usesTaken (the control)", usedOfLimit({ ...results, maxRedemptions: 10 }), null);
+eq("the list says it", resultsLines(draftFrom({ state: "LIVE", status: "LAUNCHED", results: { ...results, usesTaken: 38, maxRedemptions: 50 } }))[0], "412 saw · 38 of 50 used");
+eq("...and keeps the plain count without a limit", resultsLines(draftFrom({ state: "LIVE", status: "LAUNCHED", results: { ...results, usesTaken: 38, maxRedemptions: null } }))[0], "412 saw · 38 used");
+
+console.log("photo rule:");
+eq("an http photo stops the save", formProblem({ ...nowF, name: "x", copy: { photoUrl: "http://covers.local/a.jpg" } }, matches), "The photo must be an https link.");
+eq("an https photo is fine (the control)", formProblem({ ...nowF, name: "x", copy: { photoUrl: "https://covers.local/a.jpg" } }, matches), null);
 
 console.log("money, in cents, as the backend's applyOfferDeal:");
 eq("50% of $15", priceWithDeal(1500, "PERCENT_OFF", 50), 750);

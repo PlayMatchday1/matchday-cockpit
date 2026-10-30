@@ -4,7 +4,7 @@
 // OfferPopup.tsx draws (frontend feature/offers): photo with the eyebrow pill, headline with its last
 // word in green italic, the spaced line, the body, the dashed ticket (end time, Auto-applied), the
 // button (upper-cased by the app) and the dismiss link, with the caption on the photo. {firstName}
-// shows as "Luis"; the backend fills in each player's own. No photoUrl: the app's default photo.
+// shows as "Luis"; the backend fills in each player's own. No photoUrl: the app's own bundled offer-popup-photo.jpg (frontend feature/offers), copied here.
 
 import Image from "next/image";
 import { Heebo, Titillium_Web } from "next/font/google";
@@ -29,7 +29,7 @@ export default function OfferPopupPreview({ copy: raw, ends }: { copy: Copy; end
         {copy.photoUrl
           // eslint-disable-next-line @next/next/no-img-element
           ? <img alt="" src={copy.photoUrl} className="absolute inset-0 size-full object-cover" />
-          : <Image alt="" src="/offers/popup-photo.png" fill sizes="156px" className="object-cover" />}
+          : <Image alt="" src="/offers/offer-popup-photo.jpg" fill sizes="156px" className="object-cover" />}
         <div className="absolute inset-0" style={{ background: "linear-gradient(180deg, rgba(0,51,38,0) 30%, rgba(0,51,38,0.85) 100%)" }} />
         {copy.caption ? (
           <p data-testid="offers-preview-caption" className={`${heebo.className} absolute bottom-[8px] left-[8px] right-[8px] text-[7.5px] font-bold leading-[9.5px] text-white`}>{copy.caption}</p>

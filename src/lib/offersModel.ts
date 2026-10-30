@@ -15,11 +15,15 @@ export type Membership = "ANYONE" | "MEMBERS" | "NON_MEMBERS";
 export type ButtonTarget = "FIND_MATCH" | "MATCH" | "MEMBERSHIP";
 export type CampaignStatus = "DRAFT" | "LAUNCHED" | "PAUSED" | "ENDED";
 export type CampaignState = "DRAFT" | "SCHEDULED" | "LIVE" | "PAUSED" | "ENDED";
+// FILTERS: the audience is the filters. PLAYERS: exactly playerIds; the filters don't apply and nobody is held back.
+export type AudienceMode = "FILTERS" | "PLAYERS";
 
 export type BookedGroup = { players: number; booked: number; rate: number | null };
 export type Results = {
   granted: number; heldBack: number; saw: number; tapped: number; dismissed: number;
   used: number; discountGiven: number; cameBackAtFullPrice: number;
+  // Uses held right now (what the total limit counts) and the limit itself; null for none.
+  usesTaken?: number; maxRedemptions?: number | null;
   booked: { withOffer: BookedGroup; heldBack: BookedGroup };
 };
 
@@ -32,8 +36,9 @@ export type CopyKey = (typeof COPY_KEYS)[number];
 
 export type Campaign = Copy & {
   id: number; name: string; dealType: DealType; dealAmount: number; usesPerPlayer: number;
-  maxRedemptions: number | null; cityIds: number[]; lastPlayed: LastPlayed; lastPlayedDays: number | null;
-  minMatches: number; maxMatches: number | null; membership: Membership; playedAtMatchField: boolean;
+  maxRedemptions: number | null; audienceMode: AudienceMode; playerIds: number[]; fieldIds: number[];
+  cityIds: number[]; lastPlayed: LastPlayed; lastPlayedDays: number | null;
+  minMatches: number; maxMatches: number | null; membership: Membership;
   matchScoped: boolean; matchIds: number[]; startsLocal: string; endsLocal: string; holdoutPercent: number;
   buttonTarget: ButtonTarget; buttonMatchId: number | null; status: CampaignStatus; state: CampaignState;
   createdByStaffEmail: string | null; launchedByStaffEmail: string | null; launchedAt: string | null;
@@ -57,7 +62,7 @@ export const EDITABLE_AFTER_LAUNCH = new Set<string>([
 // Every key the Clubhouse may send on create or edit. The routes drop anything else.
 export const BODY_KEYS = new Set<string>([
   ...EDITABLE_AFTER_LAUNCH, "dealType", "dealAmount", "usesPerPlayer", "cityIds", "lastPlayed", "lastPlayedDays",
-  "minMatches", "maxMatches", "membership", "playedAtMatchField", "matchIds", "startsLocal", "endsLocal", "holdoutPercent",
+  "minMatches", "maxMatches", "membership", "fieldIds", "audienceMode", "playerIds", "matchIds", "startsLocal", "endsLocal", "holdoutPercent",
 ]);
 
 // ── WALL CLOCK ───────────────────────────────────────────────────────────────────────────────────
@@ -171,7 +176,8 @@ export function matchInfo(m: MatchOpt): string {
 }
 
 // ── WHO GETS IT ──────────────────────────────────────────────────────────────────────────────────
-export type Audience = Pick<Campaign, "cityIds" | "lastPlayed" | "lastPlayedDays" | "minMatches" | "maxMatches" | "membership" | "playedAtMatchField">;
+export type Audience = Pick<Campaign, "audienceMode" | "playerIds" | "fieldIds" | "cityIds" | "lastPlayed" | "lastPlayedDays" | "minMatches" | "maxMatches" | "membership">;
+const fieldNames = (ids: number[], fields: FieldOpt[]) => ids.map((id) => fields.find((x) => x.id === id)?.title ?? `Field ${id}`);
 
 const cityNames = (ids: number[], cities: City[]) => ids.map((id) => cities.find((c) => c.id === id)?.name ?? `City ${id}`);
 const andList = (xs: string[]) => (xs.length <= 1 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`);
@@ -185,7 +191,8 @@ export function matchesText(min: number, max: number | null): string | null {
 }
 
 // The list's audience line: "Austin · Not played in 30+ days".
-export function audienceText(a: Audience, cities: City[], field: string | null): string {
+export function audienceText(a: Audience, cities: City[], fields: FieldOpt[]): string {
+  if (a.audienceMode === "PLAYERS") return `${a.playerIds.length.toLocaleString("en-US")} chosen ${a.playerIds.length === 1 ? "player" : "players"}`;
   const parts = [a.cityIds.length ? cityNames(a.cityIds, cities).join(", ") : "All cities"];
   if (a.lastPlayed === "LAPSED") parts.push(`Not played in ${a.lastPlayedDays}+ days`);
   if (a.lastPlayed === "NEVER") parts.push("Never played");
@@ -193,7 +200,7 @@ export function audienceText(a: Audience, cities: City[], field: string | null):
   if (a.membership === "NON_MEMBERS") parts.push("Not members");
   const mt = matchesText(a.minMatches, a.maxMatches);
   if (mt) parts.push(mt);
-  if (a.playedAtMatchField) parts.push(`Played at ${field ?? "this field"} before`);
+  if (a.fieldIds.length) parts.push(`Played at ${fieldNames(a.fieldIds, fields).join(" or ")}`);
   return parts.join(" · ");
 }
 
@@ -201,7 +208,12 @@ export function audienceText(a: Audience, cities: City[], field: string | null):
 export type Form = {
   name: string; dealType: DealType; dealAmount: number; usesPerPlayer: number;
   matchId: number | null; scope: "ANY" | "MATCH";
-  cityIds: number[]; lastPlayed: LastPlayed; lastPlayedDays: number | null; membership: Membership; playedAtMatchField: boolean;
+  audienceMode: AudienceMode;
+  // Specific players: the box as typed, and the ids it holds that the lookup has not ruled out.
+  playerIdsText: string; playerIds: number[];
+  // Played at: players who ever played at any of these fields. Empty is no field filter.
+  fieldIds: number[];
+  cityIds: number[]; lastPlayed: LastPlayed; lastPlayedDays: number | null; membership: Membership;
   minMatches: number; maxMatches: number | null;
   startsLocal: string; endsLocal: string; holdoutPercent: number; maxRedemptions: number | null;
   // Where the popup's button goes (Edit text › Button opens). Forced to the deal's match when the
@@ -215,7 +227,8 @@ export type Form = {
 export function newForm(nowWall: string): Form {
   return {
     name: "", dealType: "PERCENT_OFF", dealAmount: 50, usesPerPlayer: 1, matchId: null, scope: "ANY",
-    cityIds: [], lastPlayed: "ANY", lastPlayedDays: null, membership: "ANYONE", playedAtMatchField: false,
+    audienceMode: "FILTERS", playerIdsText: "", playerIds: [], fieldIds: [],
+    cityIds: [], lastPlayed: "ANY", lastPlayedDays: null, membership: "ANYONE",
     minMatches: 0, maxMatches: null, ...defaultRun(nowWall), holdoutPercent: 10, maxRedemptions: null,
     buttonTarget: "FIND_MATCH", buttonMatchId: null, copy: {},
   };
@@ -225,7 +238,8 @@ export function formOf(c: Campaign, matches: MatchOpt[], cities: City[]): Form {
   const f: Form = {
     name: c.name, dealType: c.dealType, dealAmount: c.dealAmount, usesPerPlayer: c.usesPerPlayer,
     matchId: c.matchIds[0] ?? null, scope: c.matchScoped ? "MATCH" : "ANY",
-    cityIds: c.cityIds, lastPlayed: c.lastPlayed, lastPlayedDays: c.lastPlayedDays, membership: c.membership, playedAtMatchField: c.playedAtMatchField,
+    cityIds: c.cityIds, lastPlayed: c.lastPlayed, lastPlayedDays: c.lastPlayedDays, membership: c.membership,
+    audienceMode: c.audienceMode, playerIdsText: c.playerIds.join(", "), playerIds: c.playerIds, fieldIds: c.fieldIds,
     minMatches: c.minMatches, maxMatches: c.maxMatches,
     startsLocal: c.startsLocal, endsLocal: c.endsLocal, holdoutPercent: c.holdoutPercent, maxRedemptions: c.maxRedemptions,
     buttonTarget: c.buttonTarget, buttonMatchId: c.buttonMatchId, copy: {},
@@ -235,6 +249,10 @@ export function formOf(c: Campaign, matches: MatchOpt[], cities: City[]): Form {
   for (const k of COPY_KEYS) if ((c[k] ?? null) !== (auto[k] ?? null)) f.copy[k] = c[k] ?? null;
   return f;
 }
+
+// Picking a specific match prefills Played at with its field (kept if already there).
+export const prefillField = (fieldIds: number[], m: Pick<MatchOpt, "fieldId">) =>
+  m.fieldId === null || fieldIds.includes(m.fieldId) ? fieldIds : [...fieldIds, m.fieldId];
 
 export const pickedMatch = (f: Pick<Form, "scope" | "matchId">, matches: MatchOpt[]) =>
   f.scope === "MATCH" && f.matchId !== null ? matches.find((m) => m.id === f.matchId) ?? null : null;
@@ -284,7 +302,7 @@ export function autoCopy(f: Form, matches: MatchOpt[], cities: City[] = []): Cop
   const body = m
     ? `${m.name}, normally ${money(m.price)}. The discount is already on your account.`
     : `${n === 1 ? "Any match" : `Any ${n} matches`}${where}. The discount is already on your account.`;
-  const eyebrow = f.lastPlayed === "LAPSED" ? `WE MISS YOU, ${FIRST_NAME_TOKEN}` : f.lastPlayed === "NEVER" ? "YOUR FIRST MATCH" : m && f.playedAtMatchField ? "YOUR FIELD" : "JUST FOR YOU";
+  const eyebrow = f.lastPlayed === "LAPSED" ? `WE MISS YOU, ${FIRST_NAME_TOKEN}` : f.lastPlayed === "NEVER" ? "YOUR FIRST MATCH" : m && m.fieldId !== null && f.fieldIds.includes(m.fieldId) ? "YOUR FIELD" : "JUST FOR YOU";
   const caption = m ? `Your spot at ${m.fieldTitle ?? "the field"} is waiting.` : f.lastPlayed === "LAPSED" ? "Your spot at the field is waiting." : null;
   // The photo: a specific match's own field cover, else null (the app's default MatchDay photo).
   return { eyebrow, caption, headline, line, body, photoUrl: m?.fieldCover ?? null, buttonLabel: m ? "Join this match" : "Find a match", dismissLabel: "Not now" };
@@ -305,13 +323,19 @@ export function copyOf(f: Form, matches: MatchOpt[], cities: City[]): Copy {
 export function fullBody(f: Form, matches: MatchOpt[], cities: City[]): Record<string, unknown> {
   const m = pickedMatch(f, matches);
   const copy = copyOf(f, matches, cities);
+  // Specific players: the filters are stored as their defaults and nobody is held back (the
+  // backend does this too); sending the defaults keeps the read-back equal to what was sent.
+  const players = f.audienceMode === "PLAYERS";
   return {
     name: f.name.trim(), dealType: f.dealType, dealAmount: f.dealType === "FREE_MATCH" ? 0 : f.dealAmount,
     usesPerPlayer: m ? 1 : f.usesPerPlayer,
-    cityIds: f.cityIds, lastPlayed: f.lastPlayed, lastPlayedDays: f.lastPlayed === "LAPSED" ? f.lastPlayedDays : null,
-    minMatches: f.minMatches, maxMatches: f.maxMatches, membership: f.membership,
-    playedAtMatchField: m ? f.playedAtMatchField : false, matchIds: m ? [m.id] : [],
-    startsLocal: f.startsLocal, endsLocal: f.endsLocal, holdoutPercent: f.holdoutPercent, maxRedemptions: f.maxRedemptions,
+    // Sorted: the backend stores the list in id order, so this is what reads back.
+    audienceMode: f.audienceMode, playerIds: players ? [...f.playerIds].sort((x, y) => x - y) : [],
+    cityIds: players ? [] : f.cityIds, fieldIds: players ? [] : f.fieldIds,
+    lastPlayed: players ? "ANY" : f.lastPlayed, lastPlayedDays: !players && f.lastPlayed === "LAPSED" ? f.lastPlayedDays : null,
+    minMatches: players ? 0 : f.minMatches, maxMatches: players ? null : f.maxMatches, membership: players ? "ANYONE" : f.membership,
+    matchIds: m ? [m.id] : [],
+    startsLocal: f.startsLocal, endsLocal: f.endsLocal, holdoutPercent: players ? 0 : f.holdoutPercent, maxRedemptions: f.maxRedemptions,
     ...copy, buttonTarget: buttonOf(f, matches).target, buttonMatchId: buttonOf(f, matches).matchId,
   };
 }
@@ -339,7 +363,7 @@ export function patchBody(c: Campaign, f: Form, matches: MatchOpt[], cities: Cit
 // The live count's body: who gets it and the deal, never the copy.
 export function audienceBody(f: Form, matches: MatchOpt[], cities: City[]): Record<string, unknown> {
   const full = fullBody(f, matches, cities);
-  const keys = ["cityIds", "lastPlayed", "lastPlayedDays", "minMatches", "maxMatches", "membership", "playedAtMatchField", "matchIds", "dealType", "dealAmount", "usesPerPlayer", "maxRedemptions", "holdoutPercent"];
+  const keys = ["audienceMode", "playerIds", "cityIds", "fieldIds", "lastPlayed", "lastPlayedDays", "minMatches", "maxMatches", "membership", "matchIds", "dealType", "dealAmount", "usesPerPlayer", "maxRedemptions", "holdoutPercent"];
   return Object.fromEntries(keys.filter((k) => full[k] !== null && full[k] !== undefined).map((k) => [k, full[k]]));
 }
 
@@ -351,7 +375,10 @@ export function formProblem(f: Form, matches: MatchOpt[]): string | null {
   if (wallMs(f.endsLocal) <= wallMs(f.startsLocal)) return "It has to end after it starts.";
   const b = buttonOf(f, matches);
   if (b.target === "MATCH" && !matches.some((x) => x.id === b.matchId)) return "Pick the match the button opens.";
-  if (f.maxRedemptions !== null && (!Number.isInteger(f.maxRedemptions) || f.maxRedemptions < 1)) return "The use cap must be 1 or more, or empty for no cap.";
+  if (f.maxRedemptions !== null && (!Number.isInteger(f.maxRedemptions) || f.maxRedemptions < 1)) return "The total limit must be 1 or more.";
+  if (f.audienceMode === "PLAYERS" && f.playerIds.length === 0) return "Add at least one player ID.";
+  const photo = copyOf(f, matches, [])["photoUrl"];
+  if (photo !== null && !/^https:\/\//.test(photo)) return "The photo must be an https link.";
   return null;
 }
 
@@ -362,7 +389,8 @@ export type Count = { count: number; heldBack: number; players: number; mostItCa
 // it can cost is worked out at the highest normal price now listed in those cities, and says so.
 export function costCeiling(f: Form, count: Count, matches: MatchOpt[]): { cents: number; basis: string | null } | null {
   if (count.mostItCanCost !== null) return { cents: count.mostItCanCost, basis: null };
-  const pool = matches.filter((m) => m.upcoming && (f.cityIds.length === 0 || (m.cityId !== null && f.cityIds.includes(m.cityId))));
+  const anyCity = f.audienceMode === "PLAYERS" || f.cityIds.length === 0;
+  const pool = matches.filter((m) => m.upcoming && (anyCity || (m.cityId !== null && f.cityIds.includes(m.cityId))));
   if (pool.length === 0) return null;
   const top = Math.max(...pool.map((m) => m.price));
   let uses = count.players * f.usesPerPlayer;
@@ -370,18 +398,21 @@ export function costCeiling(f: Form, count: Count, matches: MatchOpt[]): { cents
   return { cents: discountOn(top, f.dealType, f.dealAmount) * uses, basis: `at today's top price of ${money(top)}` };
 }
 
-export function summary(f: Form, count: Count | null, matches: MatchOpt[], cities: City[], nowWall: string): string {
+export function summary(f: Form, count: Count | null, matches: MatchOpt[], cities: City[], nowWall: string, fields: FieldOpt[] = []): string {
   if (!count) return "Counting players…";
   const m = pickedMatch(f, matches);
   const n = m ? 1 : f.usesPerPlayer;
-  const where = f.cityIds.length ? `${andList(cityNames(f.cityIds, cities))} ` : "";
+  const players = f.audienceMode === "PLAYERS";
+  const where = !players && f.cityIds.length ? `${andList(cityNames(f.cityIds, cities))} ` : "";
   const one1 = count.players === 1;
   const who: string[] = [];
+  if (players) { /* the chosen players, nothing else */ } else {
   if (f.lastPlayed === "LAPSED") who.push(`${one1 ? "hasn't" : "haven't"} played in ${f.lastPlayedDays}+ days`);
   if (f.lastPlayed === "NEVER") who.push(`${one1 ? "has" : "have"} never played`);
   if (f.membership === "MEMBERS") who.push(one1 ? "is a member" : "are members");
   if (f.membership === "NON_MEMBERS") who.push(one1 ? "isn't a member" : "aren't members");
-  if (m && f.playedAtMatchField) who.push(`${one1 ? "has" : "have"} played at ${m.fieldTitle ?? "this field"}`);
+  if (f.fieldIds.length) who.push(`${one1 ? "has" : "have"} played at ${fieldNames(f.fieldIds, fields).join(" or ")}`);
+  }
   const one = n === 1 ? "one match" : `${n} matches`;
   const deal = m
     ? (f.dealType === "FREE_MATCH" ? `${m.name} free` : f.dealType === "SET_PRICE" ? `a ${money(f.dealAmount)} spot in ${m.name}` : `${dealText(f.dealType, f.dealAmount)} ${m.name}`)
@@ -389,7 +420,7 @@ export function summary(f: Form, count: Count | null, matches: MatchOpt[], citie
   const until = m && f.endsLocal === m.startLocal ? "until kickoff"
     : calendarDaysBetween(nowWall, f.endsLocal) < 7 ? `until ${fmt(wallMs(f.endsLocal), { weekday: "short" })} ${fmt(wallMs(f.endsLocal), { hour: "numeric", minute: "2-digit" })}`
     : `until ${wallDate(f.endsLocal)}`;
-  const people = `${count.players.toLocaleString("en-US")} ${where}${count.players === 1 ? "player" : "players"}`;
+  const people = `${count.players.toLocaleString("en-US")} ${players ? "chosen " : ""}${where}${count.players === 1 ? "player" : "players"}`;
   const held = count.heldBack > 0 ? ` (${count.heldBack.toLocaleString("en-US")} more held back to measure)` : "";
   const ceiling = costCeiling(f, count, matches);
   const cost = ceiling ? `Most it can cost: ${money(ceiling.cents)}${ceiling.basis ? ` ${ceiling.basis}` : ""}.` : "Most it can cost: not known until matches are listed.";
@@ -403,8 +434,32 @@ export function resultsLines(c: Campaign): [string, string] {
   if (c.state === "DRAFT") return ["Not launched", ""];
   if (c.state === "SCHEDULED") return [`Starts ${wallDate(c.startsLocal)}`, ""];
   const r = c.results;
-  return [`${r.saw.toLocaleString("en-US")} saw · ${r.used.toLocaleString("en-US")} used`, `${money(r.discountGiven)} off · ${r.cameBackAtFullPrice.toLocaleString("en-US")} came back`];
+  const usedPart = typeof r.usesTaken === "number" && typeof r.maxRedemptions === "number" ? usedOfLimit(r)! : `${r.used.toLocaleString("en-US")} used`;
+  return [`${r.saw.toLocaleString("en-US")} saw · ${usedPart}`, `${money(r.discountGiven)} off · ${r.cameBackAtFullPrice.toLocaleString("en-US")} came back`];
 }
+
+// "10 of 10 used" from usesTaken and the limit, when a limit is set (null otherwise).
+export function usedOfLimit(r: Results): string | null {
+  if (typeof r.usesTaken !== "number" || typeof r.maxRedemptions !== "number") return null;
+  return `${r.usesTaken.toLocaleString("en-US")} of ${r.maxRedemptions.toLocaleString("en-US")} used`;
+}
+
+// ── PLAYER IDS (Specific players and Send test) ──────────────────────────────────────────────────
+// Commas, spaces or one per line. Whole positive numbers only, first appearance kept, in order.
+export function parsePlayerIds(text: string, max = 2000): { ids: number[]; bad: string[]; tooMany: boolean } {
+  const ids: number[] = [], bad: string[] = [];
+  for (const tok of text.split(/[\s,]+/).filter(Boolean)) {
+    if (!/^\d+$/.test(tok) || Number(tok) <= 0) { bad.push(tok); continue; }
+    const n = Number(tok);
+    if (!ids.includes(n)) ids.push(n);
+  }
+  return { ids: ids.slice(0, max), bad, tooMany: ids.length > max };
+}
+export const MAX_TEST_IDS = 20;
+export type Lookup = { players: { id: number; name: string | null; city: string | null; matchesPlayed: number }[]; notFound: number[] };
+// "Luis Ortega · Austin · 3 matches"
+export const playerLine = (p: Lookup["players"][number]) => `${p.name ?? `Player ${p.id}`}${p.city ? ` · ${p.city}` : ""} · ${usesText(p.matchesPlayed)}`;
+export const notFoundLine = (ids: number[]) => `${ids.length} ID${ids.length === 1 ? "" : "s"} not found: ${ids.join(", ")}. ${ids.length === 1 ? "It" : "They"} will be skipped.`;
 
 // "Day 4 of 7", "Paused · day 4 of 7", "Ended Sun, Nov 2", "Starts Mon, Nov 3".
 export function progressText(c: Campaign, nowWall: string): string {

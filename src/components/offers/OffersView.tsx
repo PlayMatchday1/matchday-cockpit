@@ -11,7 +11,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useAuth } from "@/lib/useAuth";
 import {
-  STATE_LABEL, audienceText, chicagoWallNow, comparisonLine, dealText, money, progressText, resultsLines, usedPct, usesText, wallLabel,
+  STATE_LABEL, audienceText, usedOfLimit, chicagoWallNow, comparisonLine, dealText, money, progressText, resultsLines, usedPct, usesText, wallLabel,
   type Campaign, type City, type FieldOpt, type MatchOpt,
 } from "@/lib/offersModel";
 import OfferPanel from "./OfferPanel";
@@ -55,7 +55,6 @@ export default function OffersView() {
 
   const current = open === "new" || open === null ? null : data?.campaigns.find((c) => c.id === open) ?? null;
   const nowWall = chicagoWallNow();
-  const fieldOf = (c: Campaign) => (c.matchIds[0] ? data?.matches.find((m) => m.id === c.matchIds[0])?.fieldTitle ?? null : null);
 
   return (
     <div className="min-w-0 px-1 pb-16" style={{ color: O.ink }}>
@@ -95,7 +94,7 @@ export default function OffersView() {
                       style={{ borderColor: O.line, background: open === c.id ? O.mint : O.surface }}>
                       <div className="flex min-w-0 flex-col gap-0.5">
                         <div className="truncate text-[14px] font-semibold" style={{ color: O.ink }}>{c.name || "Untitled offer"}</div>
-                        <div data-testid="offers-row-who" className="truncate text-[12px]" style={{ color: O.muted }}>{audienceText(c, data.cities, fieldOf(c))}</div>
+                        <div data-testid="offers-row-who" className="truncate text-[12px]" style={{ color: O.muted }}>{audienceText(c, data.cities, data.fields)}</div>
                       </div>
                       <div className="flex min-w-0 flex-col gap-0.5">
                         <div data-testid="offers-row-deal" className="truncate text-[13px] font-medium" style={{ color: O.ink }}>{dealText(c.dealType, c.dealAmount)}</div>
@@ -141,7 +140,7 @@ function ResultsCard({ c, nowWall }: { c: Campaign; nowWall: string }) {
       </div>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Stat testId="offers-stat-saw" value={r.saw.toLocaleString("en-US")} label="Saw it" />
-        <Stat testId="offers-stat-used" value={r.used.toLocaleString("en-US")} label={up ? `Used it · ${up}` : "Used it"} />
+        <Stat testId="offers-stat-used" value={r.used.toLocaleString("en-US")} label={[up ? `Used it · ${up}` : "Used it", usedOfLimit(r)].filter(Boolean).join(" · ")} />
         <Stat testId="offers-stat-discount" value={money(r.discountGiven)} label="Discount given" />
         <Stat testId="offers-stat-came-back" value={r.cameBackAtFullPrice.toLocaleString("en-US")} label="Came back at full price" />
       </div>

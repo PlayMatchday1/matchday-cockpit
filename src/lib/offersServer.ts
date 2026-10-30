@@ -139,9 +139,12 @@ export function offersApiWrite<T = unknown>(auth: OffersAuth, method: "POST" | "
 }
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+// Id sets: the backend may store them in its own order (playerIds come back sorted), and order means nothing.
+const ID_SETS = new Set(["cityIds", "fieldIds", "playerIds"]);
+const sortedIds = (v: unknown) => (Array.isArray(v) ? [...v].sort((x, y) => Number(x) - Number(y)) : v);
 export function mismatches(expected: Record<string, unknown>, after: Record<string, unknown> | null): string[] {
   if (!after) return Object.keys(expected);
-  return Object.keys(expected).filter((k) => !same(expected[k], after[k]));
+  return Object.keys(expected).filter((k) => (ID_SETS.has(k) ? !same(sortedIds(expected[k]), sortedIds(after[k])) : !same(expected[k], after[k])));
 }
 
 export type WriteResult = { verdict: Verdict; after: Campaign | null; error?: string; detail?: string };
@@ -204,25 +207,25 @@ export async function readJson(req: Request): Promise<Record<string, unknown> | 
   } catch { return Response.json({ error: "Body must be JSON" }, { status: 400 }); }
 }
 
-// ── SEND TO MY PHONE (POST admin/offers/campaigns/{id}/send-to-me) ─────────────────────────────
-// The popup goes to the player account with the staff person's own email, on its next app open.
-// Nothing in the admin API reads a preview back, so a 2xx is reported as SENT (the backend took
-// it), never LANDED and never "arrived": whether it reached the phone is checked on the phone.
-// It is a write (it stores a preview), so it goes through recordWrite like the rest.
-export async function sendToMe(auth: OffersAuth, id: number): Promise<Response> {
-  const path = `${CAMPAIGNS}/${id}/send-to-me`;
-  let popup: unknown = null;
+// ── SEND TEST (POST admin/offers/campaigns/{id}/send-preview) ─────────────────────────────────
+// The popup on up to 20 players' phones, on their next app open; with no ids, the player account
+// with the staff person's own email (Use my email). Nothing in the admin API reads a preview back,
+// so a 2xx is reported as SENT (the backend took it, for the ids it names in `sent`), never as
+// arrived. It is a write (it stores previews), so it goes through recordWrite like the rest.
+export async function sendPreview(auth: OffersAuth, id: number, userIds: number[]): Promise<Response> {
+  const path = `${CAMPAIGNS}/${id}/send-preview`;
+  let answer: { sent?: number[]; notFound?: number[] } | null = null;
   const { outcome, error } = await recordWrite(
     {
-      env: OFFERS_ENV, source: "offers:send-to-me", actorName: auth.email, actorEmail: auth.email, saveId: randomUUID(),
-      matchId: null, matchName: null, method: "POST", path, body: {}, keys: [], label: (k) => k,
-      applied: () => popup !== null,
+      env: OFFERS_ENV, source: "offers:send-preview", actorName: auth.email, actorEmail: auth.email, saveId: randomUUID(),
+      matchId: null, matchName: null, method: "POST", path, body: { userIds }, keys: [], label: (k) => k,
+      applied: () => answer !== null && Array.isArray(answer.sent),
     },
     {
       readResource: async () => ({}),
       write: async () => {
-        const r = await offersApiWrite<{ userId?: number; popup?: unknown }>(auth, "POST", path);
-        popup = r?.popup ?? null;
+        const r = await offersApiWrite<{ sent?: number[]; notFound?: number[] }>(auth, "POST", path, { userIds });
+        answer = r ?? null;
         return r;
       },
       now: () => new Date().toISOString(),
@@ -236,6 +239,15 @@ export async function sendToMe(auth: OffersAuth, id: number): Promise<Response> 
       : errorText(error);
     return Response.json({ verdict: outcome === "unknown" ? "UNKNOWN" : "FAILED", error: text }, { status: outcome === "unknown" ? 200 : 502 });
   }
-  if (popup === null) return Response.json({ verdict: "UNKNOWN", detail: "The backend answered without the popup it says it sends. Check your phone before sending again." });
-  return Response.json({ verdict: "SENT" });
+  const a = answer as { sent?: number[]; notFound?: number[] } | null;
+  if (!a || !Array.isArray(a.sent)) return Response.json({ verdict: "UNKNOWN", detail: "The backend answered without saying who it sent to. Check the phones before sending again." });
+  return Response.json({ verdict: "SENT", sent: a.sent, notFound: a.notFound ?? [] });
 }
+
+// ── PLAYER LOOKUP (POST admin/offers/players/lookup) ───────────────────────────────────────────
+// A READ the backend takes as a POST (see readAudienceCount): names, city and matches played for
+// up to 2000 ids, and the ids that are not players. Not a write, so not through recordWrite, and
+// nothing about the players is logged.
+export type PlayerLookup = { players: { id: number; name: string | null; city: string | null; matchesPlayed: number }[]; notFound: number[] };
+export const readPlayerLookup = (auth: OffersAuth, ids: number[]) =>
+  apiWrite<PlayerLookup>(OFFERS_ENV, "POST", "/admin/offers/players/lookup", { ids }, auth.actor, "admin");
