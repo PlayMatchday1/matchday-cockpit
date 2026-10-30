@@ -7942,3 +7942,50 @@ Evidence: mirror reads from a local script, stored stats refreshed 2026-10-29T17
   field (map `locatePlayers` over a fresh history) vs the file: 0 differences each.
 - `matches_played_in_period` counts by the match's LOCAL day (wall clock, sliced) against the file's
   Central range.
+
+## Targeted Offers: `/admin/offers/campaigns` and null popup text (2026-10-30)
+
+**All of this is the LOCAL backend** (`localhost:3070`, `~/Code/backend-offers`, branch `feature/offers`,
+at a4bca23). The endpoints are not on production yet, so production behaviour is UNKNOWN. The contract
+is `docs/offers/M3-ENDPOINTS.md` in that worktree. Line numbers below are that file at a4bca23.
+
+### Documented, not probed from here
+
+- **Routes:** `GET /`, `POST /audience-count`, `GET /:id`, `GET /:id/results`, `POST /`, `PATCH /:id`,
+  `POST /:id/send-to-me`, `POST /:id/send-preview`, `DELETE /:id`, `POST /:id/launch`, `/pause`, `/end`
+  (M3-ENDPOINTS.md:108-121).
+- **Staff header:** a service account must send `X-Acting-Staff-Email` on every write, or 400. Any other
+  admin sending it gets 403 (M3-ENDPOINTS.md:99-102).
+- **After launch** only `name`, the copy fields, `buttonTarget`, `buttonMatchId` and `maxRedemptions` can
+  change; anything else is 400 `OFFER_CAMPAIGN_FIELD_LOCKED` (M3-ENDPOINTS.md:115;
+  `apps/api/src/core/offers/offer-campaigns.service.ts:19`).
+- **Null text:** `eyebrow`, `caption`, `line` and `body` left out or sent as `null` are saved as `null`
+  with no default text. `PATCH` with `null` clears one, including after launch. `GET /offers/popup` returns
+  them as `null` (M3-ENDPOINTS.md:19-22, 188-191).
+- **Required text:** `headline` and `buttonLabel` are required on create. `PATCH` with `null` for either is
+  400 (M3-ENDPOINTS.md:192-193). I did not send that request; the Clubhouse never does.
+- **`dismissLabel` is NOT NULL** with default "Not now" (`apps/api/prisma/schema.prisma:1270`). The
+  Clubhouse never sends null for it. What the backend answers to a null is UNKNOWN.
+
+### Proven through the Clubhouse routes, read back from the write's own response
+
+Campaign 253, "Sections (Clubhouse test)", Houston + Never played, 0 players, now ENDED.
+
+| Status | Request | Verdict | Read back |
+|---|---|---|---|
+| DRAFT | `POST /` with `eyebrow`, `caption`, `line`, `body` all `null` | LANDED | all four `null`, `headline` "50% OFF" |
+| DRAFT | `PATCH { caption: "See you there" }`, then `{ caption: null }` | both LANDED | the text, then `null` |
+| LAUNCHED | `PATCH { body: "<text>" }`, then `{ body: null }` | both LANDED | the text, then `null`, still LAUNCHED |
+| LAUNCHED | `PATCH { eyebrow: "HEY THERE" }`, then `{ eyebrow: null }` | both LANDED | the text, then `null`, still LAUNCHED |
+
+**Not proven:** a null section on a phone. `~/Documents/frontend-offers/src/components/OfferPopup.tsx`
+draws each of the four only when `offerCopy()` returns text (`:56`, an uncommitted edit in that worktree
+on 2026-10-30; read, not run), and no test popup was sent for this.
+
+### Null means two things, and the backend cannot tell them apart
+
+A stored `null` is either "staff removed it" or "the deal suggested nothing" (only `caption` can be the
+second: `autoCopy` in `src/lib/offersModel.ts`). So the Clubhouse treats saved text as fixed: `formOf`
+(`src/lib/offersModel.ts:252`) loads every copy key as stored, and changing the deal, audience or match
+afterwards moves only what Reset to suggested would give. Before the first save, text follows the deal.
+Guarded in `scripts/offers-model-test.ts`, "saved text is fixed".

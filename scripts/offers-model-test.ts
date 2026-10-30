@@ -43,27 +43,27 @@ const draftFrom = (over: Partial<Campaign> = {}): Campaign => {
 console.log("the diff is the request body:");
 {
   const c = draftFrom();
-  eq("a draft loaded and not touched sends nothing", patchBody(c, formOf(c, matches, cities), matches, cities), {});
-  const f = formOf(c, matches, cities);
-  eq("changing the percent sends dealAmount only", patchBody(c, { ...f, dealAmount: 40 }, matches, cities), { dealAmount: 40, headline: "40% OFF" });
+  eq("a draft loaded and not touched sends nothing", patchBody(c, formOf(c), matches, cities), {});
+  const f = formOf(c);
+  eq("changing the percent sends dealAmount only", patchBody(c, { ...f, dealAmount: 40 }, matches, cities), { dealAmount: 40 });
   eq("LAPSED to Any time clears lastPlayedDays explicitly (else the merged row is invalid)",
-    patchBody(c, { ...f, lastPlayed: "ANY", lastPlayedDays: null }, matches, cities), { lastPlayed: "ANY", lastPlayedDays: null, eyebrow: "JUST FOR YOU", caption: null });
+    patchBody(c, { ...f, lastPlayed: "ANY", lastPlayedDays: null }, matches, cities), { lastPlayed: "ANY", lastPlayedDays: null });
   const typed = { ...f, copy: { headline: "HALF OFF" } };
   const c2 = { ...c, headline: "HALF OFF" };
-  eq("typed copy survives a reload and is not re-sent", patchBody(c2, formOf(c2, matches, cities), matches, cities), {});
+  eq("typed copy survives a reload and is not re-sent", patchBody(c2, formOf(c2), matches, cities), {});
   eq("typed copy is sent as typed", patchBody(c, typed, matches, cities), { headline: "HALF OFF" });
   const old = { ...c, caption: null };
-  eq("a stored 'no caption' (saved before captions) loads and sends nothing", patchBody(old, formOf(old, matches, cities), matches, cities), {});
+  eq("a stored 'no caption' (saved before captions) loads and sends nothing", patchBody(old, formOf(old), matches, cities), {});
   eq("the lapsed eyebrow carries {firstName} for the backend to fill", createBody(f, matches, cities).eyebrow, "WE MISS YOU, {firstName}");
   eq("the preview shows {firstName} as Luis", withPreviewName("WE MISS YOU, {firstName}"), "WE MISS YOU, Luis");
   eq("an emptied headline stays empty and stops the save", [copyOf({ ...f, copy: { headline: "" } }, matches, cities).headline, formProblem({ ...f, copy: { headline: "  " } }, matches)], ["", "The popup needs a headline."]);
-  eq("Reset to suggested on a typed headline sends the deal's text", patchBody(c2, { ...formOf(c2, matches, cities), copy: resetCopy(formOf(c2, matches, cities).copy, "headline") }, matches, cities), { headline: "50% OFF" });
+  eq("Reset to suggested on a typed headline sends the deal's text", patchBody(c2, { ...formOf(c2), copy: resetCopy(formOf(c2).copy, "headline", "50% OFF", true) }, matches, cities), { headline: "50% OFF" });
 }
 {
   const c = draftFrom({ status: "LAUNCHED", state: "LIVE" });
-  const f = formOf(c, matches, cities);
+  const f = formOf(c);
   const sent = patchBody(c, { ...f, dealType: "FREE_MATCH", dealAmount: 0, cityIds: [2], holdoutPercent: 0, endsLocal: "2026-12-01 00:00:00", name: "Austin back", maxRedemptions: 50 }, matches, cities);
-  eq("after launch a locked field is never sent, only name, copy and cap", Object.keys(sent).sort(), ["body", "headline", "maxRedemptions", "name"]);
+  eq("after launch a locked field is never sent, only name and cap (the text does not move with the deal)", Object.keys(sent).sort(), ["maxRedemptions", "name"]);
   eq("after launch nothing changed sends nothing", patchBody(c, f, matches, cities), {});
 }
 
@@ -94,13 +94,13 @@ console.log("button opens:");
   eq("its opens line", opensText({ ...nowF, buttonTarget: "MATCH", buttonMatchId: 117 }, matches), "↳ Opens Tue 7:00 PM · Mueller Park");
   eq("a button match not picked yet stops the save", formProblem({ ...nowF, name: "x", buttonTarget: "MATCH", buttonMatchId: null }, matches), "Pick the match the button opens.");
   const live = draftFrom({ status: "LAUNCHED", state: "LIVE" });
-  const lf = formOf(live, matches, cities);
+  const lf = formOf(live);
   eq("after launch, pointing the button at a match sends only the target fields",
     patchBody(live, { ...lf, buttonTarget: "MATCH", buttonMatchId: 117 }, matches, cities), { buttonTarget: "MATCH", buttonMatchId: 117 });
   const live2 = { ...live, buttonTarget: "MATCH" as const, buttonMatchId: 117 };
   eq("after launch, back to Find a match clears buttonMatchId and sends nothing else",
-    patchBody(live2, { ...formOf(live2, matches, cities), buttonTarget: "FIND_MATCH", buttonMatchId: null }, matches, cities), { buttonTarget: "FIND_MATCH", buttonMatchId: null });
-  eq("a launched offer with a match button loads and sends nothing", patchBody(live2, formOf(live2, matches, cities), matches, cities), {});
+    patchBody(live2, { ...formOf(live2), buttonTarget: "FIND_MATCH", buttonMatchId: null }, matches, cities), { buttonTarget: "FIND_MATCH", buttonMatchId: null });
+  eq("a launched offer with a match button loads and sends nothing", patchBody(live2, formOf(live2), matches, cities), {});
 }
 
 console.log("uses per player:");
@@ -121,8 +121,8 @@ eq("the line", [limitLine(1), limitLine(1200)], ["The offer stops once 1 use is 
   eq("most it can cost: players x uses when that is lower than the limit", costCeiling({ ...f, maxRedemptions: 5000 }, count, matches)?.cents, 750 * 412 * 3);
   eq("most it can cost: the limit when it is lower", costCeiling({ ...f, maxRedemptions: 100 }, count, matches)?.cents, 750 * 100);
   const live = draftFrom({ status: "LAUNCHED", state: "LIVE" });
-  eq("after launch, the limit is one of the fields still sent, alone", patchBody(live, { ...formOf(live, matches, cities), maxRedemptions: 80 }, matches, cities), { maxRedemptions: 80 });
-  eq("after launch, back to no limit sends null", patchBody({ ...live, maxRedemptions: 80 }, { ...formOf({ ...live, maxRedemptions: 80 }, matches, cities), maxRedemptions: null }, matches, cities), { maxRedemptions: null });
+  eq("after launch, the limit is one of the fields still sent, alone", patchBody(live, { ...formOf(live), maxRedemptions: 80 }, matches, cities), { maxRedemptions: 80 });
+  eq("after launch, back to no limit sends null", patchBody({ ...live, maxRedemptions: 80 }, { ...formOf({ ...live, maxRedemptions: 80 }), maxRedemptions: null }, matches, cities), { maxRedemptions: null });
 }
 
 console.log("photo:");
@@ -133,9 +133,9 @@ eq("a picked cover is sent as the photo", createBody({ ...nowF, name: "x", copy:
 eq("picking MatchDay photo on a specific match sends no photo (null), not the cover", copyOf({ ...nowF, scope: "MATCH", matchId: 116, copy: { photoUrl: null } }, matches, cities).photoUrl, null);
 {
   const live = draftFrom({ status: "LAUNCHED", state: "LIVE" });
-  eq("after launch, changing the photo sends only photoUrl", patchBody(live, { ...formOf(live, matches, cities), copy: { photoUrl: "https://covers.local/mueller.jpg" } }, matches, cities), { photoUrl: "https://covers.local/mueller.jpg" });
+  eq("after launch, changing the photo sends only photoUrl", patchBody(live, { ...formOf(live), copy: { photoUrl: "https://covers.local/mueller.jpg" } }, matches, cities), { photoUrl: "https://covers.local/mueller.jpg" });
   const withPhoto = { ...live, photoUrl: "https://covers.local/mueller.jpg" };
-  eq("a stored photo loads and sends nothing", patchBody(withPhoto, formOf(withPhoto, matches, cities), matches, cities), {});
+  eq("a stored photo loads and sends nothing", patchBody(withPhoto, formOf(withPhoto), matches, cities), {});
 }
 
 console.log("played at:");
@@ -161,7 +161,7 @@ eq("over the cap is flagged", parsePlayerIds("1 2 3", 2), { ids: [1, 2], bad: []
   eq("the summary speaks of chosen players, no city", summary(pf, { count: 2, heldBack: 0, players: 2, mostItCanCost: null }, matches, cities, NOW).startsWith("2 chosen players get 50% off one match"), true);
   eq("the list line", audienceText({ ...draftFrom(), audienceMode: "PLAYERS", playerIds: [7, 8, 9] }, cities, []), "3 chosen players");
   const stored = draftFrom({ audienceMode: "PLAYERS", playerIds: [7, 8], cityIds: [], lastPlayed: "ANY", lastPlayedDays: null, holdoutPercent: 0, eyebrow: "JUST FOR YOU", caption: null, body: "Any match. The discount is already on your account." });
-  eq("a stored players offer loads and sends nothing", patchBody(stored, formOf(stored, matches, cities), matches, cities), {});
+  eq("a stored players offer loads and sends nothing", patchBody(stored, formOf(stored), matches, cities), {});
   eq("found and not-found lines", [playerLine({ id: 7, name: "Luis Ortega", city: "Austin", matchesPlayed: 3 }), notFoundLine([99999]), notFoundLine([1, 2])],
     ["Luis Ortega · Austin · 3 matches", "1 ID not found: 99999. It will be skipped.", "2 IDs not found: 1, 2. They will be skipped."]);
 }
@@ -197,34 +197,34 @@ eq("another host, a POST and no key are refused", [photoLinkProblem({ ...lk, upl
   eq("the saved photo has no ×, every other upload does", [canHidePhoto("https://x/a.jpg", "https://x/a.jpg"), canHidePhoto("https://x/b.jpg", "https://x/a.jpg"), canHidePhoto("https://x/b.jpg", null)], [false, true, true]);
   eq("a hidden saved-with photo would still be a tile (why it has no ×)", uploadTiles(hideUpload(up, "https://x/a.jpg"), "https://x/a.jpg", []).map((p) => p.url), ["https://x/b.jpg", "https://x/a.jpg"]);
   const A = "https://x/a.jpg", B = "https://x/b.jpg", COVER = "https://covers.local/riverside.jpg";
-  eq("a new offer: hiding the selected photo goes to the default", copyOf({ ...nowF, copy: copyAfterHide({ photoUrl: A, headline: "HI" }, A, undefined, null) }, matches, cities).photoUrl, null);
-  eq("...and leaves the other typed text alone", copyAfterHide({ photoUrl: A, headline: "HI" }, A, undefined, null), { headline: "HI" });
-  eq("...on a specific match the default is its field cover", copyOf({ ...nowF, scope: "MATCH", matchId: 116, copy: copyAfterHide({ photoUrl: A }, A, undefined, COVER) }, matches, cities).photoUrl, COVER);
-  eq("hiding a photo that is not selected changes nothing", copyAfterHide({ photoUrl: B }, A, B, null), { photoUrl: B });
+  eq("a new offer: hiding the selected photo goes to the default", copyOf({ ...nowF, copy: copyAfterHide({ photoUrl: A, headline: "HI" }, A, undefined) }, matches, cities).photoUrl, null);
+  eq("...and leaves the other typed text alone", copyAfterHide({ photoUrl: A, headline: "HI" }, A, undefined), { headline: "HI" });
+  eq("...on a specific match the default is its field cover", copyOf({ ...nowF, scope: "MATCH", matchId: 116, copy: copyAfterHide({ photoUrl: A }, A, undefined) }, matches, cities).photoUrl, COVER);
+  eq("hiding a photo that is not selected changes nothing", copyAfterHide({ photoUrl: B }, A, B), { photoUrl: B });
   // Saved with A, then B picked and hidden: back to A, nothing to save.
   for (const [name, over] of [["a draft", {}], ["a launched offer", { status: "LAUNCHED", state: "LIVE" }], ["a paused offer", { status: "PAUSED", state: "PAUSED" }]] as const) {
     const c = draftFrom({ photoUrl: A, ...over } as Partial<Campaign>);
-    const f = formOf(c, matches, cities);
+    const f = formOf(c);
     const picked = { ...f, copy: { ...f.copy, photoUrl: B } };
     eq(`${name} saved with a photo: picking another sends it (the control)`, patchBody(c, picked, matches, cities), { photoUrl: B });
-    const back = { ...picked, copy: copyAfterHide(picked.copy, B, c.photoUrl, null) };
+    const back = { ...picked, copy: copyAfterHide(picked.copy, B, c.photoUrl) };
     eq(`${name}: hiding it goes back to the saved photo`, copyOf(back, matches, cities).photoUrl, A);
     eq(`${name}: and leaves nothing to save`, patchBody(c, back, matches, cities), {});
   }
   const none = draftFrom({ photoUrl: null });
-  const nf = formOf(none, matches, cities);
-  const nb = { ...nf, copy: copyAfterHide({ ...nf.copy, photoUrl: B }, B, null, null) };
+  const nf = formOf(none);
+  const nb = { ...nf, copy: copyAfterHide({ ...nf.copy, photoUrl: B }, B, null) };
   eq("saved with no photo: hiding goes to the default, nothing to save", [copyOf(nb, matches, cities).photoUrl, patchBody(none, nb, matches, cities)], [null, {}]);
-  eq("...and the offer still follows the deal, it is not pinned", "photoUrl" in nb.copy, false);
+  eq("...and it stays on that when a match with a cover is picked", copyOf({ ...nb, scope: "MATCH", matchId: 116 }, matches, cities).photoUrl, null);
   // Saved with no photo, on a specific match whose default is a cover: back to no photo, not the cover.
   const sc = draftFrom({ photoUrl: null, matchIds: [116], matchScoped: true, buttonTarget: "MATCH", buttonMatchId: 116, usesPerPlayer: 1, endsLocal: "2026-11-02 19:00:00" });
-  const sf = formOf(sc, matches, cities);
-  const sb = { ...sf, copy: copyAfterHide({ ...sf.copy, photoUrl: B }, B, null, COVER) };
+  const sf = formOf(sc);
+  const sb = { ...sf, copy: copyAfterHide({ ...sf.copy, photoUrl: B }, B, null) };
   eq("saved with no photo where the default is a cover: back to saved, not the cover", [copyOf(sb, matches, cities).photoUrl, patchBody(sc, sb, matches, cities).photoUrl], [null, undefined]);
   // Another unsaved edit is still there to save; hiding only removes its own.
   const edited = draftFrom({ photoUrl: A });
-  const ef = { ...formOf(edited, matches, cities), name: "New name" };
-  eq("an unrelated unsaved edit survives hiding", patchBody(edited, { ...ef, copy: copyAfterHide({ ...ef.copy, photoUrl: B }, B, A, null) }, matches, cities), { name: "New name" });
+  const ef = { ...formOf(edited), name: "New name" };
+  eq("an unrelated unsaved edit survives hiding", patchBody(edited, { ...ef, copy: copyAfterHide({ ...ef.copy, photoUrl: B }, B, A) }, matches, cities), { name: "New name" });
   eq("a stored local photo saves", formProblem({ ...nowF, name: "x", copy: { photoUrl: "http://localhost:3070/dev/uploads/offers/photos/a.jpg" } }, matches), null);
 }
 eq("an https photo is fine (the control)", formProblem({ ...nowF, name: "x", copy: { photoUrl: "https://covers.local/a.jpg" } }, matches), null);
@@ -249,23 +249,23 @@ console.log("optional sections of the popup:");
 
   for (const [name, status] of [["draft", "DRAFT"], ["launched", "LAUNCHED"], ["paused", "PAUSED"]] as const) {
     const c = draftFrom({ status, state: status === "DRAFT" ? "DRAFT" : status === "PAUSED" ? "PAUSED" : "LIVE" });
-    const f = formOf(c, matches, cities);
+    const f = formOf(c);
     const cut = { ...f, copy: removeSection(f.copy, "body") };
     eq(`${name}: Remove sends null for that section alone`, patchBody(c, cut, matches, cities), { body: null });
     const saved = { ...c, body: null };
-    const sf = formOf(saved, matches, cities);
+    const sf = formOf(saved);
     eq(`${name}: a saved removal loads removed and sends nothing`, [sf.copy.body, sectionCollapsed(sf.copy, "body", autoCopy(sf, matches, cities).body), patchBody(saved, sf, matches, cities)], [null, true, {}]);
-    eq(`${name}: + Add on a saved removal sends the suggested text`, patchBody(saved, { ...sf, copy: addSection(sf.copy, "body", undefined, autoCopy(sf, matches, cities).body) }, matches, cities), { body: "Any match in Austin. The discount is already on your account." });
-    eq(`${name}: Remove then + Add on the same visit leaves nothing to save`, patchBody(c, { ...cut, copy: addSection(cut.copy, "body", undefined, auto.body) }, matches, cities), {});
+    eq(`${name}: + Add on a saved removal sends the suggested text`, patchBody(saved, { ...sf, copy: addSection(sf.copy, "body", undefined, autoCopy(sf, matches, cities).body, true) }, matches, cities), { body: "Any match in Austin. The discount is already on your account." });
+    eq(`${name}: Remove then + Add on the same visit leaves nothing to save`, patchBody(c, { ...cut, copy: addSection(cut.copy, "body", f.copy.body ?? undefined, auto.body, true) }, matches, cities), {});
   }
 
   const typed = draftFrom({ eyebrow: "HEY THERE", status: "LAUNCHED", state: "LIVE" });
-  const tf = formOf(typed, matches, cities);
+  const tf = formOf(typed);
   eq("typed text is the control: it loads as typed", tf.copy.eyebrow, "HEY THERE");
   const cutT = removeSection(tf.copy, "eyebrow");
-  eq("Remove then + Add brings typed text back, nothing to save", patchBody(typed, { ...tf, copy: addSection(cutT, "eyebrow", "HEY THERE", auto.eyebrow) }, matches, cities), {});
+  eq("Remove then + Add brings typed text back, nothing to save", patchBody(typed, { ...tf, copy: addSection(cutT, "eyebrow", "HEY THERE", auto.eyebrow, true) }, matches, cities), {});
   eq("Reset to suggested is offered on typed text", canReset(tf.copy, "eyebrow", auto.eyebrow), true);
-  eq("Reset to suggested sends the deal's text after launch", patchBody(typed, { ...tf, copy: resetCopy(tf.copy, "eyebrow") }, matches, cities), { eyebrow: auto.eyebrow });
+  eq("Reset to suggested sends the deal's text after launch", patchBody(typed, { ...tf, copy: resetCopy(tf.copy, "eyebrow", auto.eyebrow, true) }, matches, cities), { eyebrow: auto.eyebrow });
   eq("not offered when following the deal, or on the suggestion itself", [canReset({}, "eyebrow", auto.eyebrow), canReset({ eyebrow: auto.eyebrow }, "eyebrow", auto.eyebrow)], [false, false]);
   eq("not offered with nothing to suggest", canReset({ caption: "typed" }, "caption", null), false);
   eq("offered on an emptied required field", canReset({ headline: "" }, "headline", "50% OFF"), true);
@@ -273,13 +273,58 @@ console.log("optional sections of the popup:");
   // The photo line is the one section a deal can leave empty.
   const any = { ...nowF, name: "x" };
   eq("an any-match offer suggests no photo line, so it starts collapsed", [autoCopy(any, matches, cities).caption, sectionCollapsed(any.copy, "caption", null)], [null, true]);
-  const opened = addSection(any.copy, "caption", undefined, null);
+  const opened = addSection(any.copy, "caption", undefined, null, false);
   eq("+ Add photo line opens an empty box", [opened.caption, sectionCollapsed(opened, "caption", null)], ["", false]);
   eq("left empty it still saves as null", "caption" in createBody({ ...any, copy: opened }, matches, cities) && createBody({ ...any, copy: opened }, matches, cities).caption === null, true);
   eq("with text typed it is sent", createBody({ ...any, copy: { caption: "See you there" } }, matches, cities).caption, "See you there");
   eq("a section with text is not collapsed (the control)", sectionCollapsed({}, "eyebrow", "JUST FOR YOU"), false);
   eq("button label empty stops the save", formProblem({ ...any, copy: { buttonLabel: "" } }, matches), "The popup needs a button label.");
   eq("all four removed saves (the control)", formProblem({ ...any, copy: gone }, matches), null);
+}
+
+console.log("saved text is fixed; changes only move what Reset to suggested gives:");
+{
+  const SUGGESTED_CAPTION = "Your spot at the field is waiting.";
+  const lapse = { lastPlayed: "LAPSED" as const, lastPlayedDays: 30 };
+  const pick = { scope: "MATCH" as const, matchId: 116, fieldIds: [1], endsLocal: "2026-11-02 19:00:00" };
+  // The exact case: a draft saved with no photo line, reopened, then the audience or the match changes.
+  const body = createBody({ ...nowF, name: "x", cityIds: [1], copy: { caption: null } }, matches, cities);
+  const stored = { lastPlayedDays: null, maxMatches: null, maxRedemptions: null, buttonMatchId: null, photoUrl: null, matchIds: [], playerIds: [], fieldIds: [], ...body, id: 9, matchScoped: false, status: "DRAFT", state: "DRAFT", results } as unknown as Campaign;
+  const f = formOf(stored);
+  for (const [name, change] of [["audience changed to lapsed", lapse], ["a specific match picked", pick]] as const) {
+    const moved = { ...f, ...change };
+    const offered = autoCopy(moved, matches, cities).caption;
+    eq(`${name}: the deal does suggest a photo line now (the control)`, offered === null, false);
+    eq(`${name}: the photo line stays removed`, [copyOf(moved, matches, cities).caption, sectionCollapsed(moved.copy, "caption", offered)], [null, true]);
+    eq(`${name}: no photo line is sent`, "caption" in patchBody(stored, moved, matches, cities), false);
+    eq(`${name}: + Add brings the current suggestion`, addSection(moved.copy, "caption", undefined, offered, true).caption, offered);
+  }
+  eq("the suggestion for lapsed is the one the deal writes", autoCopy({ ...f, ...lapse }, matches, cities).caption, SUGGESTED_CAPTION);
+
+  const text = (["eyebrow", "caption", "headline", "line", "body", "buttonLabel", "dismissLabel", "photoUrl"] as const);
+  const asSaved = (g: typeof f) => text.map((k) => copyOf(g, matches, cities)[k]);
+  const before = asSaved(f);
+  eq("a new percent moves no saved text", asSaved({ ...f, dealAmount: 40 }), before);
+  eq("a new deal type moves no saved text", asSaved({ ...f, dealType: "FREE_MATCH", dealAmount: 0 }), before);
+  eq("a new audience moves no saved text", asSaved({ ...f, ...lapse, cityIds: [2] }), before);
+  eq("a picked match moves no saved text or photo", asSaved({ ...f, ...pick }), before);
+  eq("the same deal change sends the deal alone", patchBody(stored, { ...f, dealAmount: 40 }, matches, cities), { dealAmount: 40 });
+  eq("the same match pick sends no text", Object.keys(patchBody(stored, { ...f, ...pick }, matches, cities)).filter((k) => text.includes(k as (typeof text)[number])), []);
+
+  const forty = { ...f, dealAmount: 40 };
+  const s40 = autoCopy(forty, matches, cities).headline;
+  eq("Reset to suggested is offered once the deal moves on, with the new text", [canReset(f.copy, "headline", autoCopy(f, matches, cities).headline), canReset(forty.copy, "headline", s40), s40], [false, true, "40% OFF"]);
+  const reset = { ...forty, copy: resetCopy(forty.copy, "headline", s40, true) };
+  eq("Reset takes that text and sends it", patchBody(stored, reset, matches, cities), { dealAmount: 40, headline: "40% OFF" });
+  eq("and it does not move again with the next change", copyOf({ ...reset, dealAmount: 30 }, matches, cities).headline, "40% OFF");
+  const added = { ...f, ...lapse, copy: addSection(f.copy, "caption", undefined, SUGGESTED_CAPTION, true) };
+  eq("text from + Add does not move with the next change either", copyOf({ ...added, lastPlayed: "ANY" as const, lastPlayedDays: null }, matches, cities).caption, SUGGESTED_CAPTION);
+
+  const fresh = { ...nowF, name: "x" };
+  eq("before the first save the text follows the deal", copyOf({ ...fresh, dealAmount: 40 }, matches, cities).headline, "40% OFF");
+  eq("before the first save the photo line follows the audience", copyOf({ ...fresh, ...lapse }, matches, cities).caption, SUGGESTED_CAPTION);
+  eq("before the first save a removed section still stays removed", copyOf({ ...fresh, ...lapse, copy: { caption: null } }, matches, cities).caption, null);
+  eq("before the first save Reset follows the deal again", copyOf({ ...fresh, dealAmount: 40, copy: resetCopy({ headline: "TYPED" }, "headline", "50% OFF", false) }, matches, cities).headline, "40% OFF");
 }
 
 console.log("money, in cents, as the backend's applyOfferDeal:");

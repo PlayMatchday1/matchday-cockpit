@@ -51,7 +51,7 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
   c: Campaign | null; data: Data; onClose: () => void; onLanded: (o: WriteOutcome, selectId?: number) => void;
 }) {
   const nowWall = useMemo(() => chicagoWallNow(), []);
-  const start = useMemo(() => (c ? formOf(c, data.matches, data.cities) : newForm(nowWall)), [c, data, nowWall]);
+  const start = useMemo(() => (c ? formOf(c) : newForm(nowWall)), [c, data, nowWall]);
   const [f, setF] = useState<Form>(start);
   const set = (patch: Partial<Form>) => setF((x) => ({ ...x, ...patch }));
   const locked = c !== null && c.status !== "DRAFT";
@@ -279,7 +279,7 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
     const next = hideUpload(uploaded, url);
     setUploaded(next);
     if (c) keepUploads(c.id, next);
-    setF((v) => ({ ...v, copy: copyAfterHide(v.copy, url, c?.photoUrl ?? (c ? null : undefined), copyOf({ ...v, copy: {} }, data.matches, data.cities).photoUrl) }));
+    setF((v) => ({ ...v, copy: copyAfterHide(v.copy, url, c?.photoUrl ?? (c ? null : undefined)) }));
   }
   const photoTile = (key: string | number, url: string | null, title: string, sub: string, onHide?: () => void) => {
     const on = (copy.photoUrl ?? null) === url;
@@ -577,7 +577,7 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
                 if (isRemovable(k) && sectionCollapsed(f.copy, k, auto)) {
                   return (
                     <button key={k} type="button" data-testid={`offers-add-${k}`} className="self-start text-[12px] font-semibold" style={{ color: O.ok }}
-                      onClick={() => setF((x) => ({ ...x, copy: addSection(x.copy, k, typedBefore[k], auto) }))}>{SECTION_ADD[k]}</button>
+                      onClick={() => setF((x) => ({ ...x, copy: addSection(x.copy, k, typedBefore[k], auto, c !== null) }))}>{SECTION_ADD[k]}</button>
                   );
                 }
                 const value = f.copy[k] ?? auto ?? "";
@@ -600,7 +600,7 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
                         : <input id={`offers-copy-${k}`} data-testid={`offers-copy-${k}`} maxLength={max} className={inputCls} style={inputStyle} value={value} onChange={(e) => setCopy(k, e.target.value)} />}
                       {canReset(f.copy, k, auto) && (
                         <button type="button" data-testid={`offers-reset-${k}`} className="self-start text-[11.5px] font-medium" style={{ color: O.ok }}
-                          onClick={() => setF((x) => ({ ...x, copy: resetCopy(x.copy, k) }))}>Reset to suggested</button>
+                          onClick={() => setF((x) => ({ ...x, copy: resetCopy(x.copy, k, auto, c !== null) }))}>Reset to suggested</button>
                       )}
                     </div>
                     {k === "buttonLabel" && buttonOpens()}
@@ -615,7 +615,7 @@ export default function OfferPanel({ c, data, onClose, onLanded }: {
             </div>
           ) : (
             <div className="flex min-w-0 flex-1 flex-col gap-2">
-              <div className="text-[12px] leading-[17px]" style={{ color: O.muted }}>Written for you from the deal. Change any line if you want.</div>
+              <div className="text-[12px] leading-[17px]" style={{ color: O.muted }}>{c ? "The saved text. It stays as it is if the deal or who gets it changes." : "Written for you from the deal. Change any line if you want."}</div>
               {([["Headline", copy.headline], ["Line", copy.line], ["Photo", photoName(copy.photoUrl)], ["Button", copy.buttonLabel]] as const).map(([k, v]) => (
                 <div key={k} className="flex flex-col gap-[3px] font-medium">
                   <div className="text-[11px]" style={{ color: O.label }}>{k}</div>

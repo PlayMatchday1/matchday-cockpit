@@ -221,9 +221,9 @@ export type Form = {
   // Where the popup's button goes (Edit text › Button opens). Forced to the deal's match when the
   // offer is for a specific match; see buttonOf.
   buttonTarget: ButtonTarget; buttonMatchId: number | null;
-  // Copy per key. Absent follows the deal. A string was typed; an emptied box stays empty rather than
-  // going back to the deal (see copyOf). null is a removed section, also how a stored campaign's
-  // removed section loads, so loading it never invents a change.
+  // Copy per key. Absent follows the deal, which only happens before the first save: formOf fills in
+  // every key, so a saved offer's text never changes by itself. A string is the text; an emptied box
+  // stays empty rather than going back to the deal (see copyOf). null is a removed section.
   copy: Partial<Record<CopyKey, string | null>>;
 };
 
@@ -237,7 +237,7 @@ export function newForm(nowWall: string): Form {
   };
 }
 
-export function formOf(c: Campaign, matches: MatchOpt[], cities: City[]): Form {
+export function formOf(c: Campaign): Form {
   const f: Form = {
     name: c.name, dealType: c.dealType, dealAmount: c.dealAmount, usesPerPlayer: c.usesPerPlayer,
     matchId: c.matchIds[0] ?? null, scope: c.matchScoped ? "MATCH" : "ANY",
@@ -247,9 +247,9 @@ export function formOf(c: Campaign, matches: MatchOpt[], cities: City[]): Form {
     startsLocal: c.startsLocal, endsLocal: c.endsLocal, holdoutPercent: c.holdoutPercent, maxRedemptions: c.maxRedemptions,
     buttonTarget: c.buttonTarget, buttonMatchId: c.buttonMatchId, copy: {},
   };
-  // Stored copy that differs from what the deal would write was typed by someone: keep it as typed.
-  const auto = autoCopy(f, matches, cities);
-  for (const k of COPY_KEYS) if ((c[k] ?? null) !== (auto[k] ?? null)) f.copy[k] = c[k] ?? null;
+  // Saved text is fixed. The backend can't tell "removed" from "nothing suggested" (both are null), so
+  // nothing stored may follow the deal: changing the deal only changes what Reset to suggested gives.
+  for (const k of COPY_KEYS) f.copy[k] = c[k] ?? null;
   return f;
 }
 
@@ -341,11 +341,14 @@ export const sectionCollapsed = (copy: Form["copy"], k: RemovableKey, suggested:
 export const removeSection = (copy: Form["copy"], k: RemovableKey): Form["copy"] => ({ ...copy, [k]: null });
 // Back to what it held before Remove (typedBefore) if anything was typed, else the deal's text. With
 // no suggestion there is nothing to show, so an empty box opens; left empty it still saves as null.
-export function addSection(copy: Form["copy"], k: RemovableKey, typedBefore: string | undefined, suggested: string | null): Form["copy"] {
+export function addSection(copy: Form["copy"], k: RemovableKey, typedBefore: string | undefined, suggested: string | null, saved: boolean): Form["copy"] {
   if (typedBefore !== undefined) return { ...copy, [k]: typedBefore };
-  return suggested === null ? { ...copy, [k]: "" } : resetCopy(copy, k);
+  return suggested === null ? { ...copy, [k]: "" } : resetCopy(copy, k, suggested, saved);
 }
-export function resetCopy(copy: Form["copy"], k: CopyKey): Form["copy"] {
+// saved: the suggestion as it stands now becomes the text, so a later deal change leaves it alone.
+// Before the first save the key goes, and the section follows the deal again.
+export function resetCopy(copy: Form["copy"], k: CopyKey, suggested: string | null, saved: boolean): Form["copy"] {
+  if (saved) return { ...copy, [k]: suggested };
   const next = { ...copy };
   delete next[k];
   return next;
@@ -405,10 +408,10 @@ export const hideUpload = (uploaded: UploadedPhoto[], url: string) => uploaded.f
 // `saved` is the campaign's stored photoUrl (undefined: a new offer, nothing saved). `deflt` is what the
 // deal would pick right now. When those agree the key is dropped, so the offer keeps following the
 // deal as it did before the pick, rather than being pinned to today's answer.
-export function copyAfterHide(copy: Form["copy"], url: string, saved: string | null | undefined, deflt: string | null): Form["copy"] {
+export function copyAfterHide(copy: Form["copy"], url: string, saved: string | null | undefined): Form["copy"] {
   if (copy.photoUrl !== url) return copy;
   const { photoUrl: _gone, ...rest } = copy;
-  return saved === undefined || saved === deflt ? rest : { ...rest, photoUrl: saved };
+  return saved === undefined ? rest : { ...rest, photoUrl: saved };
 }
 
 // ── REQUEST BODIES ───────────────────────────────────────────────────────────────────────────────
