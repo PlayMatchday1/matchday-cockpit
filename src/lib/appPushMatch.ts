@@ -24,7 +24,8 @@ export async function staffRows(sb: SupabaseClient): Promise<StaffRow[]> {
 }
 
 export function riskPayload(env: MatchdayEnv, m: RiskMatch) {
-  return { ...matchRiskText(m.name, m.startDate, -m.cushion), data: { kind: "match_at_risk", matchId: m.id, env } };
+  // Clamped at 0 so a dry run on a match that is not short never reads "-1 short".
+  return { ...matchRiskText(m.name, m.startDate, Math.max(0, -m.cushion)), data: { kind: "match_at_risk", matchId: m.id, env } };
 }
 
 /** The cron's pass over one environment. Returns what it saw and what it sent. */
