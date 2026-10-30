@@ -120,6 +120,11 @@ const NODE_SUITES = [
   // Supabase, which is production. Each guard behind MATCHDAY_LOCAL_API (write client, read/sync
   // client, sync routes, change_log) is proven on with zero requests, and off as identical to main.
   "scripts/local-mode-guard-test.ts",
+  /* GROWTH › OFFERS. An offer changes what a player is charged, so the guards are on what it sends:
+   * the edit body is only what changed (a loaded, untouched offer sends nothing), a launched offer
+   * never sends a locked field, the deal's cents match the backend's applyOfferDeal, wall clock
+   * stays wall clock, and the allowlist gate refuses in order (503, 403, 404) with its own control. */
+  "scripts/offers-model-test.ts",
   "scripts/stage-denylist-test.ts",
   "scripts/change-log-test.ts",
   // "[object Object]" REACHED A PERSON. A PostgrestError is a plain object, so String(e) prints

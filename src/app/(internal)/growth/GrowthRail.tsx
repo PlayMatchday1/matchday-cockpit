@@ -9,6 +9,7 @@ import { useEffect, useState } from "react";
 import ChatsRail from "../match-ops/ChatsRail";
 import { useSectionNav } from "@/components/SectionNav";
 import { GROWTH_SECTIONS } from "./growthSections";
+import { useOffersAccess } from "@/components/offers/useOffersAccess";
 
 // Growth's own key. Collapsing a rail in one section must not collapse another's.
 const COLLAPSE_KEY = "growth:rail-collapsed";
@@ -18,7 +19,11 @@ const LABEL = "Growth";
 export default function GrowthRail({ children }: { children: React.ReactNode }) {
   /* PUBLISHED TO THE SHELL'S ONE APP BAR instead of rendering a second one inside <main>.
    * See src/components/SectionNav.tsx for why the bar cannot live in here. */
-  useSectionNav({ items: GROWTH_SECTIONS, label: LABEL, showSwitch: false });
+  // OFFERS IS THE ONE EXCEPTION to "gated on growth and nothing else": until release it is drawn only
+  // when the server says this user is on OFFERS_ALLOWLIST. No answer yet is no.
+  const offersOk = useOffersAccess() === true;
+  const items = offersOk ? GROWTH_SECTIONS : GROWTH_SECTIONS.filter((s) => s.key !== "offers");
+  useSectionNav({ items, label: LABEL, showSwitch: false });
   const [collapsed, setCollapsed] = useState(false);
   useEffect(() => {
     try { setCollapsed(window.localStorage.getItem(COLLAPSE_KEY) === "1"); } catch { /* private mode */ }
@@ -43,7 +48,7 @@ export default function GrowthRail({ children }: { children: React.ReactNode }) 
           height: "calc(100dvh - env(safe-area-inset-top, 0px) - var(--nav-h))",
           width: railW, transition: "width .18s ease-out",
         }}>
-        <ChatsRail collapsed={collapsed} onToggle={toggle} items={GROWTH_SECTIONS} showSwitch={false} label={LABEL} />
+        <ChatsRail collapsed={collapsed} onToggle={toggle} items={items} showSwitch={false} label={LABEL} />
       </div>
       <div
         style={{ "--mo-rail-w": railW } as React.CSSProperties}
