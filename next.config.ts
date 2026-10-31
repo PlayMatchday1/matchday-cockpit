@@ -44,6 +44,12 @@ const nextConfig: NextConfig = {
         destination: "/growth/field-pipeline",
         permanent: true,
       },
+      // OFFERS MOVED INTO MATCH OPS from /growth/offers (2026-10-31).
+      {
+        source: "/growth/offers",
+        destination: "/match-ops/offers",
+        permanent: true,
+      },
       // LOCATIONS MOVED OUT OF MATCH OPS to /growth/locations (2026-10-08). 308, and Next carries
       // the query string across a redirect, so ?tab=map&city=3 lands on the same tab and city.
       {

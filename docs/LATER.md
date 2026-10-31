@@ -3,7 +3,7 @@
 Changes that are decided but not done. Each one ships on its own, by pushing to main, never
 `vercel deploy --prod`. Delete an entry when it lands.
 
-## Growth › Offers: what the Clubhouse needs at release
+## Match Ops › Offers: what the Clubhouse needs at release
 
 **Decided by Ryan, 2026-10-30.** Ships by pushing feature/offers to main, never `vercel deploy --prod`.
 Goes in the backend's `docs/offers/RELEASE-CHECKLIST.md` too. Read at `src/lib/offersConfig.ts`. Who may use it is not a variable: anyone with Match Ops access. Every one is server-only (none has a `NEXT_PUBLIC_` prefix). Anything unset or
@@ -45,7 +45,7 @@ URL is UNKNOWN. A Preview build needs a pushed branch, and Offers writes from on
 
 On a dev server instead, which needs none of that: set `OFFERS_STAGING_UPLOAD_HOST` to the host in a real staging upload
 link and run `npm run dev:offers-staging`, port 3073, with `MATCHDAY_STAGE_API_*` in `.env.local`. Stop the local-mode
-server first: one worktree can't run two dev servers. **Open only Growth › Offers on it.** It runs with local mode off,
+server first: one worktree can't run two dev servers. **Open only Match Ops › Offers on it.** It runs with local mode off,
 so every other page there reads and writes production as usual.
 
 Either way, staging's own `CLUBHOUSE_SERVICE_ACCOUNT_EMAILS` must list the `MATCHDAY_STAGE_API_EMAIL` account.
@@ -172,5 +172,5 @@ and someone with access is still told they are not authorized. Fixing it means t
 "could not read", and is a separate decision.
 
 The rest of the Clubhouse also has no answer for a revoked session: pages keep rendering on a token
-that looks valid while every API call returns 401. Only Growth › Offers says so (`SignInAgain` in
+that looks valid while every API call returns 401. Only Match Ops › Offers says so (`SignInAgain` in
 `src/components/offers/OffersView.tsx`, on feature/offers).

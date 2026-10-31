@@ -1,6 +1,6 @@
 "use client";
 
-// GROWTH › OFFERS (Figma 20571:44; backend feature/offers on the LOCAL backend, Match Ops access).
+// MATCH OPS › OFFERS (Figma 20571:44; backend feature/offers on the LOCAL backend, Match Ops access).
 //
 // Recruiting's layout: the list on the left, one panel on the right. Picking an offer opens its panel
 // and, once it has launched, its results card under the list: saw, used, discount given, came back
@@ -158,7 +158,7 @@ function SignInAgain() {
   async function go() {
     setBusy(true);
     await supabase.auth.signOut({ scope: "local" }).catch(() => undefined);
-    window.location.assign("/login?next=/growth/offers");
+    window.location.assign("/login?next=/match-ops/offers");
   }
   return (
     <div data-testid="offers-signin" className="flex min-h-[50vh] items-center justify-center px-6 py-12 text-center">

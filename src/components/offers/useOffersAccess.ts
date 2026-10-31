@@ -1,11 +1,11 @@
 "use client";
 
-// May the signed-in user see Growth › Offers? Asked of the server (GET /api/offers/access, the same
+// May the signed-in user see Match Ops › Offers? Asked of the server (GET /api/offers/access, the same
 // gate as every /api/offers/* route). canUseOffers is the courtesy for the chrome; the server decides.
 // useOffersAccessState: null while asking, then "yes", "no" (a 404 without Match Ops access, a 503
 // config unset or wrong, a network error) or "signin" (a 401: the session has ended; see
-// offersAccessState). useOffersAccess is the rail's yes or no. One request per signed-in user,
-// shared by the rail and the page; "signin" is not kept, so signing in again asks afresh.
+// offersAccessState). One request per signed-in user; "signin" is not kept, so signing in again
+// asks afresh.
 
 import { useEffect, useState } from "react";
 import { offersAccessState, type OffersAccessState } from "@/lib/offersAccess";
@@ -44,9 +44,4 @@ export function useOffersAccessState(): OffersAccessState | null {
   if (isLoading) return null;
   if (!key) return "no";
   return answer && answer.key === key ? answer.state : null;
-}
-
-export function useOffersAccess(): boolean | null {
-  const state = useOffersAccessState();
-  return state === null ? null : state === "yes";
 }

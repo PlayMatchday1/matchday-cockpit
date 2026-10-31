@@ -68,11 +68,14 @@ function I({ children }: { children: React.ReactNode }) {
 }
 
 export const MATCH_OPS_SECTIONS: MatchOpsSection[] = [
-  // DAILY OPS — today's rhythm: 6 items in 2 groups.
+  // DAILY OPS — today's rhythm: 8 items in 2 groups.
   { key: "gameday", section: "daily", group: "Operations", label: "Gameday Ops", href: "/match-ops/gameday", desc: "Today's matches, soonest first — what's about to go wrong", access: "matchops", icon: <I><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></I> },
   { key: "veo", section: "daily", group: "Operations", label: "Veo", href: "/match-ops/veo", desc: "One day of camera matches — which films landed, which missed", access: "matchops", icon: <I><rect x="2.5" y="6.5" width="12" height="11" rx="2.5" /><path d="m14.5 11 6-3.5v9L14.5 13z" /></I> },
   { key: "player-lookup", section: "daily", group: "Operations", label: "Player Lookup", href: "/match-ops/player-lookup", desc: "One player — account, membership, matches; add or remove them", access: "matchops", icon: <I><circle cx="11" cy="8" r="3.6" /><path d="M4 20a7 7 0 0 1 12.2-4.6" /><circle cx="17.5" cy="16.5" r="3.2" /><path d="M19.8 18.8 22 21" /></I> },
   { key: "promos", section: "daily", group: "Operations", label: "Promo Codes", href: "/match-ops/promos", desc: "Discount codes — live and past; create a new one", access: "matchops", icon: <I><path d="M8.5 3.5h7l5 5v7l-5 5h-7l-5-5v-7z" /><circle cx="12" cy="12" r="2.4" /></I> },
+  // OFFERS: popup deals in the app. Moved from Growth (2026-10-31); /growth/offers 308s here. Match Ops
+  // access, decided on the server by offersGate (src/lib/offersServer.ts), so the link and the routes agree.
+  { key: "offers", section: "daily", group: "Operations", label: "Offers", href: "/match-ops/offers", desc: "Popup deals for the players you pick", access: "matchops", icon: <I><path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z" /><circle cx="7.5" cy="7.5" r="1.5" /></I> },
   { key: "reviews", section: "daily", group: "Operations", label: "Reviews", href: "/match-ops/reviews", desc: "Per-match ratings and manager standings", access: "matchops", icon: <I><path d="m12 4 2.4 4.9 5.4.8-3.9 3.8.9 5.4-4.8-2.6-4.8 2.6.9-5.4L4.2 9.7l5.4-.8z" /></I> },
   { key: "match-chats", section: "daily", group: "Conversations", label: "Match Chats", href: "/match-ops/match-chats", desc: "One WhatsApp group per match", access: "chats", icon: <I><path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 8.9 8.9 0 0 1-3.8-.9L3 21l1.9-5.1A8.4 8.4 0 0 1 12 3.1a8.4 8.4 0 0 1 9 8.4z" /></I> },
   { key: "player-chats", section: "daily", group: "Conversations", label: "Player Chats", href: "/match-ops/player-chats", desc: "1:1 threads with players", access: "chats", icon: <I><circle cx="9" cy="8" r="3.4" /><path d="M2.5 20a6.5 6.5 0 0 1 13 0" /><path d="M17 7.5a3 3 0 0 1 0 6M18.5 20a6 6 0 0 0-3-5.2" /></I>, badge: "awaiting" },

@@ -1,4 +1,4 @@
-// GROWTH › OFFERS, PACED READS (CLAUDE.md "Reading the production API"). The same three rules as
+// MATCH OPS › OFFERS, PACED READS (CLAUDE.md "Reading the production API"). The same three rules as
 // getPacedClient in src/lib/matchdayApi.ts, at the 2 seconds that section sets for live reads: one at a
 // time, each starting paceMs after the last ENDED; no retries; a failure stops the next ones without a request. Its own small version because that client
 // reads through the read client (GET only, refused in local mode) and these include POSTs the backend

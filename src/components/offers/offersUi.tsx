@@ -1,6 +1,6 @@
 "use client";
 
-// GROWTH › OFFERS, the shared parts: the mock's palette (Figma 20571:44), the authed fetch, the write
+// MATCH OPS › OFFERS, the shared parts: the mock's palette (Figma 20571:44), the authed fetch, the write
 // outcome, and the small pieces the page and the panel draw. Same grammar as the Match Manager
 // Recruiting page (list on the left, one panel on the right), in the Offers mock's colours.
 

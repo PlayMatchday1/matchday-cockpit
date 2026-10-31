@@ -1,5 +1,5 @@
 import "server-only"; // no-op under --conditions=react-server
-// GROWTH › OFFERS: the guards on what an offer sends and what it charges.
+// MATCH OPS › OFFERS: the guards on what an offer sends and what it charges.
 //   NODE_OPTIONS=--conditions=react-server npx tsx scripts/offers-model-test.ts
 //
 // Runtime assertions on computed values (src/lib/offersModel.ts, src/lib/offersServer.ts):

@@ -1,5 +1,5 @@
 import "server-only";
-// GROWTH › OFFERS, the server half shared by every /api/offers/* route.
+// MATCH OPS › OFFERS, the server half shared by every /api/offers/* route.
 //
 // WHERE IT TALKS TO comes from the environment (src/lib/offersConfig.ts): OFFERS_ENV, the backend's
 // base URL and the allowed upload host. Anything unset or wrong answers 503, for everyone.

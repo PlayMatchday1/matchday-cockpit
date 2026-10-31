@@ -1,4 +1,4 @@
-// WHO MAY USE GROWTH › OFFERS: anyone with Match Ops access, decided on the server by offersGate
+// WHO MAY USE MATCH OPS › OFFERS: anyone with Match Ops access, decided on the server by offersGate
 // (src/lib/offersServer.ts), which uses the Match Ops section's own check. These are the answers.
 
 // What a signed-in person without access gets: the same answer as a route that does not exist.

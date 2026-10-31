@@ -1,4 +1,4 @@
-// GROWTH › OFFERS, the pure half (backend feature/offers, docs/offers/M3-ENDPOINTS.md). Client-safe:
+// MATCH OPS › OFFERS, the pure half (backend feature/offers, docs/offers/M3-ENDPOINTS.md). Client-safe:
 // the page, the routes and scripts/offers-model-test.ts all use it.
 //
 // TIME MODEL: CITY WALL CLOCK, NEVER AN INSTANT. A campaign's startsLocal / endsLocal are wall-clock

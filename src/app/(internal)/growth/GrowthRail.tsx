@@ -5,12 +5,10 @@
 // a second copy of this markup would be a second thing to keep in step and the collapse state
 // would be the first to drift.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import ChatsRail from "../match-ops/ChatsRail";
 import { useSectionNav } from "@/components/SectionNav";
 import { GROWTH_SECTIONS } from "./growthSections";
-import { useOffersAccess } from "@/components/offers/useOffersAccess";
-import { canAccess, useAuth } from "@/lib/useAuth";
 
 // Growth's own key. Collapsing a rail in one section must not collapse another's.
 const COLLAPSE_KEY = "growth:rail-collapsed";
@@ -20,14 +18,7 @@ const LABEL = "Growth";
 export default function GrowthRail({ children }: { children: React.ReactNode }) {
   /* PUBLISHED TO THE SHELL'S ONE APP BAR instead of rendering a second one inside <main>.
    * See src/components/SectionNav.tsx for why the bar cannot live in here. */
-  // OFFERS IS THE ONE EXCEPTION to "gated on growth and nothing else": it follows Match Ops access, as
-  // the server answers it, and the rest follows Growth. No answer yet is no.
-  const offersOk = useOffersAccess() === true;
-  const { appUser } = useAuth();
-  const growthOk = canAccess(appUser, "growth");
-  // MEMOISED: useSectionNav depends on the array's identity, and a fresh filter each render loops.
-  const items = useMemo(() => GROWTH_SECTIONS.filter((s) => (s.key === "offers" ? offersOk : growthOk)), [offersOk, growthOk]);
-  useSectionNav({ items, label: LABEL, showSwitch: false });
+  useSectionNav({ items: GROWTH_SECTIONS, label: LABEL, showSwitch: false });
   const [collapsed, setCollapsed] = useState(false);
   useEffect(() => {
     try { setCollapsed(window.localStorage.getItem(COLLAPSE_KEY) === "1"); } catch { /* private mode */ }
@@ -39,8 +30,9 @@ export default function GrowthRail({ children }: { children: React.ReactNode }) 
       return next;
     });
 
-  // EVERY OTHER ITEM IS GATED ON `growth`. When a Growth page needs its own permission, it gets
-  // filtered here the way LifecycleRail filters Membership, not by hiding it somewhere else.
+  // EVERY ITEM HERE IS GATED ON `growth` AND NOTHING ELSE, so the shell's guard has already decided
+  // and there is no per-item filter to get wrong. When a Growth page needs its own permission, it
+  // gets filtered here the way LifecycleRail filters Membership — not by hiding it somewhere else.
   const railW = collapsed ? "60px" : "212px";
 
   return (
@@ -51,7 +43,7 @@ export default function GrowthRail({ children }: { children: React.ReactNode }) 
           height: "calc(100dvh - env(safe-area-inset-top, 0px) - var(--nav-h))",
           width: railW, transition: "width .18s ease-out",
         }}>
-        <ChatsRail collapsed={collapsed} onToggle={toggle} items={items} showSwitch={false} label={LABEL} />
+        <ChatsRail collapsed={collapsed} onToggle={toggle} items={GROWTH_SECTIONS} showSwitch={false} label={LABEL} />
       </div>
       <div
         style={{ "--mo-rail-w": railW } as React.CSSProperties}

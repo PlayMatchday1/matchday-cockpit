@@ -236,7 +236,7 @@ export function __setCreditsGuardForTest(fn: (a: WriteActor | undefined) => void
   const prev = creditsGuard; creditsGuard = fn; return () => { creditsGuard = prev; };
 }
 let adminGuard: (a: WriteActor | undefined) => void = assertIsAdmin;
-// GROWTH › OFFERS: set only by offersGate, from the same Match Ops check every Offers route passes.
+// MATCH OPS › OFFERS: set only by offersGate, from the same Match Ops check every Offers route passes.
 function assertCanUseOffers(actor: WriteActor | undefined): void {
   if (!actor || actor.canUseOffers !== true) {
     throw new NotAuthorizedError(

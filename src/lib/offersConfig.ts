@@ -1,5 +1,5 @@
 import "server-only";
-// GROWTH › OFFERS, WHERE IT TALKS TO. Read from the environment on every request, and any problem
+// MATCH OPS › OFFERS, WHERE IT TALKS TO. Read from the environment on every request, and any problem
 // closes the whole page (offersGate answers 503). There is no default for anything.
 //
 //   OFFERS_ENV            local | staging | production
