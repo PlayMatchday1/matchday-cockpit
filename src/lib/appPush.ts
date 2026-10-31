@@ -125,6 +125,22 @@ async function tokenColumn(sb: SupabaseClient): Promise<boolean> {
   return logHasToken;
 }
 
+let logHasReason: boolean | null = null;
+/** Whether app_push_log has 0245's outcome and reason columns. */
+async function reasonColumns(sb: SupabaseClient): Promise<boolean> {
+  if (logHasReason === null) logHasReason = !(await sb.from("app_push_log").select("outcome, reason").limit(1)).error;
+  return logHasReason;
+}
+
+/** A push that was considered and not sent, with why: one log row with no recipient and no ticket.
+ *  Needs 0245's columns; without them it is only a console line. */
+export async function logPushSkip(sb: SupabaseClient, event: PushEvent, subject: string, reason: string): Promise<void> {
+  console.log(`[app-push] ${event} subject=${subject} SKIPPED ${reason}`);
+  if (!(await reasonColumns(sb))) return;
+  const ins = await sb.from("app_push_log").insert({ event, subject, dry_run: false, outcome: "skipped", reason: reason.slice(0, 300) });
+  if (ins.error) console.error(`[app-push] skip log insert failed: ${ins.error.message}`);
+}
+
 export type SendResult = { event: PushEvent; skipped?: string; recipients: number; tokens: number; ok: number; errors: number; removed: number };
 
 /**
@@ -135,6 +151,8 @@ export type SendResult = { event: PushEvent; skipped?: string; recipients: numbe
 export async function sendAppPush(sb: SupabaseClient, args: {
   event: PushEvent; subject: string; recipientIds: string[]; title: string; body: string;
   data: Record<string, unknown>; dryRun?: boolean;
+  /** Why this push went out, logged on each row (needs 0245's columns; left off before it). */
+  reason?: string;
 }): Promise<SendResult> {
   const res: SendResult = { event: args.event, recipients: 0, tokens: 0, ok: 0, errors: 0, removed: 0 };
   try {
@@ -156,6 +174,7 @@ export async function sendAppPush(sb: SupabaseClient, args: {
     res.tokens = rows.length;
     if (rows.length === 0) return { ...res, skipped: "no registered devices" };
     const withToken = await tokenColumn(sb);
+    const withReason = await reasonColumns(sb);
     const badges = await badgesFor(sb, ids);
 
     for (let i = 0; i < rows.length; i += 100) {
@@ -184,6 +203,7 @@ export async function sendAppPush(sb: SupabaseClient, args: {
           ticket_id: t.status === "ok" ? t.id : null, ticket_status: t.status,
           ticket_error: t.status === "error" ? [t.details?.error, t.message].filter(Boolean).join(": ").slice(0, 300) : null,
           token_removed: dead, ...(withToken ? { token: r.token } : {}),
+          ...(withReason ? { outcome: "sent", reason: args.reason ?? null } : {}),
           _dead: dead ? r.token : null,
         };
       });

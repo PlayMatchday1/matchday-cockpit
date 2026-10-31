@@ -32,6 +32,7 @@ import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
 import { sendPushNotificationToMany, type StoredSubscription } from "@/lib/webPush";
 import { isAwaitingReply } from "@/lib/awaitingReply";
 import { humanPushDue, humanPushPath, HUMAN_PUSH_WITHIN_MS } from "@/lib/crmAttention";
+import { notifyAppNeedsHuman } from "@/lib/appPushHuman";
 import { loadAttention, strikeHoldingThreadIds } from "@/lib/crmAttentionLoad";
 import { POST as sendPOST } from "@/app/api/crm/send/route";
 
@@ -342,7 +343,19 @@ export async function runAutoSendTick(sb: SupabaseClient): Promise<Record<string
   });
 
   const apiKey = process.env.ANTHROPIC_API_KEY?.trim();
-  if (!apiKey) return { ...out, drafts: "no key" };
+  /* THE STAFF APP'S PUSH runs LAST, after this tick's drafts, so a thread its draft just sent to a
+   * person pushes now rather than a minute later (appPushHuman). Isolated: it never fails the tick. */
+  const appPush = async () => {
+    const r = await notifyAppNeedsHuman(sb, Date.now(), { hasModelKey: !!apiKey }).catch((e: unknown) => {
+      console.error("[auto-send] app needs-human push failed", e instanceof Error ? e.message.slice(0, 200) : e);
+      return null;
+    });
+    if (!r) return "error";
+    const tally: Record<string, number> = {};
+    for (const x of r) tally[x.action] = (tally[x.action] ?? 0) + 1;
+    return tally;
+  };
+  if (!apiKey) return { ...out, drafts: "no key", app_push: await appPush() };
   const threads = await sb.from("crm_threads").select("id, channel")
     .eq("status", "open").eq("last_message_direction", "inbound")
     .gte("last_message_at", new Date(now - DRAFT_WITHIN_MS).toISOString())
@@ -357,5 +370,6 @@ export async function runAutoSendTick(sb: SupabaseClient): Promise<Record<string
     if (s.status === "rejected") console.error("[auto-send] draft failed", s.reason instanceof Error ? s.reason.message.slice(0, 200) : s.reason);
   }
   out.drafts = tally;
+  out.app_push = await appPush();
   return out;
 }

@@ -1,5 +1,7 @@
 /* STAFF APP PUSH: who is notified, what it says, and when a match is at risk (src/lib/appPush.ts).
  * Ryan, 2026-10-30. Pure rules, asserted offline; every refusal has a presence control beside it. */
+import { DRAFT_SETTLE_MS, humanPushText, humanRecipients, settledHuman, waitStartOf, type WaitMsg } from "../src/lib/appPushHumanRules";
+import { NO_DRAFT_YET } from "../src/lib/crmAttention";
 import { atRiskNow, chatPushText, chatRecipients, finalRecipients, matchRecipients, matchRiskText, waitingCounts, wallClockOf, type StaffRow } from "../src/lib/appPush";
 
 let pass = 0, fail = 0;
@@ -65,6 +67,38 @@ const counts = waitingCounts(staff, [null, null, "waw2"], ["admin", "waw", "noac
 is("unconfined admin: every waiting thread (3)", counts.get("admin"), 3);
 is("Warsaw: only the thread assigned in Warsaw (1)", counts.get("waw"), 1);
 is("no Chats access: 0", counts.get("noaccess"), 0);
+
+console.log("\nNEEDS A HUMAN push (appPushHuman, 2026-10-31): who");
+is("assigned: the assignee only", humanRecipients(staff, "chats"), ["chats"]);
+is("  assigned to a confined account: that account (it can open its own thread)", humanRecipients(staff, "waw2"), ["waw2"]);
+is("  assigned to a service account: nobody", humanRecipients(staff, "svc"), []);
+is("unassigned: unconfined admins and chat staff, never confined, service or no-access", humanRecipients(staff, null), ["admin", "chats"]);
+
+console.log("\nwhen a wait begins: only a staff reply ends one");
+const M = (direction: WaitMsg["direction"], at: string, by: string | null = null, media: string | null = null): WaitMsg => ({ direction, sent_at: `2026-10-31T${at}:00Z`, sent_by_user_id: by, media_kind: media });
+is("first player message of a burst", waitStartOf([M("inbound", "10:00"), M("inbound", "10:01")]), "2026-10-31T10:00:00Z");
+is("a bot reply (no sender) does not start a new wait", waitStartOf([M("inbound", "10:00"), M("outbound", "10:02"), M("inbound", "10:05")]), "2026-10-31T10:00:00Z");
+is("  control: a staff reply does", waitStartOf([M("inbound", "10:00"), M("outbound", "10:02", "staff1"), M("inbound", "10:05")]), "2026-10-31T10:05:00Z");
+is("a strike holding reply (bot, outbound last) keeps the wait", waitStartOf([M("inbound", "10:00"), M("outbound", "10:02")]), "2026-10-31T10:00:00Z");
+is("nothing from the player since the staff reply: no wait", waitStartOf([M("inbound", "10:00"), M("outbound", "10:02", "staff1")]), null);
+is("a reaction is not a message", waitStartOf([M("outbound", "09:00", "s"), M("inbound", "10:00", null, "reaction"), M("inbound", "10:03")]), "2026-10-31T10:03:00Z");
+
+console.log("\nsettled: the section a push follows");
+const T = Date.parse("2026-10-31T10:00:00Z");
+const att = (section: "human" | "auto_sending", reason: string | null, enteredAgoMs: number) => ({ section, reason, hold_until: null, entered_at: new Date(T - enteredAgoMs).toISOString() });
+is("a decided reason pushes at once", settledHuman(att("human", "Category other always goes to a person.", 0), T, true), true);
+is("No draft yet waits for the draft", settledHuman(att("human", NO_DRAFT_YET, 60e3), T, true), false);
+is("  control: once the draft is overdue it pushes", settledHuman(att("human", NO_DRAFT_YET, DRAFT_SETTLE_MS), T, true), true);
+is("  and at once when there is no model key", settledHuman(att("human", NO_DRAFT_YET, 0), T, false), true);
+is("Auto-sending never pushes", settledHuman(att("auto_sending", null, 3600e3), T, true), false);
+is("a strike dispute owed a person pushes", settledHuman(att("human", "Strike dispute: check with the match manager", 0), T, true), true);
+
+console.log("\nwhat it says");
+is("name, city, reason", humanPushText({ first_name: "Bryan", last_name: "Ortiz", preferable_city_normalized: "ATX" }, "+15125550100", "Category other always goes to a person."),
+  { title: "Needs a human", body: "Bryan O. · ATX · Category other always goes to a person." });
+is("no linked player: last four digits, no city", humanPushText(null, "+15125550404", "Draft ready").body, "Number ending 0404 · Draft ready");
+const longReason = humanPushText(null, "+15125550404", "Claude couldn't be reached: " + "x".repeat(400)).body;
+is("a long reason is cut to 120 characters", longReason.length <= "Number ending 0404 · ".length + 120 && longReason.endsWith("…"), true);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
