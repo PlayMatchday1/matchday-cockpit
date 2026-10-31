@@ -5,6 +5,10 @@ const nextConfig: NextConfig = {
   // proof in scripts/seam-stripped-test.ts) can run without clobbering a running `next dev` .next.
   // Defaults to ".next" — production/Vercel builds are unaffected.
   distDir: process.env.NEXT_DIST_DIR || ".next",
+  // DEV-ONLY FILES. A file named route.dev.ts is a route only under `next dev`; `next build` does not
+  // treat it as one, so it is absent from every production deployment (the staff app's simulator
+  // sign-in, src/app/api/app/dev/sign-in/route.dev.ts).
+  pageExtensions: process.env.NODE_ENV === "development" ? ["tsx", "ts", "jsx", "js", "dev.ts"] : ["tsx", "ts", "jsx", "js"],
   // Claude drafts read the playbook at runtime (src/lib/aiDraftPlaybook.ts). It is not imported,
   // so file tracing would leave it out of the function bundle without this.
   outputFileTracingIncludes: {
