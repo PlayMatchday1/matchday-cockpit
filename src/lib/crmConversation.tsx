@@ -25,6 +25,7 @@ import {
 } from "react";
 import { useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import { freshAccessToken, recoverSession, reloadForExpiredSession } from "@/lib/crmSession";
 import { useAuth } from "@/lib/useAuth";
 import { isFreshThreadUpdate, nextWaitingSince } from "@/lib/awaitingReply";
 import { type Assignee } from "@/components/AssigneeChip";
@@ -125,8 +126,7 @@ function safeSession(): Storage | null {
 // ---------------- helpers (moved from CrmClient; bearerHeaders imported back there) ----------------
 
 export async function bearerHeaders(): Promise<Record<string, string> | null> {
-  const { data } = await supabase.auth.getSession();
-  const token = data.session?.access_token;
+  const token = await freshAccessToken();
   if (!token) return null;
   return {
     Authorization: `Bearer ${token}`,
@@ -360,10 +360,18 @@ export function CrmConversationProvider({ children }: { children: ReactNode }) {
       return;
     }
     try {
-      const res = await fetch(
-        `/api/crm/threads?view=${encodeURIComponent(viewRef.current)}`,
-        { headers },
-      );
+      const url = `/api/crm/threads?view=${encodeURIComponent(viewRef.current)}`;
+      let res = await fetch(url, { headers });
+      // 401: refresh and read once more. Still no good: say so and reload, and leave the list as it
+      // was. An empty inbox would read as "nothing to do".
+      if (res.status === 401) {
+        const token = await recoverSession();
+        if (token) res = await fetch(url, { headers: { ...headers, Authorization: `Bearer ${token}` } });
+        if (res.status === 401) {
+          setThreadsError(reloadForExpiredSession());
+          return;
+        }
+      }
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
         throw new Error(j.error || `HTTP ${res.status}`);
@@ -418,7 +426,15 @@ export function CrmConversationProvider({ children }: { children: ReactNode }) {
       return;
     }
     try {
-      const res = await fetch(`/api/crm/threads/${threadId}`, { headers });
+      let res = await fetch(`/api/crm/threads/${threadId}`, { headers });
+      if (res.status === 401) {
+        const token = await recoverSession();
+        if (token) res = await fetch(`/api/crm/threads/${threadId}`, { headers: { ...headers, Authorization: `Bearer ${token}` } });
+        if (res.status === 401) {
+          setDetailError(reloadForExpiredSession());
+          return;
+        }
+      }
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
         throw new Error(j.error || `HTTP ${res.status}`);

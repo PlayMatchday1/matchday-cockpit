@@ -12,7 +12,7 @@
 //
 // The decisions (skip, reuse, cap, guards) live in src/lib/aiDraftRun.ts and are tested there
 // with fakes; this file wires them to Supabase, the MatchDay profile read and the Anthropic API.
-// Key: ANTHROPIC_API_KEY, server-side only. Model: claude-sonnet-5-5 at low effort.
+// Key: ANTHROPIC_API_KEY, server-side only. Model: claude-sonnet-5-5 at medium effort.
 
 import Anthropic from "@anthropic-ai/sdk";
 import { authenticateCrm } from "@/lib/crmAuth";
@@ -26,6 +26,11 @@ import { loadPlaybook } from "@/lib/aiDraftPlaybook";
 import { assertAnthropicHost, phoneShapes, ANTHROPIC_HOST, type DraftContextIn, type DraftMsg } from "@/lib/aiDraftModel";
 import { toNationalDigits } from "@/lib/phone";
 import { runDraft, type StoredDraft } from "@/lib/aiDraftRun";
+import { priorCourtesyFromLog, type CreditLogRow } from "@/lib/aiDraftModel";
+import { buildRecordedFields, CAMERA_LOOKAHEAD_DAYS, CAMERA_LOOKBACK_DAYS, type CameraRow } from "@/lib/aiDraftCamera";
+import { creditsGate } from "@/lib/creditsAuth";
+import { can, denial } from "@/lib/capabilities";
+import type { AppUserRow } from "@/lib/adminAuth";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -90,7 +95,7 @@ export async function POST(req: Request, ctx: RouteCtx) {
     async latestDraftFor(basedOn) {
       const r = await supabase
         .from("crm_ai_drafts")
-        .select("id, outcome, draft_text, staff_notes, category, error, created_at, context_keys")
+        .select("id, outcome, draft_text, staff_notes, category, error, created_at, context_keys, reply_without_action, action, action_status")
         .eq("thread_id", threadId)
         .eq("based_on_message_id", basedOn)
         .neq("outcome", "superseded")
@@ -175,6 +180,28 @@ export async function POST(req: Request, ctx: RouteCtx) {
           console.error("[ai-draft] profile build failed", e instanceof Error ? e.message.slice(0, 160) : e);
         }
       }
+
+      // ONE COURTESY PER ACCOUNT. A failed read leaves this null, which is not eligible.
+      const log = await supabase.from("change_log").select("env, outcome, changes").eq("endpoint", `/admin/players/${thread.player_id}/profile`);
+      if (!log.error) {
+        ctxIn.priorCourtesyCredit = priorCourtesyFromLog((log.data ?? []) as CreditLogRow[]);
+        keys.push("prior_courtesy");
+      }
+
+      // CAMERA COVERAGE for their city: the marker in the match name, recent and upcoming, field by field.
+      if (ctxIn.cityCode) {
+        const now = Date.now();
+        const cam = await supabase.from("mdapi_matches")
+          .select("field_id, field_title, name, start_date, start_date_utc, is_cancelled")
+          .eq("city_identifier", ctxIn.cityCode).is("deleted_at", null)
+          .gte("start_date", new Date(now - CAMERA_LOOKBACK_DAYS * 86400e3).toISOString())
+          .lt("start_date", new Date(now + CAMERA_LOOKAHEAD_DAYS * 86400e3).toISOString())
+          .limit(1000);
+        if (!cam.error) {
+          ctxIn.recordedFields = buildRecordedFields((cam.data ?? []) as CameraRow[], now);
+          keys.push("recorded_fields");
+        }
+      }
       return { ctx: ctxIn, keys };
     },
 
@@ -191,6 +218,35 @@ export async function POST(req: Request, ctx: RouteCtx) {
         .limit(1000);
       if (r.error) throw new Error(r.error.message);
       return (r.data ?? []) as ScheduleRow[];
+    },
+
+    async priorCategory() {
+      const r = await supabase.from("crm_ai_drafts").select("category").eq("thread_id", threadId).not("category", "is", null).order("created_at", { ascending: false }).limit(1).maybeSingle();
+      if (r.error) throw new Error(r.error.message);
+      return (r.data?.category as string | null) ?? null;
+    },
+
+    // The last staff messages in that category's threads, this thread left out (it's in the transcript).
+    async loadExampleMessages(category) {
+      let q = supabase.from("crm_messages").select("id, direction, body, sent_at, is_auto_reply, media_kind, template_name")
+        .eq("direction", "outbound").not("sent_by_user_id", "is", null).neq("thread_id", threadId)
+        .order("sent_at", { ascending: false }).limit(300);
+      if (category) {
+        const t = await supabase.from("crm_ai_drafts").select("thread_id").eq("category", category).order("created_at", { ascending: false }).limit(500);
+        if (t.error) throw new Error(t.error.message);
+        const ids = [...new Set((t.data ?? []).map((x) => x.thread_id as string))];
+        if (ids.length) q = q.in("thread_id", ids);
+      }
+      const r = await q;
+      if (r.error) throw new Error(r.error.message);
+      return (r.data ?? []) as DraftMsg[];
+    },
+
+    async appliedActions() {
+      const r = await supabase.from("crm_ai_drafts").select("action").eq("thread_id", threadId).in("action_status", ["applying", "landed", "unknown"])
+        .gte("created_at", new Date(Date.now() - 7 * 86400e3).toISOString());
+      if (r.error) throw new Error(r.error.message);
+      return (r.data ?? []).map((x) => ({ kind: String((x.action as { kind?: unknown } | null)?.kind ?? "") }));
     },
 
     playbook: () => loadPlaybook(),
@@ -215,5 +271,19 @@ export async function POST(req: Request, ctx: RouteCtx) {
 
   console.log(`[ai-draft] thread=${threadId} status=${result.status}${"reused" in result ? ` reused=${result.reused}` : ""}`);
   const http = result.status === "forbidden" ? 403 : result.status === "not_found" ? 404 : 200;
-  return Response.json(result, { status: http, headers: { "cache-control": "no-store" } });
+
+  // Whether THIS person may press the button: a courtesy for the card. The action route checks again.
+  let action_refusal: string | null = null;
+  if (result.status === "ok" && result.draft.action) {
+    const u = await supabase.from("app_users").select("*").eq("id", auth.appUserId ?? "").maybeSingle();
+    const row = (u.data as AppUserRow | null) ?? null;
+    if (!row) action_refusal = "Not a cockpit user.";
+    else if (result.draft.action.kind === "credit") {
+      const g = creditsGate(row);
+      action_refusal = g.ok ? null : g.error;
+    } else if (!can(row, "managePromos", auth.email ?? "")) {
+      action_refusal = denial(row, "managePromos", auth.email ?? "") ?? "You do not hold MANAGE PROMOS.";
+    }
+  }
+  return Response.json({ ...result, action_refusal }, { status: http, headers: { "cache-control": "no-store" } });
 }

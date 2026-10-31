@@ -5,7 +5,7 @@
 // link lands, an event tells the other one to refresh, so the pane shows the new account and the
 // card drafts again from it.
 
-import { supabase } from "@/lib/supabase";
+import { freshAccessToken } from "@/lib/crmSession";
 
 export const THREAD_LINKED_EVENT = "crm:thread-linked";
 
@@ -14,8 +14,7 @@ export type LinkResponse =
   | { ok: false; error: string };
 
 export async function linkThreadToPlayer(threadId: string, playerId: number): Promise<LinkResponse> {
-  const { data } = await supabase.auth.getSession();
-  const token = data.session?.access_token;
+  const token = await freshAccessToken();
   if (!token) return { ok: false, error: "Sign in again." };
   const res = await fetch(`/api/crm/threads/${threadId}/link`, {
     method: "POST",

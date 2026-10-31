@@ -9,13 +9,17 @@
 // ONE MODEL CALL PER REQUEST, NEVER A RETRY. A draft that fails a guard is stored as `failed` and
 // shown as such; staff press Regenerate. Reopening a thread re-uses the draft already made for the
 // same player message, unless it has gone STALE (made more than 2 hours ago, or a match it mentions
-// has started since): then it is superseded and a fresh one is made. A failed or discarded draft
-// stays put until someone presses Regenerate.
+// has started since): then it is superseded and a fresh one is made. Stale is only ever asked here,
+// when a person opens the thread: nothing regenerates on a timer, and the card holds its request while
+// the tab is hidden. A failed or discarded draft stays put until someone presses Regenerate.
+//
+// A DRAFT WHOSE ACTION WAS PRESSED IS NEVER REPLACED. Its reply describes money that moved, and a new
+// draft could propose moving it again.
 
 import {
   buildDraftContext, buildDraftRequest, capReached, draftCostUsd, draftEligibility, guardDraft,
   monthStartUtcIso, parseDraftOutput, finalStaffNotes, MONTHLY_CAP_USD, SKIP_REASON_TEXT, AI_DRAFT_MODEL,
-  accountConfirmed, unconfirmedReason, extractPhoneNumbers, decideLinkSuggestion,
+  accountConfirmed, unconfirmedReason, extractPhoneNumbers, decideLinkSuggestion, staffRepliesConfirmAccount, isStaffReply, selectExamples,
   type DraftContextIn, type DraftMsg, type DraftRequest, type SkipReason, type LinkSuggestion,
 } from "@/lib/aiDraftModel";
 import {
@@ -31,7 +35,17 @@ export type StoredDraft = {
   error: string | null;
   created_at: string;
   context_keys?: string[] | null;
+  reply_without_action?: string | null;
+  action?: StoredAction | null;
+  action_status?: string | null;
 };
+
+// What the button will do, fixed when the draft is made. balance_cents is the balance the draft saw:
+// the credit route aborts if it has moved, which also stops a second press.
+export type StoredAction = { kind: "credit" | "issue_guest_code"; amount_cents: number | null; reason: string; is_courtesy: boolean; player_id: number; balance_cents: number | null };
+
+export const ACTION_LOCKED = new Set(["applying", "landed", "unknown"]);
+export const CONFIRMED_BY_STAFF_NOTE = "Account confirmed from earlier staff replies in this thread";
 
 export type NewDraftRow = {
   thread_id: string;
@@ -43,6 +57,8 @@ export type NewDraftRow = {
   draft_text: string | null;
   staff_notes: string | null;
   context_keys: string[];
+  reply_without_action: string | null;
+  action: StoredAction | null;
   input_tokens: number | null;
   output_tokens: number | null;
   cost_usd: number;
@@ -76,12 +92,21 @@ export type DraftDeps = {
   loadContext: (thread: { player_id: number | null; match_ambiguous: boolean }) => Promise<{ ctx: DraftContextIn; keys: string[] } | { forbidden: true }>;
   /** Every non-deleted match whose WALL CLOCK start_date is in [fromWall, toWall), all cities. */
   loadScheduleRows: (window: { fromWall: string; toWall: string }) => Promise<ScheduleRow[]>;
+  /** The category of this thread's latest categorized draft, if it has one. */
+  priorCategory: () => Promise<string | null>;
+  /** Recent outbound staff messages, newest first: in that category, or across all when null. */
+  loadExampleMessages: (category: string | null) => Promise<DraftMsg[]>;
+  /** Actions pressed on this thread lately whose write landed or may have. */
+  appliedActions: () => Promise<{ kind: string }[]>;
   playbook: () => { text: string; version: string };
   callModel: (req: DraftRequest) => Promise<ModelReply>;
   insertDraft: (row: NewDraftRow) => Promise<{ id: string; created_at: string }>;
 };
 
-export type DraftView = { id: string; text: string; staff_notes: string[]; category: string | null; flags: string[]; created_at: string };
+export type DraftView = {
+  id: string; text: string; staff_notes: string[]; category: string | null; flags: string[]; created_at: string;
+  text_without_action: string | null; action: StoredAction | null; action_status: string | null;
+};
 
 // A suggestion rides on every result after eligibility, so the card can offer "Link" even when the
 // draft itself is reused, failed or paused by the cap.
@@ -105,6 +130,7 @@ const viewOf = (d: StoredDraft): DraftView => ({
   id: d.id, text: d.draft_text ?? "",
   staff_notes: (d.staff_notes ?? "").replace(/^\[flags: [^\]]*\]\s*/, "").split(/\n+/).map((l) => l.replace(/^- /, "").trim()).filter(Boolean),
   category: d.category, flags: flagsFromNotes(d.staff_notes), created_at: d.created_at,
+  text_without_action: d.reply_without_action ?? null, action: d.action ?? null, action_status: d.action_status ?? null,
 });
 
 export async function runDraft(deps: DraftDeps): Promise<DraftResult> {
@@ -129,8 +155,11 @@ export async function runDraft(deps: DraftDeps): Promise<DraftResult> {
   // A draft already exists for this exact player message: show it, don't pay for another. A
   // discarded or failed one stays put until someone presses Regenerate.
   let supersede = deps.regenerate;
+  const prior = await deps.latestDraftFor(elig.basedOn.id);
+  if (prior?.outcome === "pending" && ACTION_LOCKED.has(prior.action_status ?? "")) {
+    return withLink({ status: "ok", reused: true, draft: viewOf(prior) });
+  }
   if (!deps.regenerate) {
-    const prior = await deps.latestDraftFor(elig.basedOn.id);
     if (prior?.outcome === "pending") {
       if (!staleDraftReason(prior, deps.now())) return withLink({ status: "ok", reused: true, draft: viewOf(prior) });
       supersede = true; // stale: replaced below, once the cap allows a new one
@@ -155,7 +184,19 @@ export async function runDraft(deps: DraftDeps): Promise<DraftResult> {
   let ctxIn: DraftContextIn;
   let keys: string[];
   let reason: string | null = null;
-  if (confirmed) {
+  // LINKED BUT UNCONFIRMED, AND A PERSON ALREADY KNEW WHO THIS IS. The account's data is read only to
+  // make this check, and only when there is a staff message to check. If nothing in those messages
+  // matches the account, what was read goes no further than this block.
+  let confirmedByStaff: { ctx: DraftContextIn; keys: string[] } | null = null;
+  if (!confirmed && flags.linked && msgs.some(isStaffReply)) {
+    const loaded = await deps.loadContext(thread);
+    if (!("forbidden" in loaded) && staffRepliesConfirmAccount(msgs, loaded.ctx)) confirmedByStaff = loaded;
+  }
+  if (confirmedByStaff) {
+    ctxIn = { ...confirmedByStaff.ctx, confirmed: true };
+    keys = confirmedByStaff.keys;
+    reason = CONFIRMED_BY_STAFF_NOTE;
+  } else if (confirmed) {
     const loaded = await deps.loadContext(thread);
     if ("forbidden" in loaded) return { status: "forbidden", message: "This player is outside your city." };
     ctxIn = { ...loaded.ctx, confirmed: thread.account_confirmed };
@@ -179,8 +220,13 @@ export async function runDraft(deps: DraftDeps): Promise<DraftResult> {
   const schedule = selectSchedule({ rows, texts, cityCode: ctxIn.cityCode ?? null, now });
   const tz = playerTz ?? tzForCity(schedule.fieldCity) ?? FALLBACK_TZ;
   const clock = buildClock({ now, tz, latestPlayerMsgIso: elig.basedOn.sent_at });
-  const req = buildDraftRequest({ playbook: playbook.text, context, msgs, now, tz, clock, schedule });
+  // One model call per request, so the examples can't wait for this draft's own category: they use
+  // the thread's last drafted category, or the latest across all categories on a first draft.
+  const exampleCategory = await deps.priorCategory().catch(() => null);
+  const examples = selectExamples(await deps.loadExampleMessages(exampleCategory).catch(() => [] as DraftMsg[]));
+  const req = buildDraftRequest({ playbook: playbook.text, context, msgs, now, tz, clock, schedule, examples });
   if (schedule.basis) keys = [...keys, `schedule:${schedule.basis}`];
+  keys = [...keys, `examples:${examples.length}`];
 
   if (supersede) await deps.supersedePending();
 
@@ -190,7 +236,7 @@ export async function runDraft(deps: DraftDeps): Promise<DraftResult> {
   };
   const fail = async (error: string, reply: ModelReply | null): Promise<DraftResult> => {
     const row = await deps.insertDraft({
-      ...base, category: null, draft_text: null, staff_notes: null,
+      ...base, category: null, draft_text: null, staff_notes: null, reply_without_action: null, action: null,
       input_tokens: reply?.usage.input_tokens ?? null, output_tokens: reply?.usage.output_tokens ?? null,
       cost_usd: reply ? draftCostUsd(reply.usage) : 0, error, outcome: "failed",
     });
@@ -211,6 +257,8 @@ export async function runDraft(deps: DraftDeps): Promise<DraftResult> {
   // else. Late is decided here, from the clock, not by the model.
   const guarded = guardDraft(parsed, {
     courtesy_credit_eligible: context.courtesy_credit_eligible,
+    context,
+    appliedActions: await deps.appliedActions().catch(() => [{ kind: "credit" }, { kind: "issue_guest_code" }]),
     veryLate: clock.reply_is_very_late,
     allowedTimeSources: [...schedule.entries.map((e) => e.when_local), ...msgs.map((m) => m.body ?? ""), playbook.text],
   });
@@ -223,14 +271,22 @@ export async function runDraft(deps: DraftDeps): Promise<DraftResult> {
   // Flags ride at the front of staff_notes so the table needs no extra column for them.
   const notes = [out.flags.length ? `[flags: ${out.flags.join(", ")}]` : "", ...staffNotes.map((n) => `- ${n}`)].filter(Boolean).join("\n");
   // Which schedule matches the reply mentions, with their start: the draft goes stale at kickoff.
+  const action: StoredAction | null = out.action && thread.player_id != null ? {
+    kind: out.action.kind, amount_cents: out.action.amount_cents, reason: out.action.reason,
+    is_courtesy: out.offers_courtesy_credit, player_id: thread.player_id, balance_cents: ctxIn.creditsCents,
+  } : null;
   const mentioned = out.match_ids.filter((id) => schedule.startsById.get(id)).map((id) => matchKey(id, schedule.startsById.get(id)!));
   const row = await deps.insertDraft({
     ...base, context_keys: [...base.context_keys, ...mentioned], category: out.category, draft_text: out.reply, staff_notes: notes || null,
+    reply_without_action: action ? out.reply_without_action ?? null : null, action,
     input_tokens: reply.usage.input_tokens ?? null, output_tokens: reply.usage.output_tokens ?? null,
     cost_usd: draftCostUsd(reply.usage), error: null, outcome: "pending",
   });
   return withLink({
     status: "ok", reused: false,
-    draft: { id: row.id, text: out.reply, staff_notes: staffNotes, category: out.category, flags: out.flags, created_at: row.created_at },
+    draft: {
+      id: row.id, text: out.reply, staff_notes: staffNotes, category: out.category, flags: out.flags, created_at: row.created_at,
+      text_without_action: action ? out.reply_without_action ?? null : null, action, action_status: null,
+    },
   });
 }

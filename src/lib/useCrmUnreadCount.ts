@@ -13,6 +13,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import { freshAccessToken } from "@/lib/crmSession";
 import { sharedFetch } from "@/lib/sharedBadgeFetch";
 import { useAuth } from "@/lib/useAuth";
 
@@ -30,8 +31,7 @@ export function useCrmUnreadCount(): number {
       return;
     }
     try {
-      const { data } = await supabase.auth.getSession();
-      const token = data.session?.access_token;
+      const token = await freshAccessToken();
       if (!token) return;
       /* SHARED. TopNav and useFaviconUnreadDot both want this number and both used to fetch it.
        * sharedFetch collapses concurrent callers into one request; a non-OK still leaves the count

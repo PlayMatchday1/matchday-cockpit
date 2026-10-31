@@ -16,10 +16,13 @@
 import { readFileSync } from "node:fs";
 import {
   draftEligibility, buildDraftContext, buildDraftRequest, scrubPii, sanitizeDraft, hasDash, guardDraft,
-  classifyDraftOutcome, capReached, draftCostUsd, assertAnthropicHost, monthStartUtcIso, DRAFT_INSTRUCTIONS,
+  classifyDraftOutcome, capReached, draftCostUsd, assertAnthropicHost, monthStartUtcIso, DRAFT_INSTRUCTIONS, DRAFT_OUTPUT_SCHEMA,
+  parseDraftOutput, priorCourtesyFromLog, staffRepliesConfirmAccount, selectExamples, discardReasonText, DISCARD_CHIPS,
   type DraftMsg, type DraftContextIn, type DraftRequest,
 } from "../src/lib/aiDraftModel";
-import { runDraft, type DraftDeps, type NewDraftRow, type StoredDraft } from "../src/lib/aiDraftRun";
+import { runDraft, CONFIRMED_BY_STAFF_NOTE, type DraftDeps, type NewDraftRow, type StoredDraft } from "../src/lib/aiDraftRun";
+import { applyDraftAction, creditReason, guestCodeBody, guestCodeFor, guestCodeRefusal, staffConfirmedMembership, writeStatusFrom, type ActionIO } from "../src/lib/aiDraftAction";
+import { buildRecordedFields, type CameraRow } from "../src/lib/aiDraftCamera";
 import { draftOutcomePatch, discardPatch } from "../src/lib/aiDraftOutcome";
 import { playbookForModel } from "../src/lib/aiDraftPlaybook";
 import { crmSendLogBody, logCrmSend } from "../src/lib/crmSendLog";
@@ -67,7 +70,8 @@ console.log("\nWHICH THREADS GET A DRAFT:");
 const EMAIL = "jordan.realname@example.com";
 const PHONE = "+15125550123";
 const kickoff = "2026-10-20T20:00:00.000Z"; // instant
-const lateCancel = (playedBefore: number, member = false): DraftContextIn => ({
+const lateCancel = (playedBefore: number, member = false, priorCourtesyCredit: boolean | null = false): DraftContextIn => ({
+  priorCourtesyCredit,
   linked: true, ambiguous: false, firstName: "Jordan", city: "Austin", isMember: member, membership: null,
   creditsCents: 0, matchesPlayed: playedBefore, strikes: { active: 0, limit: 4, suspended: false },
   matches: [{ name: "Westlake 8v8", startDate: "2026-10-20T15:00:00.000Z", startDateUtc: kickoff, state: "player_cancelled", price: 1200, charged: 1299, playerCancelledAt: new Date(Date.parse(kickoff) - 3 * H).toISOString() }],
@@ -97,30 +101,49 @@ console.log("\nTHE REQUEST BODY SENT TO THE API:");
   ok("the last name from the profile is NOT in the context (only first_name is built)", !JSON.stringify(ctx).includes("Realname"));
   ok("staff are labelled, never named", req.messages[0].content.includes("MatchDay staff:") && !body.includes("staff-1"));
   ok("no card, Stripe, member-number or password field names in the body", !/card|last4|stripe|payment_intent|subscription_id|member_number|password/i.test(body));
-  eq("model is claude-sonnet-5-5 at low effort", [req.model, req.output_config.effort], ["claude-sonnet-5-5", "low"]);
+  eq("model is claude-sonnet-5-5 at medium effort", [req.model, req.output_config.effort], ["claude-sonnet-5-5", "medium"]);
   eq("scrubPii keeps short numbers (a $12 price, a 9pm time)", scrubPii("It was $12 at 9pm, team 4"), "It was $12 at 9pm, team 4");
 }
 
-// ── 5. courtesy credit for first-time players only ───────────────────────────────────────────
+// ── 5. one courtesy credit per account, lifetime ─────────────────────────────────────────────
 console.log("\nTHE LATE-CANCEL COURTESY (rule 5):");
 {
   const first = buildDraftContext(lateCancel(0));
-  const returning = buildDraftContext(lateCancel(7));
+  const veteranNever = buildDraftContext(lateCancel(40));
+  const returning = buildDraftContext(lateCancel(0, false, true));
   const memberFirst = buildDraftContext(lateCancel(0, true));
+  const unknown = buildDraftContext(lateCancel(0, false, null));
   const unlinked = buildDraftContext({ ...lateCancel(0), linked: false, matchesPlayed: null });
-  eq("first-time player (0 played) → first_time_player, courtesy eligible", [first.first_time_player, first.courtesy_credit_eligible], [true, true]);
-  eq("returning player (7 played) → not first time, NOT eligible", [returning.first_time_player, returning.courtesy_credit_eligible], [false, false]);
-  eq("a first-time MEMBER is not eligible (members have no charge to credit)", memberFirst.courtesy_credit_eligible, false);
-  eq("an unlinked thread is never eligible (no courtesy on a guess)", unlinked.courtesy_credit_eligible, false);
+  eq("never had one, never played → eligible", first.courtesy_credit_eligible, true);
+  eq("never had one, 40 matches played → still eligible (playing no longer matters)", veteranNever.courtesy_credit_eligible, true);
+  eq("already had one → NOT eligible, even with 0 played", returning.courtesy_credit_eligible, false);
+  eq("a member is not eligible (members have no charge to credit)", memberFirst.courtesy_credit_eligible, false);
+  eq("the history read failed → NOT eligible (no courtesy on a guess)", unknown.courtesy_credit_eligible, false);
+  eq("an unlinked thread is never eligible", unlinked.courtesy_credit_eligible, false);
+  ok("the old first-time flag is gone from what the model sees", !("first_time_player" in first));
+
+  const row = (reason: string, before = 0, after = 1200, env = "production", outcome = "landed") =>
+    ({ env, outcome, changes: [{ key: "creditAmount", before, after }, { key: "reason", before: "—", after: reason }] });
+  for (const r of ["1st time", "1st cancel", "First match", "1st", "1st game", "1st offense", "1x courtesy credit. 16 hrs before the match.", "Courtesy credit: late cancel", "cancel grace", "Poor experience", "Experience", "one time", "one-time thing", "Player support - 1 time agreement"]) {
+    eq(`prior courtesy: "${r}"`, priorCourtesyFromLog([row(r)]), true);
+  }
+  for (const r of ["no host", "lights", "Rain", "Double payed", "Wrong match", "Clicked the wrong match.", "credit", "Cancel", "Host", "Credit instead of refund"]) {
+    eq(`not a courtesy: "${r}"`, priorCourtesyFromLog([row(r)]), false);
+  }
+  eq("a courtesy that didn't land doesn't count", priorCourtesyFromLog([row("1st time", 0, 1200, "production", "notapplied")]), false);
+  eq("a staging test doesn't count", priorCourtesyFromLog([row("1st time", 0, 1200, "staging")]), false);
+  eq("taking money away doesn't count", priorCourtesyFromLog([row("Experience adjust", 1200, 0)]), false);
+  eq("no credit history at all → no prior courtesy", priorCourtesyFromLog([]), false);
+
   eq("the late cancel is visible to the model in hours", first.recent_matches[0].cancelled_hours_before_kickoff, 3);
   eq("the match price, not the amount with tax, is what the model sees as the price", first.recent_matches[0].match_price, "$12.00");
   const mem = buildDraftContext({ ...lateCancel(20, true), membership: { status: "ACTIVE", since: "2026-06-12T00:00:00Z", renews: "2026-11-01T00:00:00Z", canceledAt: "2026-10-06T03:30:00Z", price: 6650 } });
   eq("a billing date stored as midnight UTC on the 1st reads as the 1st, not Oct 31", mem.membership?.next_charge, "Nov 1, 2026");
   eq("a cancel at 03:30 UTC on the 6th is the 5th in Central (the day they pressed it)", mem.membership?.cancelled_on, "Oct 5, 2026");
-  const offer = { reply: "Normally we need 24 hours, but since it's your first match I'll add a one-time credit.", staff_notes: ["Courtesy credit: issue $12.00"], category: "player_cancel", flags: ["needs_credit"], offers_courtesy_credit: true, match_ids: [] };
-  ok("guard ACCEPTS a courtesy offer to a first-time player", guardDraft(offer, first).ok);
-  ok("guard REJECTS the same offer to a returning player", !guardDraft(offer, returning).ok);
-  ok("guard accepts a no-courtesy reply to a returning player", guardDraft({ ...offer, reply: "Our window is 24 hours, so this one isn't eligible.", offers_courtesy_credit: false }, returning).ok);
+  const offer = { reply: "Normally we need 24 hours, but I'll add a one-time credit.", staff_notes: ["Courtesy credit: issue $12.00"], category: "player_cancel", flags: ["needs_credit"], offers_courtesy_credit: true, match_ids: [] };
+  ok("guard ACCEPTS a courtesy offer to a player who hasn't had one", guardDraft(offer, first).ok);
+  ok("guard REJECTS the same offer to a player who has", !guardDraft(offer, returning).ok);
+  ok("guard accepts a no-courtesy reply to that player", guardDraft({ ...offer, reply: "Our window is 24 hours, so this one isn't eligible.", offers_courtesy_credit: false }, returning).ok);
 }
 
 // ── 6. no em dash in any draft ───────────────────────────────────────────────────────────────
@@ -149,6 +172,9 @@ function fake(over: Partial<DraftDeps> & { msgs?: DraftMsg[]; ctx?: DraftContext
     loadThread: async () => ({ channel: "whatsapp", player_id: 42, match_ambiguous: false, account_confirmed: false }),
     countAccounts: async () => 1,
     findAccountsByPhone: async () => [],
+    priorCategory: async () => null,
+    loadExampleMessages: async () => [],
+    appliedActions: async () => [],
     loadMessages: async () => over.msgs ?? [msg("inbound", "I cancelled 3 hours before, can I get a credit?", 1 * H)],
     latestDraftFor: async () => over.prior ?? null,
     supersedePending: async () => { calls.superseded++; },
@@ -215,14 +241,14 @@ console.log("\nORCHESTRATION (no draft, reuse, guards):");
   const rd = await runDraft(dashy.deps);
   ok("a model reply WITH an em dash is stored and shown without one", rd.status === "ok" && !hasDash(rd.draft.text) && !hasDash(dashy.calls.inserts[0].draft_text ?? ""));
 
-  const courtesyText = JSON.stringify({ reply: "Since it's your first match, I'll add a one-time credit.", staff_notes: "Courtesy credit: issue $12.00", category: "player_cancel", flags: ["needs_credit"], offers_courtesy_credit: true });
+  const courtesyText = JSON.stringify({ reply: "I'll add a one-time credit for this one.", staff_notes: "Courtesy credit: issue $12.00", category: "player_cancel", flags: ["needs_credit"], offers_courtesy_credit: true });
   const firstTimer = fake({ ctx: lateCancel(0), modelText: courtesyText });
   const rf = await runDraft(firstTimer.deps);
-  ok("first-time player late cancel: the courtesy offer is SHOWN", rf.status === "ok" && /one-time credit/.test(rf.draft.text));
+  ok("no courtesy yet, late cancel: the courtesy offer is SHOWN", rf.status === "ok" && /one-time credit/.test(rf.draft.text));
   ok("  and the model was told they are eligible", firstTimer.calls.model[0].messages[0].content.includes('"courtesy_credit_eligible": true'));
-  const returner = fake({ ctx: lateCancel(7), modelText: courtesyText });
+  const returner = fake({ ctx: lateCancel(7, false, true), modelText: courtesyText });
   const rx = await runDraft(returner.deps);
-  ok("returning player late cancel: a courtesy offer is NOT shown", rx.status === "failed");
+  ok("already had one, late cancel: a courtesy offer is NOT shown", rx.status === "failed");
   ok("  it is stored as failed with the reason", returner.calls.inserts[0].outcome === "failed" && /courtesy/.test(returner.calls.inserts[0].error ?? ""));
   ok("  and the model was told they are NOT eligible", returner.calls.model[0].messages[0].content.includes('"courtesy_credit_eligible": false'));
 
@@ -519,6 +545,251 @@ console.log("\nTIME AND SCHEDULE:");
   ok("a fresh saved draft is reused (no model call)", (await runDraft(fresh.deps)).status === "ok" && fresh.calls.model.length === 0);
 }
 
+// ── phase 2: actions ─────────────────────────────────────────────────────────────────────────
+console.log("\nPROPOSED ACTIONS:");
+{
+  const base = { staff_notes: [], flags: [], match_ids: [], offers_courtesy_credit: true };
+  const credit = (amount: number | null, over: Record<string, unknown> = {}) => ({
+    ...base, category: "player_cancel", reply: "We've credited $12.00 to your account, it'll apply to your next booking.",
+    reply_without_action: "Normally we need 24 hours notice for a credit, but let me see what I can do.",
+    action: { kind: "credit" as const, amount_cents: amount, reason: "late cancel, first courtesy" }, ...over,
+  });
+  const ctx = buildDraftContext(lateCancel(0));
+  const g = (o: Parameters<typeof guardDraft>[0], c = ctx, applied: { kind: string }[] = []) => guardDraft(o, { courtesy_credit_eligible: c.courtesy_credit_eligible, context: c, appliedActions: applied });
+  ok("POSITIVE CONTROL: a credit of the match price on a late cancel passes", g(credit(1200)).ok);
+  const paid = g(credit(1299));
+  ok("RULE 6: the paid amount ($12.99, with tax and fee) fails, for that reason", !paid.ok && /\$12\.99/.test(paid.error));
+  ok("an amount that's nowhere in context fails", !g(credit(5000)).ok);
+  ok("no amount fails", !g(credit(null)).ok);
+  ok("a credit with no context to check fails", !guardDraft(credit(1200), { courtesy_credit_eligible: true }).ok);
+  ok("a player_cancel credit not flagged as a courtesy fails", !g(credit(1200, { offers_courtesy_credit: false })).ok);
+  ok("the second courtesy fails", !g(credit(1200), buildDraftContext(lateCancel(0, false, true))).ok);
+  const far = buildDraftContext({ ...lateCancel(0), matches: [{ ...lateCancel(0).matches[0], playerCancelledAt: new Date(Date.parse(kickoff) - 30 * H).toISOString() }] });
+  ok("a cancel 30 hours out is credited automatically, so no button", !g(credit(1200), far).ok);
+  const club = buildDraftContext({ ...lateCancel(0), matches: [{ ...lateCancel(0).matches[0], state: "club_cancelled" }] });
+  ok("a match already marked club-cancelled gets no button", !g(credit(1200, { category: "match_cancelled", offers_courtesy_credit: false }), club).ok);
+  const unmarked = buildDraftContext({ ...lateCancel(0), matches: [{ ...lateCancel(0).matches[0], state: "played" }] });
+  ok("POSITIVE CONTROL: a match not marked cancelled can (the host never showed)", g(credit(1200, { category: "match_cancelled", offers_courtesy_credit: false }), unmarked).ok);
+  ok("a member's match gets no credit", !g(credit(1200, { category: "match_cancelled", offers_courtesy_credit: false }), buildDraftContext({ ...lateCancel(0, true), matches: [{ ...lateCancel(0).matches[0], state: "played" }] })).ok);
+  ok("a category outside the list can't carry a credit", !g(credit(1200, { category: "veo", offers_courtesy_credit: false }), unmarked).ok);
+  ok("the same action already applied on this thread fails", !g(credit(1200), ctx, [{ kind: "credit" }]).ok);
+  ok("the version without the action can't say it's done", !g(credit(1200, { reply_without_action: "We've credited $12.00." })).ok);
+  ok("a proposed action needs both versions", !g(credit(1200, { reply_without_action: "" })).ok);
+  ok("an unconfirmed account can't carry an action", !g(credit(1200), buildDraftContext({ ...lateCancel(0), ambiguous: true, confirmed: false })).ok);
+  ok("no action, but the reply says a credit is done: fails", !g({ ...base, offers_courtesy_credit: false, category: "player_cancel", reply: "We've credited your account." }).ok);
+  const mem = buildDraftContext({ ...lateCancel(0, true), membership: { status: "ACTIVE", since: "2026-01-01T00:00:00Z", renews: null, canceledAt: null, price: 6650 } });
+  ok("a membership price can be credited on a membership_billing draft", g(credit(6650, { category: "membership_billing", offers_courtesy_credit: false }), mem).ok);
+  ok("  but not from any other category", !g(credit(6650, { category: "needs_credit", offers_courtesy_credit: false }), mem).ok);
+  const guest = { ...base, offers_courtesy_credit: false, category: "guest_pass", reply: "Your guest code is {code}, it works 3 times and goes live in a few minutes.", reply_without_action: "We're processing your guest passes.", action: { kind: "issue_guest_code" as const, amount_cents: null, reason: "member asked" } };
+  ok("POSITIVE CONTROL: a guest code draft with the placeholder passes", g(guest, mem).ok);
+  ok("a guest code without the placeholder fails (the model can't write a code)", !g({ ...guest, reply: "Your guest code is ATX597FP." }, mem).ok);
+  ok("a guest code for a non-member fails", !g(guest, ctx).ok);
+  const p1 = parseDraftOutput(JSON.stringify({ ...base, category: "x", reply: "hi", reply_without_action: "ignored", action: { kind: "none", amount_cents: null, reason: "" } }));
+  eq("kind none parses to no action", [p1?.action, p1?.reply_without_action], [null, ""]);
+  const schemaAction = DRAFT_OUTPUT_SCHEMA.properties.action.properties.kind.enum;
+  eq("the model can propose a credit or a guest code, and cannot cancel a membership", schemaAction, ["none", "credit", "issue_guest_code"]);
+
+  // Through runDraft: stored on the row, for the button.
+  const text = JSON.stringify(credit(1200));
+  const f = fake({ ctx: { ...lateCancel(0), creditsCents: 300 }, modelText: text });
+  const r = await runDraft(f.deps);
+  ok("the action comes back on the draft", r.status === "ok" && r.draft.action?.amount_cents === 1200 && r.draft.text_without_action !== null);
+  eq("  stored with the player and the balance the draft saw", [f.calls.inserts[0].action?.player_id, f.calls.inserts[0].action?.balance_cents, f.calls.inserts[0].action?.is_courtesy], [42, 300, true]);
+  const fp = fake({ modelText: JSON.stringify(credit(1299)) });
+  const rp = await runDraft(fp.deps);
+  ok("a credit that fails the guard is stored failed with no action", rp.status === "failed" && fp.calls.inserts[0].outcome === "failed" && fp.calls.inserts[0].action === null);
+  const pressed: StoredDraft = { id: "d-p", outcome: "pending", draft_text: "We've credited $12.00.", staff_notes: null, category: "player_cancel", error: null, created_at: new Date(NOW - 5 * H).toISOString(), action_status: "landed" };
+  const stale = fake({ prior: pressed });
+  ok("a draft whose action landed is reused even though it's stale, no model call", (await runDraft(stale.deps)).status === "ok" && stale.calls.model.length === 0 && stale.calls.superseded === 0);
+  const regen = fake({ prior: pressed, regenerate: true });
+  await runDraft(regen.deps);
+  ok("  and Regenerate can't replace it", regen.calls.model.length === 0 && regen.calls.superseded === 0);
+
+  // Pressing the button.
+  const mk = (over: Partial<ActionIO> = {}) => {
+    const log = { writes: [] as unknown[], finished: [] as unknown[], claimed: false };
+    const io: ActionIO = {
+      threadId: "t1",
+      loadDraft: async () => ({ id: "d1", thread_id: "t1", outcome: "pending", draft_text: "We've credited $8.00.", action_status: null, action: { kind: "credit", amount_cents: 800, reason: "late cancel", is_courtesy: true, player_id: 42, balance_cents: 300 } }),
+      threadPlayerId: async () => 42, rightsRefusal: async () => null,
+      guestPreflight: async () => ({ ok: true, code: "ATX597FP" }),
+      claim: async () => { if (log.claimed) return false; log.claimed = true; return true; },
+      writeCredit: async (a) => { log.writes.push(a); return { status: "landed" }; },
+      writeGuestCode: async (c) => { log.writes.push(c); return { status: "landed" }; },
+      finish: async (s, t) => { log.finished.push([s, t]); },
+      ...over,
+    };
+    return { io, log };
+  };
+  const a1 = mk();
+  const ra = await applyDraftAction(a1.io);
+  ok("LANDED: the reply text comes back for the composer", ra.ok && ra.text === "We've credited $8.00.");
+  eq("  the write carries the delta, the balance the draft saw, and the courtesy marker", a1.log.writes[0], { playerId: 42, deltaCents: 800, expectedBeforeCents: 300, reason: "Courtesy credit: late cancel" });
+  ok("  and that reason counts as a prior courtesy next time", priorCourtesyFromLog([{ env: "production", outcome: "landed", changes: [{ key: "creditAmount", before: 0, after: 800 }, { key: "reason", before: "", after: creditReason({ reason: "late cancel", is_courtesy: true }) }] }]));
+  ok("  and a non-courtesy credit doesn't carry the marker", creditReason({ reason: "no host", is_courtesy: false }) === "Claude draft: no host");
+  ok("a phone in the model's reason is scrubbed before the log", !creditReason({ reason: "called 512-555-0100", is_courtesy: false }).includes("555"));
+  const second = await applyDraftAction(a1.io);
+  ok("a second press writes nothing", !second.ok && a1.log.writes.length === 1);
+  for (const [status, label] of [["failed", "FAILED"], ["not_applied", "NOT APPLIED"], ["unknown", "UNKNOWN"]] as const) {
+    const a = mk({ writeCredit: async () => ({ status, error: "nope" }) });
+    const rf = await applyDraftAction(a.io);
+    ok(`${label}: no reply text comes back, so the composer stays empty, and the error shows`, !rf.ok && rf.status === status && /nope/.test(rf.error) && !("text" in rf));
+    eq(`  and the row records ${status}`, a.log.finished[0], [status, null]);
+  }
+  const noRights = mk({ rightsRefusal: async () => "EDIT CREDITS is required" });
+  ok("no EDIT CREDITS: refused before any claim or write", !(await applyDraftAction(noRights.io)).ok && !noRights.log.claimed && noRights.log.writes.length === 0);
+  const relinked = mk({ threadPlayerId: async () => 99 });
+  ok("the thread was relinked: refused before any write", !(await applyDraftAction(relinked.io)).ok && relinked.log.writes.length === 0);
+  const claimedElsewhere = mk({ claim: async () => false });
+  ok("someone else claimed it first: no write", !(await applyDraftAction(claimedElsewhere.io)).ok && claimedElsewhere.log.writes.length === 0);
+  const gc = mk({ loadDraft: async () => ({ id: "d2", thread_id: "t1", outcome: "pending", draft_text: "Your guest code is {code}, live in a few minutes.", action_status: null, action: { kind: "issue_guest_code", amount_cents: null, reason: "member asked", is_courtesy: false, player_id: 42, balance_cents: 0 } }) });
+  const rg = await applyDraftAction(gc.io);
+  ok("guest code: the code is filled into the reply after it's created", rg.ok && rg.text === "Your guest code is ATX597FP, live in a few minutes.");
+  eq("  and stored, so a send compares against what was actually in the box", gc.log.finished[0], ["landed", "Your guest code is ATX597FP, live in a few minutes."]);
+  const gr = mk({ loadDraft: gc.io.loadDraft, guestPreflight: async () => ({ ok: false, error: "already has one" }) });
+  ok("guest code refused: no claim, no write", !(await applyDraftAction(gr.io)).ok && !gr.log.claimed && gr.log.writes.length === 0);
+  eq("writeStatusFrom: credit LANDED / NOT APPLIED / ambiguous 502 / bare 403 / bare 500", [writeStatusFrom(200, { outcome: "LANDED" }), writeStatusFrom(200, { outcome: "NOT APPLIED" }), writeStatusFrom(502, { ambiguous: true }), writeStatusFrom(403, { error: "x" }), writeStatusFrom(500, { error: "x" })], ["landed", "not_applied", "unknown", "not_applied", "unknown"]);
+  eq("writeStatusFrom: promo recordWrite states", [writeStatusFrom(200, { outcome: "landed" }), writeStatusFrom(200, { outcome: "notapplied" }), writeStatusFrom(409, { duplicate: true, error: "x" })], ["landed", "not_applied", "not_applied"]);
+
+  // Guest code rules.
+  const T = Date.parse("2026-10-31T12:00:00Z");
+  const facts = { statusRaw: "ACTIVE", canceledAt: null, since: "2026-01-01T00:00:00Z", slug: "ATX597", existingCodes: [], staffConfirmed: false, now: T };
+  eq("POSITIVE CONTROL: an active member past 24 hours with no code", guestCodeRefusal(facts), null);
+  eq("the code is the slug plus FP", guestCodeFor("ATX597"), "ATX597FP");
+  ok("no membership", /active membership/.test(guestCodeRefusal({ ...facts, statusRaw: "CANCELED" }) ?? ""));
+  ok("a member who cancelled", /cancelled/.test(guestCodeRefusal({ ...facts, canceledAt: "2026-10-01T00:00:00Z" }) ?? ""));
+  ok("an active FP code under an OLD slug refuses (member number changed)", /already has/.test(guestCodeRefusal({ ...facts, existingCodes: [{ code: "HOU12FP", end_date_utc: "2027-01-01T00:00:00Z", deleted_at: null }] }) ?? ""));
+  eq("an expired one doesn't", guestCodeRefusal({ ...facts, existingCodes: [{ code: "ATX597FP", end_date_utc: "2026-01-01T00:00:00Z", deleted_at: null }] }), null);
+  eq("a deleted one doesn't", guestCodeRefusal({ ...facts, existingCodes: [{ code: "ATX597FP", end_date_utc: "2027-01-01T00:00:00Z", deleted_at: "2026-02-01T00:00:00Z" }] }), null);
+  ok("a membership 23 hours old refuses", /under 24 hours/.test(guestCodeRefusal({ ...facts, since: new Date(T - 23 * H).toISOString() }) ?? ""));
+  eq("  unless a staff message confirmed it", guestCodeRefusal({ ...facts, since: new Date(T - 23 * H).toISOString(), staffConfirmed: true }), null);
+  eq("25 hours old is fine", guestCodeRefusal({ ...facts, since: new Date(T - 25 * H).toISOString() }), null);
+  ok("an unknown start date counts as new", /under 24 hours/.test(guestCodeRefusal({ ...facts, since: null }) ?? ""));
+  ok("a slug that isn't letters then digits builds nothing", /couldn't be read/.test(guestCodeRefusal({ ...facts, slug: "ATX 597;" }) ?? ""));
+  ok("a staff message confirming the membership counts", staffConfirmedMembership(["Your membership is active, you're all set"]));
+  ok("the canned guest pass ask doesn't", !staffConfirmedMembership(["Send us a screenshot of the first MatchDay tab, the Home tab, showing your member number."]));
+  const gb = guestCodeBody("ATX597FP", T);
+  eq("the promo request is built here, 100% off, 3 uses in total, one year", [gb.code, gb.discountType, gb.value, gb.uses, gb.who, gb.which, gb.startDateUtc, gb.endDateUtc], ["ATX597FP", "PERCENT", 100, 3, "ALL_USERS", "TOTAL_USAGE", "2026-10-31T12:00:00.000Z", "2027-10-31T12:00:00.000Z"]);
+
+  // Outcomes with two versions.
+  const two = { id: "d1", thread_id: "t1", outcome: "pending", draft_text: "We've credited $8.00.", reply_without_action: "Let me check on that credit." };
+  const oBase = { threadId: "t1", messageId: "m9", userId: "u1", nowIso: "2026-10-20T18:00:00.000Z" };
+  eq("Use draft alone, sent as is → sent_unchanged", draftOutcomePatch(two, { ...oBase, sentBody: two.reply_without_action })?.outcome, "sent_unchanged");
+  eq("the action version, sent as is → sent_unchanged", draftOutcomePatch(two, { ...oBase, sentBody: two.draft_text })?.outcome, "sent_unchanged");
+}
+
+// ── phase 2: length, examples, playbook, cameras ─────────────────────────────────────────────
+console.log("\nLENGTH, EXAMPLES AND CAMERAS:");
+{
+  ok("the instructions default to one short sentence", /Default to one short sentence/.test(DRAFT_INSTRUCTIONS));
+  ok("  and ban the closing offer", /Never end with a closing offer/.test(DRAFT_INSTRUCTIONS));
+  ok("  the old 1 to 3 sentences is gone", !/1 to 3 short sentences/.test(DRAFT_INSTRUCTIONS));
+  const pb = playbookForModel(readFileSync("docs/support/PLAYBOOK.md", "utf8"));
+  ok("the playbook has the new rule, and no first-time wording", /One courtesy credit per account, lifetime/.test(pb) && !/first_time_player|first-time player/.test(pb));
+  ok("  the minimum players and camera facts", /typically 12/.test(pb) && /75 minutes/.test(pb) && /recorded_fields/.test(pb));
+  ok("  the Retool blind spot for staff", /check Retool/.test(pb));
+
+  const m = (body: string, extra: Partial<DraftMsg> = {}) => msg("outbound", body, 1 * H, extra);
+  const canned = "To cancel your membership: Profile tab, Membership Details, scroll to the bottom, Cancel Membership, confirm.";
+  const picked = selectExamples([
+    m("Awesome!"), m("Hey which field did you mean to book?"), m("Hey Jordan, you're all set"),
+    m(canned), m(canned), m(canned),
+    m("auto", { is_auto_reply: true }), m("tmpl", { template_name: "support_followup" }),
+    m("I refunded your card"), m("Sure — done"), m("x".repeat(281)), m("Hi"), m("Awesome!"),
+    m(`Mail ${EMAIL} or ${PHONE}`), m("Here you go https://app.veo.co/matches/123 and your code is ATX597FP"),
+  ]);
+  ok("POSITIVE CONTROL: real short replies are kept", picked.includes("Awesome!") && picked.includes("Hey which field did you mean to book?"));
+  eq("a repeated short reply appears once", picked.filter((p) => p === "Awesome!").length, 1);
+  ok("canned text with no template_name is dropped", !picked.some((p) => p.includes("Membership Details")));
+  ok("auto-replies and templates are dropped", !picked.includes("auto") && !picked.includes("tmpl"));
+  ok("a refund reply, a dashed reply, a very long reply and a bare hi are dropped", !picked.some((p) => /refund|—|^x+$|^Hi$/.test(p)));
+  ok("another player's name, email, phone, link and code are scrubbed", !/Jordan|example\.com|555|veo\.co|ATX597/.test(picked.join(" ")) && picked.includes("Hey {name}, you're all set"));
+  ok("\"Hey which field\" keeps its words (lower case isn't a name)", picked.some((p) => p.startsWith("Hey which")));
+  eq("never more than 30", selectExamples(Array.from({ length: 50 }, (_, i) => m(`reply number ${i}`))).length, 30);
+
+  const seen: (string | null)[] = [];
+  const fx = fake({ ctx: lateCancel(0), priorCategory: async () => "veo", loadExampleMessages: async (c) => { seen.push(c); return [m("Awesome!"), m("Yes it's on")]; } });
+  await runDraft(fx.deps);
+  eq("examples come from the thread's last category", seen, ["veo"]);
+  ok("  they reach the request under the agreed heading", fx.calls.model[0].messages[0].content.includes("EXAMPLES OF HOW THE TEAM WRITES") && fx.calls.model[0].messages[0].content.includes("- Yes it's on"));
+  ok("  and are counted in context_keys", fx.calls.inserts[0].context_keys.includes("examples:2"));
+  const fy = fake({ loadExampleMessages: async () => { throw new Error("db down"); } });
+  ok("an examples read that fails still drafts, with no block", (await runDraft(fy.deps)).status === "ok" && !fy.calls.model[0].messages[0].content.includes("EXAMPLES OF") && fy.calls.inserts[0].context_keys.includes("examples:0"));
+
+  const at = (id: number, name: string, field: number, title: string, startUtc: string, cancelled = false): CameraRow => ({ field_id: field, field_title: title, name, start_date: startUtc, start_date_utc: startUtc, is_cancelled: cancelled });
+  const CN = Date.parse("2026-10-31T12:00:00Z");
+  const fields = buildRecordedFields([
+    at(1, "Zipp 🎥", 1, "Zipp", "2026-10-20T20:00:00Z"), at(2, "Zipp 🎥", 1, "Zipp", "2026-11-03T20:00:00Z"),
+    at(3, "Keswick 🎥", 2, "Keswick", "2026-10-21T20:00:00Z"), at(4, "Keswick", 2, "Keswick", "2026-10-22T20:00:00Z"), at(5, "Keswick", 2, "Keswick", "2026-10-23T20:00:00Z"),
+    at(6, "Westlake", 3, "Westlake", "2026-10-24T20:00:00Z"),
+    at(7, "Gone 🎥", 4, "Gone", "2026-10-24T20:00:00Z", true),
+  ], CN);
+  eq("only fields with a live marked match, most recorded first", fields.map((f) => [f.field, f.recorded_matches, f.matches]), [["Zipp", 2, 2], ["Keswick", 1, 3]]);
+  eq("  with the last and next recorded match, wall clock as written", [fields[0].last_recorded, fields[0].next_recorded], ["Tue, Oct 20, 8:00 PM", "Tue, Nov 3, 8:00 PM"]);
+  ok("a coded field with no marker isn't listed", !fields.some((f) => f.field === "Westlake"));
+  const withCam = buildDraftContext({ ...lateCancel(0), recordedFields: fields });
+  eq("the list reaches the context", withCam.recorded_fields.length, 2);
+  eq("an unconfirmed account's context has none", buildDraftContext({ ...lateCancel(0), recordedFields: fields, ambiguous: true, confirmed: false }).recorded_fields, []);
+  ok("the model is told to answer camera questions only from it", /Answer camera questions only from recorded_fields/.test(DRAFT_INSTRUCTIONS));
+}
+
+// ── phase 2: confirmed by conversation ───────────────────────────────────────────────────────
+console.log("\nCONFIRMED BY CONVERSATION:");
+{
+  const acct = { firstName: "Jordan", creditsCents: 1624, matches: lateCancel(0).matches.map((x) => ({ ...x, name: "Westlake 8v8 🎥" })), membership: { status: "ACTIVE", since: "2026-06-12T00:00:00Z", renews: "2026-11-01T00:00:00Z", canceledAt: "2026-10-06T03:30:00Z", price: 6650 } };
+  const staff = (body: string, extra: Partial<DraftMsg> = {}) => [msg("outbound", body, 2 * H, extra)];
+  for (const b of ["Hey Jordan, let me check", "hey jordan!", "Thanks Jordan", "Jordan, can you resend that?", "All set, Jordan!", "I see $16.24 on your account", "That one was $12.00", "You paid $12.99", "Your Westlake 8v8 spot is set", "You cancelled on Oct 5", "You won't be charged on November 1", "Renews 11/1"]) {
+    ok(`CONFIRMS: "${b}"`, staffRepliesConfirmAccount(staff(b), acct));
+  }
+  for (const b of ["Hey Sam, let me check", "Which account is this?", "Credits apply automatically", "That one was $8.00", "Cancel by the 5th", "Jordanna said hi", "We will check with Jordan's team at the field", "You cancelled on Oct 25", "Oct 15"]) {
+    ok(`does not confirm: "${b}"`, !staffRepliesConfirmAccount(staff(b), acct));
+  }
+  ok("an auto-reply never confirms", !staffRepliesConfirmAccount(staff("Hey Jordan!", { is_auto_reply: true }), acct));
+  ok("a template never confirms", !staffRepliesConfirmAccount(staff("Hey Jordan!", { template_name: "x" }), acct));
+  ok("the player naming themselves doesn't confirm", !staffRepliesConfirmAccount([msg("inbound", "Hey it's Jordan", 2 * H)], acct));
+  ok("a credit balance of $0 doesn't match a $0 mention", !staffRepliesConfirmAccount(staff("That's $0.00"), { ...acct, creditsCents: 0 }));
+
+  let reads = 0;
+  const amb = { channel: "whatsapp", player_id: 42, match_ambiguous: true, account_confirmed: false };
+  const said = (body: string) => fake({ loadThread: async () => amb, countAccounts: async () => 2, msgs: [msg("outbound", body, 3 * H), msg("inbound", "where's my credit?", 1 * H)], loadContext: async () => { reads++; return { ctx: { ...lateCancel(0), ambiguous: true }, keys: ["first_name"] }; } });
+  const yes = said("Hey Jordan, let me look");
+  const ry = await runDraft(yes.deps);
+  ok("staff addressed the linked name: context loads normally", yes.calls.model[0].messages[0].content.includes('"first_name": "Jordan"') && yes.calls.model[0].messages[0].content.includes('"account_confirmed": true'));
+  eq("  and the first staff note says why", ry.status === "ok" && ry.draft.staff_notes[0], CONFIRMED_BY_STAFF_NOTE);
+  reads = 0;
+  const no = said("Hi, how can we help?");
+  const rn = await runDraft(no.deps);
+  ok("staff said nothing specific: read for the check, but NOTHING reaches the request", reads === 1 && !/Jordan|Westlake/.test(no.calls.model[0].messages[0].content) && no.calls.model[0].messages[0].content.includes('"account_confirmed": false'));
+  ok("  and the notes give the usual reason", rn.status === "ok" && rn.draft.staff_notes[0] === "Number is on 2 accounts.");
+  reads = 0;
+  const none = fake({ loadThread: async () => amb, countAccounts: async () => 2, msgs: [msg("inbound", "where's my credit?", 1 * H)], loadContext: async () => { reads++; return { ctx: lateCancel(0), keys: [] }; } });
+  await runDraft(none.deps);
+  eq("no staff message at all: the account isn't even read", reads, 0);
+  const outside = fake({ loadThread: async () => amb, countAccounts: async () => 2, msgs: [msg("outbound", "Hey Jordan", 3 * H), msg("inbound", "hi there, a question", 1 * H)], loadContext: async () => ({ forbidden: true }) });
+  ok("a player outside a confined account's city stays unconfirmed, not an error", (await runDraft(outside.deps)).status === "ok" && outside.calls.model[0].messages[0].content.includes('"account_confirmed": false'));
+}
+
+// ── phase 2: discard reasons and staleness ───────────────────────────────────────────────────
+console.log("\nDISCARD REASONS AND STALENESS:");
+{
+  eq("the four chips", DISCARD_CHIPS, ["Too long", "Wrong answer", "Missing info", "Wrong tone"]);
+  eq("a chip alone", discardReasonText("Too long", ""), "Too long");
+  eq("a chip with a note", discardReasonText("Wrong tone", " too stiff "), "Wrong tone: too stiff");
+  eq("a phone number in the note is scrubbed", discardReasonText("Missing info", "call 512-555-0100"), "Missing info: call [phone]");
+  eq("a made-up chip stores nothing", discardReasonText("Bad", "x"), null);
+  eq("no chip stores nothing (a tab open from before this shipped)", discardReasonText(undefined, undefined), null);
+  const d = { id: "d1", thread_id: "t1", outcome: "pending", draft_text: "x" };
+  eq("the patch carries the reason", discardPatch(d, { threadId: "t1", userId: "u", nowIso: "n", reason: "Too long" })?.discard_reason, "Too long");
+  const strip = (s: string) => s.replace(/\/\/[^\n]*/g, "");
+  ok("POSITIVE CONTROL: the stale check still exists, in runDraft", /staleDraftReason\(prior/.test(strip(readFileSync("src/lib/aiDraftRun.ts", "utf8"))));
+  const scheduled = ["vercel.json", "src/app/api/sync/cron/route.ts"].map((f) => readFileSync(f, "utf8")).join("\n");
+  ok("POSITIVE CONTROL: the cron list is readable", scheduled.includes("/api/sync/cron"));
+  ok("no cron calls the draft route (a draft needs a person)", !/ai-draft/.test(scheduled));
+  const card = strip(readFileSync("src/app/(internal)/match-ops/player-chats/components/AiDraftCard.tsx", "utf8"));
+  ok("the card holds its request while the tab is hidden", /visibilityState === "visible"\) \{ void request\(false\)/.test(card));
+  ok("the action button says it doesn't send", /\+ use draft/.test(card) && !/Send \+/.test(card));
+}
+
 // ── source pairings (a click and an HTTP route are not observable here) ──────────────────────
 console.log("\nSOURCE PAIRINGS:");
 {
@@ -543,6 +814,9 @@ console.log("\nSOURCE PAIRINGS:");
   ok("drafting NEVER links on its own: no crm_threads update and no link call in the draft path", !/from\("crm_threads"\)\.update|\/link\b|linkThread/.test(draftRoute + runSrc));
   const card2 = strip(readFileSync("src/app/(internal)/match-ops/player-chats/components/AiDraftCard.tsx", "utf8"));
   ok("the card links only from the Link button's click (one call site, inside onClick)", (card2.match(/confirmLink\(/g) ?? []).length === 1 && /onClick=\{\(\) => void confirmLink\(/.test(card2) && (card2.match(/linkThreadToPlayer\(/g) ?? []).length === 1);
+  const actionRoute = strip(readFileSync("src/app/api/crm/threads/[id]/ai-draft/action/route.ts", "utf8"));
+  ok("POSITIVE CONTROL: the action route posts to the credit and promo routes' own handlers", /creditPOST\(/.test(actionRoute) && /promoPOST/.test(actionRoute));
+  ok("the action route never sends a message, and writes through no apiWrite of its own", !/sendWhatsApp|telnyx|\/api\/crm\/send|apiWrite\(|recordWrite\(/i.test(actionRoute));
   ok("the draft route never sends a message (no send helpers imported)", !/sendWhatsApp|telnyx|\/api\/crm\/send/i.test(draftRoute));
   ok("the draft route reads no Stripe and spreads no profile into the context", !/fetchPlayerPayments|\.\.\.p\b|\.\.\.raw|\.\.\.listRow/.test(draftRoute));
 }

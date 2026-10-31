@@ -717,7 +717,7 @@ export default function CrmClient() {
   // from a filter that matched nothing (filtersActive) — those get their own
   // message so the best outcome never reads as a broken filter.
   const showCaughtUp =
-    view === "open" && !filtersActive && counts.open === 0 && !threadsLoading;
+    view === "open" && !filtersActive && counts.open === 0 && !threadsLoading && !threadsError;
   const listEmpty = renderGroups.length === 0;
 
   return (

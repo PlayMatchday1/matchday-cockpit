@@ -7613,6 +7613,39 @@ for 18596, 18680, 18679, 19700 and `/admin/matches?fromDate&toDate` windows arou
   about 35 hours. With `recent_days` in the clock and the rule against working out elapsed time, the
   reply no longer states it.
 
+## Claude drafts phase 2: courtesy credits, cameras, actions (2026-10-31)
+
+- **A courtesy credit has no marker in the API.** `user_credits` is one balance per currency, `@@unique([userId, currency])`
+  (`~/Code/backend/apps/api/prisma/schema.prisma:722`), and `creditAmount` is an absolute set. There is no ledger.
+  `change_log` is the only record and starts **2026-08-14** (first row of `endpoint like /admin/players/%/profile`,
+  service-role read 2026-10-31: 154 rows, 151 landed production). Retool writes leave nothing, so
+  **a courtesy before that date, or made in Retool, is invisible.**
+- **Staff don't write "courtesy".** 2 of 142 landed Player Lookup credits say it; the rest of the courtesies read "1st time",
+  "1st cancel", "First match". The marker (`COURTESY_REASON_RX`, `src/lib/aiDraftModel.ts`) reads courtesy, grace, experience,
+  one time, 1x, 1st and first (time/match/cancel/game/offense) on a landed production credit. Ryan's call: a false positive
+  costs one credit, a false negative costs the rule. A draft button writes `Courtesy credit: ...`.
+- **`veo_codes` is wrong in both directions as a list of recorded fields.** `mdapi_matches` non-deleted, last 30 days, 🎥 in
+  the name, service-role read 2026-10-31: **Zipp 21 of 21 recorded with no code**, STAR 21 of 22 with no code, Warsaw 12 of 12
+  with no code; **Westlake is coded with 0 of 14 recorded**, NEMP Tournaments coded with 0 of 34. Drafts read the marker
+  per field (`src/lib/aiDraftCamera.ts`, 30 days back, 14 forward); the counts also show rotation (Keswick 3 of 17).
+- **Ending a membership from the admin path is immediate** (`memberships/[subscriptionId]/end/route.ts:8-18`: Stripe cancel now, no
+  proration), which contradicts playbook rule 8's "play through the end of the month". So a draft has no cancel button (Ryan,
+  2026-10-31): it gives the in-app steps and the note "Cancel requested: confirm in Player Lookup or walk them through the app."
+- **Guest codes are `{city_member_slug}FP`.** Of 150 active members' slugs checked, 7 have that exact code in
+  `mdapi_promocodes`; the 4 live ones are all PERCENT 100, 3 uses, ALL_USERS, TOTAL_USAGE. **A member number changes:** 117 of 843
+  players in the first 1,000 `mdapi_subscriptions` rows hold more than one slug, so the existing-code check covers all of them.
+  A code a person named some other way is not detectable. **Not exercised:** the create from a draft has not been pressed on a
+  real player; no write probe was made.
+- **Nothing regenerates drafts on a timer.** All 134 rows had a `requested_by_user_id` on 2026-10-31, and no cron calls the route. The
+  stale check only ever runs when the card asks. The one case with nobody looking was a new message reaching an open background
+  tab, now held until the tab is visible.
+- **`crm_messages.template_name` misses most canned text.** Last 1,000 outbound: 14 with a template, while "To cancel your membership"
+  appears 25 times and the membership policy text 20 times with none. `selectExamples` drops repeats and long text.
+- **Medium effort and the action schema: UNKNOWN against the live API.** `scripts/ai-draft-live-check.ts` could not run on 2026-10-31:
+  400 "Your credit balance is too low". **Production drafts failed with the same 400 from 2026-10-30T19:15Z**
+  (10 rows in `crm_ai_drafts`, latest billed draft 19:09Z).
+- **Not built:** multi-spot credits. The guard only accepts one match price, so a two-spot late cancel at twice the price is stored failed.
+
 ## The admin users CSV export counts only EMAIL-VERIFIED, completed signups; the Acquisition card counts phone-verified ones too (2026-10-21)
 
 Evidence: read-only prod sweep 2026-10-21 of `GET /admin/players/{id}` for every id 93161–95300 (flags

@@ -16,7 +16,7 @@
 // toggle; fetches /api/crm/metrics itself.
 
 import { useCallback, useEffect, useState } from "react";
-import { supabase } from "@/lib/supabase";
+import { freshAccessToken } from "@/lib/crmSession";
 
 type Period = "week" | "month" | "all";
 
@@ -57,8 +57,7 @@ export default function MetricsStrip() {
 
   const load = useCallback(async (p: Period) => {
     try {
-      const { data: s } = await supabase.auth.getSession();
-      const token = s.session?.access_token;
+      const token = await freshAccessToken();
       if (!token) return;
       const res = await fetch(`/api/crm/metrics?period=${p}`, {
         headers: { Authorization: `Bearer ${token}` },

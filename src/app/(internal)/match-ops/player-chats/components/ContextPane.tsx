@@ -26,7 +26,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { linkThreadToPlayer, THREAD_LINKED_EVENT } from "@/lib/crmLinkClient";
-import { supabase } from "@/lib/supabase";
+import { freshAccessToken } from "@/lib/crmSession";
 import CopyPhone from "@/components/CopyPhone";
 import { colorForCity } from "@/lib/cityColors";
 import { useAuth, canEditCredits } from "@/lib/useAuth";
@@ -93,8 +93,7 @@ const TONE_COLOR: Record<Tone, string> = { plain: MUTED, amber: "#8a6300", red: 
 const PANE_TONE: Record<MatchTone, Tone> = { plain: "plain", amber: "amber", info: "info" };
 
 async function authFetch(path: string, init?: RequestInit): Promise<Response> {
-  const { data } = await supabase.auth.getSession();
-  const token = data.session?.access_token;
+  const token = await freshAccessToken();
   return fetch(path, { ...init, cache: "no-store",
     headers: { ...(init?.headers ?? {}), ...(token ? { Authorization: `Bearer ${token}` } : {}), "Content-Type": "application/json" } });
 }

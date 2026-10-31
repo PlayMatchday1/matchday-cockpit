@@ -164,7 +164,15 @@ export type DraftContextIn = {
   matchesPlayed: number | null;
   strikes: { active: number; limit: number; suspended: boolean } | null;
   matches: DraftMatchIn[];
+  /** Has this account had a courtesy credit? From change_log (priorCourtesyFromLog). null = unknown, so not eligible. */
+  priorCourtesyCredit?: boolean | null;
+  /** Camera coverage for the player's city, field by field (src/lib/aiDraftCamera). */
+  recordedFields?: RecordedField[];
 };
+
+// One field in the player's city with a camera on at least one match. Read from the camera marker
+// admins put in the match name: veo_codes is wrong in both directions (docs/matchday-api-facts.md).
+export type RecordedField = { field: string; recorded_matches: number; matches: number; last_recorded: string | null; next_recorded: string | null };
 
 export type DraftContext = ReturnType<typeof buildDraftContext>;
 
@@ -206,15 +214,15 @@ export function buildDraftContext(c: DraftContextIn) {
       account_confirmed: false,
       ask_for_account_phone: true,
       first_name: null, city: null, is_member: null, membership: null, credit_balance: null,
-      matches_played: null, first_time_player: false, courtesy_credit_eligible: false, strikes: null,
+      matches_played: null, courtesy_credit_eligible: false, strikes: null,
       recent_matches: [] as never[],
+      recorded_fields: [] as RecordedField[],
     };
   }
   const member = c.isMember === true || (c.membership != null && /active|added_from_admin/i.test(c.membership.status ?? "") && !c.membership.canceledAt);
-  // FIRST-TIME PLAYER (rule 5): has never played a match with us. A booking they cancelled is not
-  // "played", so a late cancel of their first-ever booking still counts as first time. Unknown
-  // (no linked account, or the count failed) is NOT first time — no courtesy on a guess.
-  const firstTime = c.linked && c.matchesPlayed === 0;
+  // ONE COURTESY CREDIT PER ACCOUNT, LIFETIME (rule 5). Unknown (the read failed) is NOT eligible:
+  // no courtesy on a guess. Members stay out: they pay nothing per match, so there is nothing to credit.
+  const courtesyEligible = c.linked && c.priorCourtesyCredit === false && !member;
   return {
     account: c.ambiguous ? "confirmed by staff" : "linked",
     account_confirmed: true,
@@ -233,8 +241,7 @@ export function buildDraftContext(c: DraftContextIn) {
       : null,
     credit_balance: usd(c.creditsCents),
     matches_played: c.linked ? c.matchesPlayed : null,
-    first_time_player: firstTime,
-    courtesy_credit_eligible: firstTime && !member,
+    courtesy_credit_eligible: courtesyEligible,
     strikes: c.strikes,
     recent_matches: c.matches.slice(0, 8).map((m) => ({
       match: m.name,
@@ -244,6 +251,7 @@ export function buildDraftContext(c: DraftContextIn) {
       paid: usd(m.charged),
       cancelled_hours_before_kickoff: m.state === "player_cancelled" || m.state === "both_cancelled" ? hoursBefore(m.startDateUtc, m.playerCancelledAt) : null,
     })),
+    recorded_fields: c.recordedFields ?? [],
   };
 }
 
@@ -256,14 +264,19 @@ Follow the playbook below exactly. Section 1 is the house rules and overrides ev
 Before you write, work out four things: what the player is actually asking for, the rule in the playbook that applies, the next concrete step, and the single piece of information (if any) needed to take it. Open the reply with the answer or that next step, in plain words.
 
 How to write the reply:
-- Write like a friendly person on the MatchDay team texting a player. Warm, short, plain words, contractions. Usually 1 to 3 short sentences.
+- Write like a friendly person on the MatchDay team texting a player. Warm, plain words, contractions. Default to one short sentence. Use two only when the answer needs a second fact. A one-word answer is fine when it answers the question.
+- Never end with a closing offer like "just message us if anything comes up" or "let me know if you need anything".
 - Never sound like an AI. No "I understand your frustration", no "Great question", no "I hope this helps", no lists, no headings, no sign-off with a name.
 - Never use an em dash or an en dash. Use a comma, a period, or "and" instead.
 - Use the player's first name when you have it, at most once.
 - Reply in the language the player wrote in.
 - Answer what they actually asked, using the facts in PLAYER CONTEXT. Never invent an amount, date, code, match or policy. If you need something you don't have, ask the player for it or say the team will check.
-- You cannot take any action. Never say a credit, refund, code, strike removal, move, hold or cancellation is done. Say "I'll" or "let me" only for an action staff will take, and name that action in staff_notes.
+- You can propose one action, which a staff member applies by pressing a button (see "action" below). Without a proposed action, never say a credit, refund, code, strike removal, move, hold or cancellation is done. Say "I'll" or "let me" only for an action staff will take, and name that action in staff_notes.
 - Only offer a courtesy credit when PLAYER CONTEXT says courtesy_credit_eligible is true, and set offers_courtesy_credit to true when you do.
+- A credit action's amount is the match_price of the match in question, never the paid amount. Never propose a credit for a member's match, a match already marked club_cancelled, or a cancel more than 24 hours before kickoff: those are either nothing to credit or credited automatically.
+- You cannot cancel a membership. Give the in-app cancel steps and put "Cancel requested: confirm in Player Lookup or walk them through the app." in staff_notes.
+- Answer camera questions only from recorded_fields in PLAYER CONTEXT. It lists the fields in the player's city with a camera on recent or upcoming matches, with how many: recorded_matches lower than matches means the camera rotates, so say it's only on some matches. A field not listed had no camera on those matches. If recorded_fields is empty, say the team will check. Never answer from memory.
+- EXAMPLES OF HOW THE TEAM WRITES, when present, show length and voice only. Copy how they sound. Never take a fact, amount, date, match or name from them.
 - Answer what you can before you ask. If PLAYER CONTEXT says account_confirmed is false, we don't know which account is writing: state no account facts at all (no credits, bookings, membership, strikes or matches, and nothing about what happened to their booking). The rules themselves are not account facts, so still explain the rule that applies to what they asked (for example, a cancel more than 24 hours before kickoff goes back to their account automatically as credit), then ask for the phone number on their MatchDay account (it's in their profile in the app; never ask for an email), and say what you'll do once you have it. Don't make them wait a round trip just to learn the policy. If the player has just sent a phone number (it shows as [phone]), thank them and say you're checking.
 - Time matters. CLOCK says what time it is now and when the player wrote. Read "today", "tonight" and "tomorrow" from when the PLAYER wrote, not from now. If what they asked about has already happened, say so kindly and point to the next real option.
 - Never work out how long ago a match was, or say a video should be up by now, unless the context gives that match's date and time. If it doesn't, say the team will check.
@@ -273,10 +286,12 @@ How to write the reply:
 - If the conversation is not something a reply can handle (a safety problem, a legal threat, a refund demand after the credit answer), write a short kind holding reply and set the flag.
 
 Output fields:
-- reply: the message text for the player, or "" if no reply should be sent.
+- reply: the message text for the player, or "" if no reply should be sent. When you propose an action, write this as if the action is done ("We've credited $8.00 to your account, it'll apply to your next booking").
+- reply_without_action: when you propose an action, the same answer without claiming the action happened, for staff who won't press the button. "" when action.kind is "none".
+- action: one proposed action, only for these categories: needs_credit, player_cancel, match_cancelled, membership_billing, guest_pass, promo_code. kind is "credit" (amount_cents is the match price in cents), "issue_guest_code" (amount_cents is null; the server builds the code, so never write one: put the literal placeholder {code} in reply and say it's live in a few minutes), or "none" (amount_cents is null, reason is ""). reason is one line for the audit log, with no name, phone or email in it.
 - staff_notes: at most 3 short bullets for staff only, never shown to the player, most important first, plain words. Never repeat a line, and never restate that the account is unconfirmed or unlinked: when it is, the system adds that line itself as the first bullet and it counts as one of the 3. Name any action needed (with amounts) and anything you could not verify. Use the exact phrases the playbook requires ("Hold requested: tell Ryan", "Strike dispute: check with the match manager", "Guest passes: confirm the membership, then issue the code", "Under 16"). No recap of the conversation unless it changes what staff should do.
 - match_ids: the match_id of every SCHEDULE match the reply mentions. Empty if none.
-- category: one short label for the request type, like "membership_billing", "match_cancelled", "player_cancel", "veo", "guest_pass", "strike", "booking", "logistics", "payment", "account", "age", "complaint", "other".
+- category: one short label for the request type, like "membership_billing", "match_cancelled", "player_cancel", "needs_credit", "veo", "promo_code", "guest_pass", "strike", "booking", "logistics", "payment", "account", "age", "complaint", "other".
 - flags: any of "escalate", "urgent", "hold_requested", "strike_dispute", "guest_pass", "under_16", "refund_pushback", "needs_credit". Empty if none.
 - offers_courtesy_credit: true only if the reply offers a courtesy credit for a late cancel.`;
 
@@ -292,8 +307,19 @@ export const DRAFT_OUTPUT_SCHEMA = {
     },
     offers_courtesy_credit: { type: "boolean" },
     match_ids: { type: "array", items: { type: "integer" } },
+    reply_without_action: { type: "string" },
+    action: {
+      type: "object",
+      properties: {
+        kind: { type: "string", enum: ["none", "credit", "issue_guest_code"] },
+        amount_cents: { anyOf: [{ type: "integer" }, { type: "null" }] },
+        reason: { type: "string" },
+      },
+      required: ["kind", "amount_cents", "reason"],
+      additionalProperties: false,
+    },
   },
-  required: ["reply", "staff_notes", "category", "flags", "offers_courtesy_credit", "match_ids"],
+  required: ["reply", "staff_notes", "category", "flags", "offers_courtesy_credit", "match_ids", "reply_without_action", "action"],
   additionalProperties: false,
 } as const;
 
@@ -318,7 +344,7 @@ export type DraftRequest = {
   max_tokens: number;
   system: string;
   messages: { role: "user"; content: string }[];
-  output_config: { effort: "low"; format: { type: "json_schema"; schema: typeof DRAFT_OUTPUT_SCHEMA } };
+  output_config: { effort: "medium"; format: { type: "json_schema"; schema: typeof DRAFT_OUTPUT_SCHEMA } };
 };
 
 // THE REQUEST BODY, built in one pure function so a test can print it and assert what is and is
@@ -326,6 +352,7 @@ export type DraftRequest = {
 export function buildDraftRequest(args: {
   playbook: string; context: DraftContext; msgs: readonly DraftMsg[]; now: number;
   tz?: string; clock?: DraftClock | null; schedule?: { basis: string | null; entries: ScheduleEntry[] } | null;
+  examples?: readonly string[];
 }): DraftRequest {
   const tz = args.tz ?? FALLBACK_TZ;
   const clock = args.clock ?? null;
@@ -337,9 +364,13 @@ export function buildDraftRequest(args: {
   const scheduleBlock = schedule && schedule.basis
     ? `SCHEDULE (our real matches ${schedule.basis === "field" ? "at the field the player named" : "in the player's city"}, from the day they wrote through the next 7 days; times are local to the field):\n${JSON.stringify(schedule.entries, null, 2)}`
     : "SCHEDULE: none (the player named no field or day). Don't state any match times.";
+  const examplesBlock = args.examples?.length
+    ? `EXAMPLES OF HOW THE TEAM WRITES (real replies to other players, for length and voice only):\n${args.examples.map((e) => `- ${e}`).join("\n")}\n\n`
+    : "";
   return {
     model: AI_DRAFT_MODEL,
-    max_tokens: 2000,
+    // Medium effort thinks before it answers, and thinking counts against this.
+    max_tokens: 6000,
     system: `${DRAFT_INSTRUCTIONS}\n\n===== PLAYBOOK =====\n${args.playbook}`,
     messages: [
       {
@@ -348,11 +379,12 @@ export function buildDraftRequest(args: {
           `${clockBlock}\n\n` +
           `PLAYER CONTEXT (from our records; the player cannot see this):\n${JSON.stringify(args.context, null, 2)}\n\n` +
           `${scheduleBlock}\n\n` +
+          examplesBlock +
           `CONVERSATION (oldest first, times in ${tz}; the last messages are what needs a reply):\n${renderTranscript(args.msgs, tz)}\n\n` +
           `Draft the next reply from MatchDay.`,
       },
     ],
-    output_config: { effort: "low", format: { type: "json_schema", schema: DRAFT_OUTPUT_SCHEMA } },
+    output_config: { effort: "medium", format: { type: "json_schema", schema: DRAFT_OUTPUT_SCHEMA } },
   };
 }
 
@@ -365,7 +397,11 @@ export function assertAnthropicHost(url: string): void {
 
 // ── what comes back ────────────────────────────────────────────────────────────────────────────
 
-export type DraftOutput = { reply: string; staff_notes: string[]; category: string; flags: string[]; offers_courtesy_credit: boolean; match_ids: number[] };
+export type DraftAction = { kind: "credit" | "issue_guest_code"; amount_cents: number | null; reason: string };
+export type DraftOutput = {
+  reply: string; staff_notes: string[]; category: string; flags: string[]; offers_courtesy_credit: boolean; match_ids: number[];
+  reply_without_action?: string; action?: DraftAction | null;
+};
 
 export const MAX_NOTE_BULLETS = 3;
 
@@ -411,10 +447,16 @@ export function parseDraftOutput(text: string): DraftOutput | null {
   const r = o as Record<string, unknown>;
   if (typeof r.reply !== "string" || typeof r.category !== "string" || typeof r.offers_courtesy_credit !== "boolean" || !Array.isArray(r.flags)) return null;
   if (typeof r.staff_notes !== "string" && !Array.isArray(r.staff_notes)) return null;
+  const a = r.action && typeof r.action === "object" ? (r.action as Record<string, unknown>) : null;
+  const action: DraftAction | null = a && (a.kind === "credit" || a.kind === "issue_guest_code")
+    ? { kind: a.kind, amount_cents: Number.isInteger(a.amount_cents) ? (a.amount_cents as number) : null, reason: typeof a.reason === "string" ? a.reason.slice(0, 200) : "" }
+    : null;
   return {
     reply: r.reply, staff_notes: toNoteBullets(r.staff_notes), category: r.category,
     flags: r.flags.filter((f): f is string => typeof f === "string"), offers_courtesy_credit: r.offers_courtesy_credit,
     match_ids: Array.isArray(r.match_ids) ? r.match_ids.filter((x): x is number => Number.isInteger(x)) : [],
+    reply_without_action: action && typeof r.reply_without_action === "string" ? r.reply_without_action : "",
+    action,
   };
 }
 
@@ -437,6 +479,10 @@ export type GuardResult = { ok: true; output: DraftOutput } | { ok: false; error
 // The checks every draft passes before anyone sees it. A draft that fails is stored as `failed`
 // with the reason and NOT shown — staff press Regenerate. No automatic retry (each call costs).
 export type GuardCtx = Pick<DraftContext, "courtesy_credit_eligible"> & {
+  /** The full context, which an action's amount is checked against. Without it a draft with an action fails. */
+  context?: DraftContext;
+  /** Actions already applied (or possibly applied) on this thread lately: the same kind is refused. */
+  appliedActions?: readonly { kind: string }[];
   /** The reply goes out more than 24 hours after the player wrote. Omitted = not checked. */
   veryLate?: boolean;
   /** Text a reply may quote times from: the schedule, the conversation, the playbook. Omitted = not checked. */
@@ -444,20 +490,199 @@ export type GuardCtx = Pick<DraftContext, "courtesy_credit_eligible"> & {
 };
 
 export function guardDraft(raw: DraftOutput, ctx: GuardCtx): GuardResult {
-  const output = { ...raw, reply: sanitizeDraft(raw.reply), staff_notes: toNoteBullets(raw.staff_notes.map(sanitizeDraft)) };
-  if (hasDash(output.reply) || output.staff_notes.some(hasDash)) return { ok: false, error: "Draft still contained a dash after cleanup." };
+  const action: DraftAction | null = raw.action ? { ...raw.action, reason: sanitizeDraft(raw.action.reason) } : null;
+  const output: DraftOutput = {
+    ...raw, reply: sanitizeDraft(raw.reply), staff_notes: toNoteBullets(raw.staff_notes.map(sanitizeDraft)),
+    reply_without_action: action ? sanitizeDraft(raw.reply_without_action ?? "") : "", action,
+  };
+  const texts = action ? [output.reply, output.reply_without_action ?? ""] : [output.reply];
+  if (texts.some(hasDash) || output.staff_notes.some(hasDash)) return { ok: false, error: "Draft still contained a dash after cleanup." };
   if (output.offers_courtesy_credit && !ctx.courtesy_credit_eligible) {
-    return { ok: false, error: "Draft offered a courtesy credit to a player who isn't a first-time player. Not shown." };
+    return { ok: false, error: "Draft offered a courtesy credit to a player who has already had one, or whose history couldn't be read. Not shown." };
   }
-  if (ctx.allowedTimeSources) {
-    const stray = unscheduledTimes(output.reply, ctx.allowedTimeSources);
-    if (stray.length) return { ok: false, error: `Draft stated a match time that isn't in our schedule (${stray.join(", ")}). Not shown.` };
-  }
-  if (ctx.veryLate !== undefined) {
-    const problem = lateReplyProblem(output.reply, ctx.veryLate);
-    if (problem) return { ok: false, error: `${problem} Not shown.` };
+  const actionErr = action ? actionProblem(output, action, ctx) : claimsDone(output.reply) ? "Draft said an action is done, with no action to apply." : null;
+  if (actionErr) return { ok: false, error: `${actionErr} Not shown.` };
+  for (const text of texts) {
+    if (ctx.allowedTimeSources) {
+      const stray = unscheduledTimes(text, ctx.allowedTimeSources);
+      if (stray.length) return { ok: false, error: `Draft stated a match time that isn't in our schedule (${stray.join(", ")}). Not shown.` };
+    }
+    if (ctx.veryLate !== undefined) {
+      const problem = lateReplyProblem(text, ctx.veryLate);
+      if (problem) return { ok: false, error: `${problem} Not shown.` };
+    }
   }
   return { ok: true, output };
+}
+
+// ── proposed actions ───────────────────────────────────────────────────────────────────────────
+
+const CREDIT_CATEGORIES = new Set(["needs_credit", "player_cancel", "match_cancelled", "membership_billing", "promo_code"]);
+const GUEST_CODE_CATEGORIES = new Set(["guest_pass", "promo_code"]);
+const CLUB_CANCELLED = new Set(["club_cancelled", "both_cancelled"]);
+
+const CLAIMS_DONE_RX = /\b(?:we've|we have|i've|i have)\s+(?:just\s+)?(?:credited|issued|added\b[^.!?]*\bcredit)|\bcredit (?:has|was) (?:been )?(?:added|issued)\b/i;
+const claimsDone = (s: string) => CLAIMS_DONE_RX.test(s);
+const centsOf = (usdText: string | null | undefined) => {
+  const m = usdText?.match(/^\$(\d+)\.(\d{2})$/);
+  return m ? Number(m[1]) * 100 + Number(m[2]) : null;
+};
+
+// Why a proposed action can't be shown, or null. THE AMOUNT IS RULE 6: a match price, never what they
+// paid (the difference is tax and the card fee, which we don't credit). A membership price is only
+// reachable from a membership_billing draft.
+function actionProblem(out: DraftOutput, action: DraftAction, ctx: GuardCtx): string | null {
+  const c = ctx.context;
+  if (!c) return "Draft proposed an action with no context to check it against.";
+  if (!c.account_confirmed) return "Draft proposed an action on an unconfirmed account.";
+  if (!out.reply.trim() || !out.reply_without_action?.trim()) return "Draft proposed an action without both versions of the reply.";
+  if (claimsDone(out.reply_without_action)) return "The reply without the action still says it's done.";
+  if (ctx.appliedActions?.some((a) => a.kind === action.kind)) return "That action was already applied on this thread.";
+  const prices = c.recent_matches.map((m) => ({ cents: centsOf(m.match_price), status: m.status, hours: m.cancelled_hours_before_kickoff }));
+  if (action.kind === "issue_guest_code") {
+    if (!GUEST_CODE_CATEGORIES.has(out.category)) return `A guest code can't be proposed for category ${out.category}.`;
+    if (action.amount_cents != null) return "A guest code has no amount.";
+    if (c.is_member !== true) return "A guest code needs an active membership.";
+    if (out.reply.split("{code}").length !== 2) return "The guest code reply must carry the {code} placeholder once.";
+    if (out.reply_without_action.includes("{code}")) return "The reply without the action can't carry a code.";
+    return null;
+  }
+  if (out.reply.includes("{code}") || out.reply_without_action.includes("{code}")) return "A credit reply can't carry a code placeholder.";
+  if (!CREDIT_CATEGORIES.has(out.category)) return `A credit can't be proposed for category ${out.category}.`;
+  const amount = action.amount_cents;
+  if (amount == null || amount <= 0) return "A credit needs an amount.";
+  const usd = `$${(amount / 100).toFixed(2)}`;
+  if (c.is_member === true && (out.category === "match_cancelled" || out.category === "player_cancel")) return "Members have no match charge to credit.";
+  if (out.category === "match_cancelled" && prices.some((p) => p.cents === amount && CLUB_CANCELLED.has(p.status))) {
+    return `Credit of ${usd} is for a match already marked cancelled, which the API credited automatically.`;
+  }
+  if (out.category === "player_cancel") {
+    if (!out.offers_courtesy_credit) return "A credit for a player's own cancel must be a courtesy credit.";
+    if (!prices.some((p) => p.cents === amount && p.status === "player_cancelled" && (p.hours == null || p.hours <= 24))) {
+      return `Credit of ${usd} doesn't match a late cancel in context (a cancel over 24 hours out is credited automatically).`;
+    }
+    return null;
+  }
+  const isMatchPrice = prices.some((p) => p.cents === amount && !CLUB_CANCELLED.has(p.status));
+  const isMembershipPrice = out.category === "membership_billing" && centsOf(c.membership?.price) === amount;
+  if (!isMatchPrice && !isMembershipPrice) return `Credit of ${usd} isn't a match price in context.`;
+  return null;
+}
+
+// ── which credits count as a courtesy ──────────────────────────────────────────────────────────
+// There is no marker in the API (user_credits is one balance per currency, creditAmount an absolute
+// set). change_log is the only record and it starts 2026-08-14; Retool writes leave nothing. Staff
+// write free text, mostly "1st time", so the rule reads what they wrote. A false positive costs one
+// credit; a false negative costs the rule. Credits from a draft's button write "Courtesy credit:".
+export const COURTESY_REASON_PREFIX = "Courtesy credit:";
+export const COURTESY_REASON_RX = /\bcourtes|\bgrace\b|\bexperience|\bone[- ]?time\b|\b1[- ]?time\b|\b1x\b|\b1st\b|\bfirst[- ](?:time|match|cancel|game|offense)/i;
+
+export type CreditLogRow = { env: string; outcome: string; changes: { key: string; before: unknown; after: unknown }[] | null };
+
+export function priorCourtesyFromLog(rows: readonly CreditLogRow[]): boolean {
+  return rows.some((r) => {
+    if (r.env !== "production" || r.outcome !== "landed") return false;
+    const bal = r.changes?.find((c) => c.key === "creditAmount");
+    const reason = r.changes?.find((c) => c.key === "reason")?.after;
+    return !!bal && Number(bal.after) > Number(bal.before) && typeof reason === "string" && COURTESY_REASON_RX.test(reason);
+  });
+}
+
+// ── confirmed by conversation ──────────────────────────────────────────────────────────────────
+
+export const isStaffReply = (m: DraftMsg) => m.direction === "outbound" && m.is_auto_reply !== true && !m.template_name && !!m.body?.trim();
+const escapeRx = (s: string) => s.replace(/[.*+?^\${}()|[\]\\]/g, "\\$&");
+
+const dateForms = (iso: string | null, timeZone: "America/Chicago" | "UTC") => {
+  if (!iso || !Number.isFinite(Date.parse(iso))) return [];
+  const f = (month: "short" | "long" | "numeric") => new Date(iso).toLocaleDateString("en-US", { timeZone, month, day: "numeric" });
+  return [f("short"), f("long"), f("numeric")];
+};
+
+// DID A PERSON ON OUR SIDE ALREADY SHOW THEY KNOW WHO THIS IS? A prior staff message (never an
+// auto-reply or template) naming something specific to the LINKED account: its first name used to
+// address the player, its match, an amount on its record, or a membership date. Every value is the
+// linked account's own, so "$8" in a reply to a different account proves nothing.
+export function staffRepliesConfirmAccount(
+  msgs: readonly DraftMsg[],
+  c: Pick<DraftContextIn, "firstName" | "creditsCents" | "membership" | "matches">,
+): boolean {
+  const name = c.firstName?.trim();
+  const nameRx = name && name.length >= 2
+    ? new RegExp(`(?:^|\\b(?:hey|hi|hello|hola|thanks|thank you|sorry|ok|okay)[,! ]+)${escapeRx(name)}\\b|,\\s*${escapeRx(name)}[.!?]*$`, "i")
+    : null;
+  const amounts = new Set(
+    [c.creditsCents, c.membership?.price, ...c.matches.flatMap((m) => [m.price, m.charged])].filter((n): n is number => n != null && n > 0),
+  );
+  const matchNames = c.matches
+    .map((m) => (m.name ?? "").replace(/\p{Extended_Pictographic}|\uFE0F/gu, "").trim().toLowerCase())
+    .filter((n) => n.length >= 4);
+  const dates = c.membership
+    ? [...dateForms(c.membership.since, "UTC"), ...dateForms(c.membership.renews, "UTC"), ...dateForms(c.membership.canceledAt, "America/Chicago")]
+    : [];
+  const dateRx = dates.length ? new RegExp(`(?:^|[^\\d/])(?:${dates.map(escapeRx).join("|")})(?![\\d/])`, "i") : null;
+  return msgs.filter(isStaffReply).some((m) => {
+    const body = m.body!.trim();
+    if (nameRx?.test(body)) return true;
+    if (dateRx?.test(body)) return true;
+    const lower = body.toLowerCase();
+    if (matchNames.some((n) => lower.includes(n))) return true;
+    return [...body.matchAll(/\$\s?(\d+(?:\.\d{1,2})?)/g)].some((a) => amounts.has(Math.round(Number(a[1]) * 100)));
+  });
+}
+
+// ── examples of how the team writes ────────────────────────────────────────────────────────────
+
+export const EXAMPLE_LIMIT = 30;
+const EXAMPLE_MAX_CHARS = 280;
+const CANNED_REPEATS = 3;
+const BARE_HELLO_RX = /^(hi+|hey+|hello+|hola)[\s!.]*$/i;
+// Section 4 of the playbook is withheld so the model doesn't learn the old refunds. Real replies carry them too.
+const OFF_RULES_RX = /\b(refund|venmo|zelle|cash ?app)/i;
+
+// These messages were written to OTHER players, so scrubPii is not enough: names, codes and links go too.
+export function scrubExample(text: string): string {
+  return scrubPii(text)
+    .replace(/https?:\/\/\S+|\bwww\.\S+/gi, "[link]")
+    .replace(/\b[A-Za-z]{2,5}\d{1,6}FP\b/gi, "[code]")
+    .replace(/\b[A-Z]{2,5}\d{2,6}\b/g, "[code]")
+    .replace(/\b(hey|hi|hello|hola|thanks|thank you|sorry)([,! ]+)[A-Z][\p{L}'-]+/giu, (m, g: string, sep: string) => {
+      const word = m.slice(g.length + sep.length);
+      return word[0] === word[0].toUpperCase() && word[0] !== word[0].toLowerCase() ? `${g}${sep}{name}` : m;
+    })
+    .replace(/\s*\n\s*/g, " / ")
+    .trim();
+}
+
+// Newest first. Long text and text sent over and over are canned copy, whatever template_name says
+// (25 "To cancel your membership" and 20 policy texts had none in the last 1,000 outbound, 2026-10-31).
+export function selectExamples(rows: readonly DraftMsg[], limit = EXAMPLE_LIMIT): string[] {
+  const staff = rows.filter(isStaffReply).map((m) => m.body!.trim());
+  const counts = new Map<string, number>();
+  for (const b of staff) counts.set(b.toLowerCase(), (counts.get(b.toLowerCase()) ?? 0) + 1);
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const body of staff) {
+    if (out.length >= limit) break;
+    const key = body.toLowerCase();
+    if (seen.has(key) || body.length > EXAMPLE_MAX_CHARS || BARE_HELLO_RX.test(body) || OFF_RULES_RX.test(body) || hasDash(body)) continue;
+    if (body.length > 40 && (counts.get(key) ?? 0) >= CANNED_REPEATS) continue;
+    seen.add(key);
+    out.push(scrubExample(body));
+  }
+  return out;
+}
+
+// ── discard reasons ────────────────────────────────────────────────────────────────────────────
+
+export const DISCARD_CHIPS = ["Too long", "Wrong answer", "Missing info", "Wrong tone"] as const;
+
+// A chip, optionally with free text. Nothing else is stored; the text is scrubbed like everything
+// else on this path. Null when no valid chip was sent (a tab open from before the chips shipped).
+export function discardReasonText(chip: unknown, text: unknown): string | null {
+  if (typeof chip !== "string" || !(DISCARD_CHIPS as readonly string[]).includes(chip)) return null;
+  const note = typeof text === "string" ? scrubPii(text).trim().slice(0, 300) : "";
+  return note ? `${chip}: ${note}` : chip;
 }
 
 // ── money ──────────────────────────────────────────────────────────────────────────────────────

@@ -32,6 +32,7 @@ import { cityNameFor } from "@/lib/cityScope";
 import { makeServerClient } from "@/lib/supabaseServer";
 import { MAX_ADJUSTMENT_CENTS, raceCheck, fmtUsd } from "@/lib/creditsModel";
 import type { Change } from "@/lib/changeLogModel";
+import { DRAFT_ACTION_SOURCE } from "@/lib/aiDraftAction";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -132,7 +133,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; p
 
     const { result, error, outcome, logged } = await recordWrite(
       {
-        env, source: "Player Lookup · credits", actorName: auth.email, actorEmail: auth.email,
+        env, source: body.source === DRAFT_ACTION_SOURCE ? DRAFT_ACTION_SOURCE : "Player Lookup · credits", actorName: auth.email, actorEmail: auth.email,
         saveId: randomUUID(), matchId: null, matchName: null,
         // NOTE the target: the player, by ID. Nothing identifying beyond the number.
         method: "PUT", path: `/admin/players/${playerId}/profile`, body: { creditAmount: after },

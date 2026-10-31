@@ -31,6 +31,7 @@ import {
 } from "@/lib/matchdayStageApi";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
 import type { Change } from "@/lib/changeLogModel";
+import { DRAFT_ACTION_SOURCE } from "@/lib/aiDraftAction";
 import { discountLabel, type DiscountType, type PromoRow, type TargetMatchType, type TargetUserType } from "@/lib/promoModel";
 
 export const runtime = "nodejs";
@@ -48,6 +49,7 @@ type CreateBody = {
   // scope payloads — only the one matching who/which is read; the rest are ignored (D5)
   userIDs?: number[]; matchIDs?: number[]; fieldIDs?: number[];
   matchTimePeriodStart?: string; matchTimePeriodEnd?: string;
+  source?: string;
 };
 const ints = (a: unknown): number[] => Array.isArray(a) ? a.map(Number).filter(Number.isFinite) : [];
 
@@ -123,7 +125,7 @@ export async function POST(req: Request) {
     const changes: Change[] = [{ key: "create", field: "Create promo code", before: null, after: `${code} — ${discountLabel({ discountType, discountValue })}, ${who} · ${which}` }];
     const { result, error, outcome, logged } = await recordWrite(
       {
-        env: ENV, source: "Promo Codes", actorName: auth.email, actorEmail: auth.email,
+        env: ENV, source: b.source === DRAFT_ACTION_SOURCE ? DRAFT_ACTION_SOURCE : "Promo Codes", actorName: auth.email, actorEmail: auth.email,
         saveId: b.saveId || randomUUID(), matchId: null, matchName: code,
         method: "POST", path: "/admin/promocodes", body, keys: [], label: (k) => k,
         applied: (bef, aft) => aft.exists === true && bef.exists !== true, changes,
