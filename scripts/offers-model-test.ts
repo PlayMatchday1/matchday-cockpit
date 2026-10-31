@@ -17,7 +17,7 @@ import { join, resolve } from "node:path";
 import {
   audienceBody, chicagoWallNow, comparisonLine, costCeiling, createBody, defaultRun, endsTicket, formOf, newForm, patchBody, priceWithDeal,
   summary, wallFromMatch, withPreviewName, buttonOf, opensText, formProblem, stepUses, usesLine, stepLimit, limitLine, copyOf,
-  addSection, autoCopy, canReset, copyAfterType, staleLines, staleSections, writtenForOnLoad, isRemovable, removeSection, resetCopy, sectionCollapsed, REMOVABLE_KEYS, canHidePhoto, copyAfterHide, hideUpload, extraBookingsLine, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, prefillField, audienceText, parsePlayerIds, playerLine, notFoundLine, usedOfLimit, resultsLines, isAdminAccount, scopeFieldsLine, setPriceAnyWarning as anyPriceWarn, matchPicked, matchTitle, matchWhere, ranUntil, endNote, pauseNote, progressText, campaignsAfter, countWanted, lockedSummary, offerWallNow, offerZones, wallNowIn, mergeMatches, offerMatchOpt, pickerRange, withCovers, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, endHasPassed, launchProblem, namedMatchIds, offersLogBody, pickerDayLabel, pickerView, fillText, fillFraction, setPriceAnyWarning, setPriceProblem, type Campaign, type City, type MatchOpt, type Results,
+  addSection, autoCopy, canReset, copyAfterType, staleLines, staleSections, writtenForOnLoad, isRemovable, removeSection, resetCopy, sectionCollapsed, REMOVABLE_KEYS, canHidePhoto, copyAfterHide, hideUpload, extraBookingsLine, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, prefillField, audienceText, parsePlayerIds, playerLine, notFoundLine, usedOfLimit, resultsLines, playedAtSuggestions, isAdminAccount, scopeFieldsLine, setPriceAnyWarning as anyPriceWarn, matchPicked, matchTitle, matchWhere, ranUntil, endNote, pauseNote, progressText, campaignsAfter, countWanted, lockedSummary, offerWallNow, offerZones, wallNowIn, mergeMatches, offerMatchOpt, pickerRange, withCovers, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, endHasPassed, launchProblem, namedMatchIds, offersLogBody, pickerDayLabel, pickerView, fillText, fillFraction, setPriceAnyWarning, setPriceProblem, type Campaign, type City, type MatchOpt, type Results,
 } from "../src/lib/offersModel";
 import { _setOffersGateDepsForTest, errorText, MAX_MATCH_PAGES, mismatches, offersGate, offersWrite, photoLinkProblem, readFirstMatchPage, readMatchesForCities, sendPreview, type OffersAuth } from "../src/lib/offersServer";
 import { readOffersConfig } from "../src/lib/offersConfig";
@@ -641,6 +641,9 @@ eq("with an end date: today's rule, today's words", [endNote("2026-11-02 19:00:0
   eq("the list row names them", [scopeFieldsLine({ usesPerPlayer: 1, appliesFieldIds: [1] }, F), scopeFieldsLine({ usesPerPlayer: 2, appliesFieldIds: [1, 2] }, F)], ["1 match at Riverside Fields", "2 matches at Riverside Fields and Mueller Park"]);
   // Where it works and who gets it stay two different things on the wire: a field offer must never save as an audience filter alone.
   const sent = createBody(one, matches, cities, F);
+  eq("Played at suggests each chosen field", playedAtSuggestions(two, F).map((x) => x.id), [1, 2]);
+  eq("...until it's added", playedAtSuggestions({ ...two, fieldIds: [1] }, F).map((x) => x.id), [2]);
+  eq("nothing to suggest on any match or a specific match", [playedAtSuggestions({ ...nowF, appliesFieldIds: [1] }, F), playedAtSuggestions({ ...nowF, scope: "MATCH", appliesFieldIds: [1] }, F)], [[], []]);
   eq("the scope is sent as its own value", sent.appliesFieldIds, [1]);
   eq("...and not as Played at", sent.fieldIds, []);
   eq("sorted, as an id set", createBody({ ...one, appliesFieldIds: [3, 1] }, matches, cities, F).appliesFieldIds, [1, 3]);

@@ -13,7 +13,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FIRST_NAME_TOKEN, isAdminAccount, MAX_TEST_IDS, SECTION_ADD, addSection, autoCopy, canReset, copyAfterType, isRemovable, staleLines, staleSections, writtenForOnLoad, removeSection, resetCopy, sectionCollapsed, canHidePhoto, copyAfterHide, hideUpload, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, MAX_USES_PER_PLAYER, notFoundLine, parsePlayerIds, playerLine, prefillField, PREVIEW_FIRST_NAME, amountText, limitLine, stepLimit, stepUses, usesLine, audienceBody, buttonMatchNote, buttonOf, opensText, chicagoWallNow, copyOf, createBody, defaultRun, endsTicket, formOf, formProblem, fromInput, matchInfo,
-  newForm, patchBody, mergeMatches, withCovers, endNote, pauseNote, ranUntil, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, countWanted, lockedSummary, endHasPassed, launchProblem, offerWallNow, offerZones, setPriceAnyWarning, setPriceProblem, pickedMatch, startLabel, STEPPER, summary, toInput, wallLabel,
+  newForm, patchBody, playedAtSuggestions, mergeMatches, withCovers, endNote, pauseNote, ranUntil, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, countWanted, lockedSummary, endHasPassed, launchProblem, offerWallNow, offerZones, setPriceAnyWarning, setPriceProblem, pickedMatch, startLabel, STEPPER, summary, toInput, wallLabel,
   type Campaign, type City, type Count, type FieldOpt, type Lookup, type UploadedPhoto, type CopyKey, type ListChange, type DealType, type Form, type MatchOpt, type WrittenFor,
 } from "@/lib/offersModel";
 import MatchPicker from "./MatchPicker";
@@ -242,20 +242,11 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
     if (!s) return;
     set({ dealAmount: Math.min(s.max, Math.max(s.min, f.dealAmount + dir * s.step)) });
   };
-  // Played at entries that picking a field put there, so taking the field back takes those back too. One the
-  // person added themselves, or removed already, is theirs.
-  const [prefilled, setPrefilled] = useState<number[]>([]);
-  const dropPrefilled = (ids: number[]) => f.fieldIds.filter((x) => !(prefilled.includes(x) && ids.includes(x)));
-  const addScopeField = (id: number) => {
-    const fieldIds = prefillField(f.fieldIds, { fieldId: id });
-    if (fieldIds !== f.fieldIds) setPrefilled((p) => [...p, id]);
-    set({ appliesFieldIds: [...f.appliesFieldIds, id], fieldIds });
-  };
-  const removeScopeField = (id: number) => { set({ appliesFieldIds: f.appliesFieldIds.filter((x) => x !== id), fieldIds: dropPrefilled([id]) }); setPrefilled((p) => p.filter((x) => x !== id)); };
+  const addScopeField = (id: number) => set({ appliesFieldIds: [...f.appliesFieldIds, id] });
+  const removeScopeField = (id: number) => set({ appliesFieldIds: f.appliesFieldIds.filter((x) => x !== id) });
   const pickScope = (scope: Form["scope"]) => {
     if (scope === f.scope) return;
-    const leftField = f.scope === "FIELD" ? { appliesFieldIds: [], fieldIds: dropPrefilled(f.appliesFieldIds) } : {};
-    if (f.scope === "FIELD") setPrefilled([]);
+    const leftField = f.scope === "FIELD" ? { appliesFieldIds: [] } : {};
     if (scope === "MATCH") set({ scope, ...leftField, usesPerPlayer: 1, endsLocal: f.endsLocal ?? defaultRun(nowWall).endsLocal });
     // Leaving a specific match goes back to a run of its own instead of ending at that kickoff.
     else set({ scope, ...leftField, matchId: null, ...(f.scope === "MATCH" ? { endsLocal: defaultRun(nowWall).endsLocal } : {}) });
@@ -647,6 +638,10 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
                 {!dl && otherFields.length > 0 && <Chip testId="offers-add-field" on={false} onClick={() => setAddingField((v) => !v)}>+ Field</Chip>}
                 {f.fieldIds.length === 0 && (dl || otherFields.length === 0) && <span className="self-center text-[12px]" style={{ color: O.muted }}>Any field</span>}
               </div>
+              {!dl && playedAtSuggestions(f, data.fields).map((x) => (
+                <button key={x.id} type="button" data-testid={`offers-pf-suggest-${x.id}`} onClick={() => set({ fieldIds: [...f.fieldIds, x.id] })}
+                  className="self-start text-left text-[12px] font-semibold" style={{ color: O.ok }}>Only players who&apos;ve played at {x.title}?</button>
+              ))}
               {addingField && !dl && (
                 <div className="flex flex-wrap gap-1.5 rounded-[8px] p-2" style={{ background: O.subtle }}>
                   {otherFields.map((x) => <Chip key={x.id} testId={`offers-field-${x.id}`} on={false} onClick={() => { set({ fieldIds: [...f.fieldIds, x.id] }); setAddingField(false); }}>{x.title}</Chip>)}
