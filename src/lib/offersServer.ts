@@ -114,12 +114,6 @@ export async function readCampaign(id: number): Promise<Campaign | null> {
   catch (e) { if (e instanceof WriteFailedError && e.status === 404) return null; throw e; }
 }
 
-// Every city, cut down: its name, and the zone an offer's end is judged in.
-export async function readCities(): Promise<City[]> {
-  const r = await offersGet<{ id: number; name: string; timeZone?: { name?: string | null } | null }[]>("/admin/cities");
-  return r.map((c) => ({ id: c.id, name: c.name, timeZone: c.timeZone?.name ?? null })).sort((a, b) => a.name.localeCompare(b.name));
-}
-
 // A match from admin/matches, cut down to what the page shows. The payload carries teams[].password
 // and players' details; none of it crosses to the browser. startDate is WALL CLOCK; upcoming is
 // decided from startDateUtc, which is TRUE UTC.
@@ -179,8 +173,11 @@ export const readMatch = async (id: number): Promise<MatchOpt> => matchOpt(await
 
 // ── THE WRITE ───────────────────────────────────────────────────────────────────────────────────
 // One request, never retried, through recordWrite (which stores nothing in local mode). The answer
-// comes from OUR OWN read after the write, compared with what the write meant to leave behind:
-// LANDED / FAILED / NOT APPLIED / UNKNOWN. A 2xx alone is never reported as landed.
+// comes from THE CAMPAIGN THE WRITE RETURNS, compared with what the write meant to leave behind:
+// LANDED / FAILED / NOT APPLIED / UNKNOWN. A 2xx alone is never reported as landed. A delete returns
+// nothing, so it alone is read back. No read before a write either: the backend checks the match, the
+// players and the end on launch, and answers with what's wrong (Ryan, 2026-10-30). The exception is an
+// edit, whose route reads first because change_log records each field's value before.
 export type Verdict = "LANDED" | "FAILED" | "NOT APPLIED" | "UNKNOWN";
 
 export function offersApiWrite<T = unknown>(auth: OffersAuth, method: "POST" | "PATCH" | "DELETE", path: string, body?: unknown): Promise<T> {
@@ -216,8 +213,8 @@ export async function offersWrite(opts: {
 }): Promise<WriteResult> {
   let createdId: number | null = opts.id;
   const read = async () => (createdId === null ? null : await readCampaign(createdId));
-  // recordWrite reads once before the write and once after. The read after IS the read-back: undefined
-  // means there wasn't one that answered.
+  // recordWrite asks for the resource before and after the write. Before is what the route read, if it
+  // did. After is the write's own answer: undefined means it didn't answer with a campaign.
   let wrote = false;
   let after: Campaign | null | undefined;
   const { outcome, error } = await recordWrite(
@@ -229,14 +226,16 @@ export async function offersWrite(opts: {
     },
     {
       readResource: async () => {
-        if (!wrote && opts.before) return opts.before as unknown as Record<string, unknown>;
-        const c = await read();
-        if (wrote) after = c;
-        return (c as unknown as Record<string, unknown>) ?? { missing: true };
+        if (!wrote) return (opts.before ?? {}) as unknown as Record<string, unknown>;
+        if (opts.expectGone) after = await read();
+        return (after as unknown as Record<string, unknown>) ?? { missing: true };
       },
       write: async () => {
         const r = await offersApiWrite<Record<string, unknown>>(opts.auth, opts.method, opts.path, opts.body);
-        if (createdId === null && r && typeof r === "object" && typeof r.id === "number") createdId = r.id;
+        if (r && typeof r === "object" && typeof r.id === "number") {
+          if (createdId === null) createdId = r.id;
+          after = r as unknown as Campaign;
+        }
         wrote = true;
         return r;
       },

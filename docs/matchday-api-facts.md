@@ -8027,6 +8027,22 @@ it has passed in any of the offer's cities (`offerZones`, `offerWallNow`). Playe
 401. So a 2xx on a GET here does not show the route exists, and Offers is not on staging. Production was not
 probed. `errorText` (`src/lib/offersServer.ts`) reports the failed JSON parse as "Offers may not be deployed there".
 
+### What the backend checks on an Offers write, and what it returns
+
+`apps/api/src/core/offers/offer-campaigns.service.ts:233`, backend 573dab8. **Launch checks** the move is allowed,
+a scoped match still exists, a specific-players list isn't empty, and the end hasn't passed. Deal rules are
+checked on create and edit (`validate`, `:547`). Launch, pause, end, create and edit each return the whole
+campaign, without `results`. Delete returns 204.
+
+**Its end check is looser than the page's.** `hasEnded` refuses only when the end has passed in EVERY city the
+offer could reach, plus UTC when it has no city filter. The panel blocks from the EARLIEST of the offer's
+cities (`offerZones`). So the earliest-city rule is the panel's alone: a launch sent straight to the route is
+refused only by the backend's rule.
+
+**The verdict rests on the write's response, not a separate read** (Ryan, 2026-10-30): the returned campaign must
+show what was intended, or it is NOT APPLIED, and a 2xx with no campaign in it is UNKNOWN. An edit still reads
+first, because `change_log` records each field's value before and the backend doesn't return it.
+
 ### `GET /admin/offers/page`
 
 Backend de910e7, `docs/offers/M3-ENDPOINTS.md`. `{ campaigns, cities, fields }` in one read: `campaigns` as

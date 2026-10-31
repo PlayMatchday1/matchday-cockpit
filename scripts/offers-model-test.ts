@@ -725,7 +725,7 @@ function routeFiles(dir: string): string[] {
       if (url.endsWith("/auth/signin")) return new Response(JSON.stringify({ accessToken: JWT }), { status: 200 });
       if (init?.method && init.method !== "GET") { sent.push({ url, body: typeof init.body === "string" ? init.body : null }); sentStaff.push(new Headers(init.headers).get("X-Acting-Staff-Email")); }
       if (url.endsWith("/send-preview")) return new Response(JSON.stringify({ sent: [7, 8], notFound: [] }), { status: 200 });
-      if (init?.method === "POST") { const b = JSON.parse(String(init.body)); stored.players = b.playerIds; return new Response(JSON.stringify({ id: 9 }), { status: 201 }); }
+      if (init?.method === "POST") { const b = JSON.parse(String(init.body)); stored.players = b.playerIds; return new Response(JSON.stringify({ id: 9, status: "DRAFT", name: b.name, playerIds: b.playerIds }), { status: 201 }); }
       return new Response(JSON.stringify({ id: 9, status: "DRAFT", name: "x", playerIds: stored.players ?? [] }), { status: 200 });
     }) as typeof fetch;
     Object.assign(process.env, { MATCHDAY_STAGE_API_BASE_URL: "https://matchday-stage.herokuapp.com", MATCHDAY_STAGE_API_EMAIL: "s@example.com", MATCHDAY_STAGE_API_PASSWORD: "x" });
@@ -754,6 +754,8 @@ function routeFiles(dir: string): string[] {
       let running = 0, most = 0;
       const campaign = (over: Record<string, unknown> = {}) => ({ id: 9, status: "LAUNCHED", name: "x", matchIds: [], cityIds: [2], audienceMode: "FILTERS", endsLocal: "2099-01-01 00:00:00", ...over });
       let current = campaign();
+      let backendRefuses = false, answerEmpty = false;
+      let answerStatus: string | null = null;
       globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = new URL(String(input instanceof Request ? input.url : input));
         if (url.pathname === "/auth/signin") return new Response(JSON.stringify({ accessToken: JWT }), { status: 200 });
@@ -762,7 +764,14 @@ function routeFiles(dir: string): string[] {
         seen.push(`${m} ${url.pathname}`);
         await new Promise((r) => setTimeout(r, 1));
         running--;
-        if (m !== "GET") { const to = url.pathname.split("/").at(-1); if (to === "pause") current = { ...current, status: "PAUSED" }; if (to === "launch") current = { ...current, status: "LAUNCHED" }; if (m === "PATCH") current = { ...current, name: "y" }; return new Response("{}", { status: 200 }); }
+        if (m !== "GET") {
+          const to = url.pathname.split("/").at(-1);
+          if (backendRefuses) return new Response(JSON.stringify({ errorCode: "INVALID_OFFER_CAMPAIGN", message: "Invalid offer campaign: its end has already passed" }), { status: 400 });
+          if (to === "pause") current = { ...current, status: "PAUSED" };
+          if (to === "launch") current = { ...current, status: answerStatus ?? "LAUNCHED" };
+          if (m === "PATCH") current = { ...current, name: "y" };
+          return new Response(answerEmpty ? "{}" : JSON.stringify(current), { status: 200 });
+        }
         if (url.pathname.endsWith("/admin/cities")) return new Response(JSON.stringify([{ id: 2, name: "Houston", timeZone: { name: "America/Chicago" } }]), { status: 200 });
         if (url.pathname.endsWith("/admin/offers/page")) return new Response(JSON.stringify({ campaigns: [campaign()], cities: [{ id: 2, name: "Houston", state: "TX", timeZone: "America/Chicago" }], fields: [{ id: 1, title: "F", address: "x", cityId: 2, cover: null }] }), { status: 200 });
         if (url.pathname.endsWith("/admin/offers/matches")) return new Response(JSON.stringify({ page: 1, limit: 100, totalItems: 0, data: [] }), { status: 200 });
@@ -778,24 +787,52 @@ function routeFiles(dir: string): string[] {
       const C = "/admin/offers/campaigns/9";
       const ctx = (action?: string) => ({ params: Promise.resolve({ id: "9", action }) });
       const POSTREQ = () => new Request("http://localhost/x", { method: "POST", headers: { Authorization: "Bearer t" } });
+      slept.length = 0;
+      await run(() => one.PATCH(new Request("http://localhost/x", { method: "PATCH", headers: { Authorization: "Bearer t" }, body: JSON.stringify({ name: "y" }) }), ctx()));
+      await list.GET(new Request("http://localhost/api/offers"), {});
+      eq("reads still wait out the 2 seconds", slept.length >= 1 && slept.every((ms) => ms > 1900 && ms <= 2000), true);
+      current = campaign();
       const load = await run(() => list.GET(new Request("http://localhost/api/offers"), {}));
       eq("page load: one read for the page, one for the picker's matches, in that order", [load.status, load.seen, most], [200, ["GET /admin/offers/page", "GET /admin/offers/matches"], 1]);
       const loaded = await (await list.GET(new Request("http://localhost/api/offers"), {})).json();
       eq("...cut down, with each city's zone as the launch check wants it", [loaded.cities, loaded.fields], [[{ id: 2, name: "Houston", timeZone: "America/Chicago" }], [{ id: 1, title: "F", cityId: 2, cover: null }]]);
-      slept.length = 0;
-      await run(() => act.POST(POSTREQ(), ctx("pause")));
-      eq("everything else still waits out the 2 seconds", slept.length >= 1 && slept.every((ms) => ms > 1900 && ms <= 2000), true);
-      current = campaign();
-      eq("pause: read once, write, read back once", await run(() => act.POST(POSTREQ(), ctx("pause"))), { status: 200, verdict: "LANDED", seen: [`GET ${C}`, `POST ${C}/pause`, `GET ${C}`] });
+      eq("pause: the write and nothing else", await run(() => act.POST(POSTREQ(), ctx("pause"))), { status: 200, verdict: "LANDED", seen: [`POST ${C}/pause`] });
       current = campaign({ status: "DRAFT" });
-      eq("launch: the campaign, its cities, write, read back", await run(() => act.POST(POSTREQ(), ctx("launch"))), { status: 200, verdict: "LANDED", seen: [`GET ${C}`, "GET /admin/cities", `POST ${C}/launch`, `GET ${C}`] });
+      eq("launch: the write and nothing else", await run(() => act.POST(POSTREQ(), ctx("launch"))), { status: 200, verdict: "LANDED", seen: [`POST ${C}/launch`] });
       current = campaign({ status: "DRAFT", matchIds: [116] });
-      eq("launch for a match: its match too", (await run(() => act.POST(POSTREQ(), ctx("launch")))).seen, [`GET ${C}`, "GET /admin/cities", "GET /admin/matches/116", `POST ${C}/launch`, `GET ${C}`]);
-      current = campaign({ status: "DRAFT", endsLocal: "2020-01-01 00:00:00" });
-      eq("launch past its end: refused, no write", await run(() => act.POST(POSTREQ(), ctx("launch"))), { status: 400, verdict: undefined, seen: [`GET ${C}`, "GET /admin/cities"] });
+      eq("launch for a match: the same", (await run(() => act.POST(POSTREQ(), ctx("launch")))).seen, [`POST ${C}/launch`]);
       current = campaign({ status: "DRAFT" });
-      eq("an edit: read once, write, read back once", await run(() => one.PATCH(new Request("http://localhost/x", { method: "PATCH", headers: { Authorization: "Bearer t" }, body: JSON.stringify({ name: "y" }) }), ctx())), { status: 200, verdict: "LANDED", seen: [`GET ${C}`, `PATCH ${C}`, `GET ${C}`] });
-      eq("a write handed its campaign still lands", (await offersWrite({ auth, source: "t", method: "POST", path: "/admin/offers/campaigns", body: { name: "x" }, id: 9, before: current as never, expect: {} })).verdict, "LANDED");
+      backendRefuses = true;
+      const refused = await act.POST(POSTREQ(), ctx("launch"));
+      const refusedBody = await refused.json();
+      eq("the backend refuses a launch: FAILED, in its own words", [refused.status, refusedBody.verdict, refusedBody.error], [502, "FAILED", "The backend refused it: its end has already passed. Nothing was saved."]);
+      backendRefuses = false;
+      // The write's own answer is still checked, not just its 2xx.
+      current = campaign({ status: "DRAFT" });
+      answerStatus = "DRAFT";
+      eq("a 2xx whose campaign shows no move: NOT APPLIED, not LANDED", (await run(() => act.POST(POSTREQ(), ctx("launch")))).verdict, "NOT APPLIED");
+      answerStatus = null;
+      answerEmpty = true;
+      eq("a 2xx with no campaign in it: UNKNOWN, not LANDED", (await run(() => act.POST(POSTREQ(), ctx("launch")))).verdict, "UNKNOWN");
+      answerEmpty = false;
+      current = campaign({ status: "DRAFT" });
+      eq("an edit: one read first, for the log's before values, then the write", await run(() => one.PATCH(new Request("http://localhost/x", { method: "PATCH", headers: { Authorization: "Bearer t" }, body: JSON.stringify({ name: "y" }) }), ctx())), { status: 200, verdict: "LANDED", seen: [`GET ${C}`, `PATCH ${C}`] });
+      seen.length = 0;
+      await list.POST(new Request("http://localhost/x", { method: "POST", body: JSON.stringify({ name: "x", cityIds: [2] }) }), {});
+      eq("a create: the write and nothing else", seen, ["POST /admin/offers/campaigns"]);
+      current = campaign({ status: "DRAFT" });
+      seen.length = 0;
+      let gone = false;
+      const realStub = globalThis.fetch;
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(String(input instanceof Request ? input.url : input));
+        if (url.pathname === "/auth/signin") return new Response(JSON.stringify({ accessToken: JWT }), { status: 200 });
+        seen.push(`${init?.method ?? "GET"} ${url.pathname}`);
+        if (init?.method === "DELETE") { gone = true; return new Response(null, { status: 204 }); }
+        return gone ? new Response("{}", { status: 404 }) : new Response(JSON.stringify(current), { status: 200 });
+      }) as typeof fetch;
+      eq("a delete returns nothing, so it alone is read back", await run(() => one.DELETE(new Request("http://localhost/x", { method: "DELETE", headers: { Authorization: "Bearer t" } }), ctx())), { status: 200, verdict: "LANDED", seen: [`GET ${C}`, `DELETE ${C}`, `GET ${C}`] });
+      globalThis.fetch = realStub;
       _setOffersGateDepsForTest({ sleep, logStore, config: () => ({ ok: true, config: { env: "staging", baseUrl: "https://matchday-stage.herokuapp.com", uploadHost: "b.s3.amazonaws.com" } }) });
       // A route the backend doesn't have can answer 200 with a web page.
       globalThis.fetch = (async (input: RequestInfo | URL) => (String(input).endsWith("/auth/signin") ? new Response(JSON.stringify({ accessToken: JWT }), { status: 200 }) : new Response("<!DOCTYPE html>", { status: 200, headers: { "content-type": "text/html" } }))) as typeof fetch;

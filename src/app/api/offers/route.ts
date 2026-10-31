@@ -2,7 +2,7 @@
 // Played at and the photo picker) and one page of upcoming matches for the picker. If the matches can't
 // be read the offers still load: pausing or ending one must not depend on the picker.
 // POST /api/offers: create a draft. The body is the page's createBody; keys outside BODY_KEYS are
-// dropped. The verdict comes from reading the new campaign back by the id the backend returned.
+// dropped. The verdict comes from the campaign the backend returns.
 
 import { BODY_KEYS } from "@/lib/offersModel";
 import { CAMPAIGNS, errorText, offersGate, offersWrite, readFirstMatchPage, readJson, readPage, verdictResponse } from "@/lib/offersServer";

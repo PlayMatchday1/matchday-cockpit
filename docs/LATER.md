@@ -38,8 +38,8 @@ every other page reads and writes production as usual, and Offers writes land in
 `env = staging`. Stop the local-mode server first: one worktree can't run two dev servers.
 
 **Reads, decided 2026-10-30.** Every Offers read goes through the pacer at 2 seconds, except the page's load,
-`GET /admin/offers/page`, which is one read in place of four. After a write the list takes that write's read-back,
-with no page read.
+`GET /admin/offers/page`, which is one read in place of four. Create, launch, pause and end make no reads: the
+backend checks them and each returns the campaign, which is the read-back and what the list takes.
 
 Also needed, none of them new variables:
 
