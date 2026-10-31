@@ -16,7 +16,7 @@ import { makeServerClient } from "@/lib/supabaseServer";
 import { normalizePhone } from "@/lib/phone";
 import { phoneLast4 } from "@/lib/changeLog";
 import { verifyStandardWebhook } from "@/lib/standardWebhook";
-import { isFictionalTestNumber, signInCodeText, smsGate } from "@/lib/signInCode";
+import { signInCodeText, smsGate } from "@/lib/signInCode";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -35,8 +35,7 @@ export async function POST(req: Request) {
   try { payload = JSON.parse(raw); } catch { return refuse(400, "Body is not JSON."); }
   const phone = normalizePhone(payload.user?.phone ? `+${String(payload.user.phone).replace(/^\+/, "")}` : null);
   const otp = payload.sms?.otp ?? "";
-  const fictional = isFictionalTestNumber(phone);
-  if (!phone || (!fictional && !/^\d{6}$/.test(otp))) return refuse(400, "Phone or code missing.");
+  if (!phone || !/^\d{6}$/.test(otp)) return refuse(400, "Phone or code missing.");
 
   const sb = makeServerClient();
   const staff = await sb.from("app_users").select("id, is_service_account").eq("phone", phone).limit(2);
@@ -62,12 +61,6 @@ export async function POST(req: Request) {
   if (!gate.send) {
     console.warn(`[sms-hook] refused ...${phoneLast4(phone)}: ${gate.reason}${rows.length > 1 ? " (number on more than one staff account)" : ""}`);
     return refuse(gate.httpCode, gate.message);
-  }
-
-  // A fictional test number on a staff row: Supabase's fixed code signs it in; nothing is texted.
-  if (fictional) {
-    console.log(`[sms-hook] test number ...${phoneLast4(phone)}: allowed, nothing sent`);
-    return Response.json({}, { status: 200 });
   }
 
   const apiKey = process.env.TELNYX_API_KEY?.trim();

@@ -52,11 +52,4 @@ export function smsGate(isStaffNumber: boolean, recent: readonly Date[], now: Da
 }
 
 /** The one reply the app shows after asking for a code, staff number or not. */
-/* FICTIONAL TEST NUMBERS (Ryan, 2026-10-30). +1 NXX 555 0100 to 0199 are reserved for fiction and
- * never reach a real phone. Supabase answers a configured test number with its own fixed code and
- * still calls the Send SMS hook, without a real code in the payload; the hook lets such a number
- * through WITHOUT texting anything, but only when it is on a staff row like any other number. */
-export const isFictionalTestNumber = (e164: string | null | undefined): boolean =>
-  typeof e164 === "string" && /^\+1[2-9]\d{2}55501\d{2}$/.test(e164);
-
 export const PHONE_START_REPLY = "If this number is on a MatchDay staff account, a code is on its way.";
