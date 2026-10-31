@@ -24,15 +24,9 @@
 // entry for the ruling. The change_log row is the only record of who made it.
 import { randomUUID } from "node:crypto";
 import { authenticateCapability } from "@/lib/capabilityAuth";
-import { getMatchdayApiClient } from "@/lib/matchdayApi";
-import {
-  apiWrite, AmbiguousWriteError, WriteFailedError, DeniedFieldError, DeniedEndpointError,
-  ProductionWriteBoltedError, StageHostGuardError, StageConfigError, NotAuthorizedError,
-} from "@/lib/matchdayStageApi";
-import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
-import type { Change } from "@/lib/changeLogModel";
 import { DRAFT_ACTION_SOURCE } from "@/lib/aiDraftAction";
-import { discountLabel, type DiscountType, type PromoRow, type TargetMatchType, type TargetUserType } from "@/lib/promoModel";
+import { createPromoWrite } from "@/lib/promoWrite";
+import { discountLabel, type DiscountType, type TargetMatchType, type TargetUserType } from "@/lib/promoModel";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -106,46 +100,10 @@ export async function POST(req: Request) {
     ...(which === "SPECIFIC_FIELDS" ? { fieldIDs } : which === "SPECIFIC_MATCHES" ? { matchIDs } : which === "TIME_PERIOD" ? { matchTimePeriodStart: mpStart, matchTimePeriodEnd: mpEnd } : {}),
   };
 
-  const client = getMatchdayApiClient();
-  // read-back by exact code (substring search filtered to equality; includes soft-deleted). A
-  // high limit so the exact code is in the fetched set for realistic full codes; if the substring
-  // set is larger, an exact hit is still definitive, and a miss falls through to the server check.
-  const readResource = async (): Promise<Record<string, unknown>> => {
-    const r = await client.get<{ data?: PromoRow[] }>("/api/v1/admin/promocodes", { code, limit: 300, page: 1 }).catch(() => ({ data: [] as PromoRow[] }));
-    const hit = (r.data ?? []).find((x) => x.code.toLowerCase() === code.toLowerCase());
-    return { exists: !!hit, id: hit?.id ?? null };
-  };
-
-  try {
-    // pre-check: refuse a CONFIRMED duplicate before writing. A non-confirmation (the exact code
-    // wasn't in the fetched set) is NOT treated as free — we proceed and let the server reject.
-    const before = await readResource();
-    if (before.exists) return Response.json({ error: `${code} already exists (ID ${before.id}). Pick another.`, duplicate: true }, { status: 409 });
-
-    const changes: Change[] = [{ key: "create", field: "Create promo code", before: null, after: `${code} — ${discountLabel({ discountType, discountValue })}, ${who} · ${which}` }];
-    const { result, error, outcome, logged } = await recordWrite(
-      {
-        env: ENV, source: b.source === DRAFT_ACTION_SOURCE ? DRAFT_ACTION_SOURCE : "Promo Codes", actorName: auth.email, actorEmail: auth.email,
-        saveId: b.saveId || randomUUID(), matchId: null, matchName: code,
-        method: "POST", path: "/admin/promocodes", body, keys: [], label: (k) => k,
-        applied: (bef, aft) => aft.exists === true && bef.exists !== true, changes,
-      },
-      { readResource, write: () => apiWrite(ENV, "POST", "/admin/promocodes", body, actor, "promos"), now: () => new Date().toISOString() },
-      supabaseLogStore(),
-    );
-    if (error) return errToResponse(error);
-    return Response.json({ ok: true, result, outcome, logRecorded: logged });
-  } catch (e) { return errToResponse(e); }
-}
-
-function errToResponse(e: unknown): Response {
-  if (e instanceof NotAuthorizedError) return Response.json({ error: e.message }, { status: 403 });
-  if (e instanceof AmbiguousWriteError) return Response.json({ error: e.message, ambiguous: true }, { status: 502 });
-  if (e instanceof ProductionWriteBoltedError) return Response.json({ error: e.message }, { status: 503 });
-  if (e instanceof DeniedEndpointError) return Response.json({ error: e.message }, { status: 403 });
-  if (e instanceof DeniedFieldError) return Response.json({ error: e.message }, { status: 400 });
-  if (e instanceof StageHostGuardError) return Response.json({ error: e.message }, { status: 500 });
-  if (e instanceof WriteFailedError) return Response.json({ error: e.message }, { status: e.status >= 400 && e.status < 600 ? e.status : 400 });
-  if (e instanceof StageConfigError) return Response.json({ error: e.message }, { status: 500 });
-  return Response.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
+  // The write itself, with its duplicate check and recordWrite, lives in src/lib/promoWrite.ts.
+  const r = await createPromoWrite({
+    env: ENV, code, body, changeAfter: `${code} — ${discountLabel({ discountType, discountValue })}, ${who} · ${which}`,
+    source: b.source === DRAFT_ACTION_SOURCE ? DRAFT_ACTION_SOURCE : "Promo Codes", saveId: b.saveId || randomUUID(), actor,
+  });
+  return Response.json(r.json, { status: r.status });
 }

@@ -74,6 +74,7 @@ import MessageBubble, {
   type ConversationMessage,
 } from "./components/MessageBubble";
 import Composer from "./components/Composer";
+import AutoSendPanel from "./components/AutoSendPanel";
 import MetricsStrip from "./components/MetricsStrip";
 import ContextPane from "./components/ContextPane";
 import { colorForCity } from "@/lib/cityColors";
@@ -109,6 +110,7 @@ function computeWhatsAppExpired(detail: ThreadDetail | null): boolean {
 
 export default function CrmClient() {
   const { appUser } = useAuth();
+  const [infoOpen, setInfoOpen] = useState(false);
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -771,9 +773,10 @@ export default function CrmClient() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setContextHidden((h) => !h)}
-                  title={contextHidden ? "Show player details" : "Hide player details"}
-                  aria-label={contextHidden ? "Show player details" : "Hide player details"}
+                  data-testid="chats-info"
+                  onClick={() => (appUser?.is_admin === true ? setInfoOpen((o) => !o) : setContextHidden((h) => !h))}
+                  title={appUser?.is_admin === true ? "Player details and auto-send" : contextHidden ? "Show player details" : "Hide player details"}
+                  aria-label={appUser?.is_admin === true ? "Player details and auto-send" : contextHidden ? "Show player details" : "Hide player details"}
                   className="hidden h-[31px] w-[31px] items-center justify-center rounded-[10px] transition hover:bg-white/85 min-[1260px]:flex"
                   style={{ color: contextHidden ? "#93a49b" : "#12704a" }}
                 >
@@ -781,6 +784,22 @@ export default function CrmClient() {
                 </button>
               </span>
             </div>
+            {infoOpen && appUser?.is_admin === true && (
+              <div className="relative">
+                <div data-testid="chats-info-menu" className="absolute right-0 top-1 z-30 rounded-lg border bg-white shadow-lg" style={{ borderColor: "#d9e4dd" }}>
+                  <button
+                    type="button"
+                    data-testid="chats-info-details"
+                    onClick={() => setContextHidden((h) => !h)}
+                    className="block w-full border-b px-3 py-2 text-left text-[12px] font-semibold hover:bg-cream-soft"
+                    style={{ borderColor: "#d9e4dd", color: "#12704a" }}
+                  >
+                    {contextHidden ? "Show player details" : "Hide player details"}
+                  </button>
+                  <AutoSendPanel />
+                </div>
+              </div>
+            )}
 
             {/* search + filter popover */}
             <SearchAndFilter

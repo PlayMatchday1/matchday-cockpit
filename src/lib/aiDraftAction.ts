@@ -14,6 +14,8 @@ import type { StoredAction } from "@/lib/aiDraftRun";
 import { fmtUsd } from "@/lib/creditsModel";
 
 export const DRAFT_ACTION_SOURCE = "Player Chats · draft action";
+export const AUTO_SEND_SOURCE = "Player Chats · auto-send";
+export const AUTO_SEND_ACTOR = "auto-send@clubhouse.system";
 
 export type ActionStatus = "landed" | "failed" | "not_applied" | "unknown";
 export type ActionDraft = { id: string; thread_id: string; outcome: string; draft_text: string | null; action: StoredAction | null; action_status: string | null };
@@ -21,6 +23,8 @@ export type WriteResult = { status: ActionStatus; error?: string };
 
 export type ActionIO = {
   threadId: string;
+  /** "Auto:" when no person pressed anything. It leads the reason in change_log. */
+  reasonPrefix?: string;
   loadDraft: () => Promise<ActionDraft | null>;
   threadPlayerId: () => Promise<number | null>;
   /** Null when this person may do it, or why not. Fresh from app_users on every press. */
@@ -67,7 +71,7 @@ export async function applyDraftAction(io: ActionIO): Promise<ActionResult> {
   if (!(await io.claim())) return refused(409, "This action was already pressed. Nothing was sent again.");
 
   const w = action.kind === "credit"
-    ? await io.writeCredit({ playerId: action.player_id, deltaCents: action.amount_cents!, expectedBeforeCents: action.balance_cents!, reason: creditReason(action) })
+    ? await io.writeCredit({ playerId: action.player_id, deltaCents: action.amount_cents!, expectedBeforeCents: action.balance_cents!, reason: `${io.reasonPrefix ? `${io.reasonPrefix} ` : ""}${creditReason(action)}` })
     : await io.writeGuestCode(code!);
   const text = code ? (d.draft_text ?? "").replace("{code}", code) : d.draft_text ?? "";
   await io.finish(w.status, w.status === "landed" && code ? text : null).catch((e: unknown) => {
@@ -126,6 +130,15 @@ export function guestCodeBody(code: string, now: number) {
   return {
     code, discountType: "PERCENT", value: GUEST_CODE_DISCOUNT_PERCENT, uses: GUEST_CODE_USES, who: "ALL_USERS", which: "TOTAL_USAGE",
     startDateUtc: new Date(now).toISOString(), endDateUtc: end.toISOString(), source: DRAFT_ACTION_SOURCE,
+  };
+}
+
+// The same code as the POST /admin/promocodes body, for a caller that isn't the Promo Codes form.
+export function guestCodeApiBody(code: string, now: number) {
+  const b = guestCodeBody(code, now);
+  return {
+    code, startDateUtc: b.startDateUtc, endDateUtc: b.endDateUtc, discountType: b.discountType, discountValue: b.value,
+    numberOfUsesPerUser: b.uses, targetUserType: b.who, targetMatchType: b.which,
   };
 }
 

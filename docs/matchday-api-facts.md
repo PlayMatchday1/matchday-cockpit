@@ -7641,10 +7641,33 @@ for 18596, 18680, 18679, 19700 and `/admin/matches?fromDate&toDate` windows arou
   tab, now held until the tab is visible.
 - **`crm_messages.template_name` misses most canned text.** Last 1,000 outbound: 14 with a template, while "To cancel your membership"
   appears 25 times and the membership policy text 20 times with none. `selectExamples` drops repeats and long text.
-- **Medium effort and the action schema: UNKNOWN against the live API.** `scripts/ai-draft-live-check.ts` could not run on 2026-10-31:
-  400 "Your credit balance is too low". **Production drafts failed with the same 400 from 2026-10-30T19:15Z**
-  (10 rows in `crm_ai_drafts`, latest billed draft 19:09Z).
+- **Medium effort and the action schema work on the live API.** After a credit top-up on 2026-10-31,
+  `scripts/ai-draft-live-check.ts`: 17 of 17 synthetic threads, $0.0321 a draft. `scripts/ai-draft-live-real.ts`, 22 real threads with
+  every write stubbed: 22 parsed, $0.0374 a draft, 15.6k to 19.6k input tokens, 110 to 1,189 output, 23.5 words a reply. `anyOf` with
+  null is accepted in the structured output schema. At 763 inbound messages in 30 days, drafting every message is about $28.50 a month.
+- **Production drafts failed from 2026-10-30T19:15Z until that top-up**, 400 "Your credit balance is too low"
+  (10 rows in `crm_ai_drafts`, latest billed draft 19:09Z). That is the account balance, not MONTHLY_CAP_USD.
+- **A real thread proposed a credit for a late cancel with no courtesy left**, filed outside `player_cancel` with no courtesy flag. Fixed in
+  the guard: a credit whose only matching match is one the player cancelled counts as a courtesy, whatever the category.
 - **Not built:** multi-spot credits. The guard only accepts one match price, so a two-spot late cancel at twice the price is stored failed.
+
+## Player Chats auto-send (2026-10-31)
+
+- **`/api/crm/send` refuses a sender with no human by design** (`no_human_actor`, pinned in `scripts/crm-characterize-test.ts`). Ryan's ruling
+  2026-10-31: the one exception is `autoSendAllowed` (`src/lib/aiDraftModel.ts`): hold_status `sending`, hold_until past, config live, a
+  stored yes on that draft, and the body equal to that draft's text.
+- **The credit and promo routes stay closed to the cron secret.** The writes moved to `src/lib/creditWrite.ts` and `src/lib/promoWrite.ts`;
+  the tick calls those with the actor `auto-send@clubhouse.system`.
+- **`crm_send_log` does not exist** (`GET /rest/v1/crm_send_log` 404 PGRST205, 2026-10-31). Sends log to `change_log` through `logCrmSend`; an
+  auto-send carries `draft_id` in the body and the actor `auto-send`. Never the message text.
+- **`crm_messages.auto_sent_draft_id` marks a message nobody typed.** `is_auto_reply` means an out-of-hours acknowledgment that doesn't count
+  as our answer, so it can't be reused.
+- **Shadow reads empty category lists as every category that could be turned on** (`decisionConfig`). Otherwise every shadow decision would
+  read "category isn't turned on" and shadow data would say nothing. Live reads the lists as they are.
+- **Inbound drafting is a cron, not the webhooks:** `/api/crm/auto-send/tick` every minute, threads whose last inbound is 90 seconds to 15 minutes
+  old. A message older than that when the tick reaches it gets its draft from the card.
+- **An action landing and the reply failing leaves money moved and no message.** Nothing retries; the draft goes to a person saying so.
+- **Live mode has never run.** Holds, system writes and the kill switch are tested with fakes only.
 
 ## The admin users CSV export counts only EMAIL-VERIFIED, completed signups; the Acquisition card counts phone-verified ones too (2026-10-21)
 

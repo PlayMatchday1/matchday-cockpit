@@ -85,6 +85,10 @@
       "schedule": "*/5 * * * *"
     },
     {
+      "path": "/api/crm/auto-send/tick",
+      "schedule": "* * * * *"
+    },
+    {
       "path": "/api/app/push/match-risk",
       "schedule": "*/5 * * * *"
     }

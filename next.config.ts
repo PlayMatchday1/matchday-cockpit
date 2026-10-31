@@ -13,6 +13,7 @@ const nextConfig: NextConfig = {
   // so file tracing would leave it out of the function bundle without this.
   outputFileTracingIncludes: {
     "/api/crm/threads/[id]/ai-draft": ["./docs/support/PLAYBOOK.md"],
+    "/api/crm/auto-send/tick": ["./docs/support/PLAYBOOK.md"],
   },
   // Build stamp — so "is this deployed?" is one glance, not a diagnostic round.
   // VERCEL_GIT_COMMIT_SHA is set by Vercel at build time from the deployed commit;

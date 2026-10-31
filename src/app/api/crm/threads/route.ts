@@ -476,5 +476,15 @@ export async function GET(req: Request) {
   // Counts were fired concurrently at the top; await the true values now.
   const counts = await countsPromise;
 
-  return Response.json({ threads: out, counts }, { status: 200 });
+  // The auto-send tag on a row: the latest pending draft's decision, and any hold. Isolated: a failure
+  // here leaves rows without a tag rather than an empty inbox.
+  const autoByThread = new Map<string, Record<string, unknown>>();
+  if (threadIds.length > 0) {
+    const ar = await supabase.from("crm_ai_drafts").select("thread_id, decision, decision_shadow, hold_status, hold_until, action, created_at")
+      .in("thread_id", threadIds).eq("outcome", "pending").not("decision", "is", null).order("created_at", { ascending: true });
+    if (ar.error) console.error("[crm:threads.list] auto-send lookup error", ar.error);
+    else for (const a of ar.data ?? []) autoByThread.set(a.thread_id as string, a);
+  }
+  const withAuto = out.map((t) => ({ ...t, auto_send: autoByThread.get(t.id) ?? null }));
+  return Response.json({ threads: withAuto, counts }, { status: 200 });
 }

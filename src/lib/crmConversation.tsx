@@ -35,6 +35,11 @@ import { type StatusFilter, type ViewCounts } from "@/app/(internal)/match-ops/p
 
 // ---------------- shared types (moved verbatim from CrmClient; imported back there) ----------------
 
+export type AutoSendRowState = {
+  decision: string | null; decision_shadow: boolean | null; hold_status: string | null; hold_until: string | null;
+  action: { kind: string; amount_cents: number | null } | null;
+};
+
 export type ThreadListRow = {
   id: string;
   phone_number: string;
@@ -55,6 +60,7 @@ export type ThreadListRow = {
   is_unread: boolean;
   is_follow_up: boolean;
   waiting_since: string | null;
+  auto_send?: AutoSendRowState | null;
   player: {
     first_name: string | null;
     last_name: string | null;

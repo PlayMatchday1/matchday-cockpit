@@ -22,16 +22,14 @@
 //  5. EVERY change through recordWrite into change_log with before, after, delta and the REASON —
 //     and the player ID only. Never a name, phone or email.
 
-import { randomUUID } from "node:crypto";
 import { authenticateCredits } from "@/lib/creditsAuth";
-import { apiGet, apiWrite, AmbiguousWriteError, WriteFailedError, DeniedFieldError, DeniedEndpointError, ProductionWriteBoltedError, StageHostGuardError, StageConfigError, NotAuthorizedError, type MatchdayEnv } from "@/lib/matchdayStageApi";
-import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
+import { apiGet, type MatchdayEnv } from "@/lib/matchdayStageApi";
+import { applyCreditAdjustment, balanceOf, creditErrorAnswer } from "@/lib/creditWrite";
 import { CONFINED_CITY_ERROR, playerCityAllowed } from "@/lib/cityConfinement";
 import { hasPlayedInCity } from "@/lib/playerCityScope";
 import { cityNameFor } from "@/lib/cityScope";
 import { makeServerClient } from "@/lib/supabaseServer";
-import { MAX_ADJUSTMENT_CENTS, raceCheck, fmtUsd } from "@/lib/creditsModel";
-import type { Change } from "@/lib/changeLogModel";
+import { MAX_ADJUSTMENT_CENTS, fmtUsd } from "@/lib/creditsModel";
 import { DRAFT_ACTION_SOURCE } from "@/lib/aiDraftAction";
 
 export const runtime = "nodejs";
@@ -39,11 +37,6 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 30;
 
 const isEnv = (x: string): x is MatchdayEnv => x === "staging" || x === "production";
-const balanceOf = (p: Record<string, unknown>): number => {
-  const n = Number(p?.creditAmount);
-  return Number.isFinite(n) ? Math.round(n) : 0;
-};
-
 
 export async function GET(req: Request, ctx: { params: Promise<{ env: string; playerId: string }> }) {
   // The READ is gated on the same grant as the write. A balance is not secret, but there is no
@@ -95,86 +88,27 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; p
   }
   if (reason.length < 3) return Response.json({ error: "A reason is required and is written to the change log." }, { status: 400 });
 
-  try {
-    // ── RULE 3 — THE RACE. Re-read IMMEDIATELY before writing. The endpoint is an absolute set,
-    // so if the player spent something since the screen was drawn, `expected + delta` would put
-    // the spend back. Abort rather than re-base: the operator chose a number against facts they
-    // were shown, and quietly acting on different ones is not the same instruction.
-    const player = await apiGet<Record<string, unknown>>(env, `/admin/players/${playerId}`);
-    // THE BOUNDARY BEFORE THE MONEY. Refused by id, from the server, on the same read the race
-    // check uses — so a confined account cannot adjust a player outside its city even by posting
-    // the id directly. This returns BEFORE any write, like every other guard on this route.
-    /* THE PLAYED-IN HALF OF THE BOUNDARY, resolved against the mirror. The payload above is
-     * GET /admin/players/{id} and carries no match history, so the union's second branch cannot be
-     * answered from it. Asked only when the account is confined: an unconfined caller is allowed
-     * by the first line of playerCityAllowed and must not pay for a query to prove it. */
+  /* THE PLAYED-IN HALF OF THE BOUNDARY, resolved against the mirror, on the same read the race check
+   * uses, so a confined account cannot adjust a player outside its city even by posting the id
+   * directly. Asked only when the account is confined. */
+  const boundary = async (player: Record<string, unknown>): Promise<string | null> => {
     const playedInScopeP = auth.confinedCity
       ? await hasPlayedInCity(makeServerClient(), cityNameFor(auth.confinedCity) ?? "", Number(playerId))
       : false;
-    if (!playerCityAllowed(auth.confinedCity, player, playedInScopeP)) {
-      console.warn(`[credits] 403: ${auth.email} (confined to ${auth.confinedCity}) attempted an adjustment on player ${playerId}`);
-      return Response.json({ error: CONFINED_CITY_ERROR }, { status: 403 });
-    }
-    const before = balanceOf(player);
-    const race = raceCheck(expected, before);
-    if (!race.ok) {
-      return Response.json({ error: race.error, aborted: true, balanceCents: before, landed: false, outcome: "NOT APPLIED" }, { status: 409 });
-    }
-    const after = before + delta;
-    if (after < 0) return Response.json({ error: `That would take the balance to ${fmtUsd(after)}. Clubhouse does not send a negative balance.` }, { status: 400 });
-
-    // ── RULE 5 — the audit record. PLAYER ID ONLY. No name, no phone, no email: change_log has
-    // different access rules and a longer life than this screen. The REASON is the point of it.
-    const changes: Change[] = [
-      { key: "creditAmount", field: "Credit balance", before, after },
-      { key: "delta", field: "Adjustment", before: "—", after: `${delta > 0 ? "+" : ""}${delta} cents (${fmtUsd(delta)})` },
-      { key: "reason", field: "Reason", before: "—", after: reason },
-    ];
-
-    const { result, error, outcome, logged } = await recordWrite(
-      {
-        env, source: body.source === DRAFT_ACTION_SOURCE ? DRAFT_ACTION_SOURCE : "Player Lookup · credits", actorName: auth.email, actorEmail: auth.email,
-        saveId: randomUUID(), matchId: null, matchName: null,
-        // NOTE the target: the player, by ID. Nothing identifying beyond the number.
-        method: "PUT", path: `/admin/players/${playerId}/profile`, body: { creditAmount: after },
-        keys: ["creditAmount"], label: (k) => (k === "creditAmount" ? "Credit balance" : k),
-        // The verdict comes from a RE-READ of the balance, never from the status code.
-        applied: (_b, a) => balanceOf((a.player as Record<string, unknown>) ?? {}) === after,
-        changes,
-      },
-      {
-        readResource: async () => ({ player: await apiGet<Record<string, unknown>>(env, `/admin/players/${playerId}`).catch(() => ({})) }),
-        // ── RULE 4 — ONE ATTEMPT. apiWrite is single-shot and never retries; this closure is
-        // called once by recordWrite. `requires: "credits"` hits the chokepoint guard, so a route
-        // that ever forgot its own check above is still stopped before any network call.
-        write: () => apiWrite(env, "PUT", `/admin/players/${playerId}/profile`, { creditAmount: after },
-          { canEditMatches: false, canEditCredits: true, email: auth.email, userId: auth.appUserId }, "credits"),
-        now: () => new Date().toISOString(),
-      },
-      supabaseLogStore(),
-    );
-    if (error) return errToResponse(error);
-
-    // Report the TRUE balance from a final read, not from what we hoped to set.
-    const fresh = balanceOf(await apiGet<Record<string, unknown>>(env, `/admin/players/${playerId}`).catch(() => ({})));
-    const landed = outcome === "landed";
-    return Response.json({
-      ok: true, landed, outcome: landed ? "LANDED" : "NOT APPLIED",
-      beforeCents: before, intendedAfterCents: after, balanceCents: fresh, deltaCents: delta,
-      logRecorded: logged, result,
-    });
-  } catch (e) { return errToResponse(e); }
+    if (playerCityAllowed(auth.confinedCity, player, playedInScopeP)) return null;
+    console.warn(`[credits] 403: ${auth.email} (confined to ${auth.confinedCity}) attempted an adjustment on player ${playerId}`);
+    return CONFINED_CITY_ERROR;
+  };
+  // The write itself, with its race check and recordWrite, lives in src/lib/creditWrite.ts.
+  const r = await applyCreditAdjustment({
+    env, playerId, deltaCents: delta, expectedBeforeCents: expected, reason,
+    source: body.source === DRAFT_ACTION_SOURCE ? DRAFT_ACTION_SOURCE : "Player Lookup · credits",
+    actor: { email: auth.email, userId: auth.appUserId }, boundary,
+  });
+  return Response.json(r.json, { status: r.status });
 }
 
-function errToResponse(e: unknown): Response {
-  if (e instanceof NotAuthorizedError) return Response.json({ error: e.message, landed: false, outcome: "NOT APPLIED" }, { status: 403 });
-  // AMBIGUOUS is its own fact and must never read as a clean failure: the write may have landed.
-  if (e instanceof AmbiguousWriteError) return Response.json({ error: e.message, ambiguous: true, outcome: "UNKNOWN" }, { status: 502 });
-  if (e instanceof ProductionWriteBoltedError) return Response.json({ error: e.message, landed: false, outcome: "NOT APPLIED" }, { status: 503 });
-  if (e instanceof DeniedEndpointError) return Response.json({ error: e.message }, { status: 403 });
-  if (e instanceof DeniedFieldError) return Response.json({ error: e.message }, { status: 400 });
-  if (e instanceof StageHostGuardError) return Response.json({ error: e.message }, { status: 500 });
-  if (e instanceof WriteFailedError) return Response.json({ error: e.message, landed: false, outcome: "FAILED" }, { status: e.status >= 400 && e.status < 600 ? e.status : 400 });
-  if (e instanceof StageConfigError) return Response.json({ error: e.message }, { status: 500 });
-  return Response.json({ error: e instanceof Error ? e.message : String(e), outcome: "UNKNOWN" }, { status: 500 });
-}
+const errToResponse = (e: unknown): Response => {
+  const r = creditErrorAnswer(e);
+  return Response.json(r.json, { status: r.status });
+};

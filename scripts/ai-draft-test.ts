@@ -17,12 +17,14 @@ import { readFileSync } from "node:fs";
 import {
   draftEligibility, buildDraftContext, buildDraftRequest, scrubPii, sanitizeDraft, hasDash, guardDraft,
   classifyDraftOutcome, capReached, draftCostUsd, assertAnthropicHost, monthStartUtcIso, DRAFT_INSTRUCTIONS, DRAFT_OUTPUT_SCHEMA,
+  decideAutoSend, decisionConfig, isAutoSendLive, autoSendAllowed, badAutoSendReplies, KILL_MAX_BAD, type AutoSendConfig, type DecisionContext, type DraftContext,
   parseDraftOutput, priorCourtesyFromLog, staffRepliesConfirmAccount, selectExamples, discardReasonText, DISCARD_CHIPS,
   type DraftMsg, type DraftContextIn, type DraftRequest,
 } from "../src/lib/aiDraftModel";
 import { runDraft, CONFIRMED_BY_STAFF_NOTE, type DraftDeps, type NewDraftRow, type StoredDraft } from "../src/lib/aiDraftRun";
 import { applyDraftAction, creditReason, guestCodeBody, guestCodeFor, guestCodeRefusal, staffConfirmedMembership, writeStatusFrom, type ActionIO } from "../src/lib/aiDraftAction";
 import { buildRecordedFields, type CameraRow } from "../src/lib/aiDraftCamera";
+import { processHold, holdStopReason, type HoldIO, type HoldRow } from "../src/lib/aiDraftAuto";
 import { draftOutcomePatch, discardPatch } from "../src/lib/aiDraftOutcome";
 import { playbookForModel } from "../src/lib/aiDraftPlaybook";
 import { crmSendLogBody, logCrmSend } from "../src/lib/crmSendLog";
@@ -194,19 +196,19 @@ function fake(over: Partial<DraftDeps> & { msgs?: DraftMsg[]; ctx?: DraftContext
 
 // tsx runs this file as CJS, which has no top-level await: the async sections run inside main().
 async function main() {
-// ── 7. the $20 monthly cap ───────────────────────────────────────────────────────────────────
-console.log("\nTHE $20 MONTHLY CAP:");
+// ── 7. the $60 monthly cap ───────────────────────────────────────────────────────────────────
+console.log("\nTHE $60 MONTHLY CAP:");
 {
-  const under = fake({ spend: 19.99 });
+  const under = fake({ spend: 59.99 });
   const r1 = await runDraft(under.deps);
-  ok("POSITIVE CONTROL: at $19.99 spent, a draft is made (one model call)", r1.status === "ok" && under.calls.model.length === 1);
-  const over = fake({ spend: 20.01 });
+  ok("POSITIVE CONTROL: at $59.99 spent, a draft is made (one model call)", r1.status === "ok" && under.calls.model.length === 1);
+  const over = fake({ spend: 60.01 });
   const r2 = await runDraft(over.deps);
-  ok("cost_usd forced over the cap ($20.01) → drafting stops", r2.status === "cap_reached");
+  ok("cost_usd forced over the cap ($60.01) → drafting stops", r2.status === "cap_reached");
   eq("  and the model is NOT called", over.calls.model.length, 0);
-  ok("  and the card says so plainly", r2.status === "cap_reached" && /paused/.test(r2.message) && r2.message.includes("$20"));
-  const exact = fake({ spend: 20 });
-  ok("exactly $20.00 is already the cap", (await runDraft(exact.deps)).status === "cap_reached" && exact.calls.model.length === 0);
+  ok("  and the card says so plainly", r2.status === "cap_reached" && /paused/.test(r2.message) && r2.message.includes("$60"));
+  const exact = fake({ spend: 60 });
+  ok("exactly $60.00 is already the cap", (await runDraft(exact.deps)).status === "cap_reached" && exact.calls.model.length === 0);
   const broken = fake({ monthSpendUsd: async () => { throw new Error("db down"); } });
   ok("a spend read that FAILS stops drafting too (fails closed)", (await runDraft(broken.deps)).status === "cap_reached" && broken.calls.model.length === 0);
   ok("capReached(NaN) is true", capReached(NaN));
@@ -578,8 +580,8 @@ console.log("\nPROPOSED ACTIONS:");
   ok("an unconfirmed account can't carry an action", !g(credit(1200), buildDraftContext({ ...lateCancel(0), ambiguous: true, confirmed: false })).ok);
   ok("no action, but the reply says a credit is done: fails", !g({ ...base, offers_courtesy_credit: false, category: "player_cancel", reply: "We've credited your account." }).ok);
   const mem = buildDraftContext({ ...lateCancel(0, true), membership: { status: "ACTIVE", since: "2026-01-01T00:00:00Z", renews: null, canceledAt: null, price: 6650 } });
-  ok("a membership price can be credited on a membership_billing draft", g(credit(6650, { category: "membership_billing", offers_courtesy_credit: false }), mem).ok);
-  ok("  but not from any other category", !g(credit(6650, { category: "needs_credit", offers_courtesy_credit: false }), mem).ok);
+  ok("RULE 6, EVERYWHERE: a membership price is not a credit amount, even on a membership_billing draft", !g(credit(6650, { category: "membership_billing", offers_courtesy_credit: false }), mem).ok);
+  ok("  nor from any other category", !g(credit(6650, { category: "needs_credit", offers_courtesy_credit: false }), mem).ok);
   const guest = { ...base, offers_courtesy_credit: false, category: "guest_pass", reply: "Your guest code is {code}, it works 3 times and goes live in a few minutes.", reply_without_action: "We're processing your guest passes.", action: { kind: "issue_guest_code" as const, amount_cents: null, reason: "member asked" } };
   ok("POSITIVE CONTROL: a guest code draft with the placeholder passes", g(guest, mem).ok);
   ok("a guest code without the placeholder fails (the model can't write a code)", !g({ ...guest, reply: "Your guest code is ATX597FP." }, mem).ok);
@@ -782,12 +784,164 @@ console.log("\nDISCARD REASONS AND STALENESS:");
   eq("the patch carries the reason", discardPatch(d, { threadId: "t1", userId: "u", nowIso: "n", reason: "Too long" })?.discard_reason, "Too long");
   const strip = (s: string) => s.replace(/\/\/[^\n]*/g, "");
   ok("POSITIVE CONTROL: the stale check still exists, in runDraft", /staleDraftReason\(prior/.test(strip(readFileSync("src/lib/aiDraftRun.ts", "utf8"))));
-  const scheduled = ["vercel.json", "src/app/api/sync/cron/route.ts"].map((f) => readFileSync(f, "utf8")).join("\n");
-  ok("POSITIVE CONTROL: the cron list is readable", scheduled.includes("/api/sync/cron"));
-  ok("no cron calls the draft route (a draft needs a person)", !/ai-draft/.test(scheduled));
+  const tick = strip(readFileSync("src/lib/aiDraftAutoRun.ts", "utf8"));
+  ok("POSITIVE CONTROL: the tick drafts", /runDraft\(\{/.test(tick));
+  ok("the tick never regenerates: only a thread with no draft for this message, regenerate false", /regenerate: false/.test(tick) && !/regenerate: true/.test(tick) && /if \(\(any\.data \?\? \[\]\)\.length\) return "has_draft"/.test(tick));
   const card = strip(readFileSync("src/app/(internal)/match-ops/player-chats/components/AiDraftCard.tsx", "utf8"));
   ok("the card holds its request while the tab is hidden", /visibilityState === "visible"\) \{ void request\(false\)/.test(card));
+  ok("the tick's cron is every minute", /"\/api\/crm\/auto-send\/tick",\s*"schedule": "\* \* \* \* \*"/.test(readFileSync("vercel.json", "utf8")));
   ok("the action button says it doesn't send", /\+ use draft/.test(card) && !/Send \+/.test(card));
+}
+
+// ── auto-send: the decision ──────────────────────────────────────────────────────────────────
+console.log("\nAUTO-SEND DECISION:");
+{
+  const on: AutoSendConfig = { auto_categories: ["veo", "player_cancel", "guest_pass", "booking"], action_categories: ["player_cancel", "guest_pass"], credit_cap_cents: 1500, hold_minutes: 3, enabled: true, shadow: false };
+  const ctx = (over: Partial<DecisionContext> = {}, c: DraftContext = buildDraftContext(lateCancel(0))): DecisionContext => ({ context: c, windowClosed: false, humanRepliedRecently: false, guest: null, ...over });
+  const plain = { reply: "Videos go up within 24 to 48 hours.", category: "veo", flags: [] as string[], action: null };
+  const credit = (amount: number) => ({ reply: "We've credited it.", category: "player_cancel", flags: [] as string[], action: { kind: "credit" as const, amount_cents: amount, reason: "late cancel" } });
+  const d = decideAutoSend;
+  eq("POSITIVE: a plain reply in a category that's on → auto_send", d(plain, ctx(), on).decision, "auto_send");
+  eq("POSITIVE: a credit of the match price under the cap, no prior courtesy → auto_send_with_action", d(credit(1200), ctx(), on).decision, "auto_send_with_action");
+  for (const f of ["escalate", "refund_pushback", "strike_dispute", "under_16", "hold_requested", "urgent"]) {
+    const r = d({ ...plain, flags: [f] }, ctx(), on);
+    ok(`HUMAN: flag ${f}`, r.decision === "human" && r.reason.includes(f));
+  }
+  ok("POSITIVE CONTROL: the guest_pass and needs_credit flags don't stop it (action drafts carry them)", d({ ...plain, flags: ["guest_pass", "needs_credit"] }, ctx(), on).decision === "auto_send");
+  const everything = { ...on, auto_categories: ["complaint", "membership_billing", "strike", "payment", "account", "other"] };
+  for (const c of ["complaint", "membership_billing", "strike", "payment", "account", "other"]) {
+    ok(`HUMAN: category ${c}, even if someone put it on the list`, d({ ...plain, category: c }, ctx(), everything).decision === "human");
+  }
+  const unconfirmed = buildDraftContext({ ...lateCancel(0), ambiguous: true, confirmed: false });
+  ok("HUMAN: unconfirmed account and the reply states a fact", /unconfirmed/.test(d({ ...plain, reply: "You have $16.24 in credit." }, ctx({}, unconfirmed), on).reason));
+  ok("  also: \"your membership\"", d({ ...plain, reply: "Your membership renews soon." }, ctx({}, unconfirmed), on).decision === "human");
+  ok("  also: a date", d({ ...plain, reply: "That was on Oct 21." }, ctx({}, unconfirmed), on).decision === "human");
+  eq("POSITIVE CONTROL: unconfirmed, asking for the number, states no fact → auto_send", d({ ...plain, reply: "What's the phone number on your MatchDay account? It's in your profile in the app." }, ctx({}, unconfirmed), on).decision, "auto_send");
+  ok("HUMAN: the guard failed", /failed a check/.test(d({ ...plain, guardError: "a dash" }, ctx(), on).reason) && d({ ...plain, guardError: "a dash" }, ctx(), on).decision === "human");
+  ok("HUMAN: the WhatsApp window is closed", /window/.test(d(plain, ctx({ windowClosed: true }), on).reason));
+  ok("HUMAN: a person replied in the last 2 hours", /2 hours/.test(d(plain, ctx({ humanRepliedRecently: true }), on).reason));
+  ok("HUMAN: empty reply", /no reply/.test(d({ ...plain, reply: "  " }, ctx(), on).reason));
+  ok("HUMAN: category not on", /isn't turned on/.test(d({ ...plain, category: "logistics" }, ctx(), on).reason));
+  ok("HUMAN: a category the model invented", d({ ...plain, category: "brand_new" }, ctx(), on).decision === "human");
+  ok("HUMAN: can send in this category but can't act in it", /Actions aren't/.test(d({ ...credit(1200), category: "veo" }, ctx(), on).reason));
+
+  // The cap, exactly.
+  const m = (price: number) => buildDraftContext({ ...lateCancel(0), matches: [{ ...lateCancel(0).matches[0], price }] });
+  eq("cap: $15.00 exactly at a $15.00 cap → with action", d(credit(1500), ctx({}, m(1500)), on).decision, "auto_send_with_action");
+  const over = d(credit(1501), ctx({}, m(1501)), on);
+  ok("cap: $15.01 at a $15.00 cap → human, for that reason", over.decision === "human" && /over the \$15\.00 cap/.test(over.reason));
+  ok("the amount must be a match price in context", /isn't a match price/.test(d(credit(800), ctx(), on).reason));
+  ok("prior courtesy → human", d(credit(1200), ctx({}, buildDraftContext(lateCancel(0, false, true))), on).decision === "human");
+  ok("courtesy history unreadable → human", d(credit(1200), ctx({}, buildDraftContext(lateCancel(0, false, null))), on).decision === "human");
+  const club = buildDraftContext({ ...lateCancel(0), matches: [{ ...lateCancel(0).matches[0], state: "club_cancelled" }] });
+  ok("a club-cancelled match, already credited → human", /already cancelled/.test(d(credit(1200), ctx({}, club), on).reason));
+  // Guest code.
+  const member = buildDraftContext({ ...lateCancel(0, true), membership: { status: "ACTIVE", since: "2026-01-01T00:00:00Z", renews: null, canceledAt: null, price: 6650 } });
+  const code = { reply: "Your code is {code}.", category: "guest_pass", flags: ["guest_pass"], action: { kind: "issue_guest_code" as const, amount_cents: null, reason: "asked" } };
+  const good = { active: true, over24Hours: true, hasActiveCode: false };
+  eq("POSITIVE: guest code, active over 24 hours, no code → with action", d(code, ctx({ guest: good }, member), on).decision, "auto_send_with_action");
+  ok("guest code: not active → human", d(code, ctx({ guest: { ...good, active: false } }, member), on).decision === "human");
+  ok("guest code: under 24 hours → human, with no staff-message exception", /under 24 hours/.test(d(code, ctx({ guest: { ...good, over24Hours: false } }, member), on).reason));
+  ok("guest code: already has one → human", /already has/.test(d(code, ctx({ guest: { ...good, hasActiveCode: true } }, member), on).reason));
+  ok("guest code: facts couldn't be read → human", d(code, ctx({ guest: null }, member), on).decision === "human");
+
+  // Shipped state: shadow, lists empty.
+  const shipped: AutoSendConfig = { auto_categories: [], action_categories: [], credit_cap_cents: 1500, hold_minutes: 3, enabled: false, shadow: true };
+  eq("shipped: not live", isAutoSendLive(shipped), false);
+  eq("shadow with empty lists still shows what would happen", d(plain, ctx(), decisionConfig(shipped)).decision, "auto_send");
+  eq("  including an action", d(credit(1200), ctx(), decisionConfig(shipped)).decision, "auto_send_with_action");
+  ok("  and still sends a complaint to a person", d({ ...plain, category: "complaint" }, ctx(), decisionConfig(shipped)).decision === "human");
+  const liveEmpty = { ...shipped, enabled: true, shadow: false };
+  eq("LIVE with empty lists does nothing: the widening is shadow only", d(plain, ctx(), decisionConfig(liveEmpty)).decision, "human");
+  eq("not live with a list set respects the list", d(plain, ctx(), decisionConfig({ ...shipped, auto_categories: ["booking"] })).decision, "human");
+  eq("enabled with shadow on isn't live", isAutoSendLive({ enabled: true, shadow: true }), false);
+  eq("shadow off but not enabled isn't live", isAutoSendLive({ enabled: false, shadow: false }), false);
+
+  // The single allowed shape through the send route.
+  const T = Date.parse("2026-10-31T12:00:00Z");
+  const row = { thread_id: "t1", draft_text: "Hello", decision: "auto_send", hold_status: "sending", hold_until: new Date(T - 1000).toISOString(), outcome: "pending" };
+  const arg = { threadId: "t1", body: "Hello", now: T };
+  ok("THE ONE ALLOWED SHAPE: sending, hold over, live, decision stored, same text", autoSendAllowed(row, liveEmpty, arg));
+  ok("  with an action decision too", autoSendAllowed({ ...row, decision: "auto_send_with_action" }, liveEmpty, arg));
+  for (const [n, r, c, a] of [
+    ["no draft", null, liveEmpty, arg],
+    ["no config", row, null, arg],
+    ["shadow on", row, { ...liveEmpty, shadow: true }, arg],
+    ["disabled", row, { ...liveEmpty, enabled: false }, arg],
+    ["still holding", { ...row, hold_status: "holding" }, liveEmpty, arg],
+    ["cancelled", { ...row, hold_status: "cancelled" }, liveEmpty, arg],
+    ["hold not over", { ...row, hold_until: new Date(T + 1000).toISOString() }, liveEmpty, arg],
+    ["no hold time", { ...row, hold_until: null }, liveEmpty, arg],
+    ["decision human", { ...row, decision: "human" }, liveEmpty, arg],
+    ["no decision", { ...row, decision: null }, liveEmpty, arg],
+    ["another thread", row, liveEmpty, { ...arg, threadId: "t2" }],
+    ["different text", row, liveEmpty, { ...arg, body: "Something else" }],
+    ["already sent", { ...row, outcome: "sent_unchanged" }, liveEmpty, arg],
+  ] as const) {
+    ok(`  refused: ${n}`, !autoSendAllowed(r as Parameters<typeof autoSendAllowed>[0], c as AutoSendConfig | null, a));
+  }
+
+  // The hold.
+  const hold = (over: Partial<HoldRow> = {}): HoldRow => ({ id: "d1", thread_id: "t1", based_on_message_id: "b1", created_at: new Date(T - 3 * 60e3).toISOString(), hold_until: new Date(T - 1000).toISOString(), draft_text: "We've credited $8.00.", decision: "auto_send_with_action", action: { kind: "credit", amount_cents: 800, reason: "x", is_courtesy: true, player_id: 42, balance_cents: 0 }, ...over });
+  const pmsg: DraftMsg = { id: "b1", direction: "inbound", body: "can I get a credit", sent_at: new Date(T - 5 * 60e3).toISOString() };
+  const mkH = (over: Partial<HoldIO> = {}, msgs: DraftMsg[] = [pmsg]) => {
+    const log = { moves: [] as string[], human: [] as string[], applied: 0, sent: [] as string[] };
+    const io: HoldIO = {
+      now: () => T, config: async () => liveEmpty, thread: async () => ({ channel: "sms", msgs }),
+      moveHold: async (_id, from, to) => { log.moves.push(`${from}>${to}`); return true; },
+      routeToHuman: async (_id, r) => { log.human.push(r); },
+      applyAction: async () => { log.applied++; return { ok: true, status: "landed", text: "We've credited $8.00.", message: "" }; },
+      send: async (_d, t) => { log.sent.push(t); return { ok: true }; },
+      ...over,
+    };
+    return { io, log };
+  };
+  const h1 = mkH();
+  eq("a hold that ends: applies, then sends", [await processHold(hold(), h1.io), h1.log.applied, h1.log.sent], ["sent", 1, ["We've credited $8.00."]]);
+  eq("  and walks the states", h1.log.moves, ["holding>sending", "sending>sent"]);
+  const h2 = mkH({ applyAction: async () => ({ ok: false, httpStatus: 409, status: "failed", error: "nope" }) });
+  eq("the action write fails: NOTHING sends", [await processHold(hold(), h2.io), h2.log.sent.length], ["failed", 0]);
+  ok("  and it goes to a person with the error", /nope/.test(h2.log.human[0]));
+  const h3 = mkH({ send: async () => ({ ok: false, error: "Meta 400" }) });
+  eq("the send fails after the credit landed: not retried", [await processHold(hold(), h3.io), h3.log.sent.length], ["failed", 0]);
+  ok("  and the note says the action landed", /action landed/.test(h3.log.human[0]));
+  const staffMsg: DraftMsg = { id: "s1", direction: "outbound", body: "On it", sent_at: new Date(T - 60e3).toISOString() };
+  const h4 = mkH({}, [pmsg, staffMsg]);
+  eq("a staff message cancels it: no money, no send", [await processHold(hold(), h4.io), h4.log.applied, h4.log.sent.length], ["cancelled", 0, 0]);
+  const h5 = mkH({ config: async () => shipped });
+  eq("the kill switch cancels it: no money, no send", [await processHold(hold(), h5.io), h5.log.applied, h5.log.sent.length], ["cancelled", 0, 0]);
+  const h6 = mkH({}, [pmsg, { id: "b2", direction: "inbound", body: "actually never mind", sent_at: new Date(T - 60e3).toISOString() }]);
+  eq("the player wrote again: cancelled", [await processHold(hold(), h6.io), h6.log.applied], ["cancelled", 0]);
+  const h7 = mkH({ moveHold: async () => false });
+  eq("another run took it: nothing happens", [await processHold(hold(), h7.io), h7.log.applied, h7.log.sent.length], ["skipped", 0, 0]);
+  const autoMsg: DraftMsg = { ...staffMsg, auto_sent_draft_id: "d0" };
+  eq("an earlier auto-send isn't a staff message", holdStopReason(hold(), [pmsg, autoMsg], "sms", liveEmpty, T), null);
+  ok("an auto-send doesn't confirm an account", !staffRepliesConfirmAccount([{ ...autoMsg, body: "Hey Jordan!" }], { firstName: "Jordan", creditsCents: 0, membership: null, matches: [] }));
+  ok("an auto-send isn't an example of how the team writes", selectExamples([{ ...autoMsg, body: "Awesome!" }]).length === 0);
+  ok("the transcript labels it", renderTranscript([{ ...autoMsg, body: "Hi" }]).includes("MatchDay (sent automatically)"));
+  ok("eligibility counts it as our answer (no draft on top of it)", !draftEligibility([pmsg, autoMsg], "sms", T).ok);
+
+  // The kill switch.
+  const sentAt = (i: number) => ({ thread_id: `t${i}`, sent_at: new Date(T - 40 * 60e3).toISOString() });
+  const reply = (i: number, body: string, minsAfter = 5) => ({ thread_id: `t${i}`, body, sent_at: new Date(T - 40 * 60e3 + minsAfter * 60e3).toISOString() });
+  for (const w of ["that's wrong", "No", "that's not what I asked", "that’s not right", "I want a refund", "can I talk to a human"]) {
+    eq(`kill: "${w}" counts`, badAutoSendReplies([sentAt(1)], [reply(1, w)], T), 1);
+  }
+  for (const w of ["I know, thanks", "thanks!", "note taken", "humane", "wrongful"]) {
+    eq(`kill: "${w}" doesn't`, badAutoSendReplies([sentAt(1)], [reply(1, w)], T), 0);
+  }
+  eq("kill: \"no worries\" counts too, whole words only go so far", badAutoSendReplies([sentAt(1)], [reply(1, "no worries")], T), 1);
+  eq("kill: a reply after 30 minutes doesn't count", badAutoSendReplies([sentAt(1)], [reply(1, "wrong", 31)], T), 0);
+  eq("kill: a message before the auto-send doesn't count", badAutoSendReplies([sentAt(1)], [reply(1, "wrong", -1)], T), 0);
+  eq("kill: another thread's reply doesn't count", badAutoSendReplies([sentAt(1)], [reply(2, "wrong")], T), 0);
+  eq("kill: an auto-send over an hour old doesn't count", badAutoSendReplies([{ thread_id: "t1", sent_at: new Date(T - 61 * 60e3).toISOString() }], [{ thread_id: "t1", body: "wrong", sent_at: new Date(T - 60 * 60e3).toISOString() }], T), 0);
+  eq("kill: two complaints on one auto-send count once", badAutoSendReplies([sentAt(1)], [reply(1, "wrong"), reply(1, "no")], T), 1);
+  eq("kill: the threshold is MORE than 3", KILL_MAX_BAD, 3);
+
+  // Real-thread regression: a late cancel filed under another category with no courtesy flag.
+  const noCourtesy = buildDraftContext(lateCancel(0, false, true));
+  const g = guardDraft({ reply: "We've credited $12.00.", reply_without_action: "I'll get that added.", category: "needs_credit", flags: [], staff_notes: [], match_ids: [], offers_courtesy_credit: false, action: { kind: "credit", amount_cents: 1200, reason: "staff agreed" } }, { courtesy_credit_eligible: noCourtesy.courtesy_credit_eligible, context: noCourtesy });
+  ok("a late cancel under another category, unflagged, fails the guard (seen on a real thread)", !g.ok && /own cancel/.test(g.error));
 }
 
 // ── source pairings (a click and an HTTP route are not observable here) ──────────────────────
@@ -808,7 +962,7 @@ console.log("\nSOURCE PAIRINGS:");
     ok(`${route}: passes a LENGTH, never the text, into the log`, calls.every((c) => /bodyLength:\s*\w+\.length/.test(c) && !/\b(body|caption|renderedBody|vars):/.test(c)));
     ok(`${route}: does not call recordWrite directly (one logging shape)`, !/recordWrite\(/.test(src));
   }
-  const draftRoute = strip(readFileSync("src/app/api/crm/threads/[id]/ai-draft/route.ts", "utf8"));
+  const draftRoute = strip(readFileSync("src/app/api/crm/threads/[id]/ai-draft/route.ts", "utf8")) + strip(readFileSync("src/lib/aiDraftDeps.ts", "utf8")) + strip(readFileSync("src/lib/aiDraftAutoRun.ts", "utf8")).replace(/import \{ POST as sendPOST \}[^\n]*\n/, "").replace(/\/\/ The one path to a player[\s\S]*?\n\}\n/, "");
   const runSrc = strip(readFileSync("src/lib/aiDraftRun.ts", "utf8"));
   ok("POSITIVE CONTROL: the link route writes player_id", /from\("crm_threads"\)\.update\(patch\)/.test(strip(readFileSync("src/app/api/crm/threads/[id]/link/route.ts", "utf8"))));
   ok("drafting NEVER links on its own: no crm_threads update and no link call in the draft path", !/from\("crm_threads"\)\.update|\/link\b|linkThread/.test(draftRoute + runSrc));
@@ -817,6 +971,15 @@ console.log("\nSOURCE PAIRINGS:");
   const actionRoute = strip(readFileSync("src/app/api/crm/threads/[id]/ai-draft/action/route.ts", "utf8"));
   ok("POSITIVE CONTROL: the action route posts to the credit and promo routes' own handlers", /creditPOST\(/.test(actionRoute) && /promoPOST/.test(actionRoute));
   ok("the action route never sends a message, and writes through no apiWrite of its own", !/sendWhatsApp|telnyx|\/api\/crm\/send|apiWrite\(|recordWrite\(/i.test(actionRoute));
+  const sendRoute = strip(readFileSync("src/app/api/crm/send/route.ts", "utf8"));
+  ok("THE SEND ROUTE: autoSentDraftId is set in exactly one place, behind autoSendAllowed", (sendRoute.match(/autoSentDraftId = /g) ?? []).length === 1 && /if \(autoSendAllowed\([^\n]*\) autoSentDraftId = draftId;/.test(sendRoute));
+  ok("  and the check only runs with no human actor", /if \(!appUserId && parsed\.auto_send === true && draftId\)/.test(sendRoute));
+  ok("  and everything else with no human still gets no_human_actor", /if \(!appUserId\) \{\s*if \(!autoSentDraftId\) \{[\s\S]{0,200}no_human_actor/.test(sendRoute));
+  ok("  the refusal is the only bare !appUserId check (crm-characterize's pin can't match anything else)", (sendRoute.match(/if \(!appUserId\)/g) ?? []).length === 1);
+  const creditRoute = strip(readFileSync("src/app/api/matchday/[env]/players/[playerId]/credits/route.ts", "utf8"));
+  const promoRoute = strip(readFileSync("src/app/api/promos/create/route.ts", "utf8"));
+  ok("POSITIVE CONTROL: the credit and promo routes gate on a person's session", /authenticateCredits\(req\)/.test(creditRoute) && /authenticateCapability\(req, "managePromos"\)/.test(promoRoute));
+  ok("THE CREDIT AND PROMO ROUTES STAY CLOSED TO THE CRON SECRET", !/CRON_SECRET|authenticateCrm/.test(creditRoute + promoRoute));
   ok("the draft route never sends a message (no send helpers imported)", !/sendWhatsApp|telnyx|\/api\/crm\/send/i.test(draftRoute));
   ok("the draft route reads no Stripe and spreads no profile into the context", !/fetchPlayerPayments|\.\.\.p\b|\.\.\.raw|\.\.\.listRow/.test(draftRoute));
 }

@@ -20,7 +20,7 @@ import {
   buildDraftContext, buildDraftRequest, capReached, draftCostUsd, draftEligibility, guardDraft,
   monthStartUtcIso, parseDraftOutput, finalStaffNotes, MONTHLY_CAP_USD, SKIP_REASON_TEXT, AI_DRAFT_MODEL,
   accountConfirmed, unconfirmedReason, extractPhoneNumbers, decideLinkSuggestion, staffRepliesConfirmAccount, isStaffReply, selectExamples,
-  type DraftContextIn, type DraftMsg, type DraftRequest, type SkipReason, type LinkSuggestion,
+  type DraftContext, type DraftContextIn, type DraftMsg, type DraftOutput, type DraftRequest, type SkipReason, type LinkSuggestion,
 } from "@/lib/aiDraftModel";
 import {
   buildClock, matchKey, scheduleWindow, selectSchedule, staleDraftReason, tzForCity, FALLBACK_TZ, type ScheduleRow,
@@ -101,6 +101,8 @@ export type DraftDeps = {
   playbook: () => { text: string; version: string };
   callModel: (req: DraftRequest) => Promise<ModelReply>;
   insertDraft: (row: NewDraftRow) => Promise<{ id: string; created_at: string }>;
+  /** Called with what the decision needs, after a guarded draft is stored. The auto-send tick uses it. */
+  afterDraft?: (d: { draftId: string; output: DraftOutput; context: DraftContext; msgs: DraftMsg[] }) => Promise<void>;
 };
 
 export type DraftView = {
@@ -282,6 +284,7 @@ export async function runDraft(deps: DraftDeps): Promise<DraftResult> {
     input_tokens: reply.usage.input_tokens ?? null, output_tokens: reply.usage.output_tokens ?? null,
     cost_usd: draftCostUsd(reply.usage), error: null, outcome: "pending",
   });
+  await deps.afterDraft?.({ draftId: row.id, output: out, context, msgs });
   return withLink({
     status: "ok", reused: false,
     draft: {

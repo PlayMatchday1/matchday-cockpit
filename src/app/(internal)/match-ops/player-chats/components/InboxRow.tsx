@@ -1,6 +1,9 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { Star, Check, Undo2 } from "lucide-react";
+import { fmtUsd } from "@/lib/creditsModel";
+import { bearerHeaders, type AutoSendRowState } from "@/lib/crmConversation";
 import {
   firstResponseCue,
   firstResponseCueDescription,
@@ -55,7 +58,49 @@ export type InboxRowThread = {
   // Per-viewer follow-up star. Server-computed; optimistically patched
   // on toggle.
   is_follow_up: boolean;
+  // The latest draft's auto-send decision and any hold. Absent on rows nothing was decided for.
+  auto_send?: AutoSendRowState | null;
 };
+
+// A grey "would" tag in shadow; a live countdown with Cancel during a hold. Its own one-second clock,
+// only while a hold is running, so the list's 30-second tick stays the list's.
+function AutoSendTag({ threadId, state, awaiting }: { threadId: string; state: AutoSendRowState; awaiting: boolean }) {
+  const holding = state.hold_status === "holding" && !!state.hold_until;
+  const [now, setNow] = useState(() => Date.now());
+  const [cancelled, setCancelled] = useState<string | null>(null);
+  useEffect(() => {
+    if (!holding) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [holding]);
+  if (cancelled) return <span data-testid="auto-send-tag" className="mt-1 inline-block rounded bg-cream-line/60 px-1.5 text-[10.5px] font-semibold text-muted">{cancelled}</span>;
+  if (holding) {
+    const left = Math.max(0, Math.ceil((Date.parse(state.hold_until!) - now) / 1000));
+    return (
+      <span className="mt-1 flex items-center gap-1.5 text-[10.5px] font-bold text-deep-green">
+        <span data-testid="auto-send-countdown" className="rounded bg-mint-soft px-1.5">{left > 0 ? `Sending in ${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}` : "Sending…"}</span>
+        <button
+          type="button"
+          data-testid="auto-send-cancel"
+          onClick={async (e) => {
+            e.stopPropagation();
+            const headers = await bearerHeaders();
+            if (!headers) { setCancelled("Sign in again"); return; }
+            const res = await fetch(`/api/crm/threads/${threadId}/auto-send/cancel`, { method: "POST", headers });
+            setCancelled(res.ok ? "Cancelled" : "Too late to cancel");
+          }}
+          className="rounded-full border border-deep-green/30 bg-white px-2 font-semibold hover:bg-cream-soft"
+        >
+          Cancel
+        </button>
+      </span>
+    );
+  }
+  if (!awaiting || !state.decision_shadow || state.decision === "human") return null;
+  const label = state.action?.kind === "credit" ? `would credit ${fmtUsd(state.action.amount_cents ?? 0)}`
+    : state.action ? "would issue a guest code" : "would auto-send";
+  return <span data-testid="auto-send-tag" className="mt-1 inline-block rounded bg-cream-line/60 px-1.5 text-[10.5px] font-semibold text-muted">{label}</span>;
+}
 
 function fullName(t: InboxRowThread): string {
   const p = t.player;
@@ -247,6 +292,11 @@ export default function InboxRow({
           />
         </label>
       )}
+      {thread.auto_send?.hold_status === "holding" && (
+        <span className="absolute bottom-1.5 right-10 z-10">
+          <AutoSendTag threadId={thread.id} state={thread.auto_send} awaiting={awaiting} />
+        </span>
+      )}
       <button
         type="button"
         onClick={onSelect}
@@ -310,6 +360,7 @@ export default function InboxRow({
               />
             )}
           </div>
+          {thread.auto_send && thread.auto_send.hold_status !== "holding" && <AutoSendTag threadId={thread.id} state={thread.auto_send} awaiting={awaiting} />}
         </div>
         {/* RIGHT: one combined status chip, assignment beneath it.
             shrink-0 with no max-width (mirrors the mock's `.right`): the
