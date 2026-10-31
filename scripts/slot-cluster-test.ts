@@ -1,3 +1,4 @@
+// Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server. Set the same to run it by hand.
 /* THE SLOT KEY THE TILE COLOUR IS BUILT ON.
  *
  * cancelPatterns keys a slot on (canonical_field, day_of_week, time_of_day), so a slate time that

@@ -1,3 +1,4 @@
+// Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server. Set the same to run it by hand.
 /* TWO REVENUE BASES, AND NO FIGURE MAY MIX THEM.
  *
  * The estate keeps two on purpose:

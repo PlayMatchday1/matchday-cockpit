@@ -1,3 +1,4 @@
+// Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server. Set the same to run it by hand.
 /* THE TWO PROPERTIES THAT REPLACE FOUR SOURCE-TEXT REGEXES.
  *
  * WHAT THEY GUARDED, AND HOW. When the weekly comparison was fixed, the SCREEN was corrected and the

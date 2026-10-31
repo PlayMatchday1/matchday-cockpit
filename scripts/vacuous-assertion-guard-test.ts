@@ -1,3 +1,4 @@
+// Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server. Set the same to run it by hand.
 /* D4. A FILTERED ASSERTION WITHOUT AN EMPTINESS GUARD FAILS REVIEW.
  *
  * THE SHAPE. `is("no row overlaps", rows.filter(bad).map(id), [])` is GREEN when `rows` is empty —

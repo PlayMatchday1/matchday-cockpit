@@ -1,3 +1,4 @@
+// Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server. Set the same to run it by hand.
 /* A COPY CARRIES ITS PRICE, OR A MATCH GOES LIVE AT $0.
  *
  * WHAT HAPPENED. Production match 18408 "Parmer Stadium - Premier" was created by Copy match on

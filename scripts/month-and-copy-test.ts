@@ -1,3 +1,4 @@
+// Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server. Set the same to run it by hand.
 /* THE MONTH VIEW AND THE COPY BUTTON.
  *
  * WHAT THESE GUARD. A copy that drops a field creates a LIVE, SELLABLE match with the wrong price

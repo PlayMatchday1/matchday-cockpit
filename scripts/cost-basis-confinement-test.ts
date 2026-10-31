@@ -1,3 +1,4 @@
+// Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server. Set the same to run it by hand.
 // CONFINEMENT — the normalized cost model must not spread, and Finance › Cost must not grow a
 // second one back.
 //

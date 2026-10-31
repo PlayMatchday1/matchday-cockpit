@@ -1,3 +1,4 @@
+// Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server. Set the same to run it by hand.
 /* THE GOAL SHEET'S ARITHMETIC, PINNED.
  *
  * This page exists because a spreadsheet cannot compute its own left-hand column, and the

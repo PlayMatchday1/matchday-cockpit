@@ -1,3 +1,4 @@
+// Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server. Set the same to run it by hand.
 /* MATCH WHEN — the guard on the drawer's DATE / START TIME / END TIME model.
  *
  * WHY THIS EXISTS AT ALL, under a policy where most changes get a browser look and a push: this

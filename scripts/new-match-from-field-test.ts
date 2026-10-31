@@ -1,3 +1,4 @@
+// Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server. Set the same to run it by hand.
 /* NEW MATCH ON A FIELD — the body, and the one failure it must not repeat.
  *
  * IN THE MANDATORY SET because the body is a live match on production MatchDay the moment it lands,

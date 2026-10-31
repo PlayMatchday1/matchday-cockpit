@@ -1,3 +1,4 @@
+// Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server. Set the same to run it by hand.
 /* LAPSED-MEMBER SPOTS — the grouping, and the reason an empty page is not a broken one.
  *
  * THE PAGE WILL BE NEAR-EMPTY IN PRODUCTION. Today: 90 free future spots, 4 held by a lapsed

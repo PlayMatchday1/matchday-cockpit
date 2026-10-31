@@ -1,11 +1,12 @@
 // GROWTH › OFFERS, PACED READS (CLAUDE.md "Reading the production API"). The same three rules as
-// getPacedClient in src/lib/matchdayApi.ts: one at a time, each starting PACE_MS after the last ENDED;
-// no retries; a failure stops the next ones without a request. Its own small version because that client
+// getPacedClient in src/lib/matchdayApi.ts, at the 2 seconds that section sets for live reads: one at a
+// time, each starting paceMs after the last ENDED; no retries; a failure stops the next ones without a request. Its own small version because that client
 // reads through the read client (GET only, refused in local mode) and these include POSTs the backend
 // treats as reads, and because it runs for one job and then ends, while this lives as long as the server.
 // So a stop lasts STOP_MS instead of until the next run. A 4xx is an answer about the request, not a
 // strained server, and does not stop anything. Per server process, not across instances.
 
+export const OFFERS_READ_PACE_MS = 2000;
 export const STOP_MS = 30_000;
 export const READS_STOPPED = "OffersReadsStopped";
 

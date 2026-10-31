@@ -1,3 +1,4 @@
+// Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server. Set the same to run it by hand.
 // WARSAW — a partner market must resolve as a city everywhere, and stay out of the estate.
 //
 // NOTHING HAS EVER TESTED A CITY THAT IS NOT IN types.CITIES, which is exactly how this shipped:

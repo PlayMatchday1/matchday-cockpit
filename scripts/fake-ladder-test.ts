@@ -1,3 +1,4 @@
+// Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server. Set the same to run it by hand.
 /* THE FAKE-SPOT LADDER.
  *
  * WHAT THIS GUARDS. A fake count is DERIVED, so a control that writes one writes to nothing and

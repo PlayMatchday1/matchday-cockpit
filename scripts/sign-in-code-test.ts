@@ -1,3 +1,4 @@
+// Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server. Set the same to run it by hand.
 /* STAFF SIGN-IN CODES BY TEXT: what may be sent, and what may be stored.
  *
  * 1. telnyx_sms_log never holds a sign-in code: the exact template is replaced in message_body AND in

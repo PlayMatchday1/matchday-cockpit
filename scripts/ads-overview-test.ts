@@ -1,3 +1,4 @@
+// Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server. Set the same to run it by hand.
 /* THE ADS OVERVIEW'S SHAPING. Pure: no network, no clock, no database.
  *
  * Three decisions here are invisible on screen and all three fail toward a plausible table:

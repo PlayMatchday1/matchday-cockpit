@@ -1,3 +1,4 @@
+// Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server. Set the same to run it by hand.
 /* CREDIT EVERYONE WHO PAID — the plan, pinned. This decides who receives money and how much, so
  * every rule that could quietly pay the wrong person or the wrong amount is asserted here.
  *

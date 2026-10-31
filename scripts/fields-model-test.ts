@@ -1,3 +1,4 @@
+// Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server. Set the same to run it by hand.
 /* FIELDS — the guard on the field write model.
  *
  * WHY IT IS A NODE GUARD and not a browser look: a field record decides what a match says it was

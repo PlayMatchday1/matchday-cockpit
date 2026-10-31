@@ -1,3 +1,4 @@
+// Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server. Set the same to run it by hand.
 /* MEMBER SPOTS IN QUALIFYING REVENUE — the guards on a partner payment.
  *
  * Every assertion here is on money that reaches a real person. The live-data figures ($808.00 of

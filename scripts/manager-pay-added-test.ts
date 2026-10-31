@@ -1,3 +1,4 @@
+// Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server. Set the same to run it by hand.
 /* PAYING SOMEONE WHO IS NOT ON THE SCHEDULE — the guards on a payroll row with no match behind it.
  *
  * WHY THIS IS A GUARD AND NOT A UNIT TEST. Every row here reaches Gusto and pays a real person.

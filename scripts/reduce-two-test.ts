@@ -1,3 +1,4 @@
+// Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server. Set the same to run it by hand.
 /* REDUCE TO 2 TEAMS — the plan, the refusal, the order, and the two totals.
  *
  * THE ORDER IS THE ASSERTION THAT MATTERS, AND IT CHANGED ON 2026-09-09. The shape is still LAST,

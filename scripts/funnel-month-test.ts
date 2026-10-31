@@ -1,3 +1,4 @@
+// Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server. Set the same to run it by hand.
 /* THE FUNNEL'S CURRENT MONTH, AND THE ONE WRONG DAY A MONTH IT USED TO HAVE.
  *
  * Two decisions carry this and neither is visible in the DOM: that the clamp is to the CALENDAR

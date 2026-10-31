@@ -27,7 +27,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     const locked = Object.keys(body).filter((k) => !EDITABLE_AFTER_LAUNCH.has(k));
     if (locked.length) return Response.json({ error: `Those parts can't change once it has launched (${locked.join(", ")}). Nothing was sent.` }, { status: 400 });
   }
-  const w = await offersWrite({ auth, source: "offers:edit", method: "PATCH", path: `${CAMPAIGNS}/${id}`, body, id, expect: body });
+  const w = await offersWrite({ auth, source: "offers:edit", method: "PATCH", path: `${CAMPAIGNS}/${id}`, body, id, expect: body, before: current });
   return verdictResponse(w);
 }
 
@@ -40,6 +40,6 @@ export async function DELETE(req: Request, ctx: { params: Promise<{ id: string }
   try { current = await readCampaign(id); } catch (e) { return Response.json({ error: errorText(e) }, { status: 502 }); }
   if (!current) return Response.json({ error: "That offer no longer exists. Refresh the list." }, { status: 404 });
   if (current.status !== "DRAFT") return Response.json({ error: "Only a draft can be deleted. Pause or end a launched offer instead." }, { status: 400 });
-  const w = await offersWrite({ auth, source: "offers:delete", method: "DELETE", path: `${CAMPAIGNS}/${id}`, id, expect: {}, expectGone: true });
+  const w = await offersWrite({ auth, source: "offers:delete", method: "DELETE", path: `${CAMPAIGNS}/${id}`, id, expect: {}, expectGone: true, before: current });
   return verdictResponse(w);
 }

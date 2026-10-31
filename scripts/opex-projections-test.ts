@@ -1,3 +1,4 @@
+// Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server. Set the same to run it by hand.
 // OPEX — Sunday-start weeks, the page's own header, and projections, against the real builders.
 //   npx tsx scripts/opex-projections-test.ts
 //

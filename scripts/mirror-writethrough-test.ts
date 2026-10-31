@@ -1,3 +1,4 @@
+// Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server. Set the same to run it by hand.
 // THE MIRROR WRITE-THROUGH — one implementation, every caller, and the four rules that keep it safe.
 //
 // ITEMISED: this file was veo-mirror-writethrough-test.ts and asserted on an INLINE block in the

@@ -17,12 +17,12 @@ import { join, resolve } from "node:path";
 import {
   audienceBody, chicagoWallNow, comparisonLine, costCeiling, createBody, defaultRun, endsTicket, formOf, newForm, patchBody, priceWithDeal,
   summary, wallFromMatch, withPreviewName, buttonOf, opensText, formProblem, stepUses, usesLine, stepLimit, limitLine, copyOf,
-  addSection, autoCopy, canReset, copyAfterType, staleLines, staleSections, writtenForOnLoad, isRemovable, removeSection, resetCopy, sectionCollapsed, REMOVABLE_KEYS, canHidePhoto, copyAfterHide, hideUpload, extraBookingsLine, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, prefillField, audienceText, parsePlayerIds, playerLine, notFoundLine, usedOfLimit, resultsLines, offerWallNow, offerZones, wallNowIn, mergeMatches, offerMatchOpt, pickerRange, withCovers, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, endHasPassed, launchProblem, namedMatchIds, offersLogBody, pickerDayLabel, pickerView, fillText, fillFraction, setPriceAnyWarning, setPriceProblem, type Campaign, type City, type MatchOpt, type Results,
+  addSection, autoCopy, canReset, copyAfterType, staleLines, staleSections, writtenForOnLoad, isRemovable, removeSection, resetCopy, sectionCollapsed, REMOVABLE_KEYS, canHidePhoto, copyAfterHide, hideUpload, extraBookingsLine, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, prefillField, audienceText, parsePlayerIds, playerLine, notFoundLine, usedOfLimit, resultsLines, countWanted, lockedSummary, offerWallNow, offerZones, wallNowIn, mergeMatches, offerMatchOpt, pickerRange, withCovers, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, endHasPassed, launchProblem, namedMatchIds, offersLogBody, pickerDayLabel, pickerView, fillText, fillFraction, setPriceAnyWarning, setPriceProblem, type Campaign, type City, type MatchOpt, type Results,
 } from "../src/lib/offersModel";
-import { _setOffersGateDepsForTest, MAX_MATCH_PAGES, mismatches, offersGate, offersWrite, photoLinkProblem, readFirstMatchPage, readMatchesForCities, sendPreview, type OffersAuth } from "../src/lib/offersServer";
+import { _setOffersGateDepsForTest, errorText, MAX_MATCH_PAGES, mismatches, offersGate, offersWrite, photoLinkProblem, readFirstMatchPage, readMatchesForCities, sendPreview, type OffersAuth } from "../src/lib/offersServer";
 import { readOffersConfig } from "../src/lib/offersConfig";
 import { assertAllowedHost, preflightWrite } from "../src/lib/matchdayStageApi";
-import { makePacer, READS_STOPPED } from "../src/lib/offersPacing";
+import { makePacer, OFFERS_READ_PACE_MS, READS_STOPPED } from "../src/lib/offersPacing";
 
 let pass = 0, fail = 0;
 const eq = (name: string, got: unknown, want: unknown) => {
@@ -373,7 +373,7 @@ eq("50% of $15", priceWithDeal(1500, "PERCENT_OFF", 50), 750);
 eq("$5 off $9", priceWithDeal(900, "AMOUNT_OFF", 500), 400);
 eq("$5 off $5.40 leaves 40 cents, which is free", priceWithDeal(540, "AMOUNT_OFF", 500), 0);
 eq("set price $5", priceWithDeal(1500, "SET_PRICE", 500), 500);
-eq("set price above the normal price is charged as set (the backend does not cap it)", priceWithDeal(900, "SET_PRICE", 1200), 1200);
+eq("priceWithDeal alone returns the set price, even above normal (like the backend's applyOfferDeal; at a join a cheaper match keeps its price and the offer isn't used)", priceWithDeal(900, "SET_PRICE", 1200), 1200);
 {
   const f = { ...nowF, name: "x", cityIds: [1] };
   eq("ceiling at today's top price when the backend cannot know it", costCeiling(f, { count: 458, heldBack: 46, players: 412, mostItCanCost: null }, matches),
@@ -584,6 +584,14 @@ eq("answered for this form: ready (the control)", countState("a", "a", false), "
 eq("failed for this form: error", countState("a", "a", true), "error");
 eq("loading and error stop a launch, ready doesn't", [COUNT_BLOCK.loading !== null, COUNT_BLOCK.error !== null, COUNT_BLOCK.ready], [true, true, null]);
 
+eq("a count is wanted for a new offer and a draft", [countWanted(null), countWanted("DRAFT")], [true, true]);
+eq("no count for a launched, paused or ended offer", [countWanted("LAUNCHED"), countWanted("PAUSED"), countWanted("ENDED")], [false, false, false]);
+eq("a locked offer's summary says who by its filters", lockedSummary({ ...nowF, name: "x", cityIds: [2], lastPlayed: "NEVER", endsLocal: "2026-11-01 23:59:00" }, matches, cities, NOW), "Houston · Never played: 50% off one match until Sun 11:59 PM.");
+eq("the read pace is the repo's 2 seconds", OFFERS_READ_PACE_MS, 2000);
+eq("a link with no headers says so instead of throwing", [settableHeaders(undefined), settableHeaders(null)], [null, null]);
+eq("empty headers are fine (the control)", settableHeaders({}), []);
+eq("the server refuses a link with no headers, and says why", photoLinkProblem({ method: "PUT", fileKey: "k", uploadURL: "http://localhost:3070/a" }, "localhost:3070"), "The upload link came without its headers; nothing was uploaded.");
+
 // ── WHAT GOES IN THE LOG ─────────────────────────────────────────────────────────────────────────
 eq("player ids become a count", offersLogBody({ name: "x", playerIds: [7, 8, 9] }), { name: "x", playerCount: 3 });
 eq("test ids become a count", offersLogBody({ userIds: [7] }), { userCount: 1 });
@@ -597,6 +605,7 @@ const asRow = (row: Record<string, unknown>, email = "someone@playmatchday.com")
     : g;
 };
 const status = async (r: unknown) => (r instanceof Response ? r.status : "through");
+const offersGetText = () => readFirstMatchPage().then(() => "read", errorText);
 // Every route file under /api/offers, found on disk, so a new one can't dodge this.
 function routeFiles(dir: string): string[] {
   return readdirSync(dir).flatMap((n) => { const p = join(dir, n); return statSync(p).isDirectory() ? routeFiles(p) : n === "route.ts" ? [p] : []; });
@@ -604,8 +613,13 @@ function routeFiles(dir: string): string[] {
 (async () => {
   const req = (method = "GET") => new Request("http://localhost/api/offers", { method });
   const open = () => ({ ok: true as const, config: { env: "local" as const, baseUrl: "http://localhost:3070", uploadHost: "localhost:3070" } });
-  _setOffersGateDepsForTest({ config: () => ({ ok: false, problem: "OFFERS_ENV must be local, staging or production" }), authenticate: asRow({ is_admin: true }) });
-  eq("config unset or wrong: 503, even for an admin", await status(await offersGate(req())), 503);
+  const broken = () => ({ ok: false as const, problem: "OFFERS_ENV must be local, staging or production" });
+  _setOffersGateDepsForTest({ config: broken, authenticate: asRow({ is_admin: true }) });
+  eq("config unset or wrong: 503 for someone with access", await status(await offersGate(req())), 503);
+  _setOffersGateDepsForTest({ config: broken });
+  eq("...the real check with no session: 401, never the 503", await status(await offersGate(req())), 401);
+  _setOffersGateDepsForTest({ config: broken, authenticate: asRow({ can_access_growth: true }) });
+  eq("...without access: 404, never the 503", await status(await offersGate(req())), 404);
   // WHO GETS IN: the Match Ops section's own decision, row by row.
   const cases: [string, Record<string, unknown>, unknown][] = [
     ["Match Ops, no Growth, not an admin: in", { can_access_matchops: true, can_access_growth: false }, "through"],
@@ -653,6 +667,14 @@ function routeFiles(dir: string): string[] {
     eq("the positive control: the walk found the routes", handlers >= 13, true);
     eq("without Match Ops, every handler of every route answers 404", answers, through);
     eq("...and none of them reached the backend", fetched, 0);
+    // The action is looked up with Object.hasOwn: what every object inherits is not an action.
+    {
+      const action = await import(resolve(process.cwd(), "src/app/api/offers/[id]/[action]/route.ts")) as { POST: (r: Request, c: unknown) => Promise<Response> };
+      _setOffersGateDepsForTest({ config: open, authenticate: asRow({ is_admin: true }) });
+      const inherited: Record<string, number> = {};
+      for (const a of ["constructor", "toString", "__proto__", "hasOwnProperty", "launchx"]) inherited[a] = (await action.POST(new Request("http://localhost/x", { method: "POST" }), { params: Promise.resolve({ id: "1", action: a }) })).status;
+      eq("an inherited name is not an action: 404, nothing sent", [inherited, fetched], [{ constructor: 404, toString: 404, __proto__: 404, hasOwnProperty: 404, launchx: 404 }, 0]);
+    }
     globalThis.fetch = realFetch;
   }
   _setOffersGateDepsForTest(null);
@@ -695,7 +717,9 @@ function routeFiles(dir: string): string[] {
     Object.assign(process.env, { MATCHDAY_STAGE_API_BASE_URL: "https://matchday-stage.herokuapp.com", MATCHDAY_STAGE_API_EMAIL: "s@example.com", MATCHDAY_STAGE_API_PASSWORD: "x" });
     const rows: { env: string; body: Record<string, unknown>; changes: unknown; actorName: string; actorEmail: string }[] = [];
     const logStore = () => ({ insert: async (r: unknown) => { rows.push(r as (typeof rows)[number]); }, resolve: async () => undefined, recent: async () => [] }) as never;
-    _setOffersGateDepsForTest({ logStore, config: () => ({ ok: true, config: { env: "staging", baseUrl: "https://matchday-stage.herokuapp.com", uploadHost: "b.s3.amazonaws.com" } }) });
+    const slept: number[] = [];
+    const sleep = async (ms: number) => { slept.push(ms); };
+    _setOffersGateDepsForTest({ sleep, logStore, config: () => ({ ok: true, config: { env: "staging", baseUrl: "https://matchday-stage.herokuapp.com", uploadHost: "b.s3.amazonaws.com" } }) });
     const auth = { email: "someone@playmatchday.com", supabase: {} as never, actor: { canEditMatches: false, canUseOffers: true, email: "someone@playmatchday.com", userId: "u1" } } as OffersAuth;
     await apiWrite("staging", "POST", "/admin/offers/campaigns", {}, { canEditMatches: true, isAdmin: true, email: "x@y.z" }, "offers").then(() => eq("no Offers authority: refused", "sent", "refused"), (e) => eq("no Offers authority, whatever else it holds: refused before any request", [e instanceof NotAuthorizedError, sent.length], [true, 0]));
     const w = await offersWrite({ auth, source: "offers:create", method: "POST", path: "/admin/offers/campaigns", body: { name: "x", playerIds: [7, 8, 9] }, id: null, expect: { name: "x", playerIds: [7, 8, 9] } });
@@ -710,10 +734,63 @@ function routeFiles(dir: string): string[] {
     eq("a test's request carries the ids", JSON.parse(sent[1]?.body ?? "{}").userIds, [7, 8]);
     eq("a test's row has the count, not the ids", [rows[1]?.body, JSON.stringify(rows[1]).includes("userIds")], [{ userCount: 2 }, false]);
 
+    // THE REQUESTS OF EACH ROUTE, real handlers, counted. Each read is paced, and nothing is read twice.
+    {
+      const seen: string[] = [];
+      let running = 0, most = 0;
+      const campaign = (over: Record<string, unknown> = {}) => ({ id: 9, status: "LAUNCHED", name: "x", matchIds: [], cityIds: [2], audienceMode: "FILTERS", endsLocal: "2099-01-01 00:00:00", ...over });
+      let current = campaign();
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(String(input instanceof Request ? input.url : input));
+        if (url.pathname === "/auth/signin") return new Response(JSON.stringify({ accessToken: JWT }), { status: 200 });
+        running++; most = Math.max(most, running);
+        const m = init?.method ?? "GET";
+        seen.push(`${m} ${url.pathname}`);
+        await new Promise((r) => setTimeout(r, 1));
+        running--;
+        if (m !== "GET") { const to = url.pathname.split("/").at(-1); if (to === "pause") current = { ...current, status: "PAUSED" }; if (to === "launch") current = { ...current, status: "LAUNCHED" }; if (m === "PATCH") current = { ...current, name: "y" }; return new Response("{}", { status: 200 }); }
+        if (url.pathname.endsWith("/admin/cities")) return new Response(JSON.stringify([{ id: 2, name: "Houston", timeZone: { name: "America/Chicago" } }]), { status: 200 });
+        if (url.pathname.endsWith("/admin/fields")) return new Response("[]", { status: 200 });
+        if (url.pathname.endsWith("/admin/offers/matches")) return new Response(JSON.stringify({ page: 1, limit: 100, totalItems: 0, data: [] }), { status: 200 });
+        if (url.pathname.endsWith("/admin/offers/campaigns")) return new Response("[]", { status: 200 });
+        if (url.pathname.startsWith("/admin/matches/")) return new Response(JSON.stringify({ id: 116, name: "M", startDate: "2099-01-01T00:00:00.000Z", startDateUtc: "2099-01-01T00:00:00.000Z", isCancelled: false, fieldId: 1, registrationPrice: 900, maxPlayerCount: 16, minPlayerCount: 0, field: { title: "F", cityId: 2 } }), { status: 200 });
+        return new Response(JSON.stringify(current), { status: 200 });
+      }) as typeof fetch;
+      _setOffersGateDepsForTest({ sleep, logStore, authenticate: asRow({ can_access_matchops: true }), config: () => ({ ok: true, config: { env: "staging", baseUrl: "https://matchday-stage.herokuapp.com", uploadHost: "b.s3.amazonaws.com" } }) });
+      const route = (p: string) => import(resolve(process.cwd(), p)) as Promise<Record<string, (r: Request, c: unknown) => Promise<Response>>>;
+      const run = async (fn: () => Promise<Response>) => { seen.length = 0; slept.length = 0; const r = await fn(); return { status: r.status, verdict: (await r.clone().json()).verdict, seen: [...seen] }; };
+      const act = await route("src/app/api/offers/[id]/[action]/route.ts");
+      const one = await route("src/app/api/offers/[id]/route.ts");
+      const list = await route("src/app/api/offers/route.ts");
+      const C = "/admin/offers/campaigns/9";
+      const ctx = (action?: string) => ({ params: Promise.resolve({ id: "9", action }) });
+      const POSTREQ = () => new Request("http://localhost/x", { method: "POST", headers: { Authorization: "Bearer t" } });
+      const load = await run(() => list.GET(new Request("http://localhost/api/offers"), {}));
+      eq("page load: four reads, one at a time", [load.status, load.seen, most], [200, ["GET /admin/offers/campaigns", "GET /admin/cities", "GET /admin/fields", "GET /admin/offers/matches"], 1]);
+      eq("...each waiting out the 2 seconds", slept.length >= 3 && slept.slice(-3).every((ms) => ms > 1900 && ms <= 2000), true);
+      eq("pause: read once, write, read back once", await run(() => act.POST(POSTREQ(), ctx("pause"))), { status: 200, verdict: "LANDED", seen: [`GET ${C}`, `POST ${C}/pause`, `GET ${C}`] });
+      current = campaign({ status: "DRAFT" });
+      eq("launch: the campaign, its cities, write, read back", await run(() => act.POST(POSTREQ(), ctx("launch"))), { status: 200, verdict: "LANDED", seen: [`GET ${C}`, "GET /admin/cities", `POST ${C}/launch`, `GET ${C}`] });
+      current = campaign({ status: "DRAFT", matchIds: [116] });
+      eq("launch for a match: its match too", (await run(() => act.POST(POSTREQ(), ctx("launch")))).seen, [`GET ${C}`, "GET /admin/cities", "GET /admin/matches/116", `POST ${C}/launch`, `GET ${C}`]);
+      current = campaign({ status: "DRAFT", endsLocal: "2020-01-01 00:00:00" });
+      eq("launch past its end: refused, no write", await run(() => act.POST(POSTREQ(), ctx("launch"))), { status: 400, verdict: undefined, seen: [`GET ${C}`, "GET /admin/cities"] });
+      current = campaign({ status: "DRAFT" });
+      eq("an edit: read once, write, read back once", await run(() => one.PATCH(new Request("http://localhost/x", { method: "PATCH", headers: { Authorization: "Bearer t" }, body: JSON.stringify({ name: "y" }) }), ctx())), { status: 200, verdict: "LANDED", seen: [`GET ${C}`, `PATCH ${C}`, `GET ${C}`] });
+      eq("a write handed its campaign still lands", (await offersWrite({ auth, source: "t", method: "POST", path: "/admin/offers/campaigns", body: { name: "x" }, id: 9, before: current as never, expect: {} })).verdict, "LANDED");
+      _setOffersGateDepsForTest({ sleep, logStore, config: () => ({ ok: true, config: { env: "staging", baseUrl: "https://matchday-stage.herokuapp.com", uploadHost: "b.s3.amazonaws.com" } }) });
+      // A route the backend doesn't have can answer 200 with a web page.
+      globalThis.fetch = (async (input: RequestInfo | URL) => (String(input).endsWith("/auth/signin") ? new Response(JSON.stringify({ accessToken: JWT }), { status: 200 }) : new Response("<!DOCTYPE html>", { status: 200, headers: { "content-type": "text/html" } }))) as typeof fetch;
+      eq("a web page where JSON should be says Offers may not be there", await offersGetText(), "The backend answered with something that isn't JSON. Offers may not be deployed there.");
+      // That failure stopped reads, as any non-4xx does. Move past the stop for what follows.
+      _setOffersGateDepsForTest({ sleep, logStore, now: () => Date.now() + 60_000, config: () => ({ ok: true, config: { env: "staging", baseUrl: "https://matchday-stage.herokuapp.com", uploadHost: "b.s3.amazonaws.com" } }) });
+    }
+
     // THE MATCH READS, on the real functions: one page on load, a paced walk only when asked, and never admin/matches.
     {
       const urls: string[] = [];
       let pages = 7, failAt = 0;
+      await new Promise((r) => setTimeout(r, 0));
       const row = (id: number) => ({ id, name: `M${id}`, startsLocal: "2026-11-02 19:00:00", fieldId: 1, fieldName: "F", cityId: 1, price: 900, playersIn: 1, capacity: 16, minimum: 14 });
       globalThis.fetch = (async (input: RequestInfo | URL) => {
         const url = String(input instanceof Request ? input.url : input);
@@ -729,10 +806,10 @@ function routeFiles(dir: string): string[] {
       eq("...and says it wasn't all of them", [first.matches.length, first.complete], [100, false]);
       urls.length = 0;
       pages = 2;
-      const started = Date.now();
+      slept.length = 0;
       const two = await readMatchesForCities([1, 2]);
       eq("a walk asks for those cities, and stops when it has them all", [urls.length, new URL(urls[0]).searchParams.get("cityIds"), two.matches.length, two.complete], [2, "1,2", 200, true]);
-      eq("...a full pace apart", Date.now() - started >= 1000, true);
+      eq("...each read waiting out the 2 seconds", slept.length >= 1 && slept.every((ms) => ms > 1900 && ms <= 2000), true);
       urls.length = 0;
       pages = MAX_MATCH_PAGES + 2;
       const capped = await readMatchesForCities([]);

@@ -1,3 +1,4 @@
+// Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server. Set the same to run it by hand.
 /* STAFF APP PUSH: who is notified, what it says, and when a match is at risk (src/lib/appPush.ts).
  * Ryan, 2026-10-30. Pure rules, asserted offline; every refusal has a presence control beside it. */
 import { atRiskNow, chatPushText, chatRecipients, finalRecipients, matchRecipients, matchRiskText, waitingCounts, wallClockOf, type StaffRow } from "../src/lib/appPush";

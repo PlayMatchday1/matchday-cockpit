@@ -1,3 +1,4 @@
+// Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server. Set the same to run it by hand.
 /* THE CONFINED MANAGER DROPDOWN IS THE ROSTER, and only the roster.
  *
  * WHY THIS IS A NODE GUARD. It decides who a city manager can put on a match, which decides who

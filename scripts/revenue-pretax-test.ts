@@ -1,3 +1,4 @@
+// Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server. Set the same to run it by hand.
 /* REVENUE IS PRE-TAX. No revenue path may read total_amount.
  *
  * WHY THIS IS A NODE GUARD. mdapi_match_players carries two money columns that differ by 5-9%

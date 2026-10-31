@@ -1,3 +1,4 @@
+// Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server. Set the same to run it by hand.
 /* PLAYER CHATS: EVERY ROUTE THAT NAMES A THREAD ASKS crmScope FIRST, EVERY COUNT COUNTS ONLY SCOPE.
  *
  * Ryan, 2026-10-30. The listing scoped a confined account by assignee; thread read, send,

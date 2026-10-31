@@ -1,3 +1,4 @@
+// Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server. Set the same to run it by hand.
 // OPEX — every field venue's days add up to its Field Costs figure, whatever day it is.
 //   npx tsx scripts/opex-field-sum-test.ts
 //

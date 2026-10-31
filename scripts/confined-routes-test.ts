@@ -1,3 +1,4 @@
+// Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server. Set the same to run it by hand.
 /* EVERY /api PATH A CONFINED PAGE CAN REACH, DERIVED FROM THE PAGES.
  *
  * WHY THIS EXISTS. city-confinement-test enumerates allowed and refused routes BY HAND, which is

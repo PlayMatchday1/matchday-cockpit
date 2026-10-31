@@ -1,3 +1,4 @@
+// Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server. Set the same to run it by hand.
 /* THE FAKE-ROSTER PLANNER. Pure, so this is a node guard rather than a browser suite — it covers a
  * write that changes what a player sees on the match page, which is the bucket that gets checks.
  *

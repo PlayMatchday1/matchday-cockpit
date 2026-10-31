@@ -1,3 +1,4 @@
+// Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server. Set the same to run it by hand.
 // THE DOOR — does the PWA's launch route open for the account that launches it?
 //
 // WHY THIS EXISTS. verify-city-confinement drives /city/gameday, /city/reviews and /city/manager-pay

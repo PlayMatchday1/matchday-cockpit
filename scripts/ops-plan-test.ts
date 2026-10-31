@@ -1,3 +1,4 @@
+// Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server. Set the same to run it by hand.
 /* THE 2027 OPERATIONS PLAN'S ARITHMETIC, PINNED. Pure, sub-second, inside `npm run verify`.
  *
  * Ryan, 2026-10-02: "I do want a few assertions, because this page is arithmetic":

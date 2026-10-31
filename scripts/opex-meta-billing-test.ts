@@ -1,3 +1,4 @@
+// Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server. Set the same to run it by hand.
 // OPEX — Meta ad charges from Meta's record (rebuilt 2026-10-07), against the real builders.
 //   npx tsx scripts/opex-meta-billing-test.ts
 //

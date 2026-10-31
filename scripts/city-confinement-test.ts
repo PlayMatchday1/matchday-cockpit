@@ -1,3 +1,4 @@
+// Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server. Set the same to run it by hand.
 // THE CITY BOUNDARY — the decision, tested offline for every row shape that matters.
 //
 // THE ONE THAT MATTERS MOST is confinement-beats-is_admin. It is the opposite of the city-manager

@@ -4,10 +4,9 @@ import "server-only";
 // WHERE IT TALKS TO comes from the environment (src/lib/offersConfig.ts): OFFERS_ENV, the backend's
 // base URL and the allowed upload host. Anything unset or wrong answers 503, for everyone.
 //
-// TWO GATES, in order: the config (503), then Match Ops access (authenticateMatchOpsRead, the same check
-// the Match Ops section uses, read fresh from app_users on every request). A signed-in person without
-// it gets the same answer as a route that doesn't exist (404). No session stays 401, so the page can
-// tell an ended sign-in from no access. The backend's ADMIN-only rule is a separate check on the service
+// TWO GATES, in order: Match Ops access (authenticateMatchOpsRead, the same check the Match Ops section
+// uses, read fresh from app_users on every request), then the config (503). So someone with no session
+// only ever gets 401, and someone without access only ever gets the 404 a missing route gives. The backend's ADMIN-only rule is a separate check on the service
 // account; it says nothing about which Clubhouse user is asking. Who did a write is in change_log and in
 // X-Acting-Staff-Email, both from the session.
 
@@ -15,12 +14,11 @@ import { randomUUID } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { authenticateMatchOpsRead } from "@/lib/matchOpsAuth";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
-import { PACE_MS } from "@/lib/matchdayApi";
 import { StageConfigError, apiGet, apiWrite, WriteFailedError, type WriteActor } from "@/lib/matchdayStageApi";
 import { OFFERS_NOT_FOUND } from "@/lib/offersAccess";
 import { readOffersConfig, type OffersConfig, type OffersConfigResult } from "@/lib/offersConfig";
 import { chicagoWallNow, offerMatchOpt, offersLogBody, photoUrlOk, pickerRange, wallFromMatch, type ApiOfferMatch, type Campaign, type City, type FieldOpt, type MatchOpt } from "@/lib/offersModel";
-import { READS_STOPPED, makePacer } from "@/lib/offersPacing";
+import { OFFERS_READ_PACE_MS, READS_STOPPED, makePacer } from "@/lib/offersPacing";
 import { STAFF_NOT_ALLOWED_PLAIN, WHO_ARE_YOU, staffEmailOf, staffErrorKind } from "@/lib/staffIdentity";
 
 export const CAMPAIGNS = "/admin/offers/campaigns";
@@ -29,8 +27,8 @@ export const PHOTO_UPLOADS = "/admin/offers/photo-uploads";
 
 export type OffersAuth = { email: string; actor: WriteActor; supabase: SupabaseClient };
 
-type GateDeps = { config: () => OffersConfigResult; authenticate: (req: Request) => ReturnType<typeof authenticateMatchOpsRead>; logStore: typeof supabaseLogStore };
-const realDeps: GateDeps = { config: readOffersConfig, authenticate: authenticateMatchOpsRead, logStore: supabaseLogStore };
+type GateDeps = { config: () => OffersConfigResult; authenticate: (req: Request) => ReturnType<typeof authenticateMatchOpsRead>; logStore: typeof supabaseLogStore; sleep: (ms: number) => Promise<void>; now: () => number };
+const realDeps: GateDeps = { config: readOffersConfig, authenticate: authenticateMatchOpsRead, logStore: supabaseLogStore, sleep: (ms) => new Promise((r) => setTimeout(r, ms)), now: () => Date.now() };
 let gateDeps: GateDeps = realDeps;
 // FOR scripts/offers-model-test.ts ONLY: run the real gate and the real writes as each kind of caller, offline.
 export function _setOffersGateDepsForTest(d: Partial<GateDeps> | null) { gateDeps = d ? { ...realDeps, ...d } : realDeps; }
@@ -44,13 +42,13 @@ function cfg(): OffersConfig {
 }
 
 export async function offersGate(req: Request): Promise<OffersAuth | Response> {
+  const auth = await gateDeps.authenticate(req);
+  if (!auth.ok) return auth.status === 403 ? Response.json(OFFERS_NOT_FOUND, { status: 404 }) : Response.json({ error: auth.error }, { status: auth.status });
   const config = gateDeps.config();
   if (!config.ok) {
     console.error(`[offers] closed: ${config.problem}`);
     return Response.json({ error: "Offers isn't set up on this server." }, { status: 503 });
   }
-  const auth = await gateDeps.authenticate(req);
-  if (!auth.ok) return auth.status === 403 ? Response.json(OFFERS_NOT_FOUND, { status: 404 }) : Response.json({ error: auth.error }, { status: auth.status });
   // Every write carries the session's person; without a usable email it is refused here, before the backend.
   if (req.method !== "GET" && !staffEmailOf(auth.email)) return Response.json({ error: WHO_ARE_YOU }, { status: 401 });
   return { email: auth.email, supabase: auth.supabase, actor: { canEditMatches: false, canUseOffers: true, email: auth.email, userId: auth.appUserId } };
@@ -73,6 +71,8 @@ export function errorText(e: unknown): string {
     console.error(`[offers] backend refused X-Acting-Staff-Email (STAFF_EMAIL_NOT_ALLOWED): ${raw.slice(0, 300)}`);
     return STAFF_NOT_ALLOWED_PLAIN;
   }
+  // A route the backend doesn't have can answer 200 with a web page (staging did, 2026-10-30).
+  if (e instanceof SyntaxError) { console.error(`[offers] the backend's answer was not JSON: ${raw.slice(0, 200)}`); return "The backend answered with something that isn't JSON. Offers may not be deployed there."; }
   if (e instanceof Error && e.name === READS_STOPPED) return "The backend just had a problem, so reads have stopped for a moment. Try again in 30 seconds.";
   const { code, message } = backendMessage(e);
   if (code === "OFFER_CAMPAIGN_FIELD_LOCKED") return `Those parts can't change once it has launched (${message?.split(": ")[1] ?? "locked fields"}). Nothing was saved.`;
@@ -85,13 +85,13 @@ export function errorText(e: unknown): string {
 }
 
 // ── READS ───────────────────────────────────────────────────────────────────────────────────────
-// The ordinary client, for single staff lookups. The page's load runs them one after another.
+// EVERY READ GOES THROUGH THE PACER (src/lib/offersPacing.ts) at the repo's rule for the production API:
+// one at a time, one every 2 seconds. Never nest paced() inside paced(): the inner one waits behind the outer.
+const paced = makePacer({ paceMs: OFFERS_READ_PACE_MS, sleep: (ms) => gateDeps.sleep(ms), now: () => gateDeps.now(), stopsOn: (e) => !(e instanceof WriteFailedError && e.status >= 400 && e.status < 500) });
 export function offersGet<T>(path: string, query?: Record<string, string | number | boolean>): Promise<T> {
   const { env, baseUrl } = cfg();
-  return apiGet<T>(env, path, query, baseUrl);
+  return paced(() => apiGet<T>(env, path, query, baseUrl));
 }
-// What fires as someone types or clicks goes through the pacer instead (src/lib/offersPacing.ts).
-const paced = makePacer({ paceMs: PACE_MS, stopsOn: (e) => !(e instanceof WriteFailedError && e.status >= 400 && e.status < 500) });
 
 export const readCampaigns = () => offersGet<Campaign[]>(CAMPAIGNS);
 export async function readCampaign(id: number): Promise<Campaign | null> {
@@ -122,7 +122,7 @@ export function matchOpt(m: ApiMatch, now = Date.now()): MatchOpt {
 }
 // THE MATCH LIST (GET admin/offers/matches): upcoming and not cancelled, soonest first, in the picker's
 // longest range. The page's load takes ONE page of it and says whether that was all of them. Only when it
-// wasn't does the panel ask for its own cities' list, walked here through the pacer, stopping at the
+// wasn't does the panel ask for its own cities' list, walked here, stopping at the
 // first error and after MAX_MATCH_PAGES. Search and Needs players filter in the browser: the design
 // searches by time as well, which the endpoint doesn't, and it saves a read for every key.
 export const MATCH_PAGE = 100;
@@ -140,7 +140,7 @@ export async function readMatchesForCities(cityIds: number[]): Promise<MatchList
   const out: ApiOfferMatch[] = [];
   let total = 0;
   for (let page = 1; page <= MAX_MATCH_PAGES; page++) {
-    const r = await paced(() => matchPage(page, cityIds));
+    const r = await matchPage(page, cityIds);
     out.push(...(r.data ?? []));
     total = r.totalItems;
     if (!r.data?.length || out.length >= total) break;
@@ -204,9 +204,15 @@ export async function offersWrite(opts: {
   expect: Record<string, unknown>;
   // A delete: LANDED only when the read-back finds no campaign at all.
   expectGone?: boolean;
+  // The campaign as the route just read it, so it isn't read a second time before the write.
+  before?: Campaign;
 }): Promise<WriteResult> {
   let createdId: number | null = opts.id;
   const read = async () => (createdId === null ? null : await readCampaign(createdId));
+  // recordWrite reads once before the write and once after. The read after IS the read-back: undefined
+  // means there wasn't one that answered.
+  let wrote = false;
+  let after: Campaign | null | undefined;
   const { outcome, error } = await recordWrite(
     {
       env: cfg().env, source: opts.source, actorName: opts.auth.email, actorEmail: opts.auth.email, saveId: randomUUID(),
@@ -215,17 +221,22 @@ export async function offersWrite(opts: {
       applied: (_b, after) => (opts.expectGone ? after.missing === true : mismatches(opts.expect, after).length === 0),
     },
     {
-      readResource: async () => ((await read()) as unknown as Record<string, unknown>) ?? { missing: true },
+      readResource: async () => {
+        if (!wrote && opts.before) return opts.before as unknown as Record<string, unknown>;
+        const c = await read();
+        if (wrote) after = c;
+        return (c as unknown as Record<string, unknown>) ?? { missing: true };
+      },
       write: async () => {
         const r = await offersApiWrite<Record<string, unknown>>(opts.auth, opts.method, opts.path, opts.body);
         if (createdId === null && r && typeof r === "object" && typeof r.id === "number") createdId = r.id;
+        wrote = true;
         return r;
       },
       now: () => new Date().toISOString(),
     },
     gateDeps.logStore(),
   );
-  const after = await read().catch(() => undefined);
   const missing = mismatches(opts.expect, (after ?? null) as unknown as Record<string, unknown> | null);
   const verdict: Verdict = error
     ? (outcome === "unknown" ? "UNKNOWN" : "FAILED")
@@ -298,6 +309,7 @@ export type PhotoLink = { uploadURL: string; method: string; headers: Record<str
 export function photoLinkProblem(link: Partial<PhotoLink>, uploadHost: string = cfg().uploadHost): string | null {
   let host = "";
   try { host = new URL(link.uploadURL ?? "").host; } catch { /* no host: refused below */ }
+  if (!link.headers || typeof link.headers !== "object") return "The upload link came without its headers; nothing was uploaded.";
   if (link.method !== "PUT" || !link.fileKey || host !== uploadHost) return `The upload link was not the expected one (${link.method ?? "no method"} to ${host || "no host"}); nothing was uploaded.`;
   return null;
 }

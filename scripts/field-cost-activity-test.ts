@@ -1,3 +1,4 @@
+// Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server. Set the same to run it by hand.
 // FIELD COSTS — "Show inactive": which venues are hidden, and that hiding them moves no figure.
 //   npx tsx scripts/field-cost-activity-test.ts
 //

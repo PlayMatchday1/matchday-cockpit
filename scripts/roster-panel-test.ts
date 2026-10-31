@@ -1,3 +1,4 @@
+// Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server. Set the same to run it by hand.
 /* THE ROSTER PANEL — three kinds of player, the email, and a text to SOME of them.
  *
  * THE NUMBER ON THE BUTTON IS PHONES, NEVER ROWS. One person holding two spots is one text, and a

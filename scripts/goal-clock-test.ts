@@ -1,3 +1,4 @@
+// Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server. Set the same to run it by hand.
 /* THE CURRENT MONTH'S AVERAGE: WHOSE CALENDAR, AND WHICH DAYS.
  *
  * Two defects, one commit, and this suite is the record of both.

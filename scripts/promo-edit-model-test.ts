@@ -1,3 +1,4 @@
+// Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server. Set the same to run it by hand.
 // Promo EDIT — the diff, the THREE PAIRING RULES, and per-field NOT APPLIED (Phase 18d).
 //
 // Each pairing rule is asserted AND mutation-tested: the rule is re-implemented with the rule

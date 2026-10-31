@@ -1,3 +1,4 @@
+// Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server. Set the same to run it by hand.
 /* A MONEY FIELD YOU CAN TYPE IN.
  *
  * WHAT IT WAS. Both panels bound `value` to a FORMATTED string derived from cents on every render

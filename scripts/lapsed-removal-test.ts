@@ -1,3 +1,4 @@
+// Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server. Set the same to run it by hand.
 /* THE LAPSED-SPOT REMOVAL CONTROL — a production write path with NO UNDO.
  *
  * WHAT MAKES THIS DIFFERENT FROM THE OTHER SUITES. Every other guard here protects a number on a

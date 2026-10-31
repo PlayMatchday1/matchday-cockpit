@@ -1,3 +1,4 @@
+// Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server. Set the same to run it by hand.
 /* EVERY SCHEDULED PATH MUST ANSWER THE VERB VERCEL SENDS.
  *
  * Vercel cron jobs issue an HTTP GET (https://vercel.com/docs/cron-jobs#how-cron-jobs-work). A

@@ -501,7 +501,9 @@ export function photoFileProblem(file: { type: string; name: string; size: numbe
 }
 // Headers a page may not set; the browser sends its own correct values for these.
 const FORBIDDEN_HEADERS = new Set(["content-length", "host", "connection", "transfer-encoding"]);
-export const settableHeaders = (h: Record<string, string>) => Object.entries(h).filter(([k]) => !FORBIDDEN_HEADERS.has(k.toLowerCase()));
+// Null: the link came without its headers, and a PUT without them would be refused or stored wrongly.
+export const settableHeaders = (h: Record<string, string> | null | undefined) =>
+  (h && typeof h === "object" ? Object.entries(h).filter(([k]) => !FORBIDDEN_HEADERS.has(k.toLowerCase())) : null);
 // The tiles after the field covers: this offer's uploads, then the saved photo if it is neither a
 // cover shown here nor one of those uploads (so a stored photo can always be switched back to).
 export type UploadedPhoto = { url: string; name: string };
@@ -635,6 +637,8 @@ export const launchProblem = (x: { endsLocal: string }, nowWall: string): string
 // THE LIVE COUNT'S STATE. asked is the body as the form stands; answered is the body the last answer
 // was for. A count for an older audience is loading, not ready, from the moment the form changes.
 export const COUNT_DEBOUNCE_MS = 800;
+// Only while the audience can still change. Opening a launched or ended offer reads nothing for it.
+export const countWanted = (status: CampaignStatus | null) => status === null || status === "DRAFT";
 export type CountState = "loading" | "ready" | "error";
 export const countState = (asked: string, answered: string | null, failed: boolean): CountState =>
   asked !== answered ? "loading" : failed ? "error" : "ready";
@@ -668,6 +672,24 @@ export function costCeiling(f: Form, count: Count, matches: MatchOpt[]): { cents
   return { cents: discountOn(top, f.dealType, f.dealAmount) * uses, basis: `at today's top price of ${money(top)}` };
 }
 
+function dealAndUntil(f: Form, m: MatchOpt | null, nowWall: string): { deal: string; until: string } {
+  const n = m ? 1 : f.usesPerPlayer;
+  const one = n === 1 ? "one match" : `${n} matches`;
+  const deal = m
+    ? (f.dealType === "FREE_MATCH" ? `${m.name} free` : f.dealType === "SET_PRICE" ? `a ${money(f.dealAmount)} spot in ${m.name}` : `${dealText(f.dealType, f.dealAmount)} ${m.name}`)
+    : (f.dealType === "FREE_MATCH" ? (n === 1 ? "one free match" : `${n} free matches`) : f.dealType === "SET_PRICE" ? `a ${money(f.dealAmount)} spot in ${one}` : `${dealText(f.dealType, f.dealAmount)} ${one}`);
+  const until = endHasPassed(f.endsLocal, nowWall) ? `until ${wallLabel(f.endsLocal)}, which has already passed`
+    : m && f.endsLocal === m.startLocal ? "until kickoff"
+    : calendarDaysBetween(nowWall, f.endsLocal) < 7 ? `until ${fmt(wallMs(f.endsLocal), { weekday: "short" })} ${fmt(wallMs(f.endsLocal), { hour: "numeric", minute: "2-digit" })}`
+    : `until ${wallDate(f.endsLocal)}`;
+  return { deal, until };
+}
+// A launched or ended offer has no live count, so it says who by its filters, not how many.
+export function lockedSummary(f: Form, matches: MatchOpt[], cities: City[], nowWall: string, fields: FieldOpt[] = []): string {
+  const { deal, until } = dealAndUntil(f, pickedMatch(f, matches), nowWall);
+  return `${audienceText(f, cities, fields)}: ${deal} ${until}.`;
+}
+
 export function summary(f: Form, count: Count | null, matches: MatchOpt[], cities: City[], nowWall: string, fields: FieldOpt[] = []): string {
   if (!count) return "Counting players…";
   const m = pickedMatch(f, matches);
@@ -683,14 +705,7 @@ export function summary(f: Form, count: Count | null, matches: MatchOpt[], citie
   if (f.membership === "NON_MEMBERS") who.push(one1 ? "isn't a member" : "aren't members");
   if (f.fieldIds.length) who.push(`${one1 ? "has" : "have"} played at ${fieldNames(f.fieldIds, fields).join(" or ")}`);
   }
-  const one = n === 1 ? "one match" : `${n} matches`;
-  const deal = m
-    ? (f.dealType === "FREE_MATCH" ? `${m.name} free` : f.dealType === "SET_PRICE" ? `a ${money(f.dealAmount)} spot in ${m.name}` : `${dealText(f.dealType, f.dealAmount)} ${m.name}`)
-    : (f.dealType === "FREE_MATCH" ? (n === 1 ? "one free match" : `${n} free matches`) : f.dealType === "SET_PRICE" ? `a ${money(f.dealAmount)} spot in ${one}` : `${dealText(f.dealType, f.dealAmount)} ${one}`);
-  const until = endHasPassed(f.endsLocal, nowWall) ? `until ${wallLabel(f.endsLocal)}, which has already passed`
-    : m && f.endsLocal === m.startLocal ? "until kickoff"
-    : calendarDaysBetween(nowWall, f.endsLocal) < 7 ? `until ${fmt(wallMs(f.endsLocal), { weekday: "short" })} ${fmt(wallMs(f.endsLocal), { hour: "numeric", minute: "2-digit" })}`
-    : `until ${wallDate(f.endsLocal)}`;
+  const { deal, until } = dealAndUntil(f, m, nowWall);
   const people = `${count.players.toLocaleString("en-US")} ${players ? "chosen " : ""}${where}${count.players === 1 ? "player" : "players"}`;
   const held = count.heldBack > 0 ? ` (${count.heldBack.toLocaleString("en-US")} more held back to measure)` : "";
   const ceiling = costCeiling(f, count, matches);

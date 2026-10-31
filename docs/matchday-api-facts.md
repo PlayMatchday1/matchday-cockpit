@@ -8019,3 +8019,10 @@ Probed on the local backend, 2026-10-30, as the Clubhouse's service account. The
 they have none (`apps/api/src/core/offers/prisma-offers.store.ts:44` and `:100`). Its own `state` field is only a rough
 guide against UTC wall clock (`offer-campaigns.service.ts:557`). So the Clubhouse counts an end as passed once
 it has passed in any of the offer's cities (`offerZones`, `offerWallNow`). Players with no city are not considered.
+
+### A route the backend doesn't have can answer 200
+
+`GET https://matchday-stage.herokuapp.com/admin/offers/campaigns` with no token, 2026-10-30: `200`,
+`content-type: text/html`, 428 bytes, a `Vite App` page. The control, `/admin/matches` with no token, answered
+401. So a 2xx on a GET here does not show the route exists, and Offers is not on staging. Production was not
+probed. `errorText` (`src/lib/offersServer.ts`) reports the failed JSON parse as "Offers may not be deployed there".

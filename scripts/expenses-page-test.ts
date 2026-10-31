@@ -1,3 +1,4 @@
+// Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server. Set the same to run it by hand.
 // FINANCE › EXPENSES — the redesigned page's model, against the real builder.
 //   npx tsx scripts/expenses-page-test.ts
 //

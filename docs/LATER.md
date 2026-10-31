@@ -15,6 +15,28 @@ wrong closes the whole page for everyone: every `/api/offers/*` route answers 50
 | `OFFERS_API_BASE_URL` | `https://playmatchday.herokuapp.com` on production, `https://matchday-stage.herokuapp.com` on staging, `http://localhost:3070` on local | Bare origin. Its host must be the write client's own allowlisted host for that environment (`MATCHDAY_HOSTS`), so a new backend host is a code change, not a variable. |
 | `OFFERS_UPLOAD_HOST` | The exact host in the backend's upload links, such as the S3 bucket's host. `localhost:3070` on local | Bare host, no scheme, path or wildcard. **The production value is UNKNOWN from here:** take it from the host in a real `POST /admin/offers/photo-uploads` answer on that environment. |
 
+**Who may use it, decided by Ryan, 2026-10-30.** Anyone with Match Ops access (admin or
+`can_access_matchops`) can view and do everything in Offers, including launching. There is no separate write
+grant: someone with read-only Match Ops, without `can_edit_matches`, can launch an offer. This is deliberate,
+not an oversight. Every write is still recorded under the signed-in person in `change_log` and sent to the
+backend as `X-Acting-Staff-Email`.
+
+**Testing against staging.** Offers is not on staging yet: on 2026-10-30, `GET /admin/offers/campaigns` on
+`matchday-stage.herokuapp.com` with no token answered 200 with an HTML page, where `/admin/matches` answered
+401. Once the backend is there, set `OFFERS_STAGING_UPLOAD_HOST` to the host in a real staging upload link and
+run `npm run dev:offers-staging`, which serves on port 3073:
+
+| Variable | Staging value |
+|---|---|
+| `OFFERS_ENV` | `staging` |
+| `OFFERS_API_BASE_URL` | `https://matchday-stage.herokuapp.com` |
+| `OFFERS_UPLOAD_HOST` | From `OFFERS_STAGING_UPLOAD_HOST` |
+
+It signs in with `MATCHDAY_STAGE_API_*`, and that account must be in staging's
+`CLUBHOUSE_SERVICE_ACCOUNT_EMAILS`. **Open only Growth › Offers on that server.** It runs with local mode off, so
+every other page reads and writes production as usual, and Offers writes land in the real `change_log` under
+`env = staging`. Stop the local-mode server first: one worktree can't run two dev servers.
+
 Also needed, none of them new variables:
 
 - **Service-account credentials for that environment** (`MATCHDAY_PROD_BASE_URL`, `MATCHDAY_PROD_API_EMAIL`,

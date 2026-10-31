@@ -1,3 +1,4 @@
+// Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server. Set the same to run it by hand.
 /* REVIEWS: THE CITY SCOPE, AND THE ROW FILTER THAT WAS EATING A WHOLE CITY.
  *
  * WHAT HAPPENED. A Warsaw operator's Reviews page showed 0 everywhere. The route was innocent:

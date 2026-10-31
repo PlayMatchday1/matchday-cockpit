@@ -1,3 +1,4 @@
+// Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server. Set the same to run it by hand.
 /* THE TAG SET AFTER 0192, AND THE OVERFLOW ASSERTION THAT HAD TO LEAVE THE DOM.
  *
  * ── WHY THIS SUITE EXISTS AT ALL ─────────────────────────────────────────────────────────────

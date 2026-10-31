@@ -1,3 +1,4 @@
+// Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server. Set the same to run it by hand.
 /* THE MEMBER-SPOT RATE — the month it comes from, and what happens when there isn't one.
  *
  * THE BUG THIS PINS. Both halves of the allocation used to come from the match's OWN month:

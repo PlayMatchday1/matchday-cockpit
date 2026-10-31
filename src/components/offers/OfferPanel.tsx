@@ -13,7 +13,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FIRST_NAME_TOKEN, MAX_TEST_IDS, SECTION_ADD, addSection, autoCopy, canReset, copyAfterType, isRemovable, staleLines, staleSections, writtenForOnLoad, removeSection, resetCopy, sectionCollapsed, canHidePhoto, copyAfterHide, hideUpload, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, MAX_USES_PER_PLAYER, notFoundLine, parsePlayerIds, playerLine, prefillField, PREVIEW_FIRST_NAME, amountText, limitLine, stepLimit, stepUses, usesLine, audienceBody, buttonMatchNote, buttonOf, opensText, chicagoWallNow, copyOf, createBody, defaultRun, endsTicket, formOf, formProblem, fromInput, matchInfo,
-  newForm, patchBody, mergeMatches, withCovers, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, endHasPassed, launchProblem, offerWallNow, offerZones, setPriceAnyWarning, setPriceProblem, pickedMatch, startLabel, STEPPER, summary, toInput, wallLabel,
+  newForm, patchBody, mergeMatches, withCovers, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, countWanted, lockedSummary, endHasPassed, launchProblem, offerWallNow, offerZones, setPriceAnyWarning, setPriceProblem, pickedMatch, startLabel, STEPPER, summary, toInput, wallLabel,
   type Campaign, type City, type Count, type FieldOpt, type Lookup, type UploadedPhoto, type CopyKey, type DealType, type Form, type MatchOpt, type WrittenFor,
 } from "@/lib/offersModel";
 import MatchPicker from "./MatchPicker";
@@ -104,6 +104,7 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
   // ── the live count, debounced, for the audience and deal as they stand ──
   // Fires COUNT_DEBOUNCE_MS after the last change, one request at a time: a change while one is out
   // waits for it, then asks about the form as it stands by then. The route paces it again.
+  const wantCount = countWanted(c?.status ?? null);
   const [countAnswer, setCountAnswer] = useState<Count | null>(null);
   const [countErr, setCountErr] = useState<string | null>(null);
   const [answeredKey, setAnsweredKey] = useState<string | null>(null);
@@ -127,10 +128,10 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => {
     latestKey.current = audKey;
-    if (matchUnread) return;
+    if (matchUnread || !wantCount) return;
     const t = setTimeout(() => { void askCount(); }, COUNT_DEBOUNCE_MS);
     return () => clearTimeout(t);
-  }, [audKey, matchUnread, askCount]);
+  }, [audKey, matchUnread, wantCount, askCount]);
   const countNow = countState(audKey, answeredKey, countErr !== null);
   // An answer for an older audience is never shown or launched on.
   const count = countNow === "ready" ? countAnswer : null;
@@ -326,7 +327,9 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
       const contentType = photoContentType(file)!;
       const link = await authed("/api/offers/photos", { method: "POST", body: JSON.stringify({ contentType, sizeBytes: file.size }) });
       if (!link.ok) { setUpErr(String(link.json.error)); return; }
-      const put = await putPhoto(String(link.json.uploadURL), settableHeaders(link.json.headers as Record<string, string>), file, setUpPct);
+      const headers = settableHeaders(link.json.headers as Record<string, string> | undefined);
+      if (!headers) { console.error("[offers] the photo upload link came without its headers"); setUpErr("The upload link came without its headers, so nothing was uploaded. Try again, and tell Ryan if it keeps happening."); return; }
+      const put = await putPhoto(String(link.json.uploadURL), headers, file, setUpPct);
       if (!put.ok) { console.error(`[offers] photo PUT failed: HTTP ${put.status} ${put.text}`); setUpErr("The upload didn't finish. Try again."); return; }
       const reg = await authed("/api/offers/photos/register", { method: "POST", body: JSON.stringify({ fileKey: link.json.fileKey }) });
       if (reg.json.verdict !== "LANDED") { setUpErr(String(reg.json.error ?? reg.json.detail ?? "The upload didn't finish. Try again.")); return; }
@@ -618,7 +621,7 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
             )}
           </>
         )}
-        {!players && !matchUnread && <div data-testid="offers-count" data-state={countNow} className="flex flex-wrap gap-1.5 self-start rounded-[8px] px-2.5 py-1.5 text-[12px]" style={{ background: countNow === "error" ? O.critBg : O.mint, color: countNow === "error" ? O.critInk : O.ok }}>
+        {!players && !matchUnread && wantCount && <div data-testid="offers-count" data-state={countNow} className="flex flex-wrap gap-1.5 self-start rounded-[8px] px-2.5 py-1.5 text-[12px]" style={{ background: countNow === "error" ? O.critBg : O.mint, color: countNow === "error" ? O.critInk : O.ok }}>
           {countNow === "error" ? <><span>Couldn&apos;t count: {countErr}</span><button type="button" data-testid="offers-count-retry" className="font-semibold underline" onClick={retryCount}>Retry</button></>
             : count ? <><b>≈ {count.count.toLocaleString("en-US")} {count.count === 1 ? "player" : "players"}</b><span>match right now</span></>
             : <span>Counting…</span>}
@@ -731,7 +734,7 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
       {/* LAUNCH */}
       <section className="flex flex-col gap-2.5 border-t p-4" style={{ borderColor: O.line }}>
         <p data-testid="offers-summary" className="text-[13px] font-medium leading-[19px]" style={{ color: O.ink }}>
-          {matchUnread ? matchUnreadText(matchRead) : summary(f, count, data.matches, data.cities, offerWall(), data.fields)}
+          {matchUnread ? matchUnreadText(matchRead) : wantCount ? summary(f, count, data.matches, data.cities, offerWall(), data.fields) : lockedSummary(f, data.matches, data.cities, offerWall(), data.fields)}
         </p>
         {outcome && <VerdictLine outcome={outcome} />}
         {problem && !ended && dirty && <div data-testid="offers-problem" className="text-[12px]" style={{ color: O.warnInk }}>{problem}</div>}

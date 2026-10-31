@@ -1,3 +1,4 @@
+// Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server. Set the same to run it by hand.
 /* CITY MANAGER CHECK-IN — the guard on the public write path and the month rules.
  *
  * WHY IT IS A NODE GUARD and not a browser look: this is a PUBLIC, no-login endpoint. The honeypot,

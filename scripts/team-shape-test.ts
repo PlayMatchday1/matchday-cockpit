@@ -1,3 +1,4 @@
+// Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server. Set the same to run it by hand.
 /* A TEAM-COUNT CHANGE WRITES THE MODE'S TOTAL, AND THE TOTAL IS A TOTAL.
  *
  * WHAT HAPPENED, on production match 18125 (San Antonio, 28 players) on 2026-08-28. The drawer's

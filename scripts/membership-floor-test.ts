@@ -1,3 +1,4 @@
+// Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server. Set the same to run it by hand.
 /* THE PAYING-MEMBER RULE: the guard on who counts as a member (2026-10-14; "above $5" since 2026-10-27).
  *
  * Member classification decides which FREE spots are member spots, and member spots are what a

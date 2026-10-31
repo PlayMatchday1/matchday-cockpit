@@ -14,20 +14,20 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string; ac
   if (auth instanceof Response) return auth;
   const { id: rawId, action } = await ctx.params;
   const id = Number(rawId);
-  if (!Number.isInteger(id) || id <= 0 || !(action in MOVES)) return Response.json({ error: "Not found" }, { status: 404 });
+  if (!Number.isInteger(id) || id <= 0 || !Object.hasOwn(MOVES, action)) return Response.json({ error: "Not found" }, { status: 404 });
   const status = MOVES[action as keyof typeof MOVES];
-  // An offer whose end has passed never launches or resumes: the page stops it, and so does this.
-  if (action === "launch") {
-    let current, why;
-    try {
-      current = await readCampaign(id);
-      if (!current) return Response.json({ error: "That offer no longer exists. Refresh the list." }, { status: 404 });
+  let current;
+  try {
+    current = await readCampaign(id);
+    if (!current) return Response.json({ error: "That offer no longer exists. Refresh the list." }, { status: 404 });
+    // An offer whose end has passed never launches or resumes: the page stops it, and so does this.
+    if (action === "launch") {
       const cities = await readCities();
       const match = current.matchIds[0] ? await readMatch(current.matchIds[0]) : null;
-      why = launchProblem(current, offerWallNow(offerZones(current, match?.cityId ?? null, cities)));
-    } catch (e) { return Response.json({ error: errorText(e) }, { status: 502 }); }
-    if (why) return Response.json({ error: `${why} Nothing was sent.` }, { status: 400 });
-  }
-  const w = await offersWrite({ auth, source: `offers:${action}`, method: "POST", path: `${CAMPAIGNS}/${id}/${action}`, id, expect: { status } });
+      const why = launchProblem(current, offerWallNow(offerZones(current, match?.cityId ?? null, cities)));
+      if (why) return Response.json({ error: `${why} Nothing was sent.` }, { status: 400 });
+    }
+  } catch (e) { return Response.json({ error: errorText(e) }, { status: 502 }); }
+  const w = await offersWrite({ auth, source: `offers:${action}`, method: "POST", path: `${CAMPAIGNS}/${id}/${action}`, id, expect: { status }, before: current });
   return verdictResponse(w);
 }

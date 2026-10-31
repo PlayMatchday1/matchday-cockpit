@@ -1,3 +1,4 @@
+// Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server. Set the same to run it by hand.
 /* THE GAMEDAY STAT STRIP, THE RISK POPULATION AND THE METER — pure model only.
  *
  * WHAT THIS GUARDS. The fill percentage is the number an operator reads to judge a day, and the

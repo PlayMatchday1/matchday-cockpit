@@ -1,3 +1,4 @@
+// Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server. Set the same to run it by hand.
 /* ONE BASIS PER GRAIN, AND MEMBERSHIP COUNTED ONCE.
  *
  * Finance › Revenue's city table put allocated membership inside a column headed DPP REVENUE and

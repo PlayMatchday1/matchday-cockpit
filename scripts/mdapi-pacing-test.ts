@@ -1,3 +1,4 @@
+// Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server. Set the same to run it by hand.
 /* THE GUARDS ON HOW CLUBHOUSE READS THE PRODUCTION MATCHDAY API (2026-10-21).
  *
  * Production went down at 2:05 PM Central on 2026-10-21 (Heroku R15) under Clubhouse's bulk reads.

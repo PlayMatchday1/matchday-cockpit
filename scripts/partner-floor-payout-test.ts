@@ -1,3 +1,4 @@
+// Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server. Set the same to run it by hand.
 /* RENTAL_FLOOR_PROFIT_SHARE — the fourth payout model, beside the third and not instead of it.
  *
  * THIS FILE DECIDES WHAT A REAL VENUE IS PAID. The shipped model is the way back: one UPDATE to

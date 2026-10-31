@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:offers-staging": ": ${OFFERS_STAGING_UPLOAD_HOST:?Set OFFERS_STAGING_UPLOAD_HOST, see docs/LATER.md} && MATCHDAY_LOCAL_API= NEXT_PUBLIC_MATCHDAY_LOCAL_API= OFFERS_ENV=staging OFFERS_API_BASE_URL=https://matchday-stage.herokuapp.com OFFERS_UPLOAD_HOST=$OFFERS_STAGING_UPLOAD_HOST next dev -p 3073",
     "build": "next build",
     "start": "next start",
     "test": "node --test 'src/**/*.test.ts' && npx --yes tsx --test 'src/**/*.finance-test.ts'",

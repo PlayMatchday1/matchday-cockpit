@@ -1,3 +1,4 @@
+// Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server. Set the same to run it by hand.
 /* CONVERT TO 4 TEAMS — the deal, the refusal, and the shape.
  *
  * IT IS NOT AUTO-BUMP AND MUST NOT BECOME IT. Measured on staging over two runs: the server's own

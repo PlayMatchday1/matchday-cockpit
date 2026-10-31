@@ -1,3 +1,4 @@
+// Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server. Set the same to run it by hand.
 /* COPY-TO-DATES — the retarget rules, and the one that fails SILENTLY.
  *
  * WHY THIS IS IN THE MANDATORY SET when most view work is not: a copy is a live match on
