@@ -13,7 +13,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FIRST_NAME_TOKEN, MAX_TEST_IDS, SECTION_ADD, addSection, autoCopy, canReset, copyAfterType, isRemovable, staleLines, staleSections, writtenForOnLoad, removeSection, resetCopy, sectionCollapsed, canHidePhoto, copyAfterHide, hideUpload, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, MAX_USES_PER_PLAYER, notFoundLine, parsePlayerIds, playerLine, prefillField, PREVIEW_FIRST_NAME, amountText, limitLine, stepLimit, stepUses, usesLine, audienceBody, buttonMatchNote, buttonOf, opensText, chicagoWallNow, copyOf, createBody, defaultRun, endsTicket, formOf, formProblem, fromInput, matchInfo,
-  newForm, patchBody, mergeMatches, withCovers, endNote, pauseNote, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, countWanted, lockedSummary, endHasPassed, launchProblem, offerWallNow, offerZones, setPriceAnyWarning, setPriceProblem, pickedMatch, startLabel, STEPPER, summary, toInput, wallLabel,
+  newForm, patchBody, mergeMatches, withCovers, endNote, pauseNote, ranUntil, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, countWanted, lockedSummary, endHasPassed, launchProblem, offerWallNow, offerZones, setPriceAnyWarning, setPriceProblem, pickedMatch, startLabel, STEPPER, summary, toInput, wallLabel,
   type Campaign, type City, type Count, type FieldOpt, type Lookup, type UploadedPhoto, type CopyKey, type ListChange, type DealType, type Form, type MatchOpt, type WrittenFor,
 } from "@/lib/offersModel";
 import MatchPicker from "./MatchPicker";
@@ -755,7 +755,7 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
       {/* LAUNCH */}
       <section className="flex flex-col gap-2.5 border-t p-4" style={{ borderColor: O.line }}>
         <p data-testid="offers-summary" className="text-[13px] font-medium leading-[19px]" style={{ color: O.ink }}>
-          {matchUnread ? matchUnreadText(matchRead) : wantCount ? summary(f, count, data.matches, data.cities, offerWall(), data.fields) : lockedSummary(f, data.matches, data.cities, offerWall(), data.fields)}
+          {matchUnread ? matchUnreadText(matchRead) : wantCount ? summary(f, count, data.matches, data.cities, offerWall(), data.fields) : lockedSummary(f, data.matches, data.cities, offerWall(), data.fields, c ? ranUntil(c) : null)}
         </p>
         {outcome && <VerdictLine outcome={outcome} />}
         {problem && !ended && dirty && <div data-testid="offers-problem" className="text-[12px]" style={{ color: O.warnInk }}>{problem}</div>}

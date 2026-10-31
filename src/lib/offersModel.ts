@@ -45,7 +45,7 @@ export type Campaign = Copy & {
   // shown, which is all a backend without the field can mean.
   matchScoped: boolean; matchIds: number[]; startsLocal: string; endsLocal: string | null; showTicket?: boolean; holdoutPercent: number;
   buttonTarget: ButtonTarget; buttonMatchId: number | null; status: CampaignStatus; state: CampaignState;
-  createdByStaffEmail: string | null; launchedByStaffEmail: string | null; launchedAt: string | null;
+  createdByStaffEmail: string | null; launchedByStaffEmail: string | null; launchedAt: string | null; updatedAt?: string;
   results: Results;
 };
 
@@ -703,10 +703,17 @@ export const endNote = (endsLocal: string | null) => (endsLocal === null
   ? "Players lose this offer immediately. It can't be launched again."
   : "Nobody new gets it and no popup shows. Players who already have it can still use it until it expires. It can't be launched again.");
 
+// An ended no-end offer's end date: "Ran until Sat, Oct 31". The backend has no ended-at, but an ended offer
+// can't change, so its updatedAt (TRUE UTC, shown in Chicago like every "now" here) is when it was ended.
+export function ranUntil(c: Pick<Campaign, "status" | "endsLocal" | "updatedAt">): string | null {
+  if (c.status !== "ENDED" || c.endsLocal !== null) return null;
+  const at = c.updatedAt ? new Date(c.updatedAt) : null;
+  return at && Number.isFinite(at.getTime()) ? `Ran until ${wallDate(chicagoWallNow(at))}` : "Ended";
+}
 // A launched or ended offer has no live count, so it says who by its filters, not how many.
-export function lockedSummary(f: Form, matches: MatchOpt[], cities: City[], nowWall: string, fields: FieldOpt[] = []): string {
+export function lockedSummary(f: Form, matches: MatchOpt[], cities: City[], nowWall: string, fields: FieldOpt[] = [], ran: string | null = null): string {
   const { deal, until } = dealAndUntil(f, pickedMatch(f, matches), nowWall);
-  return `${audienceText(f, cities, fields)}: ${deal} ${until}.`;
+  return ran ? `${audienceText(f, cities, fields)}: ${deal}. ${ran}.` : `${audienceText(f, cities, fields)}: ${deal} ${until}.`;
 }
 
 export function summary(f: Form, count: Count | null, matches: MatchOpt[], cities: City[], nowWall: string, fields: FieldOpt[] = []): string {

@@ -8061,3 +8061,7 @@ date both LANDED. `endsLocal` is fixed from launch on.
 **Ending a no-end offer stops players who hold it at once** (M3-ENDPOINTS.md, `POST /:id/end`): join-price stops applying it.
 That is documented, not probed from here. An offer with an end date keeps the old rule, usable until its own expiry.
 So the Pause and End wording follows `endsLocal` (`pauseNote`, `endNote`, `src/lib/offersModel.ts`).
+
+**There is no ended-at.** A no-end offer's "Ran until" date is its `updatedAt`, shown in Chicago (`ranUntil`). That holds because the
+only non-test writes to the row are edit, launch and pause or end (`offer-campaigns.service.ts:224`, `:244`, `:465`, backend b26d3f7),
+and an ended campaign can't be edited. A new write to that row would move the date.

@@ -17,7 +17,7 @@ import { join, resolve } from "node:path";
 import {
   audienceBody, chicagoWallNow, comparisonLine, costCeiling, createBody, defaultRun, endsTicket, formOf, newForm, patchBody, priceWithDeal,
   summary, wallFromMatch, withPreviewName, buttonOf, opensText, formProblem, stepUses, usesLine, stepLimit, limitLine, copyOf,
-  addSection, autoCopy, canReset, copyAfterType, staleLines, staleSections, writtenForOnLoad, isRemovable, removeSection, resetCopy, sectionCollapsed, REMOVABLE_KEYS, canHidePhoto, copyAfterHide, hideUpload, extraBookingsLine, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, prefillField, audienceText, parsePlayerIds, playerLine, notFoundLine, usedOfLimit, resultsLines, endNote, pauseNote, progressText, campaignsAfter, countWanted, lockedSummary, offerWallNow, offerZones, wallNowIn, mergeMatches, offerMatchOpt, pickerRange, withCovers, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, endHasPassed, launchProblem, namedMatchIds, offersLogBody, pickerDayLabel, pickerView, fillText, fillFraction, setPriceAnyWarning, setPriceProblem, type Campaign, type City, type MatchOpt, type Results,
+  addSection, autoCopy, canReset, copyAfterType, staleLines, staleSections, writtenForOnLoad, isRemovable, removeSection, resetCopy, sectionCollapsed, REMOVABLE_KEYS, canHidePhoto, copyAfterHide, hideUpload, extraBookingsLine, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, prefillField, audienceText, parsePlayerIds, playerLine, notFoundLine, usedOfLimit, resultsLines, ranUntil, endNote, pauseNote, progressText, campaignsAfter, countWanted, lockedSummary, offerWallNow, offerZones, wallNowIn, mergeMatches, offerMatchOpt, pickerRange, withCovers, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, endHasPassed, launchProblem, namedMatchIds, offersLogBody, pickerDayLabel, pickerView, fillText, fillFraction, setPriceAnyWarning, setPriceProblem, type Campaign, type City, type MatchOpt, type Results,
 } from "../src/lib/offersModel";
 import { _setOffersGateDepsForTest, errorText, MAX_MATCH_PAGES, mismatches, offersGate, offersWrite, photoLinkProblem, readFirstMatchPage, readMatchesForCities, sendPreview, type OffersAuth } from "../src/lib/offersServer";
 import { readOffersConfig } from "../src/lib/offersConfig";
@@ -607,6 +607,17 @@ eq("...and two different ones, and none", [namedMatchIds({ matchIds: [116], butt
 
 eq("no end date: End and Pause say what happens to players holding it", [endNote(null), pauseNote(null)], ["Players lose this offer immediately. It can't be launched again.", "No new players get it; players who have it can still use it until you end it. You can resume it."]);
 eq("with an end date: today's rule, today's words", [endNote("2026-11-02 19:00:00"), pauseNote("2026-11-02 19:00:00")], ["Nobody new gets it and no popup shows. Players who already have it can still use it until it expires. It can't be launched again.", "Nobody new gets it and no popup shows. Players who already have it can still use it until it expires. You can resume it."]);
+
+{
+  const noEndForm = { ...nowF, name: "x", cityIds: [2], lastPlayed: "NEVER" as const, endsLocal: null };
+  const ended = { status: "ENDED" as const, endsLocal: null, updatedAt: "2026-10-31T14:25:47.705Z" };
+  eq("ended with no end date: the day it was ended", ranUntil(ended), "Ran until Sat, Oct 31");
+  eq("the day is Chicago's, not UTC's", ranUntil({ ...ended, updatedAt: "2026-11-01T03:00:00.000Z" }), "Ran until Sat, Oct 31");
+  eq("the summary says it instead of until you end it", lockedSummary(noEndForm, matches, cities, NOW, [], ranUntil(ended)), "Houston · Never played: 50% off one match. Ran until Sat, Oct 31.");
+  eq("still running: not yet", [ranUntil({ ...ended, status: "LAUNCHED" }), ranUntil({ ...ended, status: "PAUSED" }), lockedSummary(noEndForm, matches, cities, NOW, [], null).includes("until you end it")], [null, null, true]);
+  eq("ended with an end date: unchanged (the control)", ranUntil({ ...ended, endsLocal: "2026-11-01 23:59:00" }), null);
+  eq("no usable date: never a wrong one", [ranUntil({ ...ended, updatedAt: undefined }), ranUntil({ ...ended, updatedAt: "nope" })], ["Ended", "Ended"]);
+}
 
 // ── THE TICKET ───────────────────────────────────────────────────────────────────────────────────
 {
