@@ -17,11 +17,18 @@
 //     messages:  [...],   // signed_media_url minted per row
 //     assignee:  { id, email, full_name } | null,
 //     latest_inbound_at: string | null,
+//     attention: { section, reason, hold_until, entered_at } | null,
 //   }
+//
+// ATTENTION is this thread's Needs a human / Auto-sending section (src/lib/crmAttention), worked out
+// by the same loadAttention the inbox list and the badge use, for the staff app's note at the top of
+// a conversation. Null when nothing is owed, or when it could not be read (logged).
 
 import { assertThreadInScope } from "@/lib/crmScope";
 import { authenticateCrm } from "@/lib/crmAuth";
 import { getSignedMediaUrl } from "@/lib/crmMedia";
+import { isAwaitingReply } from "@/lib/awaitingReply";
+import { loadAttention } from "@/lib/crmAttentionLoad";
 
 export const runtime = "nodejs";
 export const maxDuration = 10;
@@ -48,7 +55,7 @@ export async function GET(req: Request, ctx: RouteCtx) {
   const threadRes = await supabase
     .from("crm_threads")
     .select(
-      "id, phone_number, player_id, match_ambiguous, last_message_at, last_message_preview, created_at, assigned_to_user_id, assigned_at, channel, status, closed_at, closed_by_user_id, no_reply_needed_at",
+      "id, phone_number, player_id, match_ambiguous, last_message_at, last_message_preview, last_message_direction, created_at, assigned_to_user_id, assigned_at, channel, status, closed_at, closed_by_user_id, no_reply_needed_at",
     )
     .eq("id", threadId)
     .maybeSingle();
@@ -175,12 +182,28 @@ export async function GET(req: Request, ctx: RouteCtx) {
     }
   }
 
+  let attention: { section: string; reason: string | null; hold_until: string | null; entered_at: string } | null = null;
+  try {
+    const awaiting = isAwaitingReply({
+      status: threadRow.status as "open" | "closed",
+      last_message_direction: (threadRow.last_message_direction as "inbound" | "outbound" | null) ?? null,
+      last_message_preview: threadRow.last_message_preview as string | null,
+      last_message_at: threadRow.last_message_at as string | null,
+      no_reply_needed_at: threadRow.no_reply_needed_at as string | null,
+    });
+    const a = (await loadAttention(supabase, [{ id: threadId, awaiting, last_message_at: (threadRow.last_message_at as string) ?? "" }])).get(threadId);
+    if (a) attention = { section: a.section, reason: a.reason, hold_until: a.hold_until, entered_at: a.entered_at };
+  } catch (e) {
+    console.error("[crm:threads.detail] attention lookup error", e);
+  }
+
   return Response.json(
     {
       thread,
       messages,
       assignee,
       latest_inbound_at,
+      attention,
     },
     { status: 200 },
   );
