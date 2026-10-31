@@ -53,8 +53,8 @@ export type Campaign = Copy & {
 export type City = { id: number; name: string; timeZone?: string | null };
 // A field as the photo picker and the Played at row need it. cover is the field's cover photo URL, or null.
 export type FieldOpt = { id: number; title: string; cityId: number | null; cover: string | null };
-// A match as the page needs it. Show it with matchDay, never by name: a stored name can say the wrong
-// day ("Riverside Thursday" on a Monday). startLocal is WALL CLOCK ("YYYY-MM-DD HH:mm:ss"). players is what the
+// A match as the page needs it. Staff see it by name (matchTitle); players by weekday, time and field
+// (matchDay). startLocal is WALL CLOCK ("YYYY-MM-DD HH:mm:ss"). players is what the
 // source counts: playersIn from admin/offers/matches, _count.players from admin/matches/{id}. maxPlayers
 // null is a match with no cap. fieldCover comes from the field; admin/offers/matches doesn't carry it.
 export type MatchOpt = {
@@ -201,9 +201,15 @@ export const stepLimit = (n: number | null, dir: 1 | -1) => Math.max(1, (n ?? 0)
 export const limitLine = (n: number) => `The offer stops once ${n.toLocaleString("en-US")} ${n === 1 ? "use is" : "uses are"} taken across all players.`;
 
 const spotsTaken = (m: Pick<MatchOpt, "players" | "maxPlayers">) => (m.maxPlayers === null ? `${m.players} ${m.players === 1 ? "spot" : "spots"} taken` : `${m.players} of ${m.maxPlayers} spots taken`);
-export function matchShort(m: MatchOpt): string {
-  return `${wallLabel(m.startLocal)}${m.fieldTitle ? ` · ${m.fieldTitle}` : ""}`;
-}
+// WHAT STAFF PICK AND SEE: the match's name first, as Gameday Ops shows it. Players never see the name:
+// the popup's line and body use matchDay, because a stored name can say the wrong day.
+export const matchTitle = (m: Pick<MatchOpt, "id" | "name" | "fieldTitle">) => m.name?.trim() || m.fieldTitle || `Match ${m.id}`;
+// "Ann Richards School · Austin"
+export const matchWhere = (m: Pick<MatchOpt, "fieldTitle" | "cityId">, cities: City[]) =>
+  [m.fieldTitle, cities.find((c) => c.id === m.cityId)?.name].filter(Boolean).join(" · ");
+// "Tue 7:00 PM · ZZ probe offers A"
+export const matchPicked = (m: MatchOpt) =>
+  `${fmt(wallMs(m.startLocal), { weekday: "short" })} ${fmt(wallMs(m.startLocal), { hour: "numeric", minute: "2-digit" })} · ${matchTitle(m)}`;
 // "Normally $9 · 11 of 16 spots taken · needs 3 more · offer ends at kickoff"
 export function matchInfo(m: MatchOpt): string {
   const parts = [`Normally ${money(m.price)}`, spotsTaken(m)];
@@ -240,7 +246,7 @@ export function pickerView(matches: MatchOpt[], f: PickerFilter, nowWall: string
   const words = f.search.trim().toLowerCase().split(/\s+/).filter(Boolean);
   const kept = inWindow.filter((m) => {
     if (f.needsPlayers && matchNeeds(m) === 0) return false;
-    const hay = `${m.fieldTitle ?? ""} ${pickerTime(m.startLocal)} ${pickerDayLabel(m.startLocal, nowWall)}`.toLowerCase();
+    const hay = `${m.name ?? ""} ${m.fieldTitle ?? ""}`.toLowerCase();
     return words.every((w) => hay.includes(w));
   }).sort((a, b) => a.startLocal.localeCompare(b.startLocal) || a.id - b.id);
   const groups: { label: string; rows: { match: MatchOpt; time: string }[] }[] = [];
@@ -370,7 +376,7 @@ export function opensText(f: Form, matches: MatchOpt[]): string {
   if (b.target === "MEMBERSHIP") return "↳ Opens Membership";
   if (b.target === "FIND_MATCH") return "↳ Opens Find a match";
   const bm = matches.find((x) => x.id === b.matchId);
-  return bm ? `↳ Opens ${matchDay(bm)}` : "↳ Opens a match (pick one)";
+  return bm ? `↳ Opens ${matchPicked(bm)}` : "↳ Opens a match (pick one)";
 }
 // The mint note under the button's own match: "Normally $9 · 11 of 16 spots taken. The offer still works on any match."
 export const buttonMatchNote = (m: MatchOpt) => `Normally ${money(m.price)} · ${spotsTaken(m)}. The offer still works on any match.`;

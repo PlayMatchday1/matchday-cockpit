@@ -17,7 +17,7 @@ import { join, resolve } from "node:path";
 import {
   audienceBody, chicagoWallNow, comparisonLine, costCeiling, createBody, defaultRun, endsTicket, formOf, newForm, patchBody, priceWithDeal,
   summary, wallFromMatch, withPreviewName, buttonOf, opensText, formProblem, stepUses, usesLine, stepLimit, limitLine, copyOf,
-  addSection, autoCopy, canReset, copyAfterType, staleLines, staleSections, writtenForOnLoad, isRemovable, removeSection, resetCopy, sectionCollapsed, REMOVABLE_KEYS, canHidePhoto, copyAfterHide, hideUpload, extraBookingsLine, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, prefillField, audienceText, parsePlayerIds, playerLine, notFoundLine, usedOfLimit, resultsLines, ranUntil, endNote, pauseNote, progressText, campaignsAfter, countWanted, lockedSummary, offerWallNow, offerZones, wallNowIn, mergeMatches, offerMatchOpt, pickerRange, withCovers, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, endHasPassed, launchProblem, namedMatchIds, offersLogBody, pickerDayLabel, pickerView, fillText, fillFraction, setPriceAnyWarning, setPriceProblem, type Campaign, type City, type MatchOpt, type Results,
+  addSection, autoCopy, canReset, copyAfterType, staleLines, staleSections, writtenForOnLoad, isRemovable, removeSection, resetCopy, sectionCollapsed, REMOVABLE_KEYS, canHidePhoto, copyAfterHide, hideUpload, extraBookingsLine, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, prefillField, audienceText, parsePlayerIds, playerLine, notFoundLine, usedOfLimit, resultsLines, matchPicked, matchTitle, matchWhere, ranUntil, endNote, pauseNote, progressText, campaignsAfter, countWanted, lockedSummary, offerWallNow, offerZones, wallNowIn, mergeMatches, offerMatchOpt, pickerRange, withCovers, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, endHasPassed, launchProblem, namedMatchIds, offersLogBody, pickerDayLabel, pickerView, fillText, fillFraction, setPriceAnyWarning, setPriceProblem, type Campaign, type City, type MatchOpt, type Results,
 } from "../src/lib/offersModel";
 import { _setOffersGateDepsForTest, errorText, MAX_MATCH_PAGES, mismatches, offersGate, offersWrite, photoLinkProblem, readFirstMatchPage, readMatchesForCities, sendPreview, type OffersAuth } from "../src/lib/offersServer";
 import { readOffersConfig } from "../src/lib/offersConfig";
@@ -98,7 +98,7 @@ console.log("button opens:");
   eq("a specific-match deal forces the button to that match and locks it", buttonOf(scoped, matches), { target: "MATCH", matchId: 116, locked: true });
   eq("...and that is what is sent, whatever the form held", [createBody(scoped, matches, cities).buttonTarget, createBody(scoped, matches, cities).buttonMatchId], ["MATCH", 116]);
   eq("an any-match offer may open one match, unlocked", buttonOf({ ...nowF, buttonTarget: "MATCH", buttonMatchId: 117 }, matches), { target: "MATCH", matchId: 117, locked: false });
-  eq("its opens line", opensText({ ...nowF, buttonTarget: "MATCH", buttonMatchId: 117 }, matches), "↳ Opens Tue 7:00 PM · Mueller Park");
+  eq("its opens line", opensText({ ...nowF, buttonTarget: "MATCH", buttonMatchId: 117 }, matches), "↳ Opens Tue 7:00 PM · Mueller Friday");
   eq("a button match not picked yet stops the save", formProblem({ ...nowF, name: "x", buttonTarget: "MATCH", buttonMatchId: null }, matches), "Pick the match the button opens.");
   const live = draftFrom({ status: "LAUNCHED", state: "LIVE" });
   const lf = formOf(live, matches, cities);
@@ -512,8 +512,9 @@ eq("the production base passes the client's host guard, an Offers write passes p
   eq("next 14 days reaches day 14 and stops", ids(v({ days: 14 })), [1, 3, 4, 5, 6]);
   eq("no city chosen: every city", ids(v({ cityIds: [] })), [1, 8, 3, 4]);
   eq("search by field", ids(v({ search: "nemp" })), [1]);
-  eq("search by time", ids(v({ search: "6:00" })), [3]);
-  eq("search by day and field together", ids(v({ search: "sat round" })), [3]);
+  eq("search by the match's name", ids(v({ search: "m4" })), [4]);
+  eq("name and field together", ids(v({ search: "m3 round" })), [3]);
+  eq("not by time or day", [ids(v({ search: "6:00" })), ids(v({ search: "sat" }))], [[], []]);
   eq("a search with no match shows none, and says so in the footer", [ids(v({ search: "zzz" })), v({ search: "zzz" }).footer], [[], "Showing 0 of 4 Austin matches in the next 7 days"]);
   eq("the row's time is wall clock, not re-shifted", v().groups[0].rows[0].time, "7:00 PM");
   eq("fill text as the mock", fillText({ players: 11, maxPlayers: 16, minPlayers: 14 }), "11/16 · needs 3");
@@ -645,7 +646,12 @@ eq("with an end date: today's rule, today's words", [endNote("2026-11-02 19:00:0
   eq("...for every deal, never the name", [line({ dealType: "SET_PRICE", dealAmount: 500 }).includes("a $5 spot in Mon 7:00 PM · Riverside Fields"), line({ dealType: "FREE_MATCH", dealAmount: 0 }).includes("Mon 7:00 PM · Riverside Fields free"), line().includes("Riverside Thursday"), line({ dealType: "SET_PRICE", dealAmount: 500 }).includes("Riverside Thursday"), line({ dealType: "FREE_MATCH", dealAmount: 0 }).includes("Riverside Thursday")], [true, true, false, false, false]);
   eq("the locked summary too", lockedSummary({ ...nowF, name: "x", scope: "MATCH", matchId: 116, endsLocal: "2026-11-02 19:00:00" }, matches, cities, NOW).includes("Riverside Thursday"), false);
   const hit = (search: string) => pickerView(matches, { search, days: 14, needsPlayers: false, cityIds: [] }, NOW, cities).shown;
-  eq("the picker's search doesn't find what the row doesn't show", [hit("thursday"), hit("riverside")], [0, 1]);
+  eq("the picker's search finds the name and the field, not the time", [hit("thursday"), hit("riverside"), hit("7:00")], [1, 1, 0]);
+  eq("staff see it by name, then field and city", [matchTitle(matches[0]), matchWhere(matches[0], cities), matchPicked(matches[0])], ["Riverside Thursday", "Riverside Fields · Austin", "Mon 7:00 PM · Riverside Thursday"]);
+  eq("no field or no known city leaves just what's known", [matchWhere({ fieldTitle: null, cityId: 1 }, cities), matchWhere({ fieldTitle: "F", cityId: 99 }, cities)], ["Austin", "F"]);
+  eq("a blank name falls back, never empty", [matchTitle({ id: 9, name: " ", fieldTitle: "F" }), matchTitle({ id: 9, name: "", fieldTitle: null })], ["F", "Match 9"]);
+  const popup = autoCopy({ ...nowF, scope: "MATCH", matchId: 116 }, matches, cities);
+  eq("what the player sees still never has the name", [popup.line, popup.body, popup.caption], ["MON 7:00 PM · RIVERSIDE FIELDS", "Mon 7:00 PM · Riverside Fields, normally $15. The discount is already on your account.", "Your spot at Riverside Fields is waiting."]);
   eq("with no field, just the time", noField.body, "Mon 7:00 PM, normally $15. The discount is already on your account.");
 }
 
