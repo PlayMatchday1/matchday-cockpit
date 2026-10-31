@@ -1,7 +1,7 @@
 /* STAFF APP MATCH v2: which desktop path a team count takes, what the size stepper offers, how an
  * add's money is worded, and how a search term is read (src/lib/appMatchV2.ts). Ryan, 2026-10-30.
  * Pure rules, asserted offline; every refusal has a presence control beside it. */
-import { moneyLine, phoneLast4, pickerCapacityWrites, searchTerm, sizeBounds, sizeRefusal, sizeWrites, teamsPath } from "../src/lib/appMatchV2";
+import { reduceSizes, moneyLine, phoneLast4, pickerCapacityWrites, searchTerm, sizeBounds, sizeRefusal, sizeWrites, teamsPath } from "../src/lib/appMatchV2";
 
 let pass = 0, fail = 0;
 const ok = (m: string) => { pass++; console.log(`  ok  ${m}`); };
@@ -47,6 +47,15 @@ is("a +1 phone", searchTerm("+1 512 555 0188"), { kind: "phone", digits: "512555
 is("an email", searchTerm("ryan+devb@playmatchday.com"), { kind: "email", text: "ryan+devb@playmatchday.com" });
 is("too short to search", searchTerm("ab"), null);
 is("phone last four only", phoneLast4("+15125550188"), "0188");
+
+console.log("\nreduce to 2: the sizes offered");
+is("5 real, currently 8 a side: 6, 7, 8 (6 is the desktop's floor)", reduceSizes(5, 8), { sizes: [6, 7, 8], reason: null });
+is("15 real, currently 9 a side: from 8 (fits 15) to 9", reduceSizes(15, 9), { sizes: [8, 9], reason: null });
+is("presence control: 16 real at 8 a side fits exactly", reduceSizes(16, 8).sizes, [8]);
+is("17 real at 8 a side: nothing fits, and it says why", reduceSizes(17, 8).sizes, []);
+is("…with a reason", typeof reduceSizes(17, 8).reason, "string");
+is("26 real: beyond 12 a side, refused", reduceSizes(26, 12).sizes, []);
+is("current size above 12 is capped at 12", reduceSizes(10, 14).sizes, [6, 7, 8, 9, 10, 11, 12]);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

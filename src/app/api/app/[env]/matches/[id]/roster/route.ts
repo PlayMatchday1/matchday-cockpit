@@ -30,7 +30,7 @@ import { countedPlayers, fetchPlayersLive, isEnv } from "@/lib/appLive";
 import { apiGet, StageConfigError, StageHostGuardError, type MatchdayEnv } from "@/lib/matchdayStageApi";
 import { CONFINED_CITY_ERROR } from "@/lib/cityConfinement";
 import { rosterRowIsFake } from "@/lib/gamedayModel";
-import { moneyLine, pickerCapacityWrites, sizeRefusal, sizeWrites, teamsPath } from "@/lib/appMatchV2";
+import { moneyLine, pickerCapacityWrites, reduceSizes, sizeRefusal, sizeWrites, teamsPath } from "@/lib/appMatchV2";
 import { POST as desktopRosterPost } from "@/app/api/matchday/[env]/roster/[matchId]/route";
 import { PUT as desktopMatchPut } from "@/app/api/matchday/[env]/matches/[id]/route";
 import { GET as convertGet, POST as convertPost } from "@/app/api/matchday/[env]/matches/[id]/convert-4/route";
@@ -106,22 +106,43 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string; id
     const origin = url.origin;
     const params = { params: Promise.resolve({ env, id }) };
     let spotsAfter: number | null = null, refusal: string | null = null;
-    if (path === "picker") {
+    /* REDUCE TO 2 ASKS FOR A SIZE FIRST (Ryan, 2026-10-31). Each size the rule offers is planned by the
+     * desktop's own reduce-2 GET at that size (it writes nothing), so the spots, the open spots and
+     * the fakes dropped are the desktop's figures, not a second count made here. */
+    let sizes: { perTeam: number; spots: number; open: number; fakesDropped: number; refusal: string | null }[] | undefined;
+    let sizeReason: string | null = null;
+    if (path === "reduce-2") {
+      const real = before.players.filter((p) => !p.fake).length;
+      const current = before.teamCount > 0 && before.capacity % before.teamCount === 0 ? before.capacity / before.teamCount : null;
+      const offer = reduceSizes(real, current);
+      sizeReason = offer.reason;
+      sizes = [];
+      for (const n of offer.sizes) {
+        const res = await reduceGet(new Request(`${origin}/api/matchday/${env}/matches/${id}/reduce-2?perTeam=${n}`, { headers }), params);
+        const j = (await res.json().catch(() => null)) as Row | null;
+        const why = !res.ok ? String(j?.error ?? `HTTP ${res.status}`) : ((j?.refusal ?? j?.capacityRefusal ?? j?.shapeError ?? null) as string | null);
+        const total = Number(j?.total ?? 2 * n), realCount = Number(j?.realCount ?? real), kept = Number(j?.fakeKeepCount ?? 0);
+        sizes.push({ perTeam: n, spots: total, open: Math.max(0, total - realCount - kept), fakesDropped: Number(j?.fakeRemoveCount ?? 0), refusal: why });
+      }
+      const first = sizes.find((x) => !x.refusal);
+      spotsAfter = first?.spots ?? null;
+      refusal = first ? null : (sizeReason ?? sizes[0]?.refusal ?? "No 2-team size fits the real players.");
+    } else if (path === "picker") {
       const w = pickerCapacityWrites(before.match, before.teamCount, target);
       spotsAfter = w.maxPlayerCount ?? before.capacity;
     } else {
-      const handler = path === "convert-4" ? convertGet : reduceGet;
-      const res = await handler(new Request(`${origin}/api/matchday/${env}/matches/${id}/${path}`, { headers }), params);
+      const res = await convertGet(new Request(`${origin}/api/matchday/${env}/matches/${id}/${path}`, { headers }), params);
       const j = (await res.json().catch(() => null)) as Row | null;
       if (!res.ok) refusal = String(j?.error ?? `HTTP ${res.status}`);
       else {
         refusal = (j?.refusal as string | null) ?? (j?.capacityRefusal as string | null) ?? (j?.shapeError as string | null) ?? null;
-        spotsAfter = path === "convert-4" ? Number(j?.spotsAfter) : Number(j?.total);
+        spotsAfter = Number(j?.spotsAfter);
       }
     }
     return Response.json({
       path, teamsBefore: before.teamCount, teamsAfter: target, spotsBefore: before.capacity,
       spotsAfter: Number.isFinite(spotsAfter) ? spotsAfter : null, players: before.players.length, refusal,
+      real: before.players.filter((p) => !p.fake).length, fakes: before.players.filter((p) => p.fake).length, sizes,
     });
   } catch (e) { return fail(e); }
 }
@@ -208,8 +229,21 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
         }
         expectCap = w.maxPlayerCount ?? before.capacity;
       } else {
+        // Reduce to 2 runs at the size chosen on the confirm sheet, and must be one the rule offers.
+        let q = "";
+        if (path === "reduce-2") {
+          const real = before.players.filter((p) => !p.fake).length;
+          const current = before.teamCount > 0 && before.capacity % before.teamCount === 0 ? before.capacity / before.teamCount : null;
+          const offer = reduceSizes(real, current);
+          const perTeam = Number(body?.perTeam);
+          if (!offer.sizes.includes(perTeam)) {
+            return Response.json({ error: offer.reason ?? `Choose a team size of ${offer.sizes.join(", ")}.` }, { status: 400 });
+          }
+          q = `?perTeam=${perTeam}`;
+          expectCap = 2 * perTeam;
+        }
         const handler = path === "convert-4" ? convertPost : reducePost;
-        const res = await handler(new Request(`${origin}/api/matchday/${env}/matches/${id}/${path}`, { method: "POST", headers, body: "{}" }), params);
+        const res = await handler(new Request(`${origin}/api/matchday/${env}/matches/${id}/${path}${q}`, { method: "POST", headers, body: "{}" }), params);
         const j = (await res.json().catch(() => null)) as Row | null;
         const results = (j?.results as Row[] | undefined) ?? [];
         for (const r of results) {

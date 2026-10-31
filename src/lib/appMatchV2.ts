@@ -4,6 +4,7 @@
 // assert every rule offline.
 
 import { teamCountWrites, teamShapeError } from "./rosterEditModel";
+import { REDUCE_MAX_PER_TEAM, REDUCE_MIN_PER_TEAM } from "./reduceTwoTeams";
 
 /* WHICH DESKTOP PATH A TEAM COUNT CHANGE TAKES. Ryan: "use the desktop's exact paths (the
  * teamNumbers picker, Convert to 4, Reduce to 2), no custom spreading."
@@ -55,6 +56,22 @@ export function sizeWrites(match: Record<string, unknown>, teamCount: number, pe
   const rung = rungKey ? Number(match[rungKey]) : null;
   const w = teamCountWrites(teamCount, perTeam, Number.isFinite(rung) ? rung : null);
   return Object.fromEntries(Object.entries(w).filter(([k, v]) => Number(match[k]) !== v));
+}
+
+/* THE SIZES A REDUCE TO 2 MAY OFFER (Ryan, 2026-10-31): every size where 2 x size holds all the real
+ * players and teamShapeError accepts 2 x size, from the smallest that fits up to the current size,
+ * and only inside the desktop Reduce to 2's own range (6 to 12 a side), which refuses anything else.
+ * Empty, with the reason, when nothing fits. */
+export function reduceSizes(real: number, currentSize: number | null): { sizes: number[]; reason: string | null } {
+  const fit = Math.max(1, Math.ceil(real / 2));
+  const lo = Math.max(fit, REDUCE_MIN_PER_TEAM);
+  const hi = Math.min(currentSize ?? REDUCE_MAX_PER_TEAM, REDUCE_MAX_PER_TEAM);
+  const sizes: number[] = [];
+  for (let s = lo; s <= hi; s++) if (teamShapeError(2 * s, 2) == null) sizes.push(s);
+  if (sizes.length > 0) return { sizes, reason: null };
+  if (fit > REDUCE_MAX_PER_TEAM) return { sizes, reason: `${real} real players do not fit 2 teams of ${REDUCE_MAX_PER_TEAM}, the largest Reduce to 2 allows.` };
+  if (currentSize != null && currentSize < lo) return { sizes, reason: `The current size is ${currentSize} a side, below the ${lo} a side that 2 teams would need here (Reduce to 2 allows ${REDUCE_MIN_PER_TEAM} to ${REDUCE_MAX_PER_TEAM}).` };
+  return { sizes, reason: `No 2-team size fits ${real} real players.` };
 }
 
 /* WHAT AN ADD COST, read off the roster row AFTER the add. Clubhouse sends no price and no credit;
