@@ -73,6 +73,8 @@ const CRED_VARS: Record<MatchdayEnv, { base: string; email: string; password: st
   production: { base: "MATCHDAY_PROD_BASE_URL", email: "MATCHDAY_PROD_API_EMAIL", password: "MATCHDAY_PROD_API_PASSWORD" },
 };
 
+export const MATCHDAY_CRED_VARS: Readonly<typeof CRED_VARS> = CRED_VARS;
+
 const REFRESH_SKEW_MS = 120_000;
 const WRITE_TIMEOUT_MS = 30_000;
 

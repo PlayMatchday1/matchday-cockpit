@@ -82,7 +82,8 @@ export type WriteCtx = {
   // Roster ops don't diff a flat object — they supply their own read-back predicate and
   // their own descriptive changes ("Move: team 1 #3 → team 2 #4"). Match writes omit both
   // and fall back to the flat key diff.
-  applied?: (before: Record<string, unknown>, after: Record<string, unknown>) => boolean;
+  // "unknown": the write answered 2xx, but with nothing that says whether it took. Logged as NO ANSWER.
+  applied?: (before: Record<string, unknown>, after: Record<string, unknown>) => boolean | "unknown";
   changes?: Change[];
 };
 export type WriteIO = {
@@ -101,7 +102,8 @@ export async function recordWrite(ctx: WriteCtx, io: WriteIO, store: LogStore): 
   try {
     result = await io.write();
     after = await io.readResource().catch(() => before);
-    outcome = outcomeForOk(ctx.applied ? ctx.applied(before, after) : appliedOnServer(before, after, ctx.keys));
+    const applied = ctx.applied ? ctx.applied(before, after) : appliedOnServer(before, after, ctx.keys);
+    outcome = applied === "unknown" ? "unknown" : outcomeForOk(applied);
   } catch (e) {
     error = e as Error;
     outcome = outcomeForThrow((e as Error).name);

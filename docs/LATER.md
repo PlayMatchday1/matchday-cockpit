@@ -21,25 +21,50 @@ grant: someone with read-only Match Ops, without `can_edit_matches`, can launch 
 not an oversight. Every write is still recorded under the signed-in person in `change_log` and sent to the
 backend as `X-Acting-Staff-Email`.
 
-**Testing against staging.** Offers is not on staging yet: on 2026-10-30, `GET /admin/offers/campaigns` on
-`matchday-stage.herokuapp.com` with no token answered 200 with an HTML page, where `/admin/matches` answered
-401. Once the backend is there, set `OFFERS_STAGING_UPLOAD_HOST` to the host in a real staging upload link and
-run `npm run dev:offers-staging`, which serves on port 3073:
+**Staging.** Two ways to run it, and neither is set up on Vercel today. Offers itself is not on staging yet: on
+2026-10-30, `GET /admin/offers/campaigns` on `matchday-stage.herokuapp.com` with no token answered 200 with an HTML
+page, where `/admin/matches` answered 401.
 
-| Variable | Staging value |
-|---|---|
-| `OFFERS_ENV` | `staging` |
-| `OFFERS_API_BASE_URL` | `https://matchday-stage.herokuapp.com` |
-| `OFFERS_UPLOAD_HOST` | From `OFFERS_STAGING_UPLOAD_HOST` |
+Which Vercel scope gets what:
 
-It signs in with `MATCHDAY_STAGE_API_*`, and that account must be in staging's
-`CLUBHOUSE_SERVICE_ACCOUNT_EMAILS`. **Open only Growth › Offers on that server.** It runs with local mode off, so
-every other page reads and writes production as usual, and Offers writes land in the real `change_log` under
-`env = staging`. Stop the local-mode server first: one worktree can't run two dev servers.
+| Variable | Production scope | Preview scope |
+|---|---|---|
+| `OFFERS_ENV` | `production` | `staging` |
+| `OFFERS_API_BASE_URL` | `https://playmatchday.herokuapp.com` | `https://matchday-stage.herokuapp.com` |
+| `OFFERS_UPLOAD_HOST` | Production's upload host | Staging's upload host |
+| `MATCHDAY_PROD_BASE_URL`, `MATCHDAY_PROD_API_EMAIL`, `MATCHDAY_PROD_API_PASSWORD` | Already there | **Never.** Keeping them off Preview is what stops a Preview build writing production |
+| `MATCHDAY_STAGE_API_BASE_URL`, `MATCHDAY_STAGE_API_EMAIL`, `MATCHDAY_STAGE_API_PASSWORD` | Never | Add |
+
+Seen with `vercel env ls` by name on 2026-10-31: no `OFFERS_*` or `MATCHDAY_STAGE_API_*` in any scope, and Preview
+holds no `MATCHDAY_*` and no Supabase variable. So **a Preview build can't sign anyone in until
+`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` and `SUPABASE_SERVICE_ROLE_KEY` are added to Preview
+as well.** There is one Supabase project, so that gives Preview builds the production service-role key and production
+data, which is a decision to make deliberately, not a step to tick. Whether Supabase's redirect list accepts a Preview
+URL is UNKNOWN. A Preview build needs a pushed branch, and Offers writes from one land in the real `change_log` under
+`env = staging`.
+
+On a dev server instead, which needs none of that: set `OFFERS_STAGING_UPLOAD_HOST` to the host in a real staging upload
+link and run `npm run dev:offers-staging`, port 3073, with `MATCHDAY_STAGE_API_*` in `.env.local`. Stop the local-mode
+server first: one worktree can't run two dev servers. **Open only Growth › Offers on it.** It runs with local mode off,
+so every other page there reads and writes production as usual.
+
+Either way, staging's own `CLUBHOUSE_SERVICE_ACCOUNT_EMAILS` must list the `MATCHDAY_STAGE_API_EMAIL` account.
 
 **Reads, decided 2026-10-30.** Every Offers read goes through the pacer at 2 seconds, except the page's load,
 `GET /admin/offers/page`, which is one read in place of four. Create, launch, pause and end make no reads: the
 backend checks them and each returns the campaign, which is the read-back and what the list takes.
+
+**The pacer is per server instance.** It is in-process state (`src/lib/offersPacing.ts`), so on Vercel each running
+instance has its own 2-second gap and its own 30-second stop. Two instances can read at the same moment, and a stop
+on one doesn't reach another. It paces one person well. It is not a limit on what the Clubhouse as a whole sends.
+
+**At the push, in this order:** release the backend; set the variables above in Production scope; `git fetch` and merge
+`origin/main` into `feature/offers`, because the Clubhouse ships by pushing to main and this branch must carry what
+main has; run `npm run verify` bare and read the exit code; push to main, never `vercel deploy --prod`; then
+`git ls-remote origin refs/heads/main` is what says it landed. Variables set after the build don't reach it, so a late
+one needs another deploy from a push.
+
+A missing credential closes the page like any other variable: the routes answer 503 and the server log names it.
 
 Also needed, none of them new variables:
 

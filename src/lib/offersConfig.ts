@@ -10,9 +10,12 @@ import "server-only";
 // own allowlisted host for that environment, and the client checks it again on every request. local
 // also needs local mode on, and local mode on refuses staging and production, so a dev server can't
 // reach a real backend by way of these variables. The full list for release is in docs/LATER.md.
+//
+// THE CREDENTIALS THE WRITE CLIENT WILL SIGN IN WITH ARE CHECKED HERE TOO, by name and never by value, so
+// missing ones are this one 503 naming the variable rather than every read failing later.
 
 import { LOCAL_MDAPI_HOST, localModeOn } from "@/lib/localMode";
-import { MATCHDAY_HOSTS, type ClientEnv } from "@/lib/matchdayStageApi";
+import { MATCHDAY_CRED_VARS, MATCHDAY_HOSTS, type ClientEnv } from "@/lib/matchdayStageApi";
 
 export type OffersConfig = { env: ClientEnv; baseUrl: string; uploadHost: string };
 export type OffersConfigResult = { ok: true; config: OffersConfig } | { ok: false; problem: string };
@@ -38,5 +41,14 @@ export function readOffersConfig(e: Env = process.env): OffersConfigResult {
   if (base.pathname !== "/" || base.search || base.username || base.password) return no("OFFERS_API_BASE_URL must be the bare origin");
   const uploadHost = e.OFFERS_UPLOAD_HOST ?? "";
   if (!isBareHost(uploadHost)) return no("OFFERS_UPLOAD_HOST must be a bare host, such as bucket.s3.amazonaws.com");
+  const creds = env === "local" ? ["MATCHDAY_LOCAL_API_EMAIL", "MATCHDAY_LOCAL_API_PASSWORD"] : Object.values(MATCHDAY_CRED_VARS[env]);
+  const missing = creds.filter((k) => !e[k]?.trim());
+  if (missing.length) return no(`OFFERS_ENV=${env} needs ${missing.join(", ")}`);
+  if (env !== "local") {
+    const name = MATCHDAY_CRED_VARS[env].base;
+    let host = "";
+    try { host = new URL(e[name] ?? "").host; } catch { /* no host: refused below */ }
+    if (host !== expected) return no(`${name} must be on ${expected} for OFFERS_ENV=${env}`);
+  }
   return { ok: true, config: { env, baseUrl: base.origin, uploadHost } };
 }

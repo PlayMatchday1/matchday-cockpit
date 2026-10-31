@@ -434,12 +434,23 @@ eq("off the list, not an admin, local mode off and a strange 200 are all no",
 
 // ── THE SERVER CONFIG: env-driven, fails closed ──────────────────────────────────────────────────
 const LOCAL_ON = { MATCHDAY_LOCAL_API: "1", NODE_ENV: "development" };
-const goodLocal = { ...LOCAL_ON, OFFERS_ENV: "local", OFFERS_API_BASE_URL: "http://localhost:3070", OFFERS_UPLOAD_HOST: "localhost:3070" };
-const goodProd = { NODE_ENV: "production", OFFERS_ENV: "production", OFFERS_API_BASE_URL: "https://playmatchday.herokuapp.com", OFFERS_UPLOAD_HOST: "bucket.s3.amazonaws.com" };
+const goodLocal = { ...LOCAL_ON, OFFERS_ENV: "local", OFFERS_API_BASE_URL: "http://localhost:3070", OFFERS_UPLOAD_HOST: "localhost:3070", MATCHDAY_LOCAL_API_EMAIL: "a@x.y", MATCHDAY_LOCAL_API_PASSWORD: "p" };
+const goodProd = { NODE_ENV: "production", OFFERS_ENV: "production", OFFERS_API_BASE_URL: "https://playmatchday.herokuapp.com", OFFERS_UPLOAD_HOST: "bucket.s3.amazonaws.com", MATCHDAY_PROD_BASE_URL: "https://playmatchday.herokuapp.com", MATCHDAY_PROD_API_EMAIL: "a@x.y", MATCHDAY_PROD_API_PASSWORD: "p" };
+const goodStage = { NODE_ENV: "production", OFFERS_ENV: "staging", OFFERS_API_BASE_URL: "https://matchday-stage.herokuapp.com", OFFERS_UPLOAD_HOST: "b.s3.amazonaws.com", MATCHDAY_STAGE_API_BASE_URL: "https://matchday-stage.herokuapp.com", MATCHDAY_STAGE_API_EMAIL: "a@x.y", MATCHDAY_STAGE_API_PASSWORD: "p" };
 const cfgOk = (e: Record<string, string | undefined>) => readOffersConfig(e).ok;
 eq("local, all set: open (the control)", readOffersConfig(goodLocal), { ok: true, config: { env: "local", baseUrl: "http://localhost:3070", uploadHost: "localhost:3070" } });
 eq("production, all set: open (the control)", readOffersConfig(goodProd), { ok: true, config: { env: "production", baseUrl: "https://playmatchday.herokuapp.com", uploadHost: "bucket.s3.amazonaws.com" } });
-eq("staging, all set: open (the control)", cfgOk({ NODE_ENV: "production", OFFERS_ENV: "staging", OFFERS_API_BASE_URL: "https://matchday-stage.herokuapp.com", OFFERS_UPLOAD_HOST: "b.s3.amazonaws.com" }), true);
+eq("staging, all set: open (the control)", cfgOk(goodStage), true);
+for (const [good, keys] of [[goodProd, ["MATCHDAY_PROD_BASE_URL", "MATCHDAY_PROD_API_EMAIL", "MATCHDAY_PROD_API_PASSWORD"]], [goodStage, ["MATCHDAY_STAGE_API_BASE_URL", "MATCHDAY_STAGE_API_EMAIL", "MATCHDAY_STAGE_API_PASSWORD"]], [goodLocal, ["MATCHDAY_LOCAL_API_EMAIL", "MATCHDAY_LOCAL_API_PASSWORD"]]] as const) {
+  for (const k of keys) {
+    const r = readOffersConfig({ ...good, [k]: undefined }) as { ok: boolean; problem: string };
+    eq(`${k} missing: closed, and the problem names it`, [r.ok, r.problem.includes(k)], [false, true]);
+    eq(`${k} blank: closed`, cfgOk({ ...good, [k]: "  " }), false);
+  }
+}
+eq("production's credentials don't open staging, or staging's production", [cfgOk({ ...goodStage, MATCHDAY_STAGE_API_EMAIL: undefined, MATCHDAY_PROD_API_EMAIL: "a@x.y" }), cfgOk({ ...goodProd, MATCHDAY_PROD_API_EMAIL: undefined, MATCHDAY_STAGE_API_EMAIL: "a@x.y" })], [false, false]);
+eq("a credentials base on another host: closed", cfgOk({ ...goodProd, MATCHDAY_PROD_BASE_URL: "https://matchday-stage.herokuapp.com" }), false);
+eq("no password's value in any problem", JSON.stringify(readOffersConfig({ ...goodProd, MATCHDAY_PROD_API_EMAIL: undefined, MATCHDAY_PROD_API_PASSWORD: "hunter2" })).includes("hunter2"), false);
 eq("nothing set: closed", cfgOk({}), false);
 for (const k of ["OFFERS_ENV", "OFFERS_API_BASE_URL", "OFFERS_UPLOAD_HOST"] as const) {
   eq(`${k} unset: closed, on local and on production`, [cfgOk({ ...goodLocal, [k]: undefined }), cfgOk({ ...goodProd, [k]: undefined })], [false, false]);
@@ -729,7 +740,7 @@ function routeFiles(dir: string): string[] {
       return new Response(JSON.stringify({ id: 9, status: "DRAFT", name: "x", playerIds: stored.players ?? [] }), { status: 200 });
     }) as typeof fetch;
     Object.assign(process.env, { MATCHDAY_STAGE_API_BASE_URL: "https://matchday-stage.herokuapp.com", MATCHDAY_STAGE_API_EMAIL: "s@example.com", MATCHDAY_STAGE_API_PASSWORD: "x" });
-    const rows: { env: string; body: Record<string, unknown>; changes: unknown; actorName: string; actorEmail: string }[] = [];
+    const rows: { env: string; body: Record<string, unknown>; changes: unknown; actorName: string; actorEmail: string; outcome: string }[] = [];
     const logStore = () => ({ insert: async (r: unknown) => { rows.push(r as (typeof rows)[number]); }, resolve: async () => undefined, recent: async () => [] }) as never;
     const slept: number[] = [];
     const sleep = async (ms: number) => { slept.push(ms); };
@@ -797,6 +808,7 @@ function routeFiles(dir: string): string[] {
       const loaded = await (await list.GET(new Request("http://localhost/api/offers"), {})).json();
       eq("...cut down, with each city's zone as the launch check wants it", [loaded.cities, loaded.fields], [[{ id: 2, name: "Houston", timeZone: "America/Chicago" }], [{ id: 1, title: "F", cityId: 2, cover: null }]]);
       eq("pause: the write and nothing else", await run(() => act.POST(POSTREQ(), ctx("pause"))), { status: 200, verdict: "LANDED", seen: [`POST ${C}/pause`] });
+      eq("...and the log agrees", rows.at(-1)?.outcome, "landed");
       current = campaign({ status: "DRAFT" });
       eq("launch: the write and nothing else", await run(() => act.POST(POSTREQ(), ctx("launch"))), { status: 200, verdict: "LANDED", seen: [`POST ${C}/launch`] });
       current = campaign({ status: "DRAFT", matchIds: [116] });
@@ -810,10 +822,13 @@ function routeFiles(dir: string): string[] {
       // The write's own answer is still checked, not just its 2xx.
       current = campaign({ status: "DRAFT" });
       answerStatus = "DRAFT";
-      eq("a 2xx whose campaign shows no move: NOT APPLIED, not LANDED", (await run(() => act.POST(POSTREQ(), ctx("launch")))).verdict, "NOT APPLIED");
+      eq("a 2xx whose campaign shows no move: NOT APPLIED, not LANDED, in the route and the log", [(await run(() => act.POST(POSTREQ(), ctx("launch")))).verdict, rows.at(-1)?.outcome], ["NOT APPLIED", "notapplied"]);
       answerStatus = null;
       answerEmpty = true;
-      eq("a 2xx with no campaign in it: UNKNOWN, not LANDED", (await run(() => act.POST(POSTREQ(), ctx("launch")))).verdict, "UNKNOWN");
+      eq("a 2xx with no campaign in it: unknown in the route and the log", [(await run(() => act.POST(POSTREQ(), ctx("launch")))).verdict, rows.at(-1)?.outcome], ["UNKNOWN", "unknown"]);
+      seen.length = 0;
+      const noSent = await sendPreview(auth, 9, [7]);
+      eq("a test whose answer names nobody: unknown in the route and the log", [(await noSent.json()).verdict, rows.at(-1)?.outcome], ["UNKNOWN", "unknown"]);
       answerEmpty = false;
       current = campaign({ status: "DRAFT" });
       eq("an edit: one read first, for the log's before values, then the write", await run(() => one.PATCH(new Request("http://localhost/x", { method: "PATCH", headers: { Authorization: "Bearer t" }, body: JSON.stringify({ name: "y" }) }), ctx())), { status: 200, verdict: "LANDED", seen: [`GET ${C}`, `PATCH ${C}`] });

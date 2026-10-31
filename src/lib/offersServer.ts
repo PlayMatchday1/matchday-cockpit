@@ -222,7 +222,8 @@ export async function offersWrite(opts: {
       env: cfg().env, source: opts.source, actorName: opts.auth.email, actorEmail: opts.auth.email, saveId: randomUUID(),
       matchId: null, matchName: null, method: opts.method, path: opts.path,
       body: offersLogBody(opts.body ?? {}), keys: Object.keys(opts.expect), label: (k) => k,
-      applied: (_b, after) => (opts.expectGone ? after.missing === true : mismatches(opts.expect, after).length === 0),
+      // The same three answers the route gives below, so the log and the page can't disagree.
+      applied: (_b, seen) => (after === undefined ? "unknown" : opts.expectGone ? seen.missing === true : mismatches(opts.expect, seen).length === 0),
     },
     {
       readResource: async () => {
@@ -281,7 +282,7 @@ export async function sendPreview(auth: OffersAuth, id: number, userIds: number[
     {
       env: cfg().env, source: "offers:send-preview", actorName: auth.email, actorEmail: auth.email, saveId: randomUUID(),
       matchId: null, matchName: null, method: "POST", path, body: offersLogBody({ userIds }), keys: [], label: (k) => k,
-      applied: () => answer !== null && Array.isArray(answer.sent),
+      applied: () => (answer !== null && Array.isArray(answer.sent) ? true : "unknown"),
     },
     {
       readResource: async () => ({}),
@@ -331,7 +332,7 @@ export async function registerPhoto(auth: OffersAuth, fileKey: string): Promise<
     {
       env: cfg().env, source: "offers:photo-register", actorName: auth.email, actorEmail: auth.email, saveId: randomUUID(),
       matchId: null, matchName: null, method: "POST", path, body: { fileKey }, keys: [], label: (k) => k,
-      applied: () => typeof answer?.url === "string",
+      applied: () => (typeof answer?.url === "string" && photoUrlOk(answer.url) ? true : "unknown"),
     },
     {
       readResource: async () => ({}),
