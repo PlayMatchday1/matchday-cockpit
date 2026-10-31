@@ -8051,10 +8051,13 @@ Backend de910e7, `docs/offers/M3-ENDPOINTS.md`. `{ campaigns, cities, fields }` 
 2026-10-30: 37 keys against the list's 38), so a row updated from a write's read-back keeps the results it had
 until the next Refresh (`campaignsAfter`, `src/lib/offersModel.ts`).
 
-### No end date and `show_ticket`: not on the backend yet
+### No end date and `showTicket`
 
-Local backend 382ae5f, 2026-10-31. `ends_local` is NOT NULL (`apps/api/prisma/schema.prisma:1257`). Saving `endsLocal: null`
-through the page: "The backend refused it: endsLocal cannot be null. Nothing was saved." Saving `showTicket: false`:
-"The backend refused it: property showTicket should not exist. Nothing was saved." The field name `showTicket` on the wire
-is UNKNOWN until the backend documents it; the column was asked for as `show_ticket`. The app reads `popup.expiresAt` as a
-string (`~/Documents/frontend-offers/src/components/OfferPopup.tsx:92`), and has no ticket flag.
+Backend b26d3f7, `docs/offers/M3-ENDPOINTS.md`, "No end date". Proven through the Clubhouse on the local backend, 2026-10-31,
+offer 911: `endsLocal: null` and `showTicket: false` saved, LANDED, and read back the same after a real reload. Launched
+with `state: LIVE`. `PATCH {"showTicket":false}` LANDED after launch. On a draft, `PATCH {"endsLocal":null}` and back to a
+date both LANDED. `endsLocal` is fixed from launch on.
+
+**Ending a no-end offer stops players who hold it at once** (M3-ENDPOINTS.md, `POST /:id/end`): join-price stops applying it.
+That is documented, not probed from here. An offer with an end date keeps the old rule, usable until its own expiry.
+So the Pause and End wording follows `endsLocal` (`pauseNote`, `endNote`, `src/lib/offersModel.ts`).

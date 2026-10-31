@@ -13,7 +13,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FIRST_NAME_TOKEN, MAX_TEST_IDS, SECTION_ADD, addSection, autoCopy, canReset, copyAfterType, isRemovable, staleLines, staleSections, writtenForOnLoad, removeSection, resetCopy, sectionCollapsed, canHidePhoto, copyAfterHide, hideUpload, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, MAX_USES_PER_PLAYER, notFoundLine, parsePlayerIds, playerLine, prefillField, PREVIEW_FIRST_NAME, amountText, limitLine, stepLimit, stepUses, usesLine, audienceBody, buttonMatchNote, buttonOf, opensText, chicagoWallNow, copyOf, createBody, defaultRun, endsTicket, formOf, formProblem, fromInput, matchInfo,
-  newForm, patchBody, mergeMatches, withCovers, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, countWanted, lockedSummary, endHasPassed, launchProblem, offerWallNow, offerZones, setPriceAnyWarning, setPriceProblem, pickedMatch, startLabel, STEPPER, summary, toInput, wallLabel,
+  newForm, patchBody, mergeMatches, withCovers, endNote, pauseNote, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, countWanted, lockedSummary, endHasPassed, launchProblem, offerWallNow, offerZones, setPriceAnyWarning, setPriceProblem, pickedMatch, startLabel, STEPPER, summary, toInput, wallLabel,
   type Campaign, type City, type Count, type FieldOpt, type Lookup, type UploadedPhoto, type CopyKey, type ListChange, type DealType, type Form, type MatchOpt, type WrittenFor,
 } from "@/lib/offersModel";
 import MatchPicker from "./MatchPicker";
@@ -724,12 +724,12 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
 
       {/* RUNS */}
       <PanelSection title="Runs" testId="offers-runs">
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex items-center gap-2">
           <WallInput testId="offers-starts" label={startLabel(f.startsLocal, nowWall)} value={f.startsLocal} disabled={dl} onChange={(v) => set({ startsLocal: v })} />
-          <span className="text-[13px]" style={{ color: O.muted }}>to</span>
+          {f.endsLocal !== null && <span className="text-[13px]" style={{ color: O.muted }}>to</span>}
           {f.endsLocal !== null && <WallInput testId="offers-ends" label={m && f.endsLocal === m.startLocal ? `Kickoff · ${wallLabel(f.endsLocal)}` : wallLabel(f.endsLocal)} value={f.endsLocal} disabled={dl} onChange={(v) => set({ endsLocal: v })} />}
-          {f.scope === "ANY" && !matchUnread && <Chip testId="offers-no-end" on={f.endsLocal === null} disabled={dl} onClick={() => set({ endsLocal: f.endsLocal === null ? defaultRun(nowWall).endsLocal : null })}>No end date</Chip>}
         </div>
+        {f.scope === "ANY" && !matchUnread && <div className="flex justify-end"><Chip testId="offers-no-end" on={f.endsLocal === null} disabled={dl} onClick={() => set({ endsLocal: f.endsLocal === null ? defaultRun(nowWall).endsLocal : null })}>No end date</Chip></div>}
         <div className="text-[11.5px]" style={{ color: O.muted }}>Times are each player&apos;s own city time.</div>
         {passed && !dl && <div data-testid="offers-end-passed" className="text-[12px] font-medium" style={{ color: O.critInk }}>That end time has already passed, so it can&apos;t launch.</div>}
         {!players && <button type="button" data-testid="offers-more" onClick={() => setMore((v) => !v)} className="flex w-full items-center justify-between gap-2 rounded-[8px] px-3 py-[9px] text-left text-[12px]" style={{ background: O.subtle }}>
@@ -814,12 +814,12 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
           onConfirm={async () => { const o = await once(discard); if (o) { setOutcome(o); if (o.verdict === "LANDED") setConfirm(null); } return o; }} />
       )}
       {confirm === "pause" && (
-        <ConfirmDialog title={`Pause ${c!.name}?`} note="Nobody new gets it and no popup shows. Players who already have it can still use it until it expires. You can resume it."
+        <ConfirmDialog title={`Pause ${c!.name}?`} note={pauseNote(c!.endsLocal)}
           action="Pause" onCancel={() => setConfirm(null)}
           onConfirm={async () => { const o = await once(() => move("pause")); if (o) { setOutcome(o); if (o.verdict === "LANDED") setConfirm(null); } return o; }} />
       )}
       {confirm === "end" && (
-        <ConfirmDialog title={`End ${c!.name} for good?`} kind="dangerSolid" note="Nobody new gets it and no popup shows. Players who already have it can still use it until it expires. It can't be launched again."
+        <ConfirmDialog title={`End ${c!.name} for good?`} kind="dangerSolid" note={endNote(c!.endsLocal)}
           action="End" onCancel={() => setConfirm(null)}
           onConfirm={async () => { const o = await once(() => move("end")); if (o) { setOutcome(o); if (o.verdict === "LANDED") setConfirm(null); } return o; }} />
       )}

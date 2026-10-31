@@ -17,7 +17,7 @@ import { join, resolve } from "node:path";
 import {
   audienceBody, chicagoWallNow, comparisonLine, costCeiling, createBody, defaultRun, endsTicket, formOf, newForm, patchBody, priceWithDeal,
   summary, wallFromMatch, withPreviewName, buttonOf, opensText, formProblem, stepUses, usesLine, stepLimit, limitLine, copyOf,
-  addSection, autoCopy, canReset, copyAfterType, staleLines, staleSections, writtenForOnLoad, isRemovable, removeSection, resetCopy, sectionCollapsed, REMOVABLE_KEYS, canHidePhoto, copyAfterHide, hideUpload, extraBookingsLine, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, prefillField, audienceText, parsePlayerIds, playerLine, notFoundLine, usedOfLimit, resultsLines, progressText, campaignsAfter, countWanted, lockedSummary, offerWallNow, offerZones, wallNowIn, mergeMatches, offerMatchOpt, pickerRange, withCovers, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, endHasPassed, launchProblem, namedMatchIds, offersLogBody, pickerDayLabel, pickerView, fillText, fillFraction, setPriceAnyWarning, setPriceProblem, type Campaign, type City, type MatchOpt, type Results,
+  addSection, autoCopy, canReset, copyAfterType, staleLines, staleSections, writtenForOnLoad, isRemovable, removeSection, resetCopy, sectionCollapsed, REMOVABLE_KEYS, canHidePhoto, copyAfterHide, hideUpload, extraBookingsLine, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, prefillField, audienceText, parsePlayerIds, playerLine, notFoundLine, usedOfLimit, resultsLines, endNote, pauseNote, progressText, campaignsAfter, countWanted, lockedSummary, offerWallNow, offerZones, wallNowIn, mergeMatches, offerMatchOpt, pickerRange, withCovers, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, endHasPassed, launchProblem, namedMatchIds, offersLogBody, pickerDayLabel, pickerView, fillText, fillFraction, setPriceAnyWarning, setPriceProblem, type Campaign, type City, type MatchOpt, type Results,
 } from "../src/lib/offersModel";
 import { _setOffersGateDepsForTest, errorText, MAX_MATCH_PAGES, mismatches, offersGate, offersWrite, photoLinkProblem, readFirstMatchPage, readMatchesForCities, sendPreview, type OffersAuth } from "../src/lib/offersServer";
 import { readOffersConfig } from "../src/lib/offersConfig";
@@ -605,6 +605,9 @@ eq("...and two different ones, and none", [namedMatchIds({ matchIds: [116], butt
   eq("progress counts days with no total, and never reads NaN", [progressText(running("LIVE"), NOW), progressText(running("PAUSED"), NOW), progressText(running("ENDED"), NOW)], ["Day 3", "Paused · day 3", "Ended"]);
 }
 
+eq("no end date: End and Pause say what happens to players holding it", [endNote(null), pauseNote(null)], ["Players lose this offer immediately. It can't be launched again.", "No new players get it; players who have it can still use it until you end it. You can resume it."]);
+eq("with an end date: today's rule, today's words", [endNote("2026-11-02 19:00:00"), pauseNote("2026-11-02 19:00:00")], ["Nobody new gets it and no popup shows. Players who already have it can still use it until it expires. It can't be launched again.", "Nobody new gets it and no popup shows. Players who already have it can still use it until it expires. You can resume it."]);
+
 // ── THE TICKET ───────────────────────────────────────────────────────────────────────────────────
 {
   const f = { ...nowF, name: "x" };
@@ -625,6 +628,13 @@ eq("...and two different ones, and none", [namedMatchIds({ matchIds: [116], butt
   eq("the body says when and where, as the line does", [on(116).body, on(116).line], ["Mon 7:00 PM · Riverside Fields, normally $15. The discount is already on your account.", "MON 7:00 PM · RIVERSIDE FIELDS"]);
   eq("never the stored name", [on(116).body?.includes("Riverside Thursday"), on(117).body?.includes("Mueller Friday")], [false, false]);
   const noField = autoCopy({ ...nowF, scope: "MATCH", matchId: 9 }, [{ ...matches[0], id: 9, fieldTitle: null }], cities);
+  const cnt = { count: 3, heldBack: 0, players: 3, mostItCanCost: null };
+  const line = (over = {}) => summary({ ...nowF, name: "x", scope: "MATCH", matchId: 116, endsLocal: "2026-11-02 19:00:00", ...over }, cnt, matches, cities, NOW);
+  eq("the summary says when and where", line().includes("get 50% off Mon 7:00 PM · Riverside Fields until kickoff"), true);
+  eq("...for every deal, never the name", [line({ dealType: "SET_PRICE", dealAmount: 500 }).includes("a $5 spot in Mon 7:00 PM · Riverside Fields"), line({ dealType: "FREE_MATCH", dealAmount: 0 }).includes("Mon 7:00 PM · Riverside Fields free"), line().includes("Riverside Thursday"), line({ dealType: "SET_PRICE", dealAmount: 500 }).includes("Riverside Thursday"), line({ dealType: "FREE_MATCH", dealAmount: 0 }).includes("Riverside Thursday")], [true, true, false, false, false]);
+  eq("the locked summary too", lockedSummary({ ...nowF, name: "x", scope: "MATCH", matchId: 116, endsLocal: "2026-11-02 19:00:00" }, matches, cities, NOW).includes("Riverside Thursday"), false);
+  const hit = (search: string) => pickerView(matches, { search, days: 14, needsPlayers: false, cityIds: [] }, NOW, cities).shown;
+  eq("the picker's search doesn't find what the row doesn't show", [hit("thursday"), hit("riverside")], [0, 1]);
   eq("with no field, just the time", noField.body, "Mon 7:00 PM, normally $15. The discount is already on your account.");
 }
 

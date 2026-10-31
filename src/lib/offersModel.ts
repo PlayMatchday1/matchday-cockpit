@@ -53,7 +53,8 @@ export type Campaign = Copy & {
 export type City = { id: number; name: string; timeZone?: string | null };
 // A field as the photo picker and the Played at row need it. cover is the field's cover photo URL, or null.
 export type FieldOpt = { id: number; title: string; cityId: number | null; cover: string | null };
-// A match as the page needs it. startLocal is WALL CLOCK ("YYYY-MM-DD HH:mm:ss"). players is what the
+// A match as the page needs it. Show it with matchDay, never by name: a stored name can say the wrong
+// day ("Riverside Thursday" on a Monday). startLocal is WALL CLOCK ("YYYY-MM-DD HH:mm:ss"). players is what the
 // source counts: playersIn from admin/offers/matches, _count.players from admin/matches/{id}. maxPlayers
 // null is a match with no cap. fieldCover comes from the field; admin/offers/matches doesn't carry it.
 export type MatchOpt = {
@@ -239,7 +240,7 @@ export function pickerView(matches: MatchOpt[], f: PickerFilter, nowWall: string
   const words = f.search.trim().toLowerCase().split(/\s+/).filter(Boolean);
   const kept = inWindow.filter((m) => {
     if (f.needsPlayers && matchNeeds(m) === 0) return false;
-    const hay = `${m.fieldTitle ?? ""} ${m.name} ${pickerTime(m.startLocal)} ${pickerDayLabel(m.startLocal, nowWall)}`.toLowerCase();
+    const hay = `${m.fieldTitle ?? ""} ${pickerTime(m.startLocal)} ${pickerDayLabel(m.startLocal, nowWall)}`.toLowerCase();
     return words.every((w) => hay.includes(w));
   }).sort((a, b) => a.startLocal.localeCompare(b.startLocal) || a.id - b.id);
   const groups: { label: string; rows: { match: MatchOpt; time: string }[] }[] = [];
@@ -684,7 +685,7 @@ function dealAndUntil(f: Form, m: MatchOpt | null, nowWall: string): { deal: str
   const n = m ? 1 : f.usesPerPlayer;
   const one = n === 1 ? "one match" : `${n} matches`;
   const deal = m
-    ? (f.dealType === "FREE_MATCH" ? `${m.name} free` : f.dealType === "SET_PRICE" ? `a ${money(f.dealAmount)} spot in ${m.name}` : `${dealText(f.dealType, f.dealAmount)} ${m.name}`)
+    ? (f.dealType === "FREE_MATCH" ? `${matchDay(m)} free` : f.dealType === "SET_PRICE" ? `a ${money(f.dealAmount)} spot in ${matchDay(m)}` : `${dealText(f.dealType, f.dealAmount)} ${matchDay(m)}`)
     : (f.dealType === "FREE_MATCH" ? (n === 1 ? "one free match" : `${n} free matches`) : f.dealType === "SET_PRICE" ? `a ${money(f.dealAmount)} spot in ${one}` : `${dealText(f.dealType, f.dealAmount)} ${one}`);
   const until = f.endsLocal === null ? "until you end it"
     : endHasPassed(f.endsLocal, nowWall) ? `until ${wallLabel(f.endsLocal)}, which has already passed`
@@ -693,6 +694,15 @@ function dealAndUntil(f: Form, m: MatchOpt | null, nowWall: string): { deal: str
     : `until ${wallDate(f.endsLocal)}`;
   return { deal, until };
 }
+// PAUSE AND END, what they do to players already holding it. Held offers stay usable until their own
+// expiry, so with no end date the backend stops them the moment the offer is ended.
+export const pauseNote = (endsLocal: string | null) => (endsLocal === null
+  ? "No new players get it; players who have it can still use it until you end it. You can resume it."
+  : "Nobody new gets it and no popup shows. Players who already have it can still use it until it expires. You can resume it.");
+export const endNote = (endsLocal: string | null) => (endsLocal === null
+  ? "Players lose this offer immediately. It can't be launched again."
+  : "Nobody new gets it and no popup shows. Players who already have it can still use it until it expires. It can't be launched again.");
+
 // A launched or ended offer has no live count, so it says who by its filters, not how many.
 export function lockedSummary(f: Form, matches: MatchOpt[], cities: City[], nowWall: string, fields: FieldOpt[] = []): string {
   const { deal, until } = dealAndUntil(f, pickedMatch(f, matches), nowWall);

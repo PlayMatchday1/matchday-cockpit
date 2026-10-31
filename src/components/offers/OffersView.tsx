@@ -12,7 +12,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/useAuth";
 import {
-  STATE_LABEL, audienceText, extraBookingsLine, usedOfLimit, chicagoWallNow, campaignsAfter, comparisonLine, dealText, money, namedMatchIds, progressText, resultsLines, usedPct, usesText, wallLabel,
+  STATE_LABEL, audienceText, extraBookingsLine, usedOfLimit, chicagoWallNow, campaignsAfter, comparisonLine, dealText, matchDay, money, namedMatchIds, progressText, resultsLines, usedPct, usesText, wallLabel,
   withCovers, mergeMatches, type ListChange, type Campaign, type City, type FieldOpt, type MatchOpt,
 } from "@/lib/offersModel";
 import OfferPanel, { type MatchRead } from "./OfferPanel";
@@ -129,7 +129,7 @@ export default function OffersView() {
                       </div>
                       <div className="flex min-w-0 flex-col gap-0.5">
                         <div data-testid="offers-row-deal" className="truncate text-[13px] font-medium" style={{ color: O.ink }}>{dealText(c.dealType, c.dealAmount)}</div>
-                        <div className="truncate text-[12px]" style={{ color: O.muted }} title={m ? wallLabel(m.startLocal) : undefined}>{c.matchScoped ? (m ? m.name : `Match ${c.matchIds[0]}`) : usesText(c.usesPerPlayer)}</div>
+                        <div className="truncate text-[12px]" style={{ color: O.muted }} title={m ? wallLabel(m.startLocal) : undefined}>{c.matchScoped ? (m ? matchDay(m) : `Match ${c.matchIds[0]}`) : usesText(c.usesPerPlayer)}</div>
                       </div>
                       <div className="flex min-w-0 flex-col gap-0.5">
                         <div data-testid="offers-row-results" className="truncate text-[13px] font-medium" style={{ color: O.ink }}>{r1}</div>

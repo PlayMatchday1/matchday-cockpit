@@ -66,8 +66,9 @@ one needs another deploy from a push.
 
 A missing credential closes the page like any other variable: the routes answer 503 and the server log names it.
 
-**No end date and the removable ticket need the backend and the app first.** The page sends both only when someone
-uses them, and until then the backend refuses them in plain words (facts doc, "No end date and show_ticket").
+**No end date and the removable ticket need the backend's release, and the app.** The page sends them only when someone uses
+them. A backend without them refuses in plain words. The app must handle `expiresAt: null` and `showTicket` before an
+offer using either reaches a phone.
 
 Also needed, none of them new variables:
 

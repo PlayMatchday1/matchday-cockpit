@@ -66,7 +66,7 @@ export default function MatchPicker({ matches, cities, cityIds, selected, nowWal
                       className="flex w-full items-center gap-2.5 border-b px-3 py-2.5 text-left" style={{ borderColor: O.line, background: on ? O.mint : O.surface }}>
                       <span className="w-[64px] shrink-0 whitespace-nowrap text-[13px] font-semibold" style={{ color: O.ink }}>{r.time}</span>
                       <span className="flex min-w-0 flex-1 flex-col gap-1">
-                        <span className="truncate text-[13px] font-medium" style={{ color: O.ink }}>{r.match.fieldTitle ?? r.match.name}</span>
+                        <span className="truncate text-[13px] font-medium" style={{ color: O.ink }}>{r.match.fieldTitle ?? "No field listed"}</span>
                         <span className="flex items-center gap-1.5">
                           <span className="relative h-1 w-[80px] shrink-0 overflow-hidden rounded-[2px]" style={{ background: O.line }}>
                             <span className="absolute left-0 top-0 h-1 rounded-[2px]" style={{ width: `${fillFraction(r.match) * 100}%`, background: needs ? "#e6b23a" : O.ok }} />
