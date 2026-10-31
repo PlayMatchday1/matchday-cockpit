@@ -189,7 +189,7 @@ export function offersApiWrite<T = unknown>(auth: OffersAuth, method: "POST" | "
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 // Id sets: the backend may store them in its own order (playerIds come back sorted), and order means nothing.
-const ID_SETS = new Set(["cityIds", "fieldIds", "playerIds"]);
+const ID_SETS = new Set(["cityIds", "fieldIds", "playerIds", "appliesFieldIds"]);
 const sortedIds = (v: unknown) => (Array.isArray(v) ? [...v].sort((x, y) => Number(x) - Number(y)) : v);
 export function mismatches(expected: Record<string, unknown>, after: Record<string, unknown> | null): string[] {
   if (!after) return Object.keys(expected);
@@ -358,7 +358,7 @@ export async function registerPhoto(auth: OffersAuth, fileKey: string): Promise<
 // A READ the backend takes as a POST (see readAudienceCount): names, city and matches played for
 // up to 2000 ids, and the ids that are not players. Not a write, so not through recordWrite, and
 // nothing about the players is logged.
-export type PlayerLookup = { players: { id: number; name: string | null; city: string | null; matchesPlayed: number }[]; notFound: number[] };
+export type PlayerLookup = { players: { id: number; name: string | null; type?: string; city: string | null; matchesPlayed: number }[]; notFound: number[] };
 export const readPlayerLookup = (auth: OffersAuth, ids: number[]) => paced(() => {
   const { env, baseUrl } = cfg();
   return apiWrite<PlayerLookup>(env, "POST", "/admin/offers/players/lookup", { ids }, auth.actor, "offers", undefined, undefined, baseUrl);

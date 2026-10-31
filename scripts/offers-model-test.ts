@@ -17,7 +17,7 @@ import { join, resolve } from "node:path";
 import {
   audienceBody, chicagoWallNow, comparisonLine, costCeiling, createBody, defaultRun, endsTicket, formOf, newForm, patchBody, priceWithDeal,
   summary, wallFromMatch, withPreviewName, buttonOf, opensText, formProblem, stepUses, usesLine, stepLimit, limitLine, copyOf,
-  addSection, autoCopy, canReset, copyAfterType, staleLines, staleSections, writtenForOnLoad, isRemovable, removeSection, resetCopy, sectionCollapsed, REMOVABLE_KEYS, canHidePhoto, copyAfterHide, hideUpload, extraBookingsLine, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, prefillField, audienceText, parsePlayerIds, playerLine, notFoundLine, usedOfLimit, resultsLines, matchPicked, matchTitle, matchWhere, ranUntil, endNote, pauseNote, progressText, campaignsAfter, countWanted, lockedSummary, offerWallNow, offerZones, wallNowIn, mergeMatches, offerMatchOpt, pickerRange, withCovers, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, endHasPassed, launchProblem, namedMatchIds, offersLogBody, pickerDayLabel, pickerView, fillText, fillFraction, setPriceAnyWarning, setPriceProblem, type Campaign, type City, type MatchOpt, type Results,
+  addSection, autoCopy, canReset, copyAfterType, staleLines, staleSections, writtenForOnLoad, isRemovable, removeSection, resetCopy, sectionCollapsed, REMOVABLE_KEYS, canHidePhoto, copyAfterHide, hideUpload, extraBookingsLine, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, prefillField, audienceText, parsePlayerIds, playerLine, notFoundLine, usedOfLimit, resultsLines, isAdminAccount, scopeFieldsLine, setPriceAnyWarning as anyPriceWarn, matchPicked, matchTitle, matchWhere, ranUntil, endNote, pauseNote, progressText, campaignsAfter, countWanted, lockedSummary, offerWallNow, offerZones, wallNowIn, mergeMatches, offerMatchOpt, pickerRange, withCovers, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, endHasPassed, launchProblem, namedMatchIds, offersLogBody, pickerDayLabel, pickerView, fillText, fillFraction, setPriceAnyWarning, setPriceProblem, type Campaign, type City, type MatchOpt, type Results,
 } from "../src/lib/offersModel";
 import { _setOffersGateDepsForTest, errorText, MAX_MATCH_PAGES, mismatches, offersGate, offersWrite, photoLinkProblem, readFirstMatchPage, readMatchesForCities, sendPreview, type OffersAuth } from "../src/lib/offersServer";
 import { readOffersConfig } from "../src/lib/offersConfig";
@@ -619,6 +619,52 @@ eq("with an end date: today's rule, today's words", [endNote("2026-11-02 19:00:0
   eq("ended with an end date: unchanged (the control)", ranUntil({ ...ended, endsLocal: "2026-11-01 23:59:00" }), null);
   eq("no usable date: never a wrong one", [ranUntil({ ...ended, updatedAt: undefined }), ranUntil({ ...ended, updatedAt: "nope" })], ["Ended", "Ended"]);
 }
+
+// ── A FIELD: where it can be used, not who gets it ───────────────────────────────────────────────
+{
+  const F = [{ id: 1, title: "Riverside Fields", cityId: 1, cover: "https://c/r.jpg" }, { id: 2, title: "Mueller Park", cityId: 1, cover: null }, { id: 3, title: "Zilker", cityId: 1, cover: "https://c/z.jpg" }];
+  const one = { ...nowF, name: "x", scope: "FIELD" as const, appliesFieldIds: [1], endsLocal: "2026-11-08 23:59:00" };
+  const two = { ...one, appliesFieldIds: [1, 2] };
+  const three = { ...one, appliesFieldIds: [1, 2, 3] };
+  const cnt = { count: 3, heldBack: 0, players: 3, mostItCanCost: null };
+  eq("the line names one field", autoCopy(one, matches, cities, F).line, "ANY MATCH AT RIVERSIDE FIELDS");
+  eq("...or the first and how many more", [autoCopy(two, matches, cities, F).line, autoCopy(three, matches, cities, F).line], ["AT RIVERSIDE FIELDS AND 1 MORE", "AT RIVERSIDE FIELDS AND 2 MORE"]);
+  eq("the body says the deal, the field and the end", autoCopy(one, matches, cities, F).body, "50% off any match at Riverside Fields until Sun, Nov 8.");
+  eq("every field is named in the body", autoCopy(two, matches, cities, F).body, "50% off any match at Riverside Fields and Mueller Park until Sun, Nov 8.");
+  eq("with no end date, no until", autoCopy({ ...one, endsLocal: null }, matches, cities, F).body, "50% off any match at Riverside Fields.");
+  eq("each deal reads right", [autoCopy({ ...one, dealType: "AMOUNT_OFF", dealAmount: 500 }, matches, cities, F).body, autoCopy({ ...one, dealType: "SET_PRICE", dealAmount: 500 }, matches, cities, F).body, autoCopy({ ...one, dealType: "FREE_MATCH", dealAmount: 0 }, matches, cities, F).body, autoCopy({ ...one, usesPerPlayer: 3 }, matches, cities, F).body],
+    ["$5 off any match at Riverside Fields until Sun, Nov 8.", "A $5 spot in any match at Riverside Fields until Sun, Nov 8.", "A free match at Riverside Fields until Sun, Nov 8.", "50% off any 3 matches at Riverside Fields until Sun, Nov 8."]);
+  eq("the photo is the first chosen field's cover", [autoCopy(one, matches, cities, F).photoUrl, autoCopy({ ...one, appliesFieldIds: [2, 3] }, matches, cities, F).photoUrl], ["https://c/r.jpg", null]);
+  eq("the button finds a match, and can't be pointed at one", [buttonOf({ ...one, buttonTarget: "MATCH", buttonMatchId: 116 }, matches), autoCopy(one, matches, cities, F).buttonLabel], [{ target: "FIND_MATCH", matchId: null, locked: true }, "Find a match"]);
+  eq("the body sent has no match for the button", [createBody({ ...one, buttonTarget: "MATCH", buttonMatchId: 116 }, matches, cities, F).buttonTarget, "buttonMatchId" in createBody(one, matches, cities, F)], ["FIND_MATCH", false]);
+  eq("the summary names them", [summary(one, cnt, matches, cities, NOW, F).includes("get 50% off one match at Riverside Fields until"), summary(two, cnt, matches, cities, NOW, F).includes("at Riverside Fields and Mueller Park until"), lockedSummary(one, matches, cities, NOW, F).includes("one match at Riverside Fields")], [true, true, true]);
+  eq("the list row names them", [scopeFieldsLine({ usesPerPlayer: 1, appliesFieldIds: [1] }, F), scopeFieldsLine({ usesPerPlayer: 2, appliesFieldIds: [1, 2] }, F)], ["1 match at Riverside Fields", "2 matches at Riverside Fields and Mueller Park"]);
+  // Where it works and who gets it stay two different things on the wire: a field offer must never save as an audience filter alone.
+  const sent = createBody(one, matches, cities, F);
+  eq("the scope is sent as its own value", sent.appliesFieldIds, [1]);
+  eq("...and not as Played at", sent.fieldIds, []);
+  eq("sorted, as an id set", createBody({ ...one, appliesFieldIds: [3, 1] }, matches, cities, F).appliesFieldIds, [1, 3]);
+  eq("it never goes to the count, which doesn't depend on it", "appliesFieldIds" in audienceBody(one, matches, cities), false);
+  eq("any match and a specific match send nothing new", ["appliesFieldIds" in createBody({ ...nowF, name: "x" }, matches, cities, F), "appliesFieldIds" in createBody({ ...nowF, name: "x", scope: "MATCH", matchId: 116 }, matches, cities, F)], [false, false]);
+  eq("no field picked stops the save", formProblem({ ...one, appliesFieldIds: [] }, matches), "Pick at least one field.");
+  eq("one picked saves (the control)", formProblem(one, matches), null);
+  const stored = draftFrom({ appliesFieldIds: [1], line: "ANY MATCH AT RIVERSIDE FIELDS", body: "50% off any match at Riverside Fields until Mon, Nov 2.", photoUrl: "https://c/r.jpg", buttonLabel: "Find a match", endsLocal: "2026-11-02 23:59:00" });
+  const loaded = formOf(stored, matches, cities, F);
+  eq("a stored field offer loads as one", [loaded.scope, loaded.appliesFieldIds], ["FIELD", [1]]);
+  eq("loaded and untouched, nothing to send", patchBody(stored, loaded, matches, cities, F), {});
+  eq("its suggested text isn't taken for typed", [loaded.copy.line, loaded.copy.body, loaded.copy.photoUrl], [undefined, undefined, undefined]);
+  eq("an edit sends the new set", patchBody(stored, { ...loaded, appliesFieldIds: [1, 2] }, matches, cities, F).appliesFieldIds, [1, 2]);
+  eq("back to any match clears it", patchBody(stored, { ...loaded, scope: "ANY", appliesFieldIds: [] }, matches, cities, F).appliesFieldIds, []);
+  eq("after launch it's locked", "appliesFieldIds" in patchBody({ ...stored, status: "LAUNCHED" }, { ...loaded, appliesFieldIds: [1, 2] }, matches, cities, F), false);
+  eq("a backend without it reads as any match", [formOf(draftFrom(), matches, cities, F).scope, patchBody(draftFrom(), formOf(draftFrom(), matches, cities, F), matches, cities, F)], ["ANY", {}]);
+  eq("the read-back ignores the order of the set", mismatches({ appliesFieldIds: [1, 2] }, { appliesFieldIds: [2, 1] }), []);
+  eq("...and catches a backend that dropped it", mismatches({ appliesFieldIds: [1] }, {}), ["appliesFieldIds"]);
+  const cheap = { ...one, dealType: "SET_PRICE" as const, dealAmount: 1000, cityIds: [] };
+  eq("the set-price warning looks only at those fields", [anyPriceWarn(cheap, matches), anyPriceWarn({ ...cheap, appliesFieldIds: [2] }, matches)?.includes("as low as $9")], [null, true]);
+  eq("the cost ceiling too", [costCeiling(one, cnt, matches)?.basis, costCeiling({ ...one, appliesFieldIds: [2] }, cnt, matches)?.basis], ["at today's top price of $15", "at today's top price of $9"]);
+}
+
+eq("an admin account is one; a player or a backend without the type isn't", [isAdminAccount({ type: "ADMIN" }), isAdminAccount({ type: "PLAYER" }), isAdminAccount({})], [true, false, false]);
 
 // ── THE TICKET ───────────────────────────────────────────────────────────────────────────────────
 {

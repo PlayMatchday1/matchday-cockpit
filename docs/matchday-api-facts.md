@@ -8065,3 +8065,15 @@ So the Pause and End wording follows `endsLocal` (`pauseNote`, `endNote`, `src/l
 **There is no ended-at.** A no-end offer's "Ran until" date is its `updatedAt`, shown in Chicago (`ranUntil`). That holds because the
 only non-test writes to the row are edit, launch and pause or end (`offer-campaigns.service.ts:224`, `:244`, `:465`, backend b26d3f7),
 and an ended campaign can't be edited. A new write to that row would move the date.
+
+### Where an offer applies: `appliesFieldIds`
+
+Backend a6a79aa, `docs/offers/M3-ENDPOINTS.md`, "Where an offer applies". Any match (default), `appliesFieldIds` (up to 50, any match
+at those fields) or `matchIds`; both together is 400. The join refuses a match elsewhere (`OTHER_FIELD`, `join-pricing.ts:201`).
+**Not the same as `fieldIds`**, which is who gets it (played there): an offer that named a field only there would still discount
+every field in its cities, while its popup said one. Proven through the Clubhouse on the local backend, 2026-10-31: saved with
+`appliesFieldIds: [1, 2]`, read back with `scope: FIELDS`, and the same after a real reload. A field outside the offer's cities is
+refused: "field 1, 2 is not in the campaign's cities". That a real join is refused at another field is read from the code, not probed.
+
+`POST /admin/offers/players/lookup` returns `type` (`PLAYER`, `ADMIN`) and includes ADMIN accounts, probed on 3070: ids 1 and 83.
+

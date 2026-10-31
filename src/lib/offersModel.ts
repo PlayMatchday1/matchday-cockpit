@@ -43,6 +43,9 @@ export type Campaign = Copy & {
   minMatches: number; maxMatches: number | null; membership: Membership;
   // endsLocal null: runs until someone ends it. showTicket false: the popup draws no ticket. Absent is
   // shown, which is all a backend without the field can mean.
+  // appliesFieldIds: where it can be used, unlike fieldIds, which is who gets it (played there). Empty or absent
+  // is no field limit.
+  appliesFieldIds?: number[];
   matchScoped: boolean; matchIds: number[]; startsLocal: string; endsLocal: string | null; showTicket?: boolean; holdoutPercent: number;
   buttonTarget: ButtonTarget; buttonMatchId: number | null; status: CampaignStatus; state: CampaignState;
   createdByStaffEmail: string | null; launchedByStaffEmail: string | null; launchedAt: string | null; updatedAt?: string;
@@ -91,7 +94,7 @@ export const EDITABLE_AFTER_LAUNCH = new Set<string>([
 ]);
 // Every key the Clubhouse may send on create or edit. The routes drop anything else.
 export const BODY_KEYS = new Set<string>([
-  ...EDITABLE_AFTER_LAUNCH, "dealType", "dealAmount", "usesPerPlayer", "cityIds", "lastPlayed", "lastPlayedDays",
+  ...EDITABLE_AFTER_LAUNCH, "dealType", "dealAmount", "usesPerPlayer", "appliesFieldIds", "cityIds", "lastPlayed", "lastPlayedDays",
   "minMatches", "maxMatches", "membership", "fieldIds", "audienceMode", "playerIds", "matchIds", "startsLocal", "endsLocal", "holdoutPercent",
 ]);
 
@@ -292,7 +295,9 @@ export function audienceText(a: Audience, cities: City[], fields: FieldOpt[]): s
 // ── THE FORM ─────────────────────────────────────────────────────────────────────────────────────
 export type Form = {
   name: string; dealType: DealType; dealAmount: number; usesPerPlayer: number;
-  matchId: number | null; scope: "ANY" | "MATCH";
+  matchId: number | null; scope: "ANY" | "FIELD" | "MATCH";
+  // With scope FIELD: the fields it can be used at.
+  appliesFieldIds: number[];
   audienceMode: AudienceMode;
   // Specific players: the box as typed, and the ids it holds that the lookup has not ruled out.
   playerIdsText: string; playerIds: number[];
@@ -313,7 +318,7 @@ export type Form = {
 
 export function newForm(nowWall: string): Form {
   return {
-    name: "", dealType: "PERCENT_OFF", dealAmount: 50, usesPerPlayer: 1, matchId: null, scope: "ANY",
+    name: "", dealType: "PERCENT_OFF", dealAmount: 50, usesPerPlayer: 1, matchId: null, scope: "ANY", appliesFieldIds: [],
     audienceMode: "FILTERS", playerIdsText: "", playerIds: [], fieldIds: [],
     cityIds: [], lastPlayed: "ANY", lastPlayedDays: null, membership: "ANYONE",
     minMatches: 0, maxMatches: null, ...defaultRun(nowWall), holdoutPercent: 10, maxRedemptions: null, showTicket: true,
@@ -321,10 +326,10 @@ export function newForm(nowWall: string): Form {
   };
 }
 
-export function formOf(c: Campaign, matches: MatchOpt[], cities: City[]): Form {
+export function formOf(c: Campaign, matches: MatchOpt[], cities: City[], fields: FieldOpt[] = []): Form {
   const f: Form = {
     name: c.name, dealType: c.dealType, dealAmount: c.dealAmount, usesPerPlayer: c.usesPerPlayer,
-    matchId: c.matchIds[0] ?? null, scope: c.matchScoped ? "MATCH" : "ANY",
+    matchId: c.matchIds[0] ?? null, scope: c.matchScoped ? "MATCH" : c.appliesFieldIds?.length ? "FIELD" : "ANY", appliesFieldIds: c.appliesFieldIds ?? [],
     cityIds: c.cityIds, lastPlayed: c.lastPlayed, lastPlayedDays: c.lastPlayedDays, membership: c.membership,
     audienceMode: c.audienceMode, playerIdsText: c.playerIds.join(", "), playerIds: c.playerIds, fieldIds: c.fieldIds,
     minMatches: c.minMatches, maxMatches: c.maxMatches,
@@ -334,7 +339,7 @@ export function formOf(c: Campaign, matches: MatchOpt[], cities: City[]): Form {
   // Stored copy that differs from what the deal would write was typed by someone: keep it as typed.
   // A stored null on a section is removed even where nothing is suggested today: the backend can't tell
   // the two apart, and a removed section must not come back when the audience or the match changes.
-  const auto = autoCopy(f, matches, cities);
+  const auto = autoCopy(f, matches, cities, fields);
   for (const k of COPY_KEYS) {
     const stored = c[k] ?? null;
     if (stored !== (auto[k] ?? null) || (stored === null && isRemovable(k))) f.copy[k] = stored;
@@ -364,6 +369,8 @@ export type ButtonDest = { target: ButtonTarget; matchId: number | null; locked:
 export function buttonOf(f: Form, matches: MatchOpt[]): ButtonDest {
   const m = pickedMatch(f, matches);
   if (m) return { target: "MATCH", matchId: m.id, locked: true };
+  // A field's offer works at several matches, so its button can't open just one.
+  if (f.scope === "FIELD") return { target: "FIND_MATCH", matchId: null, locked: true };
   if (f.buttonTarget === "MATCH") return { target: "MATCH", matchId: f.buttonMatchId, locked: false };
   return { target: f.buttonTarget, matchId: null, locked: false };
 }
@@ -389,25 +396,44 @@ export const FIRST_NAME_TOKEN = "{firstName}";
 export const PREVIEW_FIRST_NAME = "Luis";
 export const withPreviewName = <T extends string | null>(text: T): T =>
   (text === null ? text : text.split(FIRST_NAME_TOKEN).join(PREVIEW_FIRST_NAME)) as T;
-export function autoCopy(f: Form, matches: MatchOpt[], cities: City[] = []): Copy {
+// The list row's second line for a field offer: "1 match at Riverside Fields and Mueller Park".
+export function scopeFieldsLine(c: Pick<Campaign, "usesPerPlayer" | "appliesFieldIds">, fields: FieldOpt[]): string {
+  return `${usesText(c.usesPerPlayer)} at ${andList(fieldNames(c.appliesFieldIds ?? [], fields))}`;
+}
+// The fields an offer with scope FIELD applies at, chosen order, as far as the field list knows them.
+const scopeFieldsOf = (f: Pick<Form, "scope" | "appliesFieldIds">, fields: FieldOpt[]) =>
+  (f.scope === "FIELD" ? f.appliesFieldIds.map((id) => fields.find((x) => x.id === id)).filter((x): x is FieldOpt => !!x) : []);
+// "50% off", "$5 spot", "A free match" for a sentence about one or more matches at a field.
+function fieldBody(f: Form, names: string[]): string {
+  const n = f.usesPerPlayer;
+  const at = andList(names);
+  const until = f.endsLocal === null ? "" : ` until ${wallDate(f.endsLocal)}`;
+  const any = n === 1 ? "any match" : `any ${n} matches`;
+  if (f.dealType === "FREE_MATCH") return `${n === 1 ? "A free match" : `${n} free matches`} at ${at}${until}.`;
+  return `${f.dealType === "SET_PRICE" ? `A ${money(f.dealAmount)} spot in` : dealText(f.dealType, f.dealAmount)} ${any} at ${at}${until}.`;
+}
+export function autoCopy(f: Form, matches: MatchOpt[], cities: City[] = [], fields: FieldOpt[] = []): Copy {
   const m = pickedMatch(f, matches);
+  const at = scopeFieldsOf(f, fields);
   const n = f.usesPerPlayer;
   const headline = f.dealType === "PERCENT_OFF" ? `${f.dealAmount}% OFF`
     : f.dealType === "AMOUNT_OFF" ? `${money(f.dealAmount)} OFF`
     : f.dealType === "SET_PRICE" ? `${money(f.dealAmount)} SPOT` : "FREE MATCH";
-  const line = m ? `${fmt(wallMs(m.startLocal), { weekday: "short" })} ${fmt(wallMs(m.startLocal), { hour: "numeric", minute: "2-digit" })}${m.fieldTitle ? ` · ${m.fieldTitle}` : ""}`.toUpperCase()
+  const line = at.length === 1 ? `ANY MATCH AT ${at[0].title.toUpperCase()}`
+    : at.length > 1 ? `AT ${at[0].title.toUpperCase()} AND ${at.length - 1} MORE`
+    : m ? `${fmt(wallMs(m.startLocal), { weekday: "short" })} ${fmt(wallMs(m.startLocal), { hour: "numeric", minute: "2-digit" })}${m.fieldTitle ? ` · ${m.fieldTitle}` : ""}`.toUpperCase()
     : n === 1 ? "YOUR NEXT MATCH" : `YOUR NEXT ${n} MATCHES`;
   const where = f.cityIds.length ? ` in ${andList(cityNames(f.cityIds, cities))}` : "";
-  const body = m
-    ? `${matchDay(m)}, normally ${money(m.price)}. The discount is already on your account.`
+  const body = at.length ? fieldBody(f, at.map((x) => x.title))
+    : m ? `${matchDay(m)}, normally ${money(m.price)}. The discount is already on your account.`
     : `${n === 1 ? "Any match" : `Any ${n} matches`}${where}. The discount is already on your account.`;
   const eyebrow = f.lastPlayed === "LAPSED" ? `WE MISS YOU, ${FIRST_NAME_TOKEN}` : f.lastPlayed === "NEVER" ? "YOUR FIRST MATCH" : m && m.fieldId !== null && f.fieldIds.includes(m.fieldId) ? "YOUR FIELD" : "JUST FOR YOU";
   const caption = m ? `Your spot at ${m.fieldTitle ?? "the field"} is waiting.` : f.lastPlayed === "LAPSED" ? "Your spot at the field is waiting." : null;
   // The photo: a specific match's own field cover, else null (the app's default MatchDay photo).
-  return { eyebrow, caption, headline, line, body, photoUrl: m?.fieldCover ?? null, buttonLabel: m ? "Join this match" : "Find a match", dismissLabel: "Not now" };
+  return { eyebrow, caption, headline, line, body, photoUrl: m?.fieldCover ?? at[0]?.cover ?? null, buttonLabel: m ? "Join this match" : "Find a match", dismissLabel: "Not now" };
 }
-export function copyOf(f: Form, matches: MatchOpt[], cities: City[]): Copy {
-  const auto = autoCopy(f, matches, cities);
+export function copyOf(f: Form, matches: MatchOpt[], cities: City[], fields: FieldOpt[] = []): Copy {
+  const auto = autoCopy(f, matches, cities, fields);
   const out = { ...auto };
   for (const k of COPY_KEYS) {
     const typed = f.copy[k];
@@ -464,16 +490,16 @@ export type WrittenFor = Partial<Record<CopyKey, string | null>>;
 export const SECTION_NAME: Record<CopyKey, string> = {
   eyebrow: "Tag on the photo", caption: "Line on the photo", headline: "Headline", line: "Line", body: "Body", photoUrl: "Photo", buttonLabel: "Button label", dismissLabel: "Dismiss link",
 };
-export function writtenForOnLoad(f: Form, kept: WrittenFor, matches: MatchOpt[], cities: City[]): WrittenFor {
-  const auto = autoCopy(f, matches, cities);
+export function writtenForOnLoad(f: Form, kept: WrittenFor, matches: MatchOpt[], cities: City[], fields: FieldOpt[] = []): WrittenFor {
+  const auto = autoCopy(f, matches, cities, fields);
   const out: WrittenFor = {};
   for (const k of COPY_KEYS) if (k !== "photoUrl" && typeof f.copy[k] === "string") out[k] = k in kept ? kept[k] : auto[k];
   return out;
 }
 // Only before launch: after it the deal, audience and match are locked, so nothing can go stale.
-export function staleSections(f: Form, writtenFor: WrittenFor, status: CampaignStatus | null, matches: MatchOpt[], cities: City[]): CopyKey[] {
+export function staleSections(f: Form, writtenFor: WrittenFor, status: CampaignStatus | null, matches: MatchOpt[], cities: City[], fields: FieldOpt[] = []): CopyKey[] {
   if (status !== null && status !== "DRAFT") return [];
-  const auto = autoCopy(f, matches, cities);
+  const auto = autoCopy(f, matches, cities, fields);
   return COPY_KEYS.filter((k) => {
     const typed = f.copy[k];
     return k !== "photoUrl" && typeof typed === "string" && typed.trim() !== "" && k in writtenFor && (writtenFor[k] ?? null) !== (auto[k] ?? null) && typed !== auto[k];
@@ -541,9 +567,9 @@ export function copyAfterHide(copy: Form["copy"], url: string, saved: string | n
 
 // ── REQUEST BODIES ───────────────────────────────────────────────────────────────────────────────
 // Everything the campaign would hold, as the backend's field names.
-export function fullBody(f: Form, matches: MatchOpt[], cities: City[]): Record<string, unknown> {
+export function fullBody(f: Form, matches: MatchOpt[], cities: City[], fields: FieldOpt[] = []): Record<string, unknown> {
   const m = pickedMatch(f, matches);
-  const copy = copyOf(f, matches, cities);
+  const copy = copyOf(f, matches, cities, fields);
   // Specific players: the filters are stored as their defaults and nobody is held back (the
   // backend does this too); sending the defaults keeps the read-back equal to what was sent.
   const players = f.audienceMode === "PLAYERS";
@@ -555,7 +581,7 @@ export function fullBody(f: Form, matches: MatchOpt[], cities: City[]): Record<s
     cityIds: players ? [] : f.cityIds, fieldIds: players ? [] : f.fieldIds,
     lastPlayed: players ? "ANY" : f.lastPlayed, lastPlayedDays: !players && f.lastPlayed === "LAPSED" ? f.lastPlayedDays : null,
     minMatches: players ? 0 : f.minMatches, maxMatches: players ? null : f.maxMatches, membership: players ? "ANYONE" : f.membership,
-    matchIds: m ? [m.id] : [],
+    matchIds: m ? [m.id] : [], appliesFieldIds: f.scope === "FIELD" ? [...f.appliesFieldIds].sort((x, y) => x - y) : [],
     startsLocal: f.startsLocal, endsLocal: f.endsLocal, holdoutPercent: players ? 0 : f.holdoutPercent, maxRedemptions: f.maxRedemptions,
     showTicket: f.showTicket,
     ...copy, buttonTarget: buttonOf(f, matches).target, buttonMatchId: buttonOf(f, matches).matchId,
@@ -565,21 +591,23 @@ export function fullBody(f: Form, matches: MatchOpt[], cities: City[]): Record<s
 // CREATE: the full body with nulls left out (the backend's defaults stand in for them), except a
 // removed section and no end date, which are sent as null like any other save. A shown ticket is the
 // default, so it's left out as well.
-export function createBody(f: Form, matches: MatchOpt[], cities: City[]): Record<string, unknown> {
-  return Object.fromEntries(Object.entries(fullBody(f, matches, cities)).filter(([k, v]) => (k === "showTicket" ? v === false : v !== null || k === "endsLocal" || isRemovable(k as CopyKey))));
+export function createBody(f: Form, matches: MatchOpt[], cities: City[], fields: FieldOpt[] = []): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(fullBody(f, matches, cities, fields)).filter(([k, v]) => (k === "showTicket" ? v === false : k === "appliesFieldIds" ? (v as number[]).length > 0 : v !== null || k === "endsLocal" || isRemovable(k as CopyKey))));
 }
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 
 // EDIT: only what changed against the campaign as the backend holds it. After launch only the
 // fields the backend still accepts are compared at all, so a locked field can never be sent.
-export function patchBody(c: Campaign, f: Form, matches: MatchOpt[], cities: City[]): Record<string, unknown> {
-  const full = fullBody(f, matches, cities);
+export function patchBody(c: Campaign, f: Form, matches: MatchOpt[], cities: City[], fields: FieldOpt[] = []): Record<string, unknown> {
+  const full = fullBody(f, matches, cities, fields);
   const locked = c.status !== "DRAFT";
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(full)) {
     if (locked && !EDITABLE_AFTER_LAUNCH.has(k)) continue;
-    const stored = k === "showTicket" ? (c.showTicket ?? true) : (c as unknown as Record<string, unknown>)[k];
+    const stored = k === "showTicket" ? (c.showTicket ?? true)
+      : k === "appliesFieldIds" ? [...(c.appliesFieldIds ?? [])].sort((x, y) => x - y)
+      : (c as unknown as Record<string, unknown>)[k];
     if (!same(v, stored)) out[k] = v;
   }
   return out;
@@ -599,6 +627,7 @@ export function formProblem(f: Form, matches: MatchOpt[], status: CampaignStatus
   if (status === null || status === "DRAFT") { const deal = setPriceProblem(f, pickedMatch(f, matches)); if (deal) return deal; }
   if (f.scope === "MATCH" && !pickedMatch(f, matches)) return "Pick the match.";
   if (f.endsLocal === null && f.scope === "MATCH") return "A specific match always ends at kickoff.";
+  if (f.scope === "FIELD" && f.appliesFieldIds.length === 0) return "Pick at least one field.";
   if (!Number.isFinite(wallMs(f.startsLocal)) || (f.endsLocal !== null && !Number.isFinite(wallMs(f.endsLocal)))) return "Set when it starts and ends.";
   if (f.endsLocal !== null && wallMs(f.endsLocal) <= wallMs(f.startsLocal)) return "It has to end after it starts.";
   const b = buttonOf(f, matches);
@@ -621,10 +650,15 @@ export function setPriceProblem(f: Pick<Form, "dealType" | "dealAmount">, m: Pic
   if (m && f.dealAmount > m.price) return `That is above this match's normal ${money(m.price)}. Set it at or below that.`;
   return null;
 }
-export function setPriceAnyWarning(f: Form, matches: MatchOpt[]): string | null {
-  if (f.dealType !== "SET_PRICE" || f.scope !== "ANY") return null;
+// Upcoming matches the offer could be used on: in its cities and, with scope FIELD, at its fields.
+function usableMatches(f: Form, matches: MatchOpt[]): MatchOpt[] {
   const anyCity = f.audienceMode === "PLAYERS" || f.cityIds.length === 0;
-  const prices = matches.filter((m) => m.upcoming && (anyCity || (m.cityId !== null && f.cityIds.includes(m.cityId)))).map((m) => m.price);
+  return matches.filter((m) => m.upcoming && (anyCity || (m.cityId !== null && f.cityIds.includes(m.cityId)))
+    && (f.scope !== "FIELD" || (m.fieldId !== null && f.appliesFieldIds.includes(m.fieldId))));
+}
+export function setPriceAnyWarning(f: Form, matches: MatchOpt[]): string | null {
+  if (f.dealType !== "SET_PRICE" || f.scope === "MATCH") return null;
+  const prices = usableMatches(f, matches).map((m) => m.price);
   if (prices.length === 0) return null;
   const low = Math.min(...prices);
   // The backend's join-pricing.ts: on a match already cheaper, the player pays that lower price and the offer isn't used.
@@ -678,8 +712,7 @@ export type Count = { count: number; heldBack: number; players: number; mostItCa
 // it can cost is worked out at the highest normal price now listed in those cities, and says so.
 export function costCeiling(f: Form, count: Count, matches: MatchOpt[]): { cents: number; basis: string | null } | null {
   if (count.mostItCanCost !== null) return { cents: count.mostItCanCost, basis: null };
-  const anyCity = f.audienceMode === "PLAYERS" || f.cityIds.length === 0;
-  const pool = matches.filter((m) => m.upcoming && (anyCity || (m.cityId !== null && f.cityIds.includes(m.cityId))));
+  const pool = usableMatches(f, matches);
   if (pool.length === 0) return null;
   const top = Math.max(...pool.map((m) => m.price));
   let uses = count.players * f.usesPerPlayer;
@@ -687,12 +720,14 @@ export function costCeiling(f: Form, count: Count, matches: MatchOpt[]): { cents
   return { cents: discountOn(top, f.dealType, f.dealAmount) * uses, basis: `at today's top price of ${money(top)}` };
 }
 
-function dealAndUntil(f: Form, m: MatchOpt | null, nowWall: string): { deal: string; until: string } {
+function dealAndUntil(f: Form, m: MatchOpt | null, nowWall: string, fields: FieldOpt[] = []): { deal: string; until: string } {
   const n = m ? 1 : f.usesPerPlayer;
-  const one = n === 1 ? "one match" : `${n} matches`;
+  const at = scopeFieldsOf(f, fields).map((x) => x.title);
+  const place = at.length ? ` at ${andList(at)}` : "";
+  const one = `${n === 1 ? "one match" : `${n} matches`}${place}`;
   const deal = m
     ? (f.dealType === "FREE_MATCH" ? `${matchDay(m)} free` : f.dealType === "SET_PRICE" ? `a ${money(f.dealAmount)} spot in ${matchDay(m)}` : `${dealText(f.dealType, f.dealAmount)} ${matchDay(m)}`)
-    : (f.dealType === "FREE_MATCH" ? (n === 1 ? "one free match" : `${n} free matches`) : f.dealType === "SET_PRICE" ? `a ${money(f.dealAmount)} spot in ${one}` : `${dealText(f.dealType, f.dealAmount)} ${one}`);
+    : (f.dealType === "FREE_MATCH" ? `${n === 1 ? "one free match" : `${n} free matches`}${place}` : f.dealType === "SET_PRICE" ? `a ${money(f.dealAmount)} spot in ${one}` : `${dealText(f.dealType, f.dealAmount)} ${one}`);
   const until = f.endsLocal === null ? "until you end it"
     : endHasPassed(f.endsLocal, nowWall) ? `until ${wallLabel(f.endsLocal)}, which has already passed`
     : m && f.endsLocal === m.startLocal ? "until kickoff"
@@ -718,7 +753,7 @@ export function ranUntil(c: Pick<Campaign, "status" | "endsLocal" | "updatedAt">
 }
 // A launched or ended offer has no live count, so it says who by its filters, not how many.
 export function lockedSummary(f: Form, matches: MatchOpt[], cities: City[], nowWall: string, fields: FieldOpt[] = [], ran: string | null = null): string {
-  const { deal, until } = dealAndUntil(f, pickedMatch(f, matches), nowWall);
+  const { deal, until } = dealAndUntil(f, pickedMatch(f, matches), nowWall, fields);
   return ran ? `${audienceText(f, cities, fields)}: ${deal}. ${ran}.` : `${audienceText(f, cities, fields)}: ${deal} ${until}.`;
 }
 
@@ -737,7 +772,7 @@ export function summary(f: Form, count: Count | null, matches: MatchOpt[], citie
   if (f.membership === "NON_MEMBERS") who.push(one1 ? "isn't a member" : "aren't members");
   if (f.fieldIds.length) who.push(`${one1 ? "has" : "have"} played at ${fieldNames(f.fieldIds, fields).join(" or ")}`);
   }
-  const { deal, until } = dealAndUntil(f, m, nowWall);
+  const { deal, until } = dealAndUntil(f, m, nowWall, fields);
   const people = `${count.players.toLocaleString("en-US")} ${players ? "chosen " : ""}${where}${count.players === 1 ? "player" : "players"}`;
   const held = count.heldBack > 0 ? ` (${count.heldBack.toLocaleString("en-US")} more held back to measure)` : "";
   const ceiling = costCeiling(f, count, matches);
@@ -801,7 +836,9 @@ export function parsePlayerIds(text: string, max = 2000): { ids: number[]; bad: 
   return { ids: ids.slice(0, max), bad, tooMany: ids.length > max };
 }
 export const MAX_TEST_IDS = 20;
-export type Lookup = { players: { id: number; name: string | null; city: string | null; matchesPlayed: number }[]; notFound: number[] };
+// type: the account type. The lookup also returns ADMIN accounts, so staff can test on their own.
+export type Lookup = { players: { id: number; name: string | null; type?: string; city: string | null; matchesPlayed: number }[]; notFound: number[] };
+export const isAdminAccount = (p: Pick<Lookup["players"][number], "type">) => p.type === "ADMIN";
 // "Luis Ortega · Austin · 3 matches"
 export const playerLine = (p: Lookup["players"][number]) => `${p.name ?? `Player ${p.id}`}${p.city ? ` · ${p.city}` : ""} · ${usesText(p.matchesPlayed)}`;
 export const notFoundLine = (ids: number[]) => `${ids.length} ID${ids.length === 1 ? "" : "s"} not found: ${ids.join(", ")}. ${ids.length === 1 ? "It" : "They"} will be skipped.`;

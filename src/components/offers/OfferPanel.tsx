@@ -12,7 +12,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  FIRST_NAME_TOKEN, MAX_TEST_IDS, SECTION_ADD, addSection, autoCopy, canReset, copyAfterType, isRemovable, staleLines, staleSections, writtenForOnLoad, removeSection, resetCopy, sectionCollapsed, canHidePhoto, copyAfterHide, hideUpload, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, MAX_USES_PER_PLAYER, notFoundLine, parsePlayerIds, playerLine, prefillField, PREVIEW_FIRST_NAME, amountText, limitLine, stepLimit, stepUses, usesLine, audienceBody, buttonMatchNote, buttonOf, opensText, chicagoWallNow, copyOf, createBody, defaultRun, endsTicket, formOf, formProblem, fromInput, matchInfo,
+  FIRST_NAME_TOKEN, isAdminAccount, MAX_TEST_IDS, SECTION_ADD, addSection, autoCopy, canReset, copyAfterType, isRemovable, staleLines, staleSections, writtenForOnLoad, removeSection, resetCopy, sectionCollapsed, canHidePhoto, copyAfterHide, hideUpload, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, MAX_USES_PER_PLAYER, notFoundLine, parsePlayerIds, playerLine, prefillField, PREVIEW_FIRST_NAME, amountText, limitLine, stepLimit, stepUses, usesLine, audienceBody, buttonMatchNote, buttonOf, opensText, chicagoWallNow, copyOf, createBody, defaultRun, endsTicket, formOf, formProblem, fromInput, matchInfo,
   newForm, patchBody, mergeMatches, withCovers, endNote, pauseNote, ranUntil, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, countWanted, lockedSummary, endHasPassed, launchProblem, offerWallNow, offerZones, setPriceAnyWarning, setPriceProblem, pickedMatch, startLabel, STEPPER, summary, toInput, wallLabel,
   type Campaign, type City, type Count, type FieldOpt, type Lookup, type UploadedPhoto, type CopyKey, type ListChange, type DealType, type Form, type MatchOpt, type WrittenFor,
 } from "@/lib/offersModel";
@@ -67,7 +67,7 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
   const [poolWanted, setPoolWanted] = useState(c === null || c.status === "DRAFT");
   const [poolRetry, setPoolRetry] = useState(0);
   const data = useMemo(() => (pool ? { ...loaded, matches: withCovers(mergeMatches(pool.matches, loaded.matches), loaded.fields) } : loaded), [loaded, pool]);
-  const start = useMemo(() => (c ? formOf(c, data.matches, data.cities) : newForm(nowWall)), [c, data, nowWall]);
+  const start = useMemo(() => (c ? formOf(c, data.matches, data.cities, data.fields) : newForm(nowWall)), [c, data, nowWall]);
   const [f, setF] = useState<Form>(start);
   const set = (patch: Partial<Form>) => setF((x) => ({ ...x, ...patch }));
   const locked = c !== null && c.status !== "DRAFT";
@@ -75,11 +75,11 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
   const matchUnread = matchRead !== "ok";
   const frozen = ended || matchUnread;
   const m = pickedMatch(f, data.matches);
-  const copy = copyOf(f, data.matches, data.cities);
+  const copy = copyOf(f, data.matches, data.cities, data.fields);
   // Now, as the wall clock furthest ahead among this offer's cities. Worked out when asked, not on mount.
   const offerWall = () => offerWallNow(offerZones(f, m?.cityId ?? null, data.cities));
   const problem = matchUnread ? null : formProblem(f, data.matches, c?.status ?? null);
-  const diff = c && !matchUnread ? patchBody(c, f, data.matches, data.cities) : null;
+  const diff = c && !matchUnread ? patchBody(c, f, data.matches, data.cities, data.fields) : null;
   const dirty = c === null || Object.keys(diff ?? {}).length > 0;
   const needPool = !loaded.matchesComplete && poolWanted && !ended;
   const poolKey = f.cityIds.join(",");
@@ -156,7 +156,7 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
   const savedAs = (after: Campaign | null): ListChange | undefined => (after ? { kind: "saved", campaign: after } : undefined);
   async function save(): Promise<{ o: WriteOutcome; id: number | null; after: Campaign | null }> {
     if (c === null) {
-      const { o, after } = await send("/api/offers", "POST", createBody(f, data.matches, data.cities), `Saved "${f.name.trim()}" as a draft.`);
+      const { o, after } = await send("/api/offers", "POST", createBody(f, data.matches, data.cities, data.fields), `Saved "${f.name.trim()}" as a draft.`);
       // A new offer's uploads move to its id, so they are still tiles when it reopens.
       if (after?.id) { keepUploads(after.id, uploaded); keepWritten(after.id, writtenFor); }
       return { o, id: after?.id ?? null, after };
@@ -242,11 +242,23 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
     if (!s) return;
     set({ dealAmount: Math.min(s.max, Math.max(s.min, f.dealAmount + dir * s.step)) });
   };
-  const pickScope = (scope: "ANY" | "MATCH") => {
+  // Played at entries that picking a field put there, so taking the field back takes those back too. One the
+  // person added themselves, or removed already, is theirs.
+  const [prefilled, setPrefilled] = useState<number[]>([]);
+  const dropPrefilled = (ids: number[]) => f.fieldIds.filter((x) => !(prefilled.includes(x) && ids.includes(x)));
+  const addScopeField = (id: number) => {
+    const fieldIds = prefillField(f.fieldIds, { fieldId: id });
+    if (fieldIds !== f.fieldIds) setPrefilled((p) => [...p, id]);
+    set({ appliesFieldIds: [...f.appliesFieldIds, id], fieldIds });
+  };
+  const removeScopeField = (id: number) => { set({ appliesFieldIds: f.appliesFieldIds.filter((x) => x !== id), fieldIds: dropPrefilled([id]) }); setPrefilled((p) => p.filter((x) => x !== id)); };
+  const pickScope = (scope: Form["scope"]) => {
     if (scope === f.scope) return;
-    if (scope === "ANY") set({ scope, matchId: null, endsLocal: defaultRun(nowWall).endsLocal });
-    // A specific match always ends at kickoff, so it never keeps No end date.
-    else set({ scope, usesPerPlayer: 1, endsLocal: f.endsLocal ?? defaultRun(nowWall).endsLocal });
+    const leftField = f.scope === "FIELD" ? { appliesFieldIds: [], fieldIds: dropPrefilled(f.appliesFieldIds) } : {};
+    if (f.scope === "FIELD") setPrefilled([]);
+    if (scope === "MATCH") set({ scope, ...leftField, usesPerPlayer: 1, endsLocal: f.endsLocal ?? defaultRun(nowWall).endsLocal });
+    // Leaving a specific match goes back to a run of its own instead of ending at that kickoff.
+    else set({ scope, ...leftField, matchId: null, ...(f.scope === "MATCH" ? { endsLocal: defaultRun(nowWall).endsLocal } : {}) });
   };
   const pickMatch = (id: number) => {
     const mm = data.matches.find((x) => x.id === id) ?? null;
@@ -263,6 +275,9 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
   const [addingField, setAddingField] = useState(false);
   const fieldsInCities = data.fields.filter((x) => f.cityIds.length === 0 || (x.cityId !== null && f.cityIds.includes(x.cityId)));
   const otherFields = fieldsInCities.filter((x) => !f.fieldIds.includes(x.id));
+  const [addingScopeField, setAddingScopeField] = useState(false);
+  const otherScopeFields = fieldsInCities.filter((x) => !f.appliesFieldIds.includes(x.id));
+  const strayScopeFields = f.appliesFieldIds.filter((id) => !fieldsInCities.some((x) => x.id === id));
   const fieldTitle = (id: number) => data.fields.find((x) => x.id === id)?.title ?? `Field ${id}`;
   const players = f.audienceMode === "PLAYERS";
 
@@ -292,13 +307,13 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
 
   // ── popup text ──
   const [editText, setEditText] = useState(false);
-  const suggested = autoCopy(f, data.matches, data.cities);
+  const suggested = autoCopy(f, data.matches, data.cities, data.fields);
   const setCopy = (k: CopyKey, v: string) => {
     setF((x) => ({ ...x, copy: copyAfterType(x.copy, k, v, suggested[k]) }));
     setWrittenFor((w) => ({ ...w, [k]: suggested[k] }));
   };
-  const [writtenFor, setWrittenFor] = useState<WrittenFor>(() => (c ? writtenForOnLoad(start, readWritten(c.id), data.matches, data.cities) : {}));
-  const stale = staleSections(f, writtenFor, c?.status ?? null, data.matches, data.cities);
+  const [writtenFor, setWrittenFor] = useState<WrittenFor>(() => (c ? writtenForOnLoad(start, readWritten(c.id), data.matches, data.cities, data.fields) : {}));
+  const stale = staleSections(f, writtenFor, c?.status ?? null, data.matches, data.cities, data.fields);
   // What a section held when Remove was pressed, so + Add puts it back. Cleared by a save (the panel remounts).
   const [typedBefore, setTypedBefore] = useState<Partial<Record<CopyKey, string>>>({});
   const [more, setMore] = useState(false);
@@ -355,7 +370,7 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
     const next = hideUpload(uploaded, url);
     setUploaded(next);
     if (c) keepUploads(c.id, next);
-    setF((v) => ({ ...v, copy: copyAfterHide(v.copy, url, c?.photoUrl ?? (c ? null : undefined), copyOf({ ...v, copy: {} }, data.matches, data.cities).photoUrl) }));
+    setF((v) => ({ ...v, copy: copyAfterHide(v.copy, url, c?.photoUrl ?? (c ? null : undefined), copyOf({ ...v, copy: {} }, data.matches, data.cities, data.fields).photoUrl) }));
   }
   const photoTile = (key: string | number, url: string | null, title: string, sub: string, onHide?: () => void) => {
     const on = (copy.photoUrl ?? null) === url;
@@ -523,9 +538,38 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
         <Labeled label="Applies to">
           <div className="flex flex-wrap gap-1.5">
             <Chip testId="offers-scope-ANY" on={f.scope === "ANY"} disabled={dl} onClick={() => pickScope("ANY")}>Any match</Chip>
+            <Chip testId="offers-scope-FIELD" on={f.scope === "FIELD"} disabled={dl} onClick={() => pickScope("FIELD")}>A field</Chip>
             <Chip testId="offers-scope-MATCH" on={f.scope === "MATCH"} disabled={dl} onClick={() => pickScope("MATCH")}>A specific match</Chip>
           </div>
         </Labeled>
+        {f.scope === "FIELD" && (
+          <div data-testid="offers-scope-fields" className="flex flex-col gap-1.5">
+            <div className="flex items-center gap-1.5">
+              <span className="text-[12px] font-medium" style={{ color: O.ink }}>Fields</span>
+              <span className="text-[11px]" style={{ color: O.label }}>the offer only works at these</span>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {f.appliesFieldIds.map((id) => <Chip key={id} on testId={`offers-sf-${id}`} disabled={dl} title={dl ? undefined : "Remove"} onClick={() => removeScopeField(id)}>{`${fieldTitle(id)}  ×`}</Chip>)}
+              {!dl && otherScopeFields.length > 0 && <Chip testId="offers-add-scope-field" on={false} onClick={() => setAddingScopeField((v) => !v)}>+ Field</Chip>}
+            </div>
+            {addingScopeField && !dl && (
+              <div className="grid grid-cols-2 gap-2 rounded-[8px] p-2" style={{ background: O.subtle }}>
+                {otherScopeFields.map((x) => (
+                  <button key={x.id} type="button" data-testid={`offers-scope-field-${x.id}`} onClick={() => { addScopeField(x.id); setAddingScopeField(false); }}
+                    className="flex flex-col overflow-hidden rounded-[8px] border text-left" style={{ borderColor: O.line, background: O.surface }}>
+                    {x.cover
+                      // eslint-disable-next-line @next/next/no-img-element
+                      ? <img alt="" src={x.cover} className="h-[48px] w-full object-cover" />
+                      : <span className="h-[48px] w-full" style={{ background: O.subtle }} />}
+                    <span className="truncate px-1.5 pt-1 text-[11px] font-medium" style={{ color: O.ink }}>{x.title}</span>
+                    <span className="truncate px-1.5 pb-1 text-[10.5px]" style={{ color: O.muted }}>{cityName(x.cityId)}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+            {!dl && strayScopeFields.length > 0 && <div data-testid="offers-scope-stray" className="text-[12px]" style={{ color: O.warnInk }}>{strayScopeFields.map(fieldTitle).join(", ")} {strayScopeFields.length === 1 ? "isn't" : "aren't"} in this offer&apos;s cities, so nobody could use it there.</div>}
+          </div>
+        )}
         {f.scope === "MATCH" && (
           <>
             <Labeled label="Match">
@@ -565,7 +609,7 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
                 {lookup.notFound.length > 0 && <div data-testid="offers-not-found" className="self-start rounded-[8px] px-2.5 py-1.5 text-[12px] font-medium" style={{ background: O.warnBg, color: O.warnInk }}>{notFoundLine(lookup.notFound)}</div>}
                 {lookup.players.length > 0 && (
                   <div data-testid="offers-found-list" className="flex flex-col gap-1 rounded-[8px] px-3 py-2.5 text-[12px]" style={{ background: O.subtle }}>
-                    {lookup.players.slice(0, 3).map((p) => <div key={p.id} style={{ color: O.ink }}>{playerLine(p)}</div>)}
+                    {lookup.players.slice(0, 3).map((p) => <PlayerRow key={p.id} p={p} />)}
                     {lookup.players.length > 3 && <div style={{ color: O.ok }}>+ {(lookup.players.length - 3).toLocaleString("en-US")} more</div>}
                   </div>
                 )}
@@ -729,7 +773,7 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
           {f.endsLocal !== null && <span className="text-[13px]" style={{ color: O.muted }}>to</span>}
           {f.endsLocal !== null && <WallInput testId="offers-ends" label={m && f.endsLocal === m.startLocal ? `Kickoff · ${wallLabel(f.endsLocal)}` : wallLabel(f.endsLocal)} value={f.endsLocal} disabled={dl} onChange={(v) => set({ endsLocal: v })} />}
         </div>
-        {f.scope === "ANY" && !matchUnread && <div className="flex justify-end"><Chip testId="offers-no-end" on={f.endsLocal === null} disabled={dl} onClick={() => set({ endsLocal: f.endsLocal === null ? defaultRun(nowWall).endsLocal : null })}>No end date</Chip></div>}
+        {f.scope !== "MATCH" && !matchUnread && <div className="flex justify-end"><Chip testId="offers-no-end" on={f.endsLocal === null} disabled={dl} onClick={() => set({ endsLocal: f.endsLocal === null ? defaultRun(nowWall).endsLocal : null })}>No end date</Chip></div>}
         <div className="text-[11.5px]" style={{ color: O.muted }}>Times are each player&apos;s own city time.</div>
         {passed && !dl && <div data-testid="offers-end-passed" className="text-[12px] font-medium" style={{ color: O.critInk }}>That end time has already passed, so it can&apos;t launch.</div>}
         {!players && <button type="button" data-testid="offers-more" onClick={() => setMore((v) => !v)} className="flex w-full items-center justify-between gap-2 rounded-[8px] px-3 py-[9px] text-left text-[12px]" style={{ background: O.subtle }}>
@@ -785,7 +829,7 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
             {testParsed.ids.length > MAX_TEST_IDS && <div className="text-[12px] font-medium" style={{ color: O.warnInk }}>A test goes to {MAX_TEST_IDS} players at most ({testParsed.ids.length} here).</div>}
             {testLookup && (
               <div data-testid="offers-test-found" className="flex flex-col gap-1 rounded-[8px] px-3 py-2 text-[12px]" style={{ background: O.subtle }}>
-                {testLookup.players.map((p) => <div key={p.id} style={{ color: O.ink }}>{playerLine(p)}</div>)}
+                {testLookup.players.map((p) => <PlayerRow key={p.id} p={p} />)}
                 {testLookup.notFound.length > 0 && <div style={{ color: O.warnInk }}>{notFoundLine(testLookup.notFound)}</div>}
                 {testLookup.players.length === 0 && <div style={{ color: O.muted }}>No players found.</div>}
               </div>
@@ -823,6 +867,16 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
           action="End" onCancel={() => setConfirm(null)}
           onConfirm={async () => { const o = await once(() => move("end")); if (o) { setOutcome(o); if (o.verdict === "LANDED") setConfirm(null); } return o; }} />
       )}
+    </div>
+  );
+}
+
+// A looked-up account in Specific players and Send test, tagged when it's staff rather than a player.
+function PlayerRow({ p }: { p: Lookup["players"][number] }) {
+  return (
+    <div data-testid="offers-player-row" data-id={p.id} className="flex flex-wrap items-center gap-1.5" style={{ color: O.ink }}>
+      <span>{playerLine(p)}</span>
+      {isAdminAccount(p) && <span data-testid="offers-admin-tag" className="rounded-full px-1.5 py-[1px] text-[10px] font-semibold" style={{ background: O.warnBg, color: O.warnInk }}>Admin</span>}
     </div>
   );
 }
