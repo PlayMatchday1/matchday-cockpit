@@ -220,6 +220,10 @@ export const CONFINED_ROUTE_PREFIXES: readonly string[] = [
   // Match Chats and Player Chats.
   "/api/match-chats/",
   "/api/crm/",
+  /* The staff app's chat-to-player lookup. It is a Player Chats read, gated by authenticateCrm and
+   * then the thread's own city boundary (assertThreadInScope), exactly like /api/crm/threads/{id};
+   * without this entry a confined chat account could not open the player of its own thread. */
+  "/api/app/chat-players/",
 ];
 
 /* ── EXACT ROUTES, NOT SUBTREES ───────────────────────────────────────────────────────────────
