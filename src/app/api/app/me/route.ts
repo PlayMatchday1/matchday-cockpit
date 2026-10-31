@@ -26,5 +26,8 @@ export async function GET(req: Request) {
     // A COURTESY for greying Save, from the same predicate the desktop UI uses. The adjust route
     // does not read this: the desktop write handlers it calls re-check the grant on every request.
     canEditMatches: can(row, "editMatches", auth.email),
+    // The same courtesy for the chat composers. The send routes (/api/crm/send, the match chat
+    // reply) re-check can_send_messages themselves before anything is sent.
+    canSendMessages: can(row, "sendMessages", auth.email),
   });
 }
