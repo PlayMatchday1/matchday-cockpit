@@ -17,7 +17,7 @@ import { join, resolve } from "node:path";
 import {
   audienceBody, chicagoWallNow, comparisonLine, costCeiling, createBody, defaultRun, endsTicket, formOf, newForm, patchBody, priceWithDeal,
   summary, wallFromMatch, withPreviewName, buttonOf, opensText, formProblem, stepUses, usesLine, stepLimit, limitLine, copyOf,
-  addSection, autoCopy, canReset, copyAfterType, staleLines, staleSections, writtenForOnLoad, isRemovable, removeSection, resetCopy, sectionCollapsed, REMOVABLE_KEYS, canHidePhoto, copyAfterHide, hideUpload, extraBookingsLine, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, prefillField, audienceText, parsePlayerIds, playerLine, notFoundLine, usedOfLimit, resultsLines, countWanted, lockedSummary, offerWallNow, offerZones, wallNowIn, mergeMatches, offerMatchOpt, pickerRange, withCovers, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, endHasPassed, launchProblem, namedMatchIds, offersLogBody, pickerDayLabel, pickerView, fillText, fillFraction, setPriceAnyWarning, setPriceProblem, type Campaign, type City, type MatchOpt, type Results,
+  addSection, autoCopy, canReset, copyAfterType, staleLines, staleSections, writtenForOnLoad, isRemovable, removeSection, resetCopy, sectionCollapsed, REMOVABLE_KEYS, canHidePhoto, copyAfterHide, hideUpload, extraBookingsLine, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, prefillField, audienceText, parsePlayerIds, playerLine, notFoundLine, usedOfLimit, resultsLines, campaignsAfter, countWanted, lockedSummary, offerWallNow, offerZones, wallNowIn, mergeMatches, offerMatchOpt, pickerRange, withCovers, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, endHasPassed, launchProblem, namedMatchIds, offersLogBody, pickerDayLabel, pickerView, fillText, fillFraction, setPriceAnyWarning, setPriceProblem, type Campaign, type City, type MatchOpt, type Results,
 } from "../src/lib/offersModel";
 import { _setOffersGateDepsForTest, errorText, MAX_MATCH_PAGES, mismatches, offersGate, offersWrite, photoLinkProblem, readFirstMatchPage, readMatchesForCities, sendPreview, type OffersAuth } from "../src/lib/offersServer";
 import { readOffersConfig } from "../src/lib/offersConfig";
@@ -592,6 +592,20 @@ eq("a link with no headers says so instead of throwing", [settableHeaders(undefi
 eq("empty headers are fine (the control)", settableHeaders({}), []);
 eq("the server refuses a link with no headers, and says why", photoLinkProblem({ method: "PUT", fileKey: "k", uploadURL: "http://localhost:3070/a" }, "localhost:3070"), "The upload link came without its headers; nothing was uploaded.");
 
+{
+  const old = [draftFrom({ id: 2, name: "b" }), draftFrom({ id: 1, name: "a" })];
+  const ids = (l: Campaign[]) => l.map((c) => [c.id, c.name]);
+  eq("after an edit, that campaign changes and keeps its place", ids(campaignsAfter(old, { kind: "saved", campaign: draftFrom({ id: 1, name: "z" }) })), [[2, "b"], [1, "z"]]);
+  eq("the others are the same objects, untouched", campaignsAfter(old, { kind: "saved", campaign: draftFrom({ id: 1, name: "z" }) })[0] === old[0], true);
+  eq("a new one goes first", ids(campaignsAfter(old, { kind: "saved", campaign: draftFrom({ id: 3, name: "c" }) })), [[3, "c"], [2, "b"], [1, "a"]]);
+  eq("a delete takes it out", ids(campaignsAfter(old, { kind: "gone", id: 2 })), [[1, "a"]]);
+  const withResults = { ...old[0], results };
+  const { results: _dropped, ...noResults } = draftFrom({ id: 2, status: "LAUNCHED" });
+  const fresh = campaignsAfter(old, { kind: "saved", campaign: { ...noResults, id: 8, state: "LIVE" } as Campaign })[0];
+  eq("a new one launched at once has empty results, so its row draws", resultsLines(fresh), ["0 saw · 0 used", "$0 off · 0 came back"]);
+  eq("what the read-back lacks stays", campaignsAfter([withResults], { kind: "saved", campaign: noResults as Campaign })[0].results, results);
+}
+
 // ── WHAT GOES IN THE LOG ─────────────────────────────────────────────────────────────────────────
 eq("player ids become a count", offersLogBody({ name: "x", playerIds: [7, 8, 9] }), { name: "x", playerCount: 3 });
 eq("test ids become a count", offersLogBody({ userIds: [7] }), { userCount: 1 });
@@ -750,15 +764,14 @@ function routeFiles(dir: string): string[] {
         running--;
         if (m !== "GET") { const to = url.pathname.split("/").at(-1); if (to === "pause") current = { ...current, status: "PAUSED" }; if (to === "launch") current = { ...current, status: "LAUNCHED" }; if (m === "PATCH") current = { ...current, name: "y" }; return new Response("{}", { status: 200 }); }
         if (url.pathname.endsWith("/admin/cities")) return new Response(JSON.stringify([{ id: 2, name: "Houston", timeZone: { name: "America/Chicago" } }]), { status: 200 });
-        if (url.pathname.endsWith("/admin/fields")) return new Response("[]", { status: 200 });
+        if (url.pathname.endsWith("/admin/offers/page")) return new Response(JSON.stringify({ campaigns: [campaign()], cities: [{ id: 2, name: "Houston", state: "TX", timeZone: "America/Chicago" }], fields: [{ id: 1, title: "F", address: "x", cityId: 2, cover: null }] }), { status: 200 });
         if (url.pathname.endsWith("/admin/offers/matches")) return new Response(JSON.stringify({ page: 1, limit: 100, totalItems: 0, data: [] }), { status: 200 });
-        if (url.pathname.endsWith("/admin/offers/campaigns")) return new Response("[]", { status: 200 });
         if (url.pathname.startsWith("/admin/matches/")) return new Response(JSON.stringify({ id: 116, name: "M", startDate: "2099-01-01T00:00:00.000Z", startDateUtc: "2099-01-01T00:00:00.000Z", isCancelled: false, fieldId: 1, registrationPrice: 900, maxPlayerCount: 16, minPlayerCount: 0, field: { title: "F", cityId: 2 } }), { status: 200 });
         return new Response(JSON.stringify(current), { status: 200 });
       }) as typeof fetch;
       _setOffersGateDepsForTest({ sleep, logStore, authenticate: asRow({ can_access_matchops: true }), config: () => ({ ok: true, config: { env: "staging", baseUrl: "https://matchday-stage.herokuapp.com", uploadHost: "b.s3.amazonaws.com" } }) });
       const route = (p: string) => import(resolve(process.cwd(), p)) as Promise<Record<string, (r: Request, c: unknown) => Promise<Response>>>;
-      const run = async (fn: () => Promise<Response>) => { seen.length = 0; slept.length = 0; const r = await fn(); return { status: r.status, verdict: (await r.clone().json()).verdict, seen: [...seen] }; };
+      const run = async (fn: () => Promise<Response>) => { seen.length = 0; const r = await fn(); return { status: r.status, verdict: (await r.clone().json()).verdict, seen: [...seen] }; };
       const act = await route("src/app/api/offers/[id]/[action]/route.ts");
       const one = await route("src/app/api/offers/[id]/route.ts");
       const list = await route("src/app/api/offers/route.ts");
@@ -766,8 +779,13 @@ function routeFiles(dir: string): string[] {
       const ctx = (action?: string) => ({ params: Promise.resolve({ id: "9", action }) });
       const POSTREQ = () => new Request("http://localhost/x", { method: "POST", headers: { Authorization: "Bearer t" } });
       const load = await run(() => list.GET(new Request("http://localhost/api/offers"), {}));
-      eq("page load: four reads, one at a time", [load.status, load.seen, most], [200, ["GET /admin/offers/campaigns", "GET /admin/cities", "GET /admin/fields", "GET /admin/offers/matches"], 1]);
-      eq("...each waiting out the 2 seconds", slept.length >= 3 && slept.slice(-3).every((ms) => ms > 1900 && ms <= 2000), true);
+      eq("page load: one read for the page, one for the picker's matches, in that order", [load.status, load.seen, most], [200, ["GET /admin/offers/page", "GET /admin/offers/matches"], 1]);
+      const loaded = await (await list.GET(new Request("http://localhost/api/offers"), {})).json();
+      eq("...cut down, with each city's zone as the launch check wants it", [loaded.cities, loaded.fields], [[{ id: 2, name: "Houston", timeZone: "America/Chicago" }], [{ id: 1, title: "F", cityId: 2, cover: null }]]);
+      slept.length = 0;
+      await run(() => act.POST(POSTREQ(), ctx("pause")));
+      eq("everything else still waits out the 2 seconds", slept.length >= 1 && slept.every((ms) => ms > 1900 && ms <= 2000), true);
+      current = campaign();
       eq("pause: read once, write, read back once", await run(() => act.POST(POSTREQ(), ctx("pause"))), { status: 200, verdict: "LANDED", seen: [`GET ${C}`, `POST ${C}/pause`, `GET ${C}`] });
       current = campaign({ status: "DRAFT" });
       eq("launch: the campaign, its cities, write, read back", await run(() => act.POST(POSTREQ(), ctx("launch"))), { status: 200, verdict: "LANDED", seen: [`GET ${C}`, "GET /admin/cities", `POST ${C}/launch`, `GET ${C}`] });

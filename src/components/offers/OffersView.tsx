@@ -12,8 +12,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/useAuth";
 import {
-  STATE_LABEL, audienceText, extraBookingsLine, usedOfLimit, chicagoWallNow, comparisonLine, dealText, money, namedMatchIds, progressText, resultsLines, usedPct, usesText, wallLabel,
-  withCovers, mergeMatches, type Campaign, type City, type FieldOpt, type MatchOpt,
+  STATE_LABEL, audienceText, extraBookingsLine, usedOfLimit, chicagoWallNow, campaignsAfter, comparisonLine, dealText, money, namedMatchIds, progressText, resultsLines, usedPct, usesText, wallLabel,
+  withCovers, mergeMatches, type ListChange, type Campaign, type City, type FieldOpt, type MatchOpt,
 } from "@/lib/offersModel";
 import OfferPanel, { type MatchRead } from "./OfferPanel";
 import { Banner, Btn, NotFound, O, Split, StateChip, authed, type WriteOutcome } from "./offersUi";
@@ -71,10 +71,14 @@ export default function OffersView() {
     return () => { cancelled = true; };
   }, [missingKey, matchRetry]);
   const matchRead: MatchRead = !missingKey ? "ok" : matchFailed ? "failed" : "loading";
-  const landed = useCallback((o: WriteOutcome, selectId?: number) => {
+  // No page read after a write: its read-back is the fresh copy of that one campaign. With none (it
+  // can't happen on LANDED), the whole page is read rather than showing a stale row.
+  const landed = useCallback((o: WriteOutcome, selectId?: number, change?: ListChange) => {
     setBanner(o);
     if (selectId !== undefined) setOpen(selectId);
-    setKey((k) => k + 1);
+    if (!change) { setKey((k) => k + 1); return; }
+    setData((d) => (d ? { ...d, campaigns: campaignsAfter(d.campaigns, change) } : d));
+    setVer((v) => v + 1);
   }, []);
 
   if (isLoading || access === null) return <div className="px-1 py-6 text-[13px]" style={{ color: O.muted }}>Loading…</div>;

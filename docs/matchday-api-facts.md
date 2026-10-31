@@ -8026,3 +8026,11 @@ it has passed in any of the offer's cities (`offerZones`, `offerWallNow`). Playe
 `content-type: text/html`, 428 bytes, a `Vite App` page. The control, `/admin/matches` with no token, answered
 401. So a 2xx on a GET here does not show the route exists, and Offers is not on staging. Production was not
 probed. `errorText` (`src/lib/offersServer.ts`) reports the failed JSON parse as "Offers may not be deployed there".
+
+### `GET /admin/offers/page`
+
+Backend de910e7, `docs/offers/M3-ENDPOINTS.md`. `{ campaigns, cities, fields }` in one read: `campaigns` as
+`GET /admin/offers/campaigns`, with `results`; `cities` with `timeZone` as a plain IANA string, not the
+`{ name }` object `/admin/cities` gives. **`GET /admin/offers/campaigns/{id}` has no `results`** (probed locally,
+2026-10-30: 37 keys against the list's 38), so a row updated from a write's read-back keeps the results it had
+until the next Refresh (`campaignsAfter`, `src/lib/offersModel.ts`).

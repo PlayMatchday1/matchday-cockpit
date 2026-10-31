@@ -85,7 +85,7 @@ export function errorText(e: unknown): string {
 }
 
 // ── READS ───────────────────────────────────────────────────────────────────────────────────────
-// EVERY READ GOES THROUGH THE PACER (src/lib/offersPacing.ts) at the repo's rule for the production API:
+// EVERY OTHER READ GOES THROUGH THE PACER (src/lib/offersPacing.ts) at the repo's rule for the production API:
 // one at a time, one every 2 seconds. Never nest paced() inside paced(): the inner one waits behind the outer.
 const paced = makePacer({ paceMs: OFFERS_READ_PACE_MS, sleep: (ms) => gateDeps.sleep(ms), now: () => gateDeps.now(), stopsOn: (e) => !(e instanceof WriteFailedError && e.status >= 400 && e.status < 500) });
 export function offersGet<T>(path: string, query?: Record<string, string | number | boolean>): Promise<T> {
@@ -93,7 +93,22 @@ export function offersGet<T>(path: string, query?: Record<string, string | numbe
   return paced(() => apiGet<T>(env, path, query, baseUrl));
 }
 
-export const readCampaigns = () => offersGet<Campaign[]>(CAMPAIGNS);
+// THE PAGE'S LOAD (GET admin/offers/page): campaigns, cities and fields in one read, which is why it
+// alone skips the pacer. Cut down to what the page uses, by the same rule as every other read here.
+type ApiPage = {
+  campaigns: Campaign[];
+  cities: { id: number; name: string; timeZone?: string | null }[];
+  fields: { id: number; title: string; cityId: number | null; cover?: string | null }[];
+};
+export async function readPage(): Promise<{ campaigns: Campaign[]; cities: City[]; fields: FieldOpt[] }> {
+  const { env, baseUrl } = cfg();
+  const r = await apiGet<ApiPage>(env, "/admin/offers/page", undefined, baseUrl);
+  return {
+    campaigns: r.campaigns,
+    cities: r.cities.map((c) => ({ id: c.id, name: c.name, timeZone: c.timeZone ?? null })),
+    fields: r.fields.map((f) => ({ id: f.id, title: f.title, cityId: f.cityId ?? null, cover: f.cover ?? null })),
+  };
+}
 export async function readCampaign(id: number): Promise<Campaign | null> {
   try { return await offersGet<Campaign>(`${CAMPAIGNS}/${id}`); }
   catch (e) { if (e instanceof WriteFailedError && e.status === 404) return null; throw e; }
@@ -121,7 +136,8 @@ export function matchOpt(m: ApiMatch, now = Date.now()): MatchOpt {
   };
 }
 // THE MATCH LIST (GET admin/offers/matches): upcoming and not cancelled, soonest first, in the picker's
-// longest range. The page's load takes ONE page of it and says whether that was all of them. Only when it
+// longest range. The page's load takes ONE page of it, paced like the rest (right after the page read when
+// nothing else has read lately) and says whether that was all of them. Only when it
 // wasn't does the panel ask for its own cities' list, walked here, stopping at the
 // first error and after MAX_MATCH_PAGES. Search and Needs players filter in the browser: the design
 // searches by time as well, which the endpoint doesn't, and it saves a read for every key.
@@ -157,15 +173,6 @@ export const readAudienceCount = (auth: OffersAuth, body: Record<string, unknown
   const { env, baseUrl } = cfg();
   return apiWrite<AudienceCount>(env, "POST", `${CAMPAIGNS}/audience-count`, body, auth.actor, "offers", undefined, undefined, baseUrl);
 });
-
-// Every field, cut down to what the photo picker and Played at need (title, city, cover URL).
-type ApiField = { id: number; title: string; cityId: number | null; cover?: string | null; deletedAt?: string | null };
-export async function readFields(): Promise<FieldOpt[]> {
-  const r = await offersGet<ApiField[] | { data: ApiField[] }>("/admin/fields");
-  return (Array.isArray(r) ? r : r.data ?? []).filter((f) => !f.deletedAt)
-    .map((f) => ({ id: f.id, title: f.title, cityId: f.cityId ?? null, cover: f.cover ?? null }))
-    .sort((a, b) => a.title.localeCompare(b.title));
-}
 
 // One match, read when an offer that names it is opened (GET /api/offers/matches/{id}), never on page load.
 export const readMatch = async (id: number): Promise<MatchOpt> => matchOpt(await offersGet<ApiMatch>(`/admin/matches/${id}`));

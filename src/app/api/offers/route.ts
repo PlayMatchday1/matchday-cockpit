@@ -5,7 +5,7 @@
 // dropped. The verdict comes from reading the new campaign back by the id the backend returned.
 
 import { BODY_KEYS } from "@/lib/offersModel";
-import { CAMPAIGNS, errorText, offersGate, offersWrite, readCampaigns, readCities, readJson, readFields, readFirstMatchPage, verdictResponse } from "@/lib/offersServer";
+import { CAMPAIGNS, errorText, offersGate, offersWrite, readFirstMatchPage, readJson, readPage, verdictResponse } from "@/lib/offersServer";
 
 export const dynamic = "force-dynamic";
 
@@ -13,12 +13,10 @@ export async function GET(req: Request) {
   const auth = await offersGate(req);
   if (auth instanceof Response) return auth;
   try {
-    // One at a time. A match an offer names but this list doesn't have is read when that offer is opened.
-    const campaigns = await readCampaigns();
-    const cities = await readCities();
-    const fields = await readFields();
+    // One read, then the picker's page. A match an offer names but this list doesn't have is read when that offer is opened.
+    const page = await readPage();
     const list = await readFirstMatchPage().then((l) => ({ ...l, error: null as string | null }), (e) => ({ matches: [], complete: false, error: errorText(e) }));
-    return Response.json({ campaigns, cities, fields, matches: list.matches, matchesComplete: list.complete, matchesError: list.error });
+    return Response.json({ ...page, matches: list.matches, matchesComplete: list.complete, matchesError: list.error });
   } catch (e) {
     return Response.json({ error: errorText(e) }, { status: 502 });
   }

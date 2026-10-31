@@ -37,6 +37,10 @@ It signs in with `MATCHDAY_STAGE_API_*`, and that account must be in staging's
 every other page reads and writes production as usual, and Offers writes land in the real `change_log` under
 `env = staging`. Stop the local-mode server first: one worktree can't run two dev servers.
 
+**Reads, decided 2026-10-30.** Every Offers read goes through the pacer at 2 seconds, except the page's load,
+`GET /admin/offers/page`, which is one read in place of four. After a write the list takes that write's read-back,
+with no page read.
+
 Also needed, none of them new variables:
 
 - **Service-account credentials for that environment** (`MATCHDAY_PROD_BASE_URL`, `MATCHDAY_PROD_API_EMAIL`,

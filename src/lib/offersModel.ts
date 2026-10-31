@@ -713,6 +713,19 @@ export function summary(f: Form, count: Count | null, matches: MatchOpt[], citie
   return `${people}${who.length ? ` who ${andList(who)}` : ""} ${one1 ? "gets" : "get"} ${deal} ${until}${held}. ${cost}`;
 }
 
+// AFTER A WRITE the list takes the write's own read-back, so nothing else is read. Newest first, as the
+// backend lists them. GET /:id carries no results: a campaign in the list keeps the ones it has until the
+// next Refresh, and a new one has none yet.
+const NO_GROUP: BookedGroup = { players: 0, booked: 0, rate: null };
+const NO_RESULTS: Results = { granted: 0, heldBack: 0, saw: 0, tapped: 0, dismissed: 0, used: 0, discountGiven: 0, cameBackAtFullPrice: 0, booked: { withOffer: NO_GROUP, heldBack: NO_GROUP } };
+export type ListChange = { kind: "saved"; campaign: Campaign } | { kind: "gone"; id: number };
+export function campaignsAfter(list: Campaign[], change: ListChange): Campaign[] {
+  if (change.kind === "gone") return list.filter((c) => c.id !== change.id);
+  return list.some((c) => c.id === change.campaign.id)
+    ? list.map((c) => (c.id === change.campaign.id ? { ...c, ...change.campaign } : c))
+    : [{ ...change.campaign, results: change.campaign.results ?? NO_RESULTS }, ...list];
+}
+
 // ── THE LIST AND THE RESULTS ─────────────────────────────────────────────────────────────────────
 export const STATE_LABEL: Record<CampaignState, string> = { DRAFT: "Draft", SCHEDULED: "Scheduled", LIVE: "Live", PAUSED: "Paused", ENDED: "Ended" };
 

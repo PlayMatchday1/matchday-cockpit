@@ -14,7 +14,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FIRST_NAME_TOKEN, MAX_TEST_IDS, SECTION_ADD, addSection, autoCopy, canReset, copyAfterType, isRemovable, staleLines, staleSections, writtenForOnLoad, removeSection, resetCopy, sectionCollapsed, canHidePhoto, copyAfterHide, hideUpload, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, MAX_USES_PER_PLAYER, notFoundLine, parsePlayerIds, playerLine, prefillField, PREVIEW_FIRST_NAME, amountText, limitLine, stepLimit, stepUses, usesLine, audienceBody, buttonMatchNote, buttonOf, opensText, chicagoWallNow, copyOf, createBody, defaultRun, endsTicket, formOf, formProblem, fromInput, matchInfo,
   newForm, patchBody, mergeMatches, withCovers, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, countWanted, lockedSummary, endHasPassed, launchProblem, offerWallNow, offerZones, setPriceAnyWarning, setPriceProblem, pickedMatch, startLabel, STEPPER, summary, toInput, wallLabel,
-  type Campaign, type City, type Count, type FieldOpt, type Lookup, type UploadedPhoto, type CopyKey, type DealType, type Form, type MatchOpt, type WrittenFor,
+  type Campaign, type City, type Count, type FieldOpt, type Lookup, type UploadedPhoto, type CopyKey, type ListChange, type DealType, type Form, type MatchOpt, type WrittenFor,
 } from "@/lib/offersModel";
 import MatchPicker from "./MatchPicker";
 import OfferPopupPreview from "./OfferPopupPreview";
@@ -56,7 +56,7 @@ const readTestIds = () => { try { return window.localStorage.getItem(TEST_IDS_KE
 const keepTestIds = (text: string) => { try { window.localStorage.setItem(TEST_IDS_KEY, text); } catch { /* private mode */ } };
 
 export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, onClose, onLanded }: {
-  c: Campaign | null; data: Data; matchRead: MatchRead; onRetryMatch: () => void; onClose: () => void; onLanded: (o: WriteOutcome, selectId?: number) => void;
+  c: Campaign | null; data: Data; matchRead: MatchRead; onRetryMatch: () => void; onClose: () => void; onLanded: (o: WriteOutcome, selectId?: number, change?: ListChange) => void;
 }) {
   const nowWall = useMemo(() => chicagoWallNow(), []);
   // THE PICKER'S LIST. The page's load holds one page of it. Only if that wasn't all of them (or it
@@ -153,23 +153,24 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
   }
 
   // Save: create a draft, or send only what changed.
-  async function save(): Promise<{ o: WriteOutcome; id: number | null }> {
+  const savedAs = (after: Campaign | null): ListChange | undefined => (after ? { kind: "saved", campaign: after } : undefined);
+  async function save(): Promise<{ o: WriteOutcome; id: number | null; after: Campaign | null }> {
     if (c === null) {
       const { o, after } = await send("/api/offers", "POST", createBody(f, data.matches, data.cities), `Saved "${f.name.trim()}" as a draft.`);
       // A new offer's uploads move to its id, so they are still tiles when it reopens.
       if (after?.id) { keepUploads(after.id, uploaded); keepWritten(after.id, writtenFor); }
-      return { o, id: after?.id ?? null };
+      return { o, id: after?.id ?? null, after };
     }
-    if (!dirty) return { o: { verdict: "LANDED", text: "Nothing to save." }, id: c.id };
-    const { o } = await send(`/api/offers/${c.id}`, "PATCH", diff, `Saved changes to "${f.name.trim()}".`);
+    if (!dirty) return { o: { verdict: "LANDED", text: "Nothing to save." }, id: c.id, after: null };
+    const { o, after } = await send(`/api/offers/${c.id}`, "PATCH", diff, `Saved changes to "${f.name.trim()}".`);
     if (o.verdict === "LANDED") keepWritten(c.id, writtenFor);
-    return { o, id: c.id };
+    return { o, id: c.id, after };
   }
   async function onSave() {
     const r = await once(save);
     if (!r) return;
     setOutcome(r.o);
-    if (r.o.verdict === "LANDED") onLanded(r.o, r.id ?? undefined);
+    if (r.o.verdict === "LANDED") onLanded(r.o, r.id ?? undefined, savedAs(r.after));
   }
   // Launch (or resume): save first when there is anything to save, then launch. Two writes, in order;
   // the second goes only if the first LANDED. Neither is retried.
@@ -177,21 +178,28 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
     const passed = launchProblem(f, offerWall());
     if (passed) return { verdict: "FAILED", text: `${passed} Nothing was sent.` };
     let id = c?.id ?? null;
+    let saved: Campaign | null = null;
     if (c === null || (c.status === "DRAFT" && dirty)) {
       const s = await save();
+      saved = s.after;
       if (s.o.verdict !== "LANDED" || s.id === null) return c === null && s.o.verdict === "LANDED" ? { verdict: "UNKNOWN", text: "Saved, but the new offer's id did not come back. Refresh before launching." } : s.o;
       id = s.id;
     }
     const resume = c?.status === "PAUSED";
-    const { o } = await send(`/api/offers/${id}/launch`, "POST", undefined, resume ? `Resumed "${f.name.trim()}".` : `Launched "${f.name.trim()}".`);
-    if (o.verdict !== "LANDED" && c === null) return { ...o, text: `Saved as a draft, but the launch did not land: ${o.text}` };
-    if (o.verdict === "LANDED") onLanded(o, id ?? undefined);
+    const { o, after } = await send(`/api/offers/${id}/launch`, "POST", undefined, resume ? `Resumed "${f.name.trim()}".` : `Launched "${f.name.trim()}".`);
+    if (o.verdict === "LANDED") { onLanded(o, id ?? undefined, savedAs(after)); return o; }
+    // The save landed and the launch didn't: the panel moves to the saved draft, so a second try can't make another.
+    if (saved) {
+      const told = c === null ? { ...o, text: `Saved as a draft, but the launch did not land: ${o.text}` } : o;
+      onLanded(told, id ?? undefined, savedAs(saved));
+      return told;
+    }
     return o;
   }
   async function discard(): Promise<WriteOutcome> {
     const r = await authed(`/api/offers/${c!.id}`, { method: "DELETE" });
     const o = outcomeOf(r, `Deleted the draft "${c!.name}".`);
-    if (o.verdict === "LANDED") { onLanded(o); onClose(); }
+    if (o.verdict === "LANDED") { onLanded(o, undefined, { kind: "gone", id: c!.id }); onClose(); }
     return o;
   }
   // ── send test ──
@@ -222,8 +230,8 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
     if (o.verdict === "SENT") { if (!toMe) keepTestIds(testText); setTestOpen(false); }
   }
   async function move(action: "pause" | "end"): Promise<WriteOutcome> {
-    const { o } = await send(`/api/offers/${c!.id}/${action}`, "POST", undefined, action === "pause" ? `Paused "${c!.name}".` : `Ended "${c!.name}".`);
-    if (o.verdict === "LANDED") onLanded(o, c!.id);
+    const { o, after } = await send(`/api/offers/${c!.id}/${action}`, "POST", undefined, action === "pause" ? `Paused "${c!.name}".` : `Ended "${c!.name}".`);
+    if (o.verdict === "LANDED") onLanded(o, c!.id, savedAs(after));
     return o;
   }
 
