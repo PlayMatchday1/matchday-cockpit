@@ -12,7 +12,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  FIRST_NAME_TOKEN, isAdminAccount, MAX_TEST_IDS, SECTION_ADD, addSection, autoCopy, canReset, copyAfterType, isRemovable, staleLines, staleSections, writtenForOnLoad, removeSection, resetCopy, sectionCollapsed, canHidePhoto, copyAfterHide, hideUpload, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, MAX_USES_PER_PLAYER, notFoundLine, parsePlayerIds, playerLine, prefillField, PREVIEW_FIRST_NAME, amountText, limitLine, stepLimit, stepUses, usesLine, audienceBody, buttonMatchNote, buttonOf, opensText, chicagoWallNow, copyOf, createBody, defaultRun, endsTicket, formOf, formProblem, fromInput, matchInfo,
+  FIRST_NAME_TOKEN, isAdminAccount, MAX_TEST_IDS, SECTION_ADD, addSection, autoCopy, canReset, copyAfterType, isRemovable, staleLines, staleSections, writtenForOnLoad, removeSection, resetCopy, sectionCollapsed, canHidePhoto, copyAfterHide, hideUpload, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, MAX_USES_PER_PLAYER, notFoundLine, parsePlayerIds, playerLine, PREVIEW_FIRST_NAME, amountText, limitLine, stepLimit, stepUses, usesLine, audienceBody, buttonMatchNote, buttonOf, opensText, chicagoWallNow, copyOf, createBody, defaultRun, endsTicket, formOf, formProblem, fromInput, matchInfo,
   newForm, patchBody, playedAtSuggestions, mergeMatches, withCovers, endNote, pauseNote, ranUntil, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, countWanted, lockedSummary, endHasPassed, launchProblem, offerWallNow, offerZones, setPriceAnyWarning, setPriceProblem, pickedMatch, startLabel, STEPPER, summary, toInput, wallLabel,
   type Campaign, type City, type Count, type FieldOpt, type Lookup, type UploadedPhoto, type CopyKey, type ListChange, type DealType, type Form, type MatchOpt, type WrittenFor,
 } from "@/lib/offersModel";
@@ -253,9 +253,8 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
   };
   const pickMatch = (id: number) => {
     const mm = data.matches.find((x) => x.id === id) ?? null;
-    // A specific match's offer ends at its kickoff unless someone moves it, and Played at is
-    // prefilled with that match's field (the person can take it off).
-    set({ matchId: id, ...(mm ? { endsLocal: mm.startLocal, fieldIds: prefillField(f.fieldIds, mm) } : {}) });
+    // A specific match's offer ends at its kickoff unless someone moves it.
+    set({ matchId: id, ...(mm ? { endsLocal: mm.startLocal } : {}) });
   };
 
   // ── who gets it ──
@@ -638,7 +637,7 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
                 {!dl && otherFields.length > 0 && <Chip testId="offers-add-field" on={false} onClick={() => setAddingField((v) => !v)}>+ Field</Chip>}
                 {f.fieldIds.length === 0 && (dl || otherFields.length === 0) && <span className="self-center text-[12px]" style={{ color: O.muted }}>Any field</span>}
               </div>
-              {!dl && playedAtSuggestions(f, data.fields).map((x) => (
+              {!dl && playedAtSuggestions(f, data.fields, data.matches).map((x) => (
                 <button key={x.id} type="button" data-testid={`offers-pf-suggest-${x.id}`} onClick={() => set({ fieldIds: [...f.fieldIds, x.id] })}
                   className="self-start text-left text-[12px] font-semibold" style={{ color: O.ok }}>Only players who&apos;ve played at {x.title}?</button>
               ))}

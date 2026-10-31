@@ -17,7 +17,7 @@ import { join, resolve } from "node:path";
 import {
   audienceBody, chicagoWallNow, comparisonLine, costCeiling, createBody, defaultRun, endsTicket, formOf, newForm, patchBody, priceWithDeal,
   summary, wallFromMatch, withPreviewName, buttonOf, opensText, formProblem, stepUses, usesLine, stepLimit, limitLine, copyOf,
-  addSection, autoCopy, canReset, copyAfterType, staleLines, staleSections, writtenForOnLoad, isRemovable, removeSection, resetCopy, sectionCollapsed, REMOVABLE_KEYS, canHidePhoto, copyAfterHide, hideUpload, extraBookingsLine, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, prefillField, audienceText, parsePlayerIds, playerLine, notFoundLine, usedOfLimit, resultsLines, playedAtSuggestions, isAdminAccount, scopeFieldsLine, setPriceAnyWarning as anyPriceWarn, matchPicked, matchTitle, matchWhere, ranUntil, endNote, pauseNote, progressText, campaignsAfter, countWanted, lockedSummary, offerWallNow, offerZones, wallNowIn, mergeMatches, offerMatchOpt, pickerRange, withCovers, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, endHasPassed, launchProblem, namedMatchIds, offersLogBody, pickerDayLabel, pickerView, fillText, fillFraction, setPriceAnyWarning, setPriceProblem, type Campaign, type City, type MatchOpt, type Results,
+  addSection, autoCopy, canReset, copyAfterType, staleLines, staleSections, writtenForOnLoad, isRemovable, removeSection, resetCopy, sectionCollapsed, REMOVABLE_KEYS, canHidePhoto, copyAfterHide, hideUpload, extraBookingsLine, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, audienceText, parsePlayerIds, playerLine, notFoundLine, usedOfLimit, resultsLines, playedAtSuggestions, isAdminAccount, scopeFieldsLine, setPriceAnyWarning as anyPriceWarn, matchPicked, matchTitle, matchWhere, ranUntil, endNote, pauseNote, progressText, campaignsAfter, countWanted, lockedSummary, offerWallNow, offerZones, wallNowIn, mergeMatches, offerMatchOpt, pickerRange, withCovers, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, endHasPassed, launchProblem, namedMatchIds, offersLogBody, pickerDayLabel, pickerView, fillText, fillFraction, setPriceAnyWarning, setPriceProblem, type Campaign, type City, type MatchOpt, type Results,
 } from "../src/lib/offersModel";
 import { _setOffersGateDepsForTest, errorText, MAX_MATCH_PAGES, mismatches, offersGate, offersWrite, photoLinkProblem, readFirstMatchPage, readMatchesForCities, sendPreview, type OffersAuth } from "../src/lib/offersServer";
 import { readOffersConfig } from "../src/lib/offersConfig";
@@ -146,8 +146,6 @@ eq("picking MatchDay photo on a specific match sends no photo (null), not the co
 }
 
 console.log("played at:");
-eq("picking a specific match prefills its field", prefillField([], matches[0]), [1]);
-eq("...and keeps fields already there, without doubling", [prefillField([2], matches[0]), prefillField([1, 2], matches[0])], [[2, 1], [1, 2]]);
 eq("fields are sent with or without a match", [createBody({ ...nowF, name: "x", fieldIds: [1, 2] }, matches, cities).fieldIds, audienceBody({ ...nowF, fieldIds: [2] }, matches, cities).fieldIds], [[1, 2], [2]]);
 eq("the list line names them", audienceText({ ...draftFrom(), fieldIds: [1, 2], cityIds: [1] }, cities, [{ id: 1, title: "Riverside Fields", cityId: 1, cover: null }, { id: 2, title: "Mueller Park", cityId: 1, cover: null }]),
   "Austin · Not played in 30+ days · Played at Riverside Fields or Mueller Park");
@@ -643,7 +641,12 @@ eq("with an end date: today's rule, today's words", [endNote("2026-11-02 19:00:0
   const sent = createBody(one, matches, cities, F);
   eq("Played at suggests each chosen field", playedAtSuggestions(two, F).map((x) => x.id), [1, 2]);
   eq("...until it's added", playedAtSuggestions({ ...two, fieldIds: [1] }, F).map((x) => x.id), [2]);
-  eq("nothing to suggest on any match or a specific match", [playedAtSuggestions({ ...nowF, appliesFieldIds: [1] }, F), playedAtSuggestions({ ...nowF, scope: "MATCH", appliesFieldIds: [1] }, F)], [[], []]);
+  eq("nothing to suggest on any match", playedAtSuggestions({ ...nowF, appliesFieldIds: [1] }, F, matches), []);
+  const onMatch = { ...nowF, name: "x", scope: "MATCH" as const, matchId: 116, endsLocal: "2026-11-02 19:00:00" };
+  eq("a specific match suggests its field", playedAtSuggestions(onMatch, F, matches), [{ id: 1, title: "Riverside Fields" }]);
+  eq("...until it's added", playedAtSuggestions({ ...onMatch, fieldIds: [1] }, F, matches), []);
+  eq("...and not with no match picked or no field on it", [playedAtSuggestions({ ...onMatch, matchId: null }, F, matches), playedAtSuggestions(onMatch, F, [{ ...matches[0], fieldId: null, fieldTitle: null }])], [[], []]);
+  eq("a specific match's offer doesn't send Played at unless asked", createBody(onMatch, matches, cities, F).fieldIds, []);
   eq("the scope is sent as its own value", sent.appliesFieldIds, [1]);
   eq("...and not as Played at", sent.fieldIds, []);
   eq("sorted, as an id set", createBody({ ...one, appliesFieldIds: [3, 1] }, matches, cities, F).appliesFieldIds, [1, 3]);

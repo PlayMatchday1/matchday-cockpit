@@ -354,9 +354,6 @@ export function formOf(c: Campaign, matches: MatchOpt[], cities: City[], fields:
 export const namedMatchIds = (c: Pick<Campaign, "matchIds" | "buttonMatchId">) =>
   [...new Set([...c.matchIds, ...(c.buttonMatchId ? [c.buttonMatchId] : [])])];
 
-// Picking a specific match prefills Played at with its field (kept if already there).
-export const prefillField = (fieldIds: number[], m: Pick<MatchOpt, "fieldId">) =>
-  m.fieldId === null || fieldIds.includes(m.fieldId) ? fieldIds : [...fieldIds, m.fieldId];
 
 export const pickedMatch = (f: Pick<Form, "scope" | "matchId">, matches: MatchOpt[]) =>
   f.scope === "MATCH" && f.matchId !== null ? matches.find((m) => m.id === f.matchId) ?? null : null;
@@ -400,9 +397,13 @@ export const withPreviewName = <T extends string | null>(text: T): T =>
 export function scopeFieldsLine(c: Pick<Campaign, "usesPerPlayer" | "appliesFieldIds">, fields: FieldOpt[]): string {
   return `${usesText(c.usesPerPlayer)} at ${andList(fieldNames(c.appliesFieldIds ?? [], fields))}`;
 }
-// Picking a field never touches who gets the offer. These are the fields Played at can offer to add, one click each.
-export const playedAtSuggestions = (f: Pick<Form, "scope" | "appliesFieldIds" | "fieldIds">, fields: FieldOpt[]) =>
-  scopeFieldsOf(f, fields).filter((x) => !f.fieldIds.includes(x.id));
+// Picking a field or a match never touches who gets the offer. These are the fields Played at can offer to add,
+// one click each: the chosen fields, or the specific match's field.
+export function playedAtSuggestions(f: Pick<Form, "scope" | "appliesFieldIds" | "fieldIds" | "matchId">, fields: FieldOpt[], matches: MatchOpt[] = []): { id: number; title: string }[] {
+  const m = pickedMatch(f, matches);
+  const from = m ? (m.fieldId !== null && m.fieldTitle ? [{ id: m.fieldId, title: m.fieldTitle }] : []) : scopeFieldsOf(f, fields);
+  return from.filter((x) => !f.fieldIds.includes(x.id)).map((x) => ({ id: x.id, title: x.title }));
+}
 // The fields an offer with scope FIELD applies at, chosen order, as far as the field list knows them.
 const scopeFieldsOf = (f: Pick<Form, "scope" | "appliesFieldIds">, fields: FieldOpt[]) =>
   (f.scope === "FIELD" ? f.appliesFieldIds.map((id) => fields.find((x) => x.id === id)).filter((x): x is FieldOpt => !!x) : []);
