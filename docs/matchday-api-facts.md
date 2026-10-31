@@ -7670,7 +7670,8 @@ for 18596, 18680, 18679, 19700 and `/admin/matches?fromDate&toDate` windows arou
   correctly in staff notes (strike banner, Edit Profile screen, Profile tab credits, Home tab member number). A real thread's output token count
   moves the cost as much as the image does. 51 inbound images in the 30 days to 2026-10-31.
 - **crm-media downloads work with the service role** (`downloadMessageMedia`, `src/lib/crmMedia.ts`). Stored images are JPEG, 100KB to 175KB.
-- **`sharp` is now a direct dependency** at 0.34.5, the version `next` already pulled in as optional. Not exercised on Vercel's runtime before this push.
+- **`sharp` is now a direct dependency** at 0.34.5, the version `next` already pulled in as optional. It works on Vercel: a real inbound image was drafted by the tick on production at 18:43Z on
+  2026-10-31 (`crm_ai_drafts`: `claude-opus-5-5`, context key `images:1`, $0.083264). It loads lazily, so a failure costs one image, not every draft.
 - **`InboxRow.tsx` is dead code.** Nothing imports it; the inbox renders `MistInboxRow` in `CrmClient.tsx`. Between `422a200` and this build the countdown and
   Cancel existed only in that dead file, so staff had no Cancel while auto-send was live. Measured: 4 auto-sends went out in that time.
 - **The nav badge counts NEEDS A HUMAN, not everyone waiting** (`awaiting-count`, rule in `src/lib/crmAttention.ts`). It falls back to everyone waiting if
