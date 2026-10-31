@@ -160,7 +160,8 @@ export function rosterOut(rows: PlayerRaw[], marks: Mark[] | null) {
 /**
  * THE REVIEWS ON A LIVE ROSTER. A review is a roster row with a starRating, exactly the rule
  * reviewFromRoster (mdapiMatchesSync.ts) uses for mdapi_reviews. The reviewer is first name and last
- * initial only, and nothing else about them leaves this function. Newest first.
+ * initial, plus their player id for the profile link; nothing else about them leaves this function.
+ * Newest first.
  */
 export const LOW_RATING_MAX = 3;
 const tagLabel = (t: string) => { const s = t.trim().toLowerCase().replace(/_/g, " "); return s.charAt(0).toUpperCase() + s.slice(1); };
@@ -173,6 +174,9 @@ export function reviewsOut(rows: PlayerRaw[]) {
       const tags = Array.isArray(p.tagsRating) ? p.tagsRating.filter((t): t is string => typeof t === "string" && t.trim() !== "").map(tagLabel) : [];
       return {
         id: num(p.id),
+        // The reviewer's player id, so the app can open their profile (Ryan, 2026-10-31). The
+        // profile itself is read through Player Lookup, which applies its own city boundary.
+        playerId: num(p.userId),
         name: [first, last ? `${last.charAt(0).toUpperCase()}.` : ""].filter(Boolean).join(" ") || "Player",
         stars: Number(p.starRating),
         tags,
