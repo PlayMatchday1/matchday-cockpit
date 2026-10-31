@@ -33,6 +33,8 @@ type Draft = {
   text_without_action: string | null;
   action: { kind: "credit" | "issue_guest_code"; amount_cents: number | null } | null;
   action_status: string | null;
+  decision?: string | null;
+  decision_reason?: string | null;
 };
 type Resp = (
   | { status: "ok"; reused: boolean; draft: Draft }
@@ -217,6 +219,11 @@ export default function AiDraftCard({
 
   return (
     <div data-testid="ai-draft-card" className="mb-2 rounded-lg border border-deep-green/15 bg-cream-soft px-3 py-2 text-sm text-deep-green">
+      {view.kind === "draft" && view.draft.decision === "human" && (
+        <div data-testid="ai-draft-needs-you" className="mb-1 text-[13px] font-[750]" style={{ color: "#a82a18" }}>
+          Needs you: {view.draft.decision_reason ?? "this one needs a person"}
+        </div>
+      )}
       <div className="mb-1 flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide text-deep-green/60">
         <Sparkles aria-hidden className="h-3.5 w-3.5" strokeWidth={2} />
         Claude draft

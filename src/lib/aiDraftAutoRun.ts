@@ -30,6 +30,9 @@ import { applyCreditAdjustment } from "@/lib/creditWrite";
 import { createPromoWrite } from "@/lib/promoWrite";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
 import { sendPushNotificationToMany, type StoredSubscription } from "@/lib/webPush";
+import { isAwaitingReply } from "@/lib/awaitingReply";
+import { humanPushDue, humanPushPath, HUMAN_PUSH_WITHIN_MS } from "@/lib/crmAttention";
+import { loadAttention, strikeHoldingThreadIds } from "@/lib/crmAttentionLoad";
 import { POST as sendPOST } from "@/app/api/crm/send/route";
 
 const ENV = FULL_EDITOR_ENV;
@@ -212,6 +215,56 @@ async function checkKillSwitch(sb: SupabaseClient, now: number): Promise<boolean
   return true;
 }
 
+// ONE PUSH PER THREAD PER INBOUND, 10 minutes after it landed in NEEDS A HUMAN with nothing sent. To the
+// assignee, or all chat staff when unassigned. The marker is a change_log row keyed on the inbound id,
+// written before the push, so a failed push isn't sent twice either.
+async function notifyNeedsHuman(sb: SupabaseClient, now: number): Promise<number> {
+  const COLS = "id, assigned_to_user_id, last_message_at, last_message_preview, last_message_direction, no_reply_needed_at, status";
+  const open = await sb.from("crm_threads").select(COLS).eq("status", "open").eq("last_message_direction", "inbound").gte("last_message_at", new Date(now - HUMAN_PUSH_WITHIN_MS).toISOString());
+  if (open.error) throw new Error(open.error.message);
+  const rows = [...(open.data ?? [])] as { id: string; assigned_to_user_id: string | null; last_message_at: string; last_message_preview: string | null; last_message_direction: "inbound" | "outbound"; no_reply_needed_at: string | null; status: "open" | "closed" }[];
+  const held = await strikeHoldingThreadIds(sb, now);
+  const heldRows = held.length ? await sb.from("crm_threads").select(COLS).in("id", held).eq("status", "open").eq("last_message_direction", "outbound") : null;
+  if (heldRows?.error) throw new Error(heldRows.error.message);
+  rows.push(...((heldRows?.data ?? []) as typeof rows));
+  const attention = await loadAttention(sb, rows.map((t) => ({ id: t.id, last_message_at: t.last_message_at, awaiting: isAwaitingReply(t) })));
+  let sent = 0;
+  for (const t of rows) {
+    const a = attention.get(t.id);
+    if (a?.section !== "human" || !a.inbound_id || !humanPushDue(Date.parse(a.entered_at), now)) continue;
+    const path = humanPushPath(a.inbound_id);
+    const seen = await sb.from("change_log").select("id").eq("endpoint", path).limit(1);
+    if (seen.error) throw new Error(seen.error.message);
+    if ((seen.data ?? []).length) continue;
+    const at = new Date(now).toISOString();
+    const logged = await recordWrite(
+      {
+        env: "production", source: "crm-human-push", actorName: "auto-send", actorEmail: null, saveId: randomUUID(), matchId: null, matchName: null,
+        method: "POST", path, body: { thread_id: t.id, to: t.assigned_to_user_id ? "assignee" : "all chat staff" }, keys: [], label: (k) => k, applied: () => true,
+        changes: [{ key: "push", field: "Needs a human push", before: "", after: a.reason ?? "" }],
+      },
+      { readResource: async () => ({}), write: async () => ({}), now: () => at },
+      supabaseLogStore(),
+    );
+    if (!logged.logged) { console.error("[auto-send] push marker not written, not pushing", t.id); continue; }
+    let recipients: string[] = t.assigned_to_user_id ? [t.assigned_to_user_id] : [];
+    if (!t.assigned_to_user_id) {
+      const staff = await sb.from("app_users").select("*");
+      if (staff.error) throw new Error(staff.error.message);
+      recipients = (staff.data ?? []).filter((u) => (u.is_admin === true || u.can_access_chats === true) && u.is_service_account !== true).map((u) => u.id as string);
+    }
+    const subs = recipients.length ? await sb.from("push_subscriptions").select("user_id, endpoint, p256dh, auth").in("user_id", recipients) : null;
+    if (subs?.data?.length) {
+      await sendPushNotificationToMany(subs.data as StoredSubscription[], {
+        title: "Needs a human", body: a.reason ?? "A player is waiting.", tag: `human-${t.id}`,
+        data: { thread_id: t.id, route: `/match-ops/player-chats?threadId=${encodeURIComponent(t.id)}` },
+      }).catch((e: unknown) => console.error("[auto-send] push failed", e instanceof Error ? e.message : e));
+      sent++;
+    }
+  }
+  return sent;
+}
+
 async function draftOneThread(sb: SupabaseClient, threadId: string, channel: string, now: number, apiKey: string, config: AutoSendConfig): Promise<string> {
   const deps = draftDataDeps({ supabase: sb, threadId, requestedBy: null, confinedCity: null, apiKey });
   const msgs = await deps.loadMessages();
@@ -282,6 +335,11 @@ export async function runAutoSendTick(sb: SupabaseClient): Promise<Record<string
       out.holds = await runDueHolds(sb, now);
     }
   }
+
+  out.pushed = await notifyNeedsHuman(sb, now).catch((e: unknown) => {
+    console.error("[auto-send] needs-human push failed", e instanceof Error ? e.message.slice(0, 200) : e);
+    return "error";
+  });
 
   const apiKey = process.env.ANTHROPIC_API_KEY?.trim();
   if (!apiKey) return { ...out, drafts: "no key" };

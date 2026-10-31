@@ -14,7 +14,8 @@ import { cityNameFor, resolveCityScope } from "@/lib/cityScope";
 import type { ScheduleRow } from "@/lib/aiDraftClock";
 import { FULL_EDITOR_ENV } from "@/lib/matchEnv";
 import { loadPlaybook } from "@/lib/aiDraftPlaybook";
-import { assertAnthropicHost, phoneShapes, priorCourtesyFromLog, ANTHROPIC_HOST, type CreditLogRow, type DraftContextIn, type DraftMsg } from "@/lib/aiDraftModel";
+import { loadDraftImage } from "@/lib/aiDraftImage";
+import { assertAnthropicHost, phoneShapes, priorCourtesyFromLog, toApiRequest, ANTHROPIC_HOST, type CreditLogRow, type DraftContextIn, type DraftMsg } from "@/lib/aiDraftModel";
 import { toNationalDigits } from "@/lib/phone";
 import type { DraftDeps, StoredDraft } from "@/lib/aiDraftRun";
 import { buildRecordedFields, CAMERA_LOOKAHEAD_DAYS, CAMERA_LOOKBACK_DAYS, type CameraRow } from "@/lib/aiDraftCamera";
@@ -57,7 +58,7 @@ export function draftDataDeps(args: DraftDataArgs): DataDeps {
       // Newest 60, returned oldest first. The transcript keeps the last 40 of those.
       const r = await supabase
         .from("crm_messages")
-        .select("id, direction, body, sent_at, is_auto_reply, media_kind, template_name, sent_by_user_id, auto_sent_draft_id")
+        .select("id, direction, body, sent_at, is_auto_reply, media_kind, template_name, sent_by_user_id, auto_sent_draft_id, media_url")
         .eq("thread_id", threadId)
         .order("sent_at", { ascending: false })
         .limit(60);
@@ -68,7 +69,7 @@ export function draftDataDeps(args: DraftDataArgs): DataDeps {
     async latestDraftFor(basedOn) {
       const r = await supabase
         .from("crm_ai_drafts")
-        .select("id, outcome, draft_text, staff_notes, category, error, created_at, context_keys, reply_without_action, action, action_status")
+        .select("id, outcome, draft_text, staff_notes, category, error, created_at, context_keys, reply_without_action, action, action_status, decision, decision_reason")
         .eq("thread_id", threadId)
         .eq("based_on_message_id", basedOn)
         .neq("outcome", "superseded")
@@ -224,10 +225,12 @@ export function draftDataDeps(args: DraftDataArgs): DataDeps {
 
     playbook: () => loadPlaybook(),
 
+    loadImage: (messageId, storagePath) => loadDraftImage(supabase, messageId, storagePath),
+
     async callModel(request) {
       const client = new Anthropic({ apiKey, baseURL: ANTHROPIC_BASE_URL, maxRetries: 0, timeout: 50_000 });
       assertAnthropicHost(client.baseURL);
-      const res = await client.messages.create(request);
+      const res = await client.messages.create(toApiRequest(request));
       const text = res.content.map((b) => (b.type === "text" ? b.text : "")).join("").trim() || null;
       return { text, stopReason: res.stop_reason, usage: res.usage };
     },

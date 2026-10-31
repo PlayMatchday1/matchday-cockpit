@@ -403,10 +403,11 @@ apology, and nothing is promised about specific clips or goals.
 - Chargebacks: the account is expelled until the player reverses the dispute with their bank.
 
 **Suggested answer**
-> Hey {first name}, thanks for letting us know! I see {n} strike(s) from {match/date}. I need to
-> check with the match manager on that one, and we'll get back to you as soon as we hear.
+> Hey {first name}, thanks for letting us know! I need to check with the match manager on that
+> one, and we'll get back to you as soon as we hear.
 
-Rule 10: honest, friendly, no promise. Notes: "Strike dispute: check with the match manager."
+Rule 10: honest, friendly, no promise, and no strike count in the reply. Notes: "Strike dispute:
+check with the match manager."
 A draft never says a strike is removed, and never debates an expulsion. Expelled and fraud
 appeals go to staff.
 

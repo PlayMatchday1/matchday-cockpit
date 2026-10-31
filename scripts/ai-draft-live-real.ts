@@ -4,6 +4,7 @@
 // message an earlier draft was made for, as of 20 minutes after it, and prints what staff actually sent.
 //
 //   NODE_OPTIONS="--conditions=react-server" npx tsx scripts/ai-draft-live-real.ts [per-category] [max-threads]
+//   ... scripts/ai-draft-live-real.ts --images [threads]   re-drafts threads where the player sent an image
 //
 // Output carries first names and message text: read it, don't paste it anywhere. About $0.03 a thread;
 // not recorded in crm_ai_drafts. Paced at one thread per 2 seconds (MatchDay reads, no bulk sweeps).
@@ -20,7 +21,8 @@ async function main() {
   const { draftDataDeps } = await import("../src/lib/aiDraftDeps");
   const { draftCostUsd } = await import("../src/lib/aiDraftModel");
   const sb = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!.trim(), process.env.SUPABASE_SERVICE_ROLE_KEY!.trim(), { auth: { persistSession: false } });
-  const perCategory = Number(process.argv[2] ?? 2), maxThreads = Number(process.argv[3] ?? 1000);
+  const imagesOnly = process.argv[2] === "--images";
+  const perCategory = imagesOnly ? 0 : Number(process.argv[2] ?? 2), maxThreads = Number(process.argv[3] ?? 1000);
   const rows = await sb.from("crm_ai_drafts").select("thread_id, based_on_message_id, category, created_at").not("category", "is", null).order("created_at", { ascending: false }).limit(200);
   if (rows.error) throw new Error(rows.error.message);
   const seen = new Set<string>(), count = new Map<string, number>();
@@ -29,6 +31,17 @@ async function main() {
     seen.add(d.thread_id); count.set(d.category, (count.get(d.category) ?? 0) + 1);
     return true;
   }).slice(0, maxThreads);
+  if (imagesOnly) {
+    const im = await sb.from("crm_messages").select("id, thread_id").eq("direction", "inbound").eq("media_kind", "image").not("media_url", "is", null).order("sent_at", { ascending: false }).limit(100);
+    if (im.error) throw new Error(im.error.message);
+    const threads = new Set<string>();
+    picks.length = 0;
+    for (const m of im.data ?? []) {
+      if (threads.has(m.thread_id) || picks.length >= (Number(process.argv[3]) || 3)) continue;
+      threads.add(m.thread_id);
+      picks.push({ thread_id: m.thread_id, based_on_message_id: m.id, category: "(image)", created_at: "" });
+    }
+  }
   let slowest = 0, total = 0, n = 0, shown = 0, failed = 0, actions = 0, words = 0;
   for (const p of picks) {
     const based = await sb.from("crm_messages").select("sent_at").eq("id", p.based_on_message_id).single();
@@ -48,7 +61,7 @@ async function main() {
         const reply = await real.callModel(req);
         cost = draftCostUsd(reply.usage);
         slowest = Math.max(slowest, Date.now() - t0);
-        console.log(`\n── was ${p.category} · ${req.model} · ${((Date.now() - t0) / 1000).toFixed(1)}s · ${reply.usage.input_tokens} in, ${reply.usage.output_tokens} out, $${cost.toFixed(4)}, ${reply.stopReason}, examples: ${exampleBlock}`);
+        console.log(`\n── was ${p.category} · ${req.model} · images ${req.images.length} (${req.images.map((i) => `${Math.round(i.data.length * 0.75 / 1024)}KB`).join(", ")}) · ${((Date.now() - t0) / 1000).toFixed(1)}s · ${reply.usage.input_tokens} in, ${reply.usage.output_tokens} out, $${cost.toFixed(4)}, ${reply.stopReason}, examples: ${exampleBlock}`);
         return reply;
       },
       insertDraft: async (row) => { console.log(`  keys: ${row.context_keys.filter((k) => !k.startsWith("match:")).join(", ")}`); return { id: "not-stored", created_at: new Date(asOf).toISOString() }; },
@@ -60,6 +73,7 @@ async function main() {
       console.log(`  reply: ${r.draft.text}`);
       if (r.draft.action) { actions++; console.log(`  action: ${JSON.stringify(r.draft.action)}\n  without: ${r.draft.text_without_action}`); }
       for (const note of r.draft.staff_notes) console.log(`  note: ${note}`);
+      console.log(`  category ${r.draft.category}, flags [${r.draft.flags.join(", ")}]`);
     } else {
       if (r.status === "failed") failed++;
       console.log(`  ${r.status}: ${"message" in r ? r.message : ""}`);

@@ -1,5 +1,8 @@
-// GET /api/crm/threads/awaiting-count — GLOBAL count of open conversations
-// waiting on a human reply, for the chat rail badge + the metrics-strip pill.
+// GET /api/crm/threads/awaiting-count — the count of NEEDS A HUMAN (src/lib/crmAttention), for the chat
+// rail badge. A thread with a hold running isn't owed a person yet, so it isn't counted; a strike holding
+// reply was answered and is. The inbox section reads the same rule.
+//
+// The waiting population before that:
 //
 // This is the SAME population the inbox list route reports as counts.awaiting
 // (src/app/api/crm/threads/route.ts): open threads whose last message is
@@ -14,6 +17,7 @@
 import { authenticateCrm } from "@/lib/crmAuth";
 import { crmScopedAssignees } from "@/lib/crmScope";
 import { isAwaitingReply } from "@/lib/awaitingReply";
+import { loadAttention, strikeHoldingThreadIds } from "@/lib/crmAttentionLoad";
 
 export const runtime = "nodejs";
 export const maxDuration = 10;
@@ -35,6 +39,7 @@ export async function GET(req: Request) {
     // small set) then the shared isAwaitingReply filter, mirroring the list
     // route's awaitingCountP exactly so the pill and badge can never drift.
     const rows: {
+      id: string;
       last_message_preview: string | null;
       last_message_at: string | null;
       no_reply_needed_at: string | null;
@@ -43,7 +48,7 @@ export async function GET(req: Request) {
     while (from < 20000) {
       let q = supabase
         .from("crm_threads")
-        .select("last_message_preview, last_message_at, no_reply_needed_at")
+        .select("id, last_message_preview, last_message_at, no_reply_needed_at")
         .eq("status", "open")
         .eq("last_message_direction", "inbound");
       if (scope.ids) q = q.in("assigned_to_user_id", scope.ids);
@@ -57,7 +62,7 @@ export async function GET(req: Request) {
       if (page.length < PAGE) break;
       from += PAGE;
     }
-    const count = rows.filter((r) =>
+    const waiting = rows.filter((r) =>
       isAwaitingReply({
         status: "open",
         last_message_direction: "inbound",
@@ -65,8 +70,23 @@ export async function GET(req: Request) {
         last_message_at: r.last_message_at,
         no_reply_needed_at: r.no_reply_needed_at,
       }),
-    ).length;
-    return Response.json({ count }, { status: 200 });
+    );
+    // Counted wide if the sections can't be read: everyone waiting, never a false zero.
+    try {
+      const heldIds = await strikeHoldingThreadIds(supabase, Date.now());
+      let held = heldIds.length ? supabase.from("crm_threads").select("id, last_message_at").in("id", heldIds).eq("status", "open").eq("last_message_direction", "outbound") : null;
+      if (held && scope.ids) held = held.in("assigned_to_user_id", scope.ids);
+      const heldRows = held ? await held : null;
+      if (heldRows?.error) throw new Error(heldRows.error.message);
+      const attention = await loadAttention(supabase, [
+        ...waiting.map((r) => ({ id: r.id, awaiting: true, last_message_at: r.last_message_at ?? "" })),
+        ...((heldRows?.data ?? []) as { id: string; last_message_at: string }[]).map((r) => ({ id: r.id, awaiting: false, last_message_at: r.last_message_at })),
+      ]);
+      return Response.json({ count: [...attention.values()].filter((a) => a.section === "human").length }, { status: 200 });
+    } catch (e) {
+      console.error("[crm:awaiting-count] sections unreadable, counting everyone waiting", e);
+      return Response.json({ count: waiting.length }, { status: 200 });
+    }
   } catch (e) {
     console.error("[crm:awaiting-count] threw", e);
     return Response.json({ count: 0 }, { status: 200 });

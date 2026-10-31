@@ -7663,6 +7663,21 @@ for 18596, 18680, 18679, 19700 and `/admin/matches?fromDate&toDate` windows arou
   and below that quote Sonnet figures are what was measured at the time.
 - **`fallbacks` is not set.** A refusal is stored as a failed draft, as it was on Sonnet.
 
+## Player Chats: images to the model, Needs a human (2026-10-31)
+
+- **Images reach the model at about $0.09 a draft.** `scripts/ai-draft-live-real.ts --images 4`, real threads with one image each, writes stubbed:
+  $0.0744 to $0.1020, average $0.0911, 33KB to 51KB after the downscale, 17.4k to 18.0k input tokens, slowest 17.6 seconds. All four were read
+  correctly in staff notes (strike banner, Edit Profile screen, Profile tab credits, Home tab member number). A real thread's output token count
+  moves the cost as much as the image does. 51 inbound images in the 30 days to 2026-10-31.
+- **crm-media downloads work with the service role** (`downloadMessageMedia`, `src/lib/crmMedia.ts`). Stored images are JPEG, 100KB to 175KB.
+- **`sharp` is now a direct dependency** at 0.34.5, the version `next` already pulled in as optional. Not exercised on Vercel's runtime before this push.
+- **`InboxRow.tsx` is dead code.** Nothing imports it; the inbox renders `MistInboxRow` in `CrmClient.tsx`. Between `422a200` and this build the countdown and
+  Cancel existed only in that dead file, so staff had no Cancel while auto-send was live. Measured: 4 auto-sends went out in that time.
+- **The nav badge counts NEEDS A HUMAN, not everyone waiting** (`awaiting-count`, rule in `src/lib/crmAttention.ts`). It falls back to everyone waiting if
+  the sections can't be read. **`counts.awaiting` in the list route, behind the Awaiting filter pill, is still everyone waiting.**
+- **The needs-human push marker is a `change_log` row** at `/crm/human-push/{inbound id}`, checked and written before the push. It is not atomic: two ticks
+  overlapping at that step could both push. A tick runs a minute apart and reaches that step in seconds. Not observed.
+
 ## Player Chats auto-send (2026-10-31)
 
 - **`/api/crm/send` refuses a sender with no human by design** (`no_human_actor`, pinned in `scripts/crm-characterize-test.ts`). Ryan's ruling

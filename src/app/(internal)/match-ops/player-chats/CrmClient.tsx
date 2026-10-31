@@ -75,6 +75,8 @@ import MessageBubble, {
 } from "./components/MessageBubble";
 import Composer from "./components/Composer";
 import AutoSendPanel from "./components/AutoSendPanel";
+import AutoSendCountdown from "./components/AutoSendCountdown";
+import { rowAttention } from "@/lib/crmAttention";
 import MetricsStrip from "./components/MetricsStrip";
 import ContextPane from "./components/ContextPane";
 import { colorForCity } from "@/lib/cityColors";
@@ -111,6 +113,8 @@ function computeWhatsAppExpired(detail: ThreadDetail | null): boolean {
 export default function CrmClient() {
   const { appUser } = useAuth();
   const [infoOpen, setInfoOpen] = useState(false);
+  // AUTO-SENDING starts collapsed: there's nothing to do there unless someone wants to stop one.
+  const [autoOpen, setAutoOpen] = useState(false);
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -313,23 +317,26 @@ export default function CrmClient() {
 
   const isAwaiting = (t: ThreadListRow) => isAwaitingReply(t);
 
-  // Two groups (mockup playerchats-v1): "Waiting on a reply" (amber — the
-  // customer spoke last and needs an answer, oldest on top) and "Answered —
-  // nothing owed" (everything else, including closing acknowledgments — all
-  // genuinely nothing-owed). Closed / other views render one ungrouped list.
+  // Three groups: NEEDS A HUMAN (red, oldest on top: the default for anyone waiting), AUTO-SENDING (a hold
+  // is running, collapsed) and "Answered — nothing owed" (everything else, including closing
+  // acknowledgments). The section rule is src/lib/crmAttention. Closed / other views render one list.
   const threadGroups = useMemo<
-    { key: string; label: string | null; tone: "await" | "quiet"; rows: ThreadListRow[] }[]
+    { key: string; label: string | null; tone: "await" | "quiet" | "auto"; rows: ThreadListRow[] }[]
   >(() => {
     const byOldest = (a: ThreadListRow, b: ThreadListRow) =>
       Date.parse(a.last_message_at) - Date.parse(b.last_message_at);
     const byNewest = (a: ThreadListRow, b: ThreadListRow) =>
       Date.parse(b.last_message_at) - Date.parse(a.last_message_at);
     if (view === "open" || view === "mine") {
-      const waiting = filteredThreads.filter(isAwaiting).sort(byOldest);
-      const answered = filteredThreads.filter((t) => !isAwaiting(t)).sort(byNewest);
-      const groups: { key: string; label: string | null; tone: "await" | "quiet"; rows: ThreadListRow[] }[] = [];
-      if (waiting.length > 0)
-        groups.push({ key: "waiting", label: `Waiting on a reply · ${waiting.length}`, tone: "await", rows: waiting });
+      const sectionOf = (t: ThreadListRow) => rowAttention({ ...t, awaiting: isAwaiting(t) })?.section ?? null;
+      const needsHuman = filteredThreads.filter((t) => sectionOf(t) === "human").sort(byOldest);
+      const autoSending = filteredThreads.filter((t) => sectionOf(t) === "auto_sending").sort(byOldest);
+      const answered = filteredThreads.filter((t) => sectionOf(t) === null).sort(byNewest);
+      const groups: { key: string; label: string | null; tone: "await" | "quiet" | "auto"; rows: ThreadListRow[] }[] = [];
+      if (needsHuman.length > 0)
+        groups.push({ key: "human", label: `Needs a human · ${needsHuman.length}`, tone: "await", rows: needsHuman });
+      if (autoSending.length > 0)
+        groups.push({ key: "auto", label: `Auto-sending · ${autoSending.length}`, tone: "auto", rows: autoSending });
       if (answered.length > 0)
         groups.push({ key: "answered", label: "Answered — nothing owed", tone: "quiet", rows: answered });
       return groups;
@@ -722,6 +729,12 @@ export default function CrmClient() {
     view === "open" && !filtersActive && counts.open === 0 && !threadsLoading && !threadsError;
   const listEmpty = renderGroups.length === 0;
 
+  // A decision lands from the tick, which no realtime message announces. Re-read while someone is looking.
+  useEffect(() => {
+    const t = setInterval(() => { if (document.visibilityState === "visible") void loadThreads(); }, 30_000);
+    return () => clearInterval(t);
+  }, [loadThreads]);
+
   return (
     // The rail is owned by the section layout (fixed, full-bleed). We only leave
     // room for it on desktop via --mo-rail-w, which the layout sets.
@@ -908,15 +921,20 @@ export default function CrmClient() {
               {!showCaughtUp &&
                 renderGroups.map((g) => (
                   <div key={g.key} className="mb-1">
-                    {g.label && (
-                      <div className="flex items-center gap-2 px-2 pb-[7px] pt-3">
+                    {g.tone === "auto" ? (
+                      <button type="button" data-testid="crm-auto-section" onClick={() => setAutoOpen((o) => !o)} aria-expanded={autoOpen} className="flex w-full items-center gap-2 px-2 pb-[7px] pt-3 text-left">
+                        <span className="text-[10px] font-extrabold uppercase tracking-[0.12em]" style={{ color: "#6d7b74" }}>{autoOpen ? "▾" : "▸"} {g.label}</span>
+                        <span className="h-px flex-1" style={{ background: "#e6ebe8" }} />
+                      </button>
+                    ) : g.label && (
+                      <div data-testid={g.key === "human" ? "crm-human-section" : undefined} className="flex items-center gap-2 px-2 pb-[7px] pt-3">
                         <span className="text-[10px] font-extrabold uppercase tracking-[0.12em]" style={{ color: g.tone === "await" ? "#8a6300" : "#93a49b" }}>
                           {g.label}
                         </span>
                         <span className="h-px flex-1" style={{ background: "#e6ebe8" }} />
                       </div>
                     )}
-                    {g.rows.map((t) => (
+                    {(g.tone !== "auto" || autoOpen) && g.rows.map((t) => (
                       <MistInboxRow
                         key={t.id}
                         thread={t}
@@ -925,6 +943,7 @@ export default function CrmClient() {
                         mine={t.assigned_to_user_id === appUserId}
                         onSelect={() => setSelected(t.id)}
                         onToggleFollowUp={() => onToggleFollowUp(t.id, !t.is_follow_up)}
+                        onHoldChanged={() => void loadThreads()}
                       />
                     ))}
                   </div>
@@ -1241,6 +1260,7 @@ function MistInboxRow({
   mine,
   onSelect,
   onToggleFollowUp,
+  onHoldChanged,
 }: {
   thread: ThreadListRow;
   nowMs: number;
@@ -1248,6 +1268,7 @@ function MistInboxRow({
   mine: boolean;
   onSelect: () => void;
   onToggleFollowUp: () => void;
+  onHoldChanged: () => void;
 }) {
   const name = fullNameOf(thread);
   const cc = cityCodeForThread(thread);
@@ -1256,6 +1277,9 @@ function MistInboxRow({
     (name.trim()[0] ?? "?").toUpperCase() +
     (name.trim().split(/\s+/)[1]?.[0]?.toUpperCase() ?? "");
   const waiting = isAwaitingReply(thread);
+  const attention = rowAttention({ ...thread, awaiting: waiting });
+  const needsHuman = attention?.section === "human";
+  const autoSending = attention?.section === "auto_sending";
   const ago = awaitingAgeLabel(thread.last_message_at, nowMs);
   const inbound = thread.last_message_direction === "inbound";
   const preview = thread.last_message_preview ?? "";
@@ -1269,18 +1293,21 @@ function MistInboxRow({
       data-thread-id={thread.id}
       data-unread={thread.is_unread ? 1 : 0}
       data-waiting={waiting ? 1 : 0}
+      data-section={attention?.section ?? "answered"}
       style={{
         touchAction: "manipulation",
         ...(active
           ? { background: "#ffffff", borderColor: "#e2eae5", boxShadow: "0 1px 2px rgba(7,42,32,.05), 0 14px 30px -22px rgba(7,42,32,.5)" }
-          : waiting
-            ? { background: "rgba(253,241,208,.5)", borderColor: "transparent" }
+          : needsHuman
+            ? { background: "rgba(253,228,224,.55)", borderColor: "transparent" }
+          : autoSending
+            ? { background: "#f4f6f5", borderColor: "transparent" }
             : { borderColor: "transparent" }),
       }}
       className={`relative mt-px flex w-full items-start gap-2.5 rounded-[13px] border p-[10px_11px] text-left transition ${active ? "" : "hover:bg-white/80"}`}
     >
-      {(active || waiting) && (
-        <span aria-hidden className="absolute left-0 top-[11px] bottom-[11px] w-[3px] rounded-r-[3px]" style={{ background: active ? "#35c77f" : "#e3c369" }} />
+      {(active || waiting || needsHuman) && (
+        <span aria-hidden data-testid={needsHuman ? "crm-human-edge" : undefined} className="absolute left-0 top-[11px] bottom-[11px] w-[3px] rounded-r-[3px]" style={{ background: needsHuman ? "#c8341f" : autoSending ? "#a9b4ae" : active ? "#35c77f" : "#e3c369" }} />
       )}
       <span className="relative mt-px flex h-[34px] w-[34px] flex-none items-center justify-center rounded-[11px] text-[9.5px] font-extrabold" style={{ background: `${col}22`, color: col }}>
         {initials || "?"}
@@ -1290,6 +1317,7 @@ function MistInboxRow({
       </span>
       <span className="min-w-0 flex-1">
         <span className="flex items-baseline gap-1.5">
+          {needsHuman && <span data-testid="crm-human-pill" className="flex-none rounded-full px-[7px] py-px text-[10px] font-[800]" style={{ background: "#c8341f", color: "#ffffff" }}>Human</span>}
           <span data-testid="crm-thread-name" className={`min-w-0 flex-1 truncate text-[13.5px] tracking-[-0.008em] ${thread.is_unread ? "font-[760]" : "font-[660]"}`} style={{ color: "#12241d" }}>{name}</span>
           <button
             type="button"
@@ -1313,11 +1341,16 @@ function MistInboxRow({
             </>
           )}
         </span>
+        {needsHuman && attention?.reason ? (
+          <span data-testid="crm-human-reason" className="mt-[5px] block overflow-hidden text-[12.5px] font-[650] leading-[1.42]" style={{ color: "#a82a18" }}>{attention.reason}</span>
+        ) : (
         <span data-testid="crm-thread-preview" className="mt-[5px] block overflow-hidden text-[12.5px] leading-[1.42]" style={{ color: "#63736b", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>
           <span className={inbound ? "font-[700]" : "font-[700] italic"} style={{ color: inbound ? "#4a5f55" : "#8a978f" }}>{speaker}: </span>
           {preview || <span className="italic" style={{ color: "#8d9c94" }}>(no preview)</span>}
         </span>
-        {waiting && (
+        )}
+        {autoSending && <AutoSendCountdown threadId={thread.id} holdUntil={attention?.hold_until ?? null} onDone={onHoldChanged} />}
+        {waiting && !autoSending && (
           <span className="mt-1.5 inline-flex rounded-[6px] border px-[7px] py-0.5 text-[10px] font-[750]" style={{ background: "#fdf1d0", borderColor: "#e3c369", color: "#8a6300" }}>
             Waiting {awaitingAgeLabel(thread.waiting_since ?? thread.last_message_at, nowMs)}
           </span>

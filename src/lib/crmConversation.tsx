@@ -26,6 +26,7 @@ import {
 import { useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { freshAccessToken, recoverSession, reloadForExpiredSession } from "@/lib/crmSession";
+import type { RowAttention } from "@/lib/crmAttention";
 import { useAuth } from "@/lib/useAuth";
 import { isFreshThreadUpdate, nextWaitingSince } from "@/lib/awaitingReply";
 import { type Assignee } from "@/components/AssigneeChip";
@@ -61,6 +62,8 @@ export type ThreadListRow = {
   is_follow_up: boolean;
   waiting_since: string | null;
   auto_send?: AutoSendRowState | null;
+  awaiting?: boolean;
+  attention?: RowAttention | null;
   player: {
     first_name: string | null;
     last_name: string | null;

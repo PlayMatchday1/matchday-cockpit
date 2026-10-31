@@ -28,6 +28,7 @@
 import { authenticateCrm } from "@/lib/crmAuth";
 import { crmScopedAssignees } from "@/lib/crmScope";
 import { isAwaitingReply, waitingSinceMs } from "@/lib/awaitingReply";
+import { loadAttention, type LoadedAttention } from "@/lib/crmAttentionLoad";
 
 export const runtime = "nodejs";
 export const maxDuration = 10;
@@ -485,6 +486,15 @@ export async function GET(req: Request) {
     if (ar.error) console.error("[crm:threads.list] auto-send lookup error", ar.error);
     else for (const a of ar.data ?? []) autoByThread.set(a.thread_id as string, a);
   }
-  const withAuto = out.map((t) => ({ ...t, auto_send: autoByThread.get(t.id) ?? null }));
+  // WHICH SECTION each row is in. Isolated too: with no answer here the client falls back to NEEDS A
+  // HUMAN for anyone waiting, so a player can't end up in neither section.
+  const attention = await loadAttention(supabase, out.map((t) => ({ id: t.id, awaiting: t.awaiting, last_message_at: t.last_message_at }))).catch((e: unknown) => {
+    console.error("[crm:threads.list] attention lookup error", e);
+    return new Map<string, LoadedAttention>();
+  });
+  const withAuto = out.map((t) => {
+    const a = attention.get(t.id);
+    return { ...t, auto_send: autoByThread.get(t.id) ?? null, attention: a ? { section: a.section, reason: a.reason, hold_until: a.hold_until, as_of: t.last_message_at } : null };
+  });
   return Response.json({ threads: withAuto, counts }, { status: 200 });
 }

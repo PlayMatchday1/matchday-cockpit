@@ -19,8 +19,8 @@
 import {
   buildDraftContext, buildDraftRequest, capReached, draftCostUsd, draftEligibility, guardDraft,
   monthStartUtcIso, parseDraftOutput, finalStaffNotes, MONTHLY_CAP_USD, SKIP_REASON_TEXT, AI_DRAFT_MODEL,
-  accountConfirmed, unconfirmedReason, extractPhoneNumbers, decideLinkSuggestion, staffRepliesConfirmAccount, isStaffReply, selectExamples,
-  type DraftContext, type DraftContextIn, type DraftMsg, type DraftOutput, type DraftRequest, type SkipReason, type LinkSuggestion,
+  accountConfirmed, unconfirmedReason, extractPhoneNumbers, decideLinkSuggestion, staffRepliesConfirmAccount, isStaffReply, selectExamples, imagesToAttach,
+  type DraftContext, type DraftContextIn, type DraftImage, type DraftMsg, type DraftOutput, type DraftRequest, type SkipReason, type LinkSuggestion,
 } from "@/lib/aiDraftModel";
 import {
   buildClock, matchKey, scheduleWindow, selectSchedule, staleDraftReason, tzForCity, FALLBACK_TZ, type ScheduleRow,
@@ -38,6 +38,8 @@ export type StoredDraft = {
   reply_without_action?: string | null;
   action?: StoredAction | null;
   action_status?: string | null;
+  decision?: string | null;
+  decision_reason?: string | null;
 };
 
 // What the button will do, fixed when the draft is made. balance_cents is the balance the draft saw:
@@ -96,6 +98,8 @@ export type DraftDeps = {
   priorCategory: () => Promise<string | null>;
   /** Recent outbound staff messages, newest first: in that category, or across all when null. */
   loadExampleMessages: (category: string | null) => Promise<DraftMsg[]>;
+  /** The player's image, downscaled for the model. Null when it couldn't be read. */
+  loadImage?: (messageId: string, storagePath: string) => Promise<DraftImage | null>;
   /** Actions pressed on this thread lately whose write landed or may have. */
   appliedActions: () => Promise<{ kind: string }[]>;
   playbook: () => { text: string; version: string };
@@ -108,6 +112,7 @@ export type DraftDeps = {
 export type DraftView = {
   id: string; text: string; staff_notes: string[]; category: string | null; flags: string[]; created_at: string;
   text_without_action: string | null; action: StoredAction | null; action_status: string | null;
+  decision: string | null; decision_reason: string | null;
 };
 
 // A suggestion rides on every result after eligibility, so the card can offer "Link" even when the
@@ -133,6 +138,7 @@ const viewOf = (d: StoredDraft): DraftView => ({
   staff_notes: (d.staff_notes ?? "").replace(/^\[flags: [^\]]*\]\s*/, "").split(/\n+/).map((l) => l.replace(/^- /, "").trim()).filter(Boolean),
   category: d.category, flags: flagsFromNotes(d.staff_notes), created_at: d.created_at,
   text_without_action: d.reply_without_action ?? null, action: d.action ?? null, action_status: d.action_status ?? null,
+  decision: d.decision ?? null, decision_reason: d.decision_reason ?? null,
 });
 
 export async function runDraft(deps: DraftDeps): Promise<DraftResult> {
@@ -226,7 +232,14 @@ export async function runDraft(deps: DraftDeps): Promise<DraftResult> {
   // the thread's last drafted category, or the latest across all categories on a first draft.
   const exampleCategory = await deps.priorCategory().catch(() => null);
   const examples = selectExamples(await deps.loadExampleMessages(exampleCategory).catch(() => [] as DraftMsg[]));
-  const req = buildDraftRequest({ playbook: playbook.text, context, msgs, now, tz, clock, schedule, examples });
+  // THE LAST 3 IMAGES in what the player just sent, read fresh. One that won't load stays a placeholder
+  // and the draft goes to a person: it would otherwise answer without having seen what they sent.
+  const wanted = deps.loadImage ? imagesToAttach(elig.pending) : [];
+  const loadedImages = await Promise.all(wanted.map((m) => deps.loadImage!(m.id, m.media_url!)));
+  const images = loadedImages.filter((i): i is DraftImage => i != null);
+  const imageMissing = images.length < wanted.length;
+  const req = buildDraftRequest({ playbook: playbook.text, context, msgs, now, tz, clock, schedule, examples, images });
+  if (images.length) keys = [...keys, `images:${images.length}`];
   if (schedule.basis) keys = [...keys, `schedule:${schedule.basis}`];
   keys = [...keys, `examples:${examples.length}`];
 
@@ -260,13 +273,14 @@ export async function runDraft(deps: DraftDeps): Promise<DraftResult> {
   const guarded = guardDraft(parsed, {
     courtesy_credit_eligible: context.courtesy_credit_eligible,
     context,
+    imagesAttached: images.length > 0,
     appliedActions: await deps.appliedActions().catch(() => [{ kind: "credit" }, { kind: "issue_guest_code" }]),
     veryLate: clock.reply_is_very_late,
     allowedTimeSources: [...schedule.entries.map((e) => e.when_local), ...msgs.map((m) => m.body ?? ""), playbook.text],
   });
   if (!guarded.ok) return fail(guarded.error, reply);
 
-  const out = guarded.output;
+  const out = imageMissing ? { ...guarded.output, image_unreadable: true } : guarded.output;
   // AT MOST 3 BULLETS. The reason an account is unconfirmed is stated in code, first, not left to
   // the model; a model clause that restates it is cut (finalStaffNotes).
   const staffNotes = finalStaffNotes(out.staff_notes, reason);
@@ -289,7 +303,7 @@ export async function runDraft(deps: DraftDeps): Promise<DraftResult> {
     status: "ok", reused: false,
     draft: {
       id: row.id, text: out.reply, staff_notes: staffNotes, category: out.category, flags: out.flags, created_at: row.created_at,
-      text_without_action: action ? out.reply_without_action ?? null : null, action, action_status: null,
+      text_without_action: action ? out.reply_without_action ?? null : null, action, action_status: null, decision: null, decision_reason: null,
     },
   });
 }

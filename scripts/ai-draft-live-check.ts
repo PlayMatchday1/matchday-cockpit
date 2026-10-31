@@ -12,7 +12,7 @@
 
 import { readFileSync } from "node:fs";
 import Anthropic from "@anthropic-ai/sdk";
-import { assertAnthropicHost, draftCostUsd, hasDash, type DraftContextIn, type DraftMsg } from "../src/lib/aiDraftModel";
+import { assertAnthropicHost, draftCostUsd, hasDash, toApiRequest, type DraftContextIn, type DraftMsg } from "../src/lib/aiDraftModel";
 import { runDraft, type DraftResult, type NewDraftRow } from "../src/lib/aiDraftRun";
 import { timesIn, type ScheduleRow } from "../src/lib/aiDraftClock";
 import { playbookForModel } from "../src/lib/aiDraftPlaybook";
@@ -195,7 +195,7 @@ async function main() {
       callModel: async (req) => {
         reqText = req.messages[0].content;
         const t0 = Date.now();
-        const res = await client.messages.create(req);
+        const res = await client.messages.create(toApiRequest(req));
         console.log(`  [${((Date.now() - t0) / 1000).toFixed(1)}s, ${res.usage.input_tokens} in, ${res.usage.output_tokens} out, ${res.stop_reason}]`);
         cost += draftCostUsd(res.usage);
         return { text: res.content.map((b) => (b.type === "text" ? b.text : "")).join("").trim() || null, stopReason: res.stop_reason, usage: res.usage };

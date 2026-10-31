@@ -99,6 +99,16 @@ export async function uploadMessageMedia({
   return path;
 }
 
+// The bytes themselves, for the draft pipeline. Null when the object can't be read.
+export async function downloadMessageMedia(supabase: SupabaseClient, storagePath: string): Promise<Buffer | null> {
+  const { data, error } = await supabase.storage.from(BUCKET).download(storagePath);
+  if (error || !data) {
+    console.error(`[crmMedia] download failed for ${storagePath}:`, error?.message ?? "no data");
+    return null;
+  }
+  return Buffer.from(await data.arrayBuffer());
+}
+
 // Mints a short-lived signed URL for the given storage path. Caller
 // supplies the Supabase client so authed routes can reuse the
 // request's JWT (RLS policy passes for admin users) and webhook

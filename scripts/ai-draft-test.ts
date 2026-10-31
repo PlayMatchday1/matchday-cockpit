@@ -17,6 +17,7 @@ import { readFileSync } from "node:fs";
 import {
   draftEligibility, buildDraftContext, buildDraftRequest, scrubPii, sanitizeDraft, hasDash, guardDraft,
   classifyDraftOutcome, capReached, draftCostUsd, assertAnthropicHost, monthStartUtcIso, DRAFT_INSTRUCTIONS, DRAFT_OUTPUT_SCHEMA,
+  AUTO_ACTION_CATEGORIES, AUTO_CATEGORIES, imagesToAttach, toApiRequest, type DraftOutput,
   decideAutoSend, decisionConfig, isAutoSendLive, autoSendAllowed, badAutoSendReplies, KILL_MAX_BAD, type AutoSendConfig, type DecisionContext, type DraftContext,
   parseDraftOutput, priorCourtesyFromLog, staffRepliesConfirmAccount, selectExamples, discardReasonText, DISCARD_CHIPS,
   type DraftMsg, type DraftContextIn, type DraftRequest,
@@ -24,6 +25,8 @@ import {
 import { runDraft, CONFIRMED_BY_STAFF_NOTE, type DraftDeps, type NewDraftRow, type StoredDraft } from "../src/lib/aiDraftRun";
 import { applyDraftAction, creditReason, guestCodeBody, guestCodeFor, guestCodeRefusal, staffConfirmedMembership, writeStatusFrom, type ActionIO } from "../src/lib/aiDraftAction";
 import { buildRecordedFields, type CameraRow } from "../src/lib/aiDraftCamera";
+import { attentionFor, rowAttention, humanPushDue, humanPushPath, STRIKE_DISPUTE_NOTE, type AttentionDraft } from "../src/lib/crmAttention";
+import { downscaleForModel } from "../src/lib/aiDraftImage";
 import { processHold, holdStopReason, type HoldIO, type HoldRow } from "../src/lib/aiDraftAuto";
 import { draftOutcomePatch, discardPatch } from "../src/lib/aiDraftOutcome";
 import { playbookForModel } from "../src/lib/aiDraftPlaybook";
@@ -806,11 +809,11 @@ console.log("\nAUTO-SEND DECISION:");
   eq("POSITIVE: a credit of the match price under the cap, no prior courtesy → auto_send_with_action", d(credit(1200), ctx(), on).decision, "auto_send_with_action");
   for (const f of ["escalate", "refund_pushback", "strike_dispute", "under_16", "hold_requested", "urgent"]) {
     const r = d({ ...plain, flags: [f] }, ctx(), on);
-    ok(`HUMAN: flag ${f}`, r.decision === "human" && r.reason.includes(f));
+    ok(`HUMAN: flag ${f}`, r.decision === "human" && r.reason === ({ escalate: "Escalate", refund_pushback: "Refund pushback", strike_dispute: STRIKE_DISPUTE_NOTE, under_16: "Under 16", hold_requested: "Hold requested: tell Ryan", urgent: "Urgent" } as Record<string, string>)[f]);
   }
   ok("POSITIVE CONTROL: the guest_pass and needs_credit flags don't stop it (action drafts carry them)", d({ ...plain, flags: ["guest_pass", "needs_credit"] }, ctx(), on).decision === "auto_send");
-  const everything = { ...on, auto_categories: ["complaint", "membership_billing", "strike", "payment", "account", "other"] };
-  for (const c of ["complaint", "membership_billing", "strike", "payment", "account", "other"]) {
+  const everything = { ...on, auto_categories: ["complaint", "membership_billing", "payment", "account", "other"] };
+  for (const c of ["complaint", "membership_billing", "payment", "account", "other"]) {
     ok(`HUMAN: category ${c}, even if someone put it on the list`, d({ ...plain, category: c }, ctx(), everything).decision === "human");
   }
   const unconfirmed = buildDraftContext({ ...lateCancel(0), ambiguous: true, confirmed: false });
@@ -943,6 +946,131 @@ console.log("\nAUTO-SEND DECISION:");
   const noCourtesy = buildDraftContext(lateCancel(0, false, true));
   const g = guardDraft({ reply: "We've credited $12.00.", reply_without_action: "I'll get that added.", category: "needs_credit", flags: [], staff_notes: [], match_ids: [], offers_courtesy_credit: false, action: { kind: "credit", amount_cents: 1200, reason: "staff agreed" } }, { courtesy_credit_eligible: noCourtesy.courtesy_credit_eligible, context: noCourtesy });
   ok("a late cancel under another category, unflagged, fails the guard (seen on a real thread)", !g.ok && /own cancel/.test(g.error));
+}
+
+// ── needs a human, strike holding replies, images ────────────────────────────────────────────
+console.log("\nNEEDS A HUMAN SECTION:");
+{
+  const base: AttentionDraft = { id: "d", thread_id: "t", based_on_message_id: "m", created_at: "2026-10-31T12:00:00Z", outcome: "pending", error: null, decision: "human", decision_reason: "Refund pushback", decision_shadow: false, hold_status: null, hold_note: null, hold_until: null, action_status: null, staff_notes: null, action: null };
+  const at = (draft: AttentionDraft | null, awaiting = true, humanRepliedSinceDraft = false) => attentionFor({ awaiting, draft, humanRepliedSinceDraft });
+  eq("decision human → the reason", at(base), { section: "human", reason: "Refund pushback", hold_until: null });
+  eq("no draft for the latest inbound → No draft yet", at(null)?.reason, "No draft yet");
+  eq("drafting failed → the failure text", at({ ...base, outcome: "failed", error: "Claude declined", decision: null })?.reason, "Claude declined");
+  eq("drafting failed with a human decision → still the failure text", at({ ...base, outcome: "failed", error: "Bad draft" })?.reason, "Bad draft");
+  eq("hold running → AUTO-SENDING", at({ ...base, decision: "auto_send", hold_status: "holding", hold_until: "2026-10-31T12:03:00Z" }), { section: "auto_sending", reason: null, hold_until: "2026-10-31T12:03:00Z" });
+  eq("  sending counts too", at({ ...base, decision: "auto_send", hold_status: "sending" })?.section, "auto_sending");
+  eq("hold cancelled → human, with why", at({ ...base, decision: "auto_send", hold_status: "cancelled", hold_note: "The player wrote again." })?.reason, "The player wrote again.");
+  eq("hold failed → human, with why", at({ ...base, decision: "auto_send", hold_status: "failed", hold_note: "Stopped" })?.reason, "Stopped");
+  eq("action failed → human", at({ ...base, decision: "auto_send_with_action", action_status: "not_applied" })?.reason, "The action failed.");
+  eq("  action unknown → human", at({ ...base, decision: "auto_send_with_action", action_status: "unknown" })?.section, "human");
+  eq("a card draft with no decision → human", at({ ...base, decision: null, decision_reason: null })?.reason, "Draft ready");
+  eq("discarded → human", at({ ...base, outcome: "discarded" })?.reason, "Draft discarded");
+  eq("shadow's would-send → still human, saying so", at({ ...base, decision: "auto_send", decision_shadow: true })?.reason, "Would auto-send, auto-send is off");
+  eq("  with the amount", at({ ...base, decision: "auto_send_with_action", decision_shadow: true, action: { kind: "credit", amount_cents: 800 } })?.reason, "Would credit $8.00, auto-send is off");
+  eq("nobody waiting, nothing held → in neither (Answered)", at(base, false), null);
+  // A player waiting is never in neither, in every state above.
+  const states: (AttentionDraft | null)[] = [null, base, { ...base, decision: null }, { ...base, outcome: "failed" }, { ...base, outcome: "discarded" }, { ...base, outcome: "sent_edited" }, { ...base, hold_status: "sent", decision: "auto_send" }, { ...base, decision: "auto_send" }, { ...base, hold_status: "cancelled" }, { ...base, hold_status: "holding" }];
+  ok("A WAITING PLAYER IS NEVER IN NEITHER SECTION, in any draft state", states.every((d) => at(d) !== null));
+  const held: AttentionDraft = { ...base, decision: "auto_send", outcome: "sent_unchanged", hold_status: "sent", staff_notes: "[flags: strike_dispute]\n- x" };
+  eq("the strike holding reply went out: still human, though we spoke last", at(held, false), { section: "human", reason: STRIKE_DISPUTE_NOTE, hold_until: null });
+  eq("  until a person replies", at(held, false, true), null);
+  eq("POSITIVE CONTROL: another sent auto-send isn't held", at({ ...held, staff_notes: "- x" }, false), null);
+  // A row against a newer message.
+  const row = { section: "human" as const, reason: "Refund pushback", hold_until: null, as_of: "A" };
+  eq("the row's section is used for the message it was worked out on", rowAttention({ awaiting: true, last_message_at: "A", attention: row })?.reason, "Refund pushback");
+  eq("a newer player message → No draft yet until the next load", rowAttention({ awaiting: true, last_message_at: "B", attention: row })?.reason, "No draft yet");
+  eq("a newer reply from us → Answered", rowAttention({ awaiting: false, last_message_at: "B", attention: row }), null);
+  eq("no attention at all and waiting → human", rowAttention({ awaiting: true, last_message_at: "A" })?.section, "human");
+  // Push timing.
+  const T0 = Date.parse("2026-10-31T12:00:00Z");
+  eq("push: 9m59s isn't due", humanPushDue(T0 - (10 * 60e3 - 1000), T0), false);
+  eq("push: 10m is due", humanPushDue(T0 - 10 * 60e3, T0), true);
+  eq("push: over 2h isn't (a deploy can't page about yesterday)", humanPushDue(T0 - (2 * 3600e3 + 1000), T0), false);
+  eq("push: the marker is per inbound", humanPushPath("m1"), "/crm/human-push/m1");
+}
+
+console.log("\nSTRIKE HOLDING REPLIES:");
+{
+  const on: AutoSendConfig = { auto_categories: ["strike", "veo"], action_categories: [], credit_cap_cents: 1500, hold_minutes: 3, enabled: true, shadow: false };
+  const ctx: DecisionContext = { context: buildDraftContext(lateCancel(0)), windowClosed: false, humanRepliedRecently: false, guest: null };
+  const hold = "Thanks for letting us know! I need to check with the match manager on that one, and we'll get back to you as soon as we hear.";
+  const dispute = (reply: string, over: Record<string, unknown> = {}) => decideAutoSend({ reply, category: "strike", flags: ["strike_dispute"], action: null, ...over }, ctx, on);
+  eq("POSITIVE: the holding line can send", dispute(hold).decision, "auto_send");
+  for (const b of ["We removed it.", "I'll remove that strike", "Your strike was cleared", "We'll clear it", "We reset your strikes", "It's been taken off", "I'll have it taken off, the match manager agreed", "You have 2 strikes, I'll check with the match manager", "You're at two strikes, checking with the match manager", "1 active strike, let me ask the match manager", "That won't count, I'll ask the match manager"]) {
+    const r = dispute(b);
+    ok(`NEGATIVE: "${b}" routes to a person`, r.decision === "human" && r.reason.startsWith(STRIKE_DISPUTE_NOTE));
+  }
+  ok("NEGATIVE: a dispute reply that isn't the holding line", /holding line/.test(dispute("Thanks, we're looking into it.").reason));
+  ok("a strike question with no dispute can send", decideAutoSend({ reply: "Strikes are for members, and 4 of them is a week's suspension.", category: "strike", flags: [], action: null }, ctx, on).decision === "auto_send");
+  ok("  but it can't state a count either", decideAutoSend({ reply: "You have 3 strikes.", category: "strike", flags: [], action: null }, ctx, on).decision === "human");
+  ok("a strike can never act, with or without being on the action list", dispute(hold, { action: { kind: "credit", amount_cents: 1200, reason: "x" } }).decision === "human" && decideAutoSend({ reply: hold, category: "strike", flags: ["strike_dispute"], action: { kind: "credit", amount_cents: 1200, reason: "x" } }, ctx, { ...on, action_categories: ["strike"] }).decision === "human");
+  eq("strike can be turned on to send", AUTO_CATEGORIES.includes("strike"), true);
+  eq("strike can't be turned on to act", AUTO_ACTION_CATEGORIES.includes("strike"), false);
+  eq("strike not turned on → human, with the note", dispute(hold, {}).decision === "auto_send" && decideAutoSend({ reply: hold, category: "strike", flags: ["strike_dispute"], action: null }, ctx, { ...on, auto_categories: [] }).reason, STRIKE_DISPUTE_NOTE);
+  eq("the flag on any other category still stops it", decideAutoSend({ reply: hold, category: "veo", flags: ["strike_dispute"], action: null }, ctx, on).reason, STRIKE_DISPUTE_NOTE);
+  ok("another flag beside the dispute still stops it", decideAutoSend({ reply: hold, category: "strike", flags: ["strike_dispute", "escalate"], action: null }, ctx, on).reason === "Escalate");
+  const pb = playbookForModel(readFileSync("docs/support/PLAYBOOK.md", "utf8"));
+  ok("POSITIVE CONTROL: the playbook has the strike answer", /check with the match manager on that/.test(pb));
+  ok("the playbook's strike answer no longer states a count", !/I see \{n\} strike/.test(pb));
+}
+
+console.log("\nIMAGES:");
+{
+  const img = (id: string, over: Partial<DraftMsg> = {}): DraftMsg => ({ id, direction: "inbound", body: "", sent_at: iso(1 * H), media_kind: "image", media_url: `t/${id}/a.jpg`, ...over });
+  eq("only the last 3 images in the burst", imagesToAttach([img("a"), img("b"), img("c"), img("d")]).map((m) => m.id), ["b", "c", "d"]);
+  eq("not a sticker, and not one with no stored file", imagesToAttach([img("a", { media_kind: "sticker" }), img("b", { media_url: null })]).length, 0);
+  const SECRET = "QkFTRTY0SU1BR0VCWVRFUw==";
+  const seenPaths: string[] = [];
+  const ok1 = fake({
+    msgs: [img("old1"), msg("outbound", "Got it", 2 * H), img("n1"), img("n2"), img("n3"), img("n4"), msg("inbound", "see these", 0.5 * H)],
+    loadImage: async (id, path) => { seenPaths.push(path); return { messageId: id, mediaType: "image/jpeg", data: SECRET }; },
+    modelText: JSON.stringify({ reply: "Those screenshots show the match.", staff_notes: ["Strike screen naming Westlake."], category: "strike", flags: [], offers_courtesy_credit: false, match_ids: [], image_unreadable: false, reply_without_action: "", action: { kind: "none", amount_cents: null, reason: "" } }),
+  });
+  const r1 = await runDraft(ok1.deps);
+  const req = ok1.calls.model[0];
+  eq("the last 3 from the burst are read", seenPaths, ["t/n2/a.jpg", "t/n3/a.jpg", "t/n4/a.jpg"]);
+  ok("  the transcript names them", req.messages[0].content.includes("attached as image 1") && req.messages[0].content.includes("attached as image 3"));
+  ok("  older ones stay placeholders", (req.messages[0].content.match(/\[player sent an image\]/g) ?? []).length === 2);
+  const api = toApiRequest(req) as { messages: { content: { type: string; text?: string; source?: { data: string; media_type: string } }[] }[] };
+  eq("the API request has 3 image blocks and the text", api.messages[0].content.map((b) => b.type), ["image", "image", "image", "text"]);
+  eq("  as base64 JPEG", [api.messages[0].content[0].source?.media_type, api.messages[0].content[0].source?.data], ["image/jpeg", SECRET]);
+  ok("  and `images` itself doesn't go out as an API field", !("images" in (api as object)));
+  eq("no image: the request is the plain text shape", typeof (toApiRequest({ ...req, images: [] }).messages[0] as { content: unknown }).content, "string");
+  ok("IMAGE BYTES STAY OUT OF THE ROW", r1.status === "ok" && !JSON.stringify(ok1.calls.inserts[0]).includes(SECRET));
+  ok("  and out of the prompt text, and what the card gets", !req.messages[0].content.includes(SECRET) && !JSON.stringify(r1).includes(SECRET));
+  ok("  counted in context_keys", ok1.calls.inserts[0].context_keys.includes("images:3"));
+  ok("the cost is recorded like any other", ok1.calls.inserts[0].cost_usd > 0);
+  ok("the instructions ask for the description in the first note, and no contact details", /first staff note/.test(DRAFT_INSTRUCTIONS) && /Never read a payment number, email or phone number out of an image/.test(DRAFT_INSTRUCTIONS));
+  const contact = (reply: string, notes: string[] = []) => ({ reply, staff_notes: notes, category: "other", flags: [], offers_courtesy_credit: false, match_ids: [] });
+  ok("with an image: an email in the reply fails", !guardDraft(contact("Your email is sam@example.com"), { courtesy_credit_eligible: false, imagesAttached: true }).ok);
+  ok("  a card number fails", !guardDraft(contact("Card 4242 4242 4242 4242 was declined"), { courtesy_credit_eligible: false, imagesAttached: true }).ok);
+  ok("  a phone fails", !guardDraft(contact("Your number is 512-555-0100"), { courtesy_credit_eligible: false, imagesAttached: true }).ok);
+  const scrubbed = guardDraft(contact("It says your card was declined.", ["Error dialog, card 4242 4242 4242 4242, sam@example.com"]), { courtesy_credit_eligible: false, imagesAttached: true });
+  ok("  in the notes they're scrubbed, and the draft still shows", scrubbed.ok && !/4242|example\.com/.test(scrubbed.output.staff_notes[0]) && /Error dialog/.test(scrubbed.output.staff_notes[0]));
+  ok("POSITIVE CONTROL: a member number is fine", guardDraft(contact("That's member ATX597, you're all set."), { courtesy_credit_eligible: false, imagesAttached: true }).ok);
+
+  const on: AutoSendConfig = { auto_categories: ["veo"], action_categories: [], credit_cap_cents: 1500, hold_minutes: 3, enabled: true, shadow: false };
+  const dctx: DecisionContext = { context: buildDraftContext(lateCancel(0)), windowClosed: false, humanRepliedRecently: false, guest: null };
+  eq("an image-led message follows its category", decideAutoSend({ reply: "Videos go up in 24 to 48 hours.", category: "veo", flags: [], action: null, image_unreadable: false }, dctx, on).decision, "auto_send");
+  eq("the model couldn't read it → human, Image unreadable", decideAutoSend({ reply: "The team will check.", category: "veo", flags: [], action: null, image_unreadable: true }, dctx, on), { decision: "human", reason: "Image unreadable" });
+  const broken: DraftOutput[] = [];
+  const f2 = fake({ msgs: [img("n1")], loadImage: async () => null, afterDraft: async (d) => { broken.push(d.output); } });
+  await runDraft(f2.deps);
+  eq("an image that won't load counts as unreadable", broken[0]?.image_unreadable, true);
+  ok("  and stays a placeholder", f2.calls.model[0].messages[0].content.includes("[player sent an image]") && f2.calls.model[0].images.length === 0);
+
+  // The real downscale.
+  const sharp = (await import("sharp")).default;
+  const big = await sharp({ create: { width: 3000, height: 1500, channels: 3, background: { r: 10, g: 120, b: 60 } } }).png().toBuffer();
+  const small = await sharp({ create: { width: 400, height: 300, channels: 3, background: { r: 10, g: 120, b: 60 } } }).png().toBuffer();
+  const tall = await sharp({ create: { width: 800, height: 2400, channels: 3, background: { r: 10, g: 120, b: 60 } } }).withMetadata({ exif: { IFD0: { Copyright: "secret-gps" } } }).jpeg().toBuffer();
+  const mb = await sharp(await downscaleForModel(big)).metadata();
+  const mt = await sharp(await downscaleForModel(tall)).metadata();
+  const ms = await sharp(await downscaleForModel(small)).metadata();
+  eq("a wide image: long edge 1024, as JPEG", [mb.width, mb.height, mb.format], [1024, 512, "jpeg"]);
+  eq("a tall image: long edge 1024", [mt.width, mt.height], [341, 1024]);
+  eq("a small image isn't enlarged", [ms.width, ms.height], [400, 300]);
+  eq("metadata is dropped", mt.exif, undefined);
 }
 
 // ── source pairings (a click and an HTTP route are not observable here) ──────────────────────

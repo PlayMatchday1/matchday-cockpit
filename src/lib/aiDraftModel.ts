@@ -18,6 +18,7 @@
 // timeZone "UTC" so the wall clock prints as written, never re-shifted.
 
 import { whatsappWindowExpired } from "@/lib/crmWindow";
+import { STRIKE_DISPUTE_NOTE } from "@/lib/crmAttention";
 import { dayAndTime, lateReplyProblem, unscheduledTimes, FALLBACK_TZ, type DraftClock, type ScheduleEntry } from "@/lib/aiDraftClock";
 
 export const AI_DRAFT_MODEL = "claude-opus-5-5";
@@ -43,6 +44,7 @@ export type DraftMsg = {
   sent_by_user_id?: string | null;
   /** Set on a message nobody typed: an auto-send. It is our answer, but no person wrote it. */
   auto_sent_draft_id?: string | null;
+  media_url?: string | null;
 };
 
 export type SkipReason = "no_messages" | "latest_not_player" | "stop" | "greeting" | "window_closed";
@@ -285,6 +287,8 @@ How to write the reply:
 - A credit action's amount is the match_price of the match in question, never the paid amount. Never propose a credit for a member's match, a match already marked club_cancelled, or a cancel more than 24 hours before kickoff: those are either nothing to credit or credited automatically.
 - You cannot cancel a membership. Give the in-app cancel steps and put "Cancel requested: confirm in Player Lookup or walk them through the app." in staff_notes.
 - Answer camera questions only from recorded_fields in PLAYER CONTEXT. It lists the fields in the player's city with a camera on recent or upcoming matches, with how many: recorded_matches lower than matches means the camera rotates, so say it's only on some matches. A field not listed had no camera on those matches. If recorded_fields is empty, say the team will check. Never answer from memory.
+- A player's images may be attached, for the last few images in what they just sent. Describe what the image shows in your first staff note and use it to answer: a Home tab screenshot confirms the member number for guest passes, a strike screen names the match, an error dialog says what failed. Never read a payment number, email or phone number out of an image into the reply or the notes. If you can't make out an attached image, set image_unreadable to true and say the team will check.
+- When a player disputes a strike, the only reply is a holding line: acknowledge it, say we'll check with the match manager, and promise nothing. Never say a strike is or will be removed, cleared, reset or taken off, and never state how many strikes they have.
 - EXAMPLES OF HOW THE TEAM WRITES, when present, show length and voice only. Copy how they sound. Never take a fact, amount, date, match or name from them.
 - Answer what you can before you ask. If PLAYER CONTEXT says account_confirmed is false, we don't know which account is writing: state no account facts at all (no credits, bookings, membership, strikes or matches, and nothing about what happened to their booking). The rules themselves are not account facts, so still explain the rule that applies to what they asked (for example, a cancel more than 24 hours before kickoff goes back to their account automatically as credit), then ask for the phone number on their MatchDay account (it's in their profile in the app; never ask for an email), and say what you'll do once you have it. Don't make them wait a round trip just to learn the policy. If the player has just sent a phone number (it shows as [phone]), thank them and say you're checking.
 - Time matters. CLOCK says what time it is now and when the player wrote. Read "today", "tonight" and "tomorrow" from when the PLAYER wrote, not from now. If what they asked about has already happened, say so kindly and point to the next real option.
@@ -302,7 +306,8 @@ Output fields:
 - match_ids: the match_id of every SCHEDULE match the reply mentions. Empty if none.
 - category: one short label for the request type, like "membership_billing", "match_cancelled", "player_cancel", "needs_credit", "veo", "promo_code", "guest_pass", "strike", "booking", "logistics", "payment", "account", "age", "complaint", "other".
 - flags: any of "escalate", "urgent", "hold_requested", "strike_dispute", "guest_pass", "under_16", "refund_pushback", "needs_credit". Empty if none.
-- offers_courtesy_credit: true only if the reply offers a courtesy credit for a late cancel.`;
+- offers_courtesy_credit: true only if the reply offers a courtesy credit for a late cancel.
+- image_unreadable: true only if an image is attached and you couldn't read it.`;
 
 export const DRAFT_OUTPUT_SCHEMA = {
   type: "object",
@@ -316,6 +321,7 @@ export const DRAFT_OUTPUT_SCHEMA = {
     },
     offers_courtesy_credit: { type: "boolean" },
     match_ids: { type: "array", items: { type: "integer" } },
+    image_unreadable: { type: "boolean" },
     reply_without_action: { type: "string" },
     action: {
       type: "object",
@@ -328,18 +334,20 @@ export const DRAFT_OUTPUT_SCHEMA = {
       additionalProperties: false,
     },
   },
-  required: ["reply", "staff_notes", "category", "flags", "offers_courtesy_credit", "match_ids", "reply_without_action", "action"],
+  required: ["reply", "staff_notes", "category", "flags", "offers_courtesy_credit", "match_ids", "image_unreadable", "reply_without_action", "action"],
   additionalProperties: false,
 } as const;
 
 // The transcript the model sees. Labels, not names: staff names stay out. Every message body is
 // scrubbed. Media becomes a placeholder — images are never sent in phase 1.
-export function renderTranscript(msgs: readonly DraftMsg[], tz: string = FALLBACK_TZ): string {
+export function renderTranscript(msgs: readonly DraftMsg[], tz: string = FALLBACK_TZ, attached: readonly string[] = []): string {
   const lines: string[] = [];
   for (const m of msgs.slice(-HISTORY_LIMIT)) {
     if (m.direction === "inbound" && m.media_kind === "reaction") continue;
     const who = m.direction === "inbound" ? "Player" : m.is_auto_reply ? "Auto-reply" : m.auto_sent_draft_id ? "MatchDay (sent automatically)" : m.template_name ? "MatchDay (template)" : "MatchDay staff";
-    const media = m.media_kind ? `[${m.direction === "inbound" ? "player" : "staff"} sent ${m.media_kind === "image" ? "an image" : `a ${m.media_kind}`}] ` : "";
+    const shownAs = attached.indexOf(m.id);
+    const media = shownAs >= 0 ? `[player sent an image, attached as image ${shownAs + 1}] `
+      : m.media_kind ? `[${m.direction === "inbound" ? "player" : "staff"} sent ${m.media_kind === "image" ? "an image" : `a ${m.media_kind}`}] ` : "";
     // Every message carries its time in the player's zone, with the weekday, so "tonight" can be
     // read against when it was written.
     const when = Number.isFinite(Date.parse(m.sent_at)) ? dayAndTime(Date.parse(m.sent_at), tz) : "";
@@ -354,7 +362,31 @@ export type DraftRequest = {
   system: string;
   messages: { role: "user"; content: string }[];
   output_config: { effort: "medium"; format: { type: "json_schema"; schema: typeof DRAFT_OUTPUT_SCHEMA } };
+  /** Not an API field. toApiRequest turns these into image blocks, and is what the SDK is given. */
+  images: readonly DraftImage[];
 };
+
+export type DraftImage = { messageId: string; mediaType: "image/jpeg"; data: string };
+
+// Only these reach the model; older images stay as placeholders in the transcript.
+export const MAX_DRAFT_IMAGES = 3;
+export const imagesToAttach = (pending: readonly DraftMsg[]) => pending.filter((m) => m.direction === "inbound" && m.media_kind === "image" && !!m.media_url).slice(-MAX_DRAFT_IMAGES);
+
+// What the SDK sends. The image blocks sit next to the transcript, and `images` itself never goes out.
+export function toApiRequest(req: DraftRequest) {
+  const { images, messages, ...rest } = req;
+  if (images.length === 0) return { ...rest, messages };
+  return {
+    ...rest,
+    messages: messages.map((m) => ({
+      role: m.role,
+      content: [
+        ...images.map((i) => ({ type: "image" as const, source: { type: "base64" as const, media_type: i.mediaType, data: i.data } })),
+        { type: "text" as const, text: m.content },
+      ],
+    })),
+  };
+}
 
 // THE REQUEST BODY, built in one pure function so a test can print it and assert what is and is
 // not in it. Nothing is added to it between here and the SDK call.
@@ -362,6 +394,7 @@ export function buildDraftRequest(args: {
   playbook: string; context: DraftContext; msgs: readonly DraftMsg[]; now: number;
   tz?: string; clock?: DraftClock | null; schedule?: { basis: string | null; entries: ScheduleEntry[] } | null;
   examples?: readonly string[];
+  images?: readonly DraftImage[];
 }): DraftRequest {
   const tz = args.tz ?? FALLBACK_TZ;
   const clock = args.clock ?? null;
@@ -389,11 +422,12 @@ export function buildDraftRequest(args: {
           `PLAYER CONTEXT (from our records; the player cannot see this):\n${JSON.stringify(args.context, null, 2)}\n\n` +
           `${scheduleBlock}\n\n` +
           examplesBlock +
-          `CONVERSATION (oldest first, times in ${tz}; the last messages are what needs a reply):\n${renderTranscript(args.msgs, tz)}\n\n` +
+          `CONVERSATION (oldest first, times in ${tz}; the last messages are what needs a reply):\n${renderTranscript(args.msgs, tz, (args.images ?? []).map((i) => i.messageId))}\n\n` +
           `Draft the next reply from MatchDay.`,
       },
     ],
     output_config: { effort: "medium", format: { type: "json_schema", schema: DRAFT_OUTPUT_SCHEMA } },
+    images: args.images ?? [],
   };
 }
 
@@ -409,7 +443,7 @@ export function assertAnthropicHost(url: string): void {
 export type DraftAction = { kind: "credit" | "issue_guest_code"; amount_cents: number | null; reason: string };
 export type DraftOutput = {
   reply: string; staff_notes: string[]; category: string; flags: string[]; offers_courtesy_credit: boolean; match_ids: number[];
-  reply_without_action?: string; action?: DraftAction | null;
+  reply_without_action?: string; action?: DraftAction | null; image_unreadable?: boolean;
 };
 
 export const MAX_NOTE_BULLETS = 3;
@@ -465,7 +499,7 @@ export function parseDraftOutput(text: string): DraftOutput | null {
     flags: r.flags.filter((f): f is string => typeof f === "string"), offers_courtesy_credit: r.offers_courtesy_credit,
     match_ids: Array.isArray(r.match_ids) ? r.match_ids.filter((x): x is number => Number.isInteger(x)) : [],
     reply_without_action: action && typeof r.reply_without_action === "string" ? r.reply_without_action : "",
-    action,
+    action, image_unreadable: r.image_unreadable === true,
   };
 }
 
@@ -492,6 +526,8 @@ export type GuardCtx = Pick<DraftContext, "courtesy_credit_eligible"> & {
   context?: DraftContext;
   /** Actions already applied (or possibly applied) on this thread lately: the same kind is refused. */
   appliedActions?: readonly { kind: string }[];
+  /** Images went to the model: no contact or card details in the reply, and they're scrubbed from notes. */
+  imagesAttached?: boolean;
   /** The reply goes out more than 24 hours after the player wrote. Omitted = not checked. */
   veryLate?: boolean;
   /** Text a reply may quote times from: the schedule, the conversation, the playbook. Omitted = not checked. */
@@ -501,10 +537,11 @@ export type GuardCtx = Pick<DraftContext, "courtesy_credit_eligible"> & {
 export function guardDraft(raw: DraftOutput, ctx: GuardCtx): GuardResult {
   const action: DraftAction | null = raw.action ? { ...raw.action, reason: sanitizeDraft(raw.action.reason) } : null;
   const output: DraftOutput = {
-    ...raw, reply: sanitizeDraft(raw.reply), staff_notes: toNoteBullets(raw.staff_notes.map(sanitizeDraft)),
+    ...raw, reply: sanitizeDraft(raw.reply), staff_notes: toNoteBullets(raw.staff_notes.map((n) => (ctx.imagesAttached ? scrubPii(sanitizeDraft(n)) : sanitizeDraft(n)))),
     reply_without_action: action ? sanitizeDraft(raw.reply_without_action ?? "") : "", action,
   };
   const texts = action ? [output.reply, output.reply_without_action ?? ""] : [output.reply];
+  if (ctx.imagesAttached && texts.some((t) => scrubPii(t) !== t)) return { ok: false, error: "Draft quoted an email, phone or card number. Not shown." };
   if (texts.some(hasDash) || output.staff_notes.some(hasDash)) return { ok: false, error: "Draft still contained a dash after cleanup." };
   if (output.offers_courtesy_credit && !ctx.courtesy_credit_eligible) {
     return { ok: false, error: "Draft offered a courtesy credit to a player who has already had one, or whose history couldn't be read. Not shown." };
@@ -749,7 +786,7 @@ export type AutoSendConfig = {
 };
 export type AutoDecision = "auto_send" | "auto_send_with_action" | "human";
 export type DecisionResult = { decision: AutoDecision; reason: string };
-export type DecisionDraft = Pick<DraftOutput, "reply" | "category" | "flags" | "action"> & { guardError?: string | null };
+export type DecisionDraft = Pick<DraftOutput, "reply" | "category" | "flags" | "action" | "image_unreadable"> & { guardError?: string | null };
 export type DecisionContext = {
   context: DraftContext;
   windowClosed: boolean;
@@ -760,9 +797,26 @@ export type DecisionContext = {
 };
 
 export const AUTO_HUMAN_FLAGS = ["escalate", "refund_pushback", "strike_dispute", "under_16", "hold_requested", "urgent"];
-export const AUTO_HUMAN_CATEGORIES = ["complaint", "membership_billing", "strike", "payment", "account", "other"];
+export const AUTO_HUMAN_CATEGORIES = ["complaint", "membership_billing", "payment", "account", "other"];
+const FLAG_REASON: Record<string, string> = {
+  escalate: "Escalate", refund_pushback: "Refund pushback", strike_dispute: STRIKE_DISPUTE_NOTE,
+  under_16: "Under 16", hold_requested: "Hold requested: tell Ryan", urgent: "Urgent",
+};
+
+// A STRIKE AUTO-REPLY PROMISES NOTHING. Why it can't go out, or null. A disputed strike gets a holding
+// line and only that. These words are the ones a holding line never needs, in any tense the model used.
+const STRIKE_PROMISE_RX = /\b(?:remov\w*|clear\w*|reset\w*|tak(?:en?|ing) (?:it |that |them )?off|wiped?|waived?|drop(?:ped)?)\b|\bwon'?t (?:get|have|count)\b/i;
+const STRIKE_COUNT_RX = /\b(?:\d+|one|two|three|four|five)\s+(?:active\s+)?strikes?\b|\bstrike\s+count\b|\bstrikes?\s+(?:left|remaining)\b/i;
+export function strikeReplyProblem(reply: string, disputing: boolean): string | null {
+  const promised = reply.match(STRIKE_PROMISE_RX);
+  if (promised) return `the reply said "${promised[0]}"`;
+  if (STRIKE_COUNT_RX.test(reply)) return "the reply stated a strike count";
+  if (disputing && !/\bmatch manager\b/i.test(reply)) return "the reply isn't the holding line";
+  return null;
+}
+// strike can send and can never act: it isn't in the action list, and the guard refuses an action on it.
 // What an admin can turn on. A category the model invents isn't here, so it can't go out on its own.
-export const AUTO_CATEGORIES = ["veo", "logistics", "booking", "age", "player_cancel", "match_cancelled", "needs_credit", "guest_pass", "promo_code"];
+export const AUTO_CATEGORIES = ["veo", "logistics", "booking", "age", "strike", "player_cancel", "match_cancelled", "needs_credit", "guest_pass", "promo_code"];
 export const AUTO_ACTION_CATEGORIES = ["player_cancel", "match_cancelled", "needs_credit", "guest_pass", "promo_code"];
 export const HUMAN_OWNS_THREAD_MS = 2 * 3600e3;
 export const isAutoSendLive = (c: Pick<AutoSendConfig, "enabled" | "shadow">) => c.enabled && !c.shadow;
@@ -787,14 +841,22 @@ const human = (reason: string): DecisionResult => ({ decision: "human", reason }
 
 export function decideAutoSend(draft: DecisionDraft, ctx: DecisionContext, config: AutoSendConfig): DecisionResult {
   if (draft.guardError) return human(`The draft failed a check: ${draft.guardError}`);
-  const flag = draft.flags.find((f) => AUTO_HUMAN_FLAGS.includes(f));
-  if (flag) return human(`Flagged ${flag}.`);
+  if (draft.image_unreadable) return human("Image unreadable");
+  const disputing = draft.flags.includes("strike_dispute");
+  // A disputed strike is only ever answered inside the strike category. Everywhere else the flag stops it.
+  const flag = draft.flags.find((f) => AUTO_HUMAN_FLAGS.includes(f) && !(f === "strike_dispute" && draft.category === "strike"));
+  if (flag) return human(FLAG_REASON[flag] ?? flag);
+  if (draft.category === "strike") {
+    const problem = strikeReplyProblem(draft.reply, disputing);
+    if (problem) return human(disputing ? `${STRIKE_DISPUTE_NOTE} (${problem})` : `Strike question: ${problem}`);
+    if (draft.action) return human(disputing ? STRIKE_DISPUTE_NOTE : "A strike reply can't carry an action.");
+  }
   if (AUTO_HUMAN_CATEGORIES.includes(draft.category)) return human(`Category ${draft.category} always goes to a person.`);
   if (!draft.reply.trim()) return human("The draft has no reply.");
   if (ctx.windowClosed) return human("The WhatsApp window is closed.");
   if (ctx.humanRepliedRecently) return human("A person replied in this thread in the last 2 hours.");
   if (!ctx.context.account_confirmed && statesAccountFact(draft.reply)) return human("The account is unconfirmed and the reply states an account fact.");
-  if (!config.auto_categories.includes(draft.category)) return human(`Category ${draft.category} isn't turned on.`);
+  if (!config.auto_categories.includes(draft.category)) return human(disputing ? STRIKE_DISPUTE_NOTE : `Category ${draft.category} isn't turned on.`);
 
   const action = draft.action;
   if (!action) return { decision: "auto_send", reason: `Category ${draft.category} is on.` };
