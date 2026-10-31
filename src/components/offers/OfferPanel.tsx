@@ -245,7 +245,8 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
   const pickScope = (scope: "ANY" | "MATCH") => {
     if (scope === f.scope) return;
     if (scope === "ANY") set({ scope, matchId: null, endsLocal: defaultRun(nowWall).endsLocal });
-    else set({ scope, usesPerPlayer: 1 });
+    // A specific match always ends at kickoff, so it never keeps No end date.
+    else set({ scope, usesPerPlayer: 1, endsLocal: f.endsLocal ?? defaultRun(nowWall).endsLocal });
   };
   const pickMatch = (id: number) => {
     const mm = data.matches.find((x) => x.id === id) ?? null;
@@ -641,7 +642,7 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
         {/* Figma 20612:47: with Edit text open the fields take the summary's place beside the preview. */}
         <div className="flex items-start gap-3.5">
           <div className="flex shrink-0 flex-col gap-2">
-            <OfferPopupPreview copy={copy} ends={ends} />
+            <OfferPopupPreview copy={copy} ends={ends} showTicket={f.showTicket} />
             <div data-testid="offers-opens" className="max-w-[156px] text-[11px] font-medium" style={{ color: O.muted }}>{matchUnread ? "↳ Opens a match" : opensText(f, data.matches)}</div>
           </div>
           {editText && !frozen ? (
@@ -684,6 +685,17 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
                     </div>
                     {k === "buttonLabel" && buttonOpens()}
                     {k === "buttonLabel" && photoPicker()}
+                    {k === "body" && (f.showTicket ? (
+                      <div data-testid="offers-ticket" className="flex flex-col gap-1.5">
+                        <div className="flex items-baseline justify-between gap-2">
+                          <span className="text-[12px] font-medium" style={{ color: O.ink }}>Ticket</span>
+                          <button type="button" data-testid="offers-remove-ticket" className="text-[11.5px] font-medium" style={{ color: O.muted }} onClick={() => set({ showTicket: false })}>Remove</button>
+                        </div>
+                        <div className="text-[12px]" style={{ color: O.muted }}>{ends ?? "No end date"} · Auto-applied</div>
+                      </div>
+                    ) : (
+                      <button type="button" data-testid="offers-add-ticket" className="self-start text-[12px] font-semibold" style={{ color: O.ok }} onClick={() => set({ showTicket: true })}>+ Add ticket</button>
+                    ))}
                   </div>
                 );
               })}
@@ -712,10 +724,11 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
 
       {/* RUNS */}
       <PanelSection title="Runs" testId="offers-runs">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <WallInput testId="offers-starts" label={startLabel(f.startsLocal, nowWall)} value={f.startsLocal} disabled={dl} onChange={(v) => set({ startsLocal: v })} />
           <span className="text-[13px]" style={{ color: O.muted }}>to</span>
-          <WallInput testId="offers-ends" label={m && f.endsLocal === m.startLocal ? `Kickoff · ${wallLabel(f.endsLocal)}` : wallLabel(f.endsLocal)} value={f.endsLocal} disabled={dl} onChange={(v) => set({ endsLocal: v })} />
+          {f.endsLocal !== null && <WallInput testId="offers-ends" label={m && f.endsLocal === m.startLocal ? `Kickoff · ${wallLabel(f.endsLocal)}` : wallLabel(f.endsLocal)} value={f.endsLocal} disabled={dl} onChange={(v) => set({ endsLocal: v })} />}
+          {f.scope === "ANY" && !matchUnread && <Chip testId="offers-no-end" on={f.endsLocal === null} disabled={dl} onClick={() => set({ endsLocal: f.endsLocal === null ? defaultRun(nowWall).endsLocal : null })}>No end date</Chip>}
         </div>
         <div className="text-[11.5px]" style={{ color: O.muted }}>Times are each player&apos;s own city time.</div>
         {passed && !dl && <div data-testid="offers-end-passed" className="text-[12px] font-medium" style={{ color: O.critInk }}>That end time has already passed, so it can&apos;t launch.</div>}

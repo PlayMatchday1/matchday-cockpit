@@ -17,7 +17,7 @@ import { join, resolve } from "node:path";
 import {
   audienceBody, chicagoWallNow, comparisonLine, costCeiling, createBody, defaultRun, endsTicket, formOf, newForm, patchBody, priceWithDeal,
   summary, wallFromMatch, withPreviewName, buttonOf, opensText, formProblem, stepUses, usesLine, stepLimit, limitLine, copyOf,
-  addSection, autoCopy, canReset, copyAfterType, staleLines, staleSections, writtenForOnLoad, isRemovable, removeSection, resetCopy, sectionCollapsed, REMOVABLE_KEYS, canHidePhoto, copyAfterHide, hideUpload, extraBookingsLine, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, prefillField, audienceText, parsePlayerIds, playerLine, notFoundLine, usedOfLimit, resultsLines, campaignsAfter, countWanted, lockedSummary, offerWallNow, offerZones, wallNowIn, mergeMatches, offerMatchOpt, pickerRange, withCovers, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, endHasPassed, launchProblem, namedMatchIds, offersLogBody, pickerDayLabel, pickerView, fillText, fillFraction, setPriceAnyWarning, setPriceProblem, type Campaign, type City, type MatchOpt, type Results,
+  addSection, autoCopy, canReset, copyAfterType, staleLines, staleSections, writtenForOnLoad, isRemovable, removeSection, resetCopy, sectionCollapsed, REMOVABLE_KEYS, canHidePhoto, copyAfterHide, hideUpload, extraBookingsLine, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, prefillField, audienceText, parsePlayerIds, playerLine, notFoundLine, usedOfLimit, resultsLines, progressText, campaignsAfter, countWanted, lockedSummary, offerWallNow, offerZones, wallNowIn, mergeMatches, offerMatchOpt, pickerRange, withCovers, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, endHasPassed, launchProblem, namedMatchIds, offersLogBody, pickerDayLabel, pickerView, fillText, fillFraction, setPriceAnyWarning, setPriceProblem, type Campaign, type City, type MatchOpt, type Results,
 } from "../src/lib/offersModel";
 import { _setOffersGateDepsForTest, errorText, MAX_MATCH_PAGES, mismatches, offersGate, offersWrite, photoLinkProblem, readFirstMatchPage, readMatchesForCities, sendPreview, type OffersAuth } from "../src/lib/offersServer";
 import { readOffersConfig } from "../src/lib/offersConfig";
@@ -584,6 +584,48 @@ eq("...and two different ones, and none", [namedMatchIds({ matchIds: [116], butt
   eq("the match's city counts", past([4], 3), true);
   eq("the Chicago clock alone would have said otherwise (why this changed)", endHasPassed(end, chicagoWallNow(AT)), false);
   eq("the summary uses that clock", summary({ ...nowF, name: "x", cityIds: [3], endsLocal: end }, { count: 1, heldBack: 0, players: 1, mostItCanCost: null }, [], C, offerWallNow(["America/New_York"], AT)).includes("already passed"), true);
+}
+
+// ── NO END DATE ──────────────────────────────────────────────────────────────────────────────────
+{
+  const noEnd = { ...nowF, name: "x", endsLocal: null };
+  const cnt = { count: 3, heldBack: 0, players: 3, mostItCanCost: null };
+  eq("the summary says until you end it, and no date", [summary(noEnd, cnt, matches, cities, NOW).includes("until you end it"), lockedSummary(noEnd, matches, cities, NOW).includes("until you end it")], [true, true]);
+  eq("a dated offer doesn't (the control)", summary({ ...nowF, name: "x" }, cnt, matches, cities, NOW).includes("until you end it"), false);
+  eq("no end saves and launches on any match", [formProblem(noEnd, matches), launchProblem(noEnd, NOW), endHasPassed(null, NOW)], [null, null, false]);
+  eq("a specific match can't have it", formProblem({ ...noEnd, scope: "MATCH", matchId: 116 }, matches), "A specific match always ends at kickoff.");
+  eq("the ticket has no end time", endsTicket(null, NOW), null);
+  eq("a create sends the null, not a date", "endsLocal" in createBody(noEnd, matches, cities) && createBody(noEnd, matches, cities).endsLocal === null, true);
+  const dated = draftFrom();
+  eq("an edit sends just the null", patchBody(dated, { ...formOf(dated, matches, cities), endsLocal: null }, matches, cities), { endsLocal: null });
+  const stored = draftFrom({ endsLocal: null });
+  eq("loaded with none and untouched, nothing to send", patchBody(stored, formOf(stored, matches, cities), matches, cities), {});
+  eq("after launch it's locked like any date", patchBody({ ...stored, status: "LAUNCHED" }, { ...formOf(stored, matches, cities), endsLocal: "2026-11-05 23:59:00" }, matches, cities), {});
+  const running = (state: Campaign["state"]) => ({ ...stored, state, startsLocal: "2026-10-27 10:00:00" });
+  eq("progress counts days with no total, and never reads NaN", [progressText(running("LIVE"), NOW), progressText(running("PAUSED"), NOW), progressText(running("ENDED"), NOW)], ["Day 3", "Paused · day 3", "Ended"]);
+}
+
+// ── THE TICKET ───────────────────────────────────────────────────────────────────────────────────
+{
+  const f = { ...nowF, name: "x" };
+  eq("a shown ticket isn't sent on a create", "showTicket" in createBody(f, matches, cities), false);
+  eq("a removed one is", createBody({ ...f, showTicket: false }, matches, cities).showTicket, false);
+  const old = draftFrom();
+  eq("a backend that has no such field reads as shown, with nothing to send", [formOf(old, matches, cities).showTicket, patchBody(old, formOf(old, matches, cities), matches, cities)], [true, {}]);
+  eq("removing it sends just that", patchBody(old, { ...formOf(old, matches, cities), showTicket: false }, matches, cities), { showTicket: false });
+  const gone = draftFrom({ showTicket: false });
+  eq("stored removed stays removed, with nothing to send", [formOf(gone, matches, cities).showTicket, patchBody(gone, formOf(gone, matches, cities), matches, cities)], [false, {}]);
+  eq("adding it back sends true", patchBody(gone, { ...formOf(gone, matches, cities), showTicket: true }, matches, cities), { showTicket: true });
+  eq("it can change after launch, like the rest of the popup", patchBody({ ...old, status: "LAUNCHED" }, { ...formOf(old, matches, cities), showTicket: false }, matches, cities), { showTicket: false });
+}
+
+// ── A SPECIFIC MATCH'S BODY ──────────────────────────────────────────────────────────────────────
+{
+  const on = (id: number) => autoCopy({ ...nowF, scope: "MATCH", matchId: id }, matches, cities);
+  eq("the body says when and where, as the line does", [on(116).body, on(116).line], ["Mon 7:00 PM · Riverside Fields, normally $15. The discount is already on your account.", "MON 7:00 PM · RIVERSIDE FIELDS"]);
+  eq("never the stored name", [on(116).body?.includes("Riverside Thursday"), on(117).body?.includes("Mueller Friday")], [false, false]);
+  const noField = autoCopy({ ...nowF, scope: "MATCH", matchId: 9 }, [{ ...matches[0], id: 9, fieldTitle: null }], cities);
+  eq("with no field, just the time", noField.body, "Mon 7:00 PM, normally $15. The discount is already on your account.");
 }
 
 // ── THE COUNT'S STATE ────────────────────────────────────────────────────────────────────────────

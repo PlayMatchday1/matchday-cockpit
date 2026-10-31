@@ -8050,3 +8050,11 @@ Backend de910e7, `docs/offers/M3-ENDPOINTS.md`. `{ campaigns, cities, fields }` 
 `{ name }` object `/admin/cities` gives. **`GET /admin/offers/campaigns/{id}` has no `results`** (probed locally,
 2026-10-30: 37 keys against the list's 38), so a row updated from a write's read-back keeps the results it had
 until the next Refresh (`campaignsAfter`, `src/lib/offersModel.ts`).
+
+### No end date and `show_ticket`: not on the backend yet
+
+Local backend 382ae5f, 2026-10-31. `ends_local` is NOT NULL (`apps/api/prisma/schema.prisma:1257`). Saving `endsLocal: null`
+through the page: "The backend refused it: endsLocal cannot be null. Nothing was saved." Saving `showTicket: false`:
+"The backend refused it: property showTicket should not exist. Nothing was saved." The field name `showTicket` on the wire
+is UNKNOWN until the backend documents it; the column was asked for as `show_ticket`. The app reads `popup.expiresAt` as a
+string (`~/Documents/frontend-offers/src/components/OfferPopup.tsx:92`), and has no ticket flag.

@@ -41,7 +41,9 @@ export type Campaign = Copy & {
   maxRedemptions: number | null; audienceMode: AudienceMode; playerIds: number[]; fieldIds: number[];
   cityIds: number[]; lastPlayed: LastPlayed; lastPlayedDays: number | null;
   minMatches: number; maxMatches: number | null; membership: Membership;
-  matchScoped: boolean; matchIds: number[]; startsLocal: string; endsLocal: string; holdoutPercent: number;
+  // endsLocal null: runs until someone ends it. showTicket false: the popup draws no ticket. Absent is
+  // shown, which is all a backend without the field can mean.
+  matchScoped: boolean; matchIds: number[]; startsLocal: string; endsLocal: string | null; showTicket?: boolean; holdoutPercent: number;
   buttonTarget: ButtonTarget; buttonMatchId: number | null; status: CampaignStatus; state: CampaignState;
   createdByStaffEmail: string | null; launchedByStaffEmail: string | null; launchedAt: string | null;
   results: Results;
@@ -84,7 +86,7 @@ export function pickerRange(nowWall: string): { from: string; to: string } {
 
 // Fields a launched or paused campaign may still change (the backend's EDITABLE_AFTER_LAUNCH).
 export const EDITABLE_AFTER_LAUNCH = new Set<string>([
-  "name", "eyebrow", "caption", "headline", "line", "body", "photoUrl", "buttonLabel", "buttonTarget", "buttonMatchId", "dismissLabel", "maxRedemptions",
+  "name", "eyebrow", "caption", "headline", "line", "body", "photoUrl", "showTicket", "buttonLabel", "buttonTarget", "buttonMatchId", "dismissLabel", "maxRedemptions",
 ]);
 // Every key the Clubhouse may send on create or edit. The routes drop anything else.
 export const BODY_KEYS = new Set<string>([
@@ -136,7 +138,8 @@ export function startLabel(s: string, nowWall: string): string {
 }
 // The popup's ticket, as the app writes it (OfferPopup.offerEndsLabel): within a week "Ends Sun 11:59 PM",
 // after that "Ends Sun, Nov 9".
-export function endsTicket(endsLocal: string, nowWall: string): string | null {
+export function endsTicket(endsLocal: string | null, nowWall: string): string | null {
+  if (endsLocal === null) return null;
   const ms = wallMs(endsLocal);
   if (!Number.isFinite(ms)) return null;
   const days = calendarDaysBetween(nowWall, endsLocal);
@@ -290,7 +293,8 @@ export type Form = {
   fieldIds: number[];
   cityIds: number[]; lastPlayed: LastPlayed; lastPlayedDays: number | null; membership: Membership;
   minMatches: number; maxMatches: number | null;
-  startsLocal: string; endsLocal: string; holdoutPercent: number; maxRedemptions: number | null;
+  startsLocal: string; endsLocal: string | null; holdoutPercent: number; maxRedemptions: number | null;
+  showTicket: boolean;
   // Where the popup's button goes (Edit text › Button opens). Forced to the deal's match when the
   // offer is for a specific match; see buttonOf.
   buttonTarget: ButtonTarget; buttonMatchId: number | null;
@@ -305,7 +309,7 @@ export function newForm(nowWall: string): Form {
     name: "", dealType: "PERCENT_OFF", dealAmount: 50, usesPerPlayer: 1, matchId: null, scope: "ANY",
     audienceMode: "FILTERS", playerIdsText: "", playerIds: [], fieldIds: [],
     cityIds: [], lastPlayed: "ANY", lastPlayedDays: null, membership: "ANYONE",
-    minMatches: 0, maxMatches: null, ...defaultRun(nowWall), holdoutPercent: 10, maxRedemptions: null,
+    minMatches: 0, maxMatches: null, ...defaultRun(nowWall), holdoutPercent: 10, maxRedemptions: null, showTicket: true,
     buttonTarget: "FIND_MATCH", buttonMatchId: null, copy: {},
   };
 }
@@ -317,7 +321,7 @@ export function formOf(c: Campaign, matches: MatchOpt[], cities: City[]): Form {
     cityIds: c.cityIds, lastPlayed: c.lastPlayed, lastPlayedDays: c.lastPlayedDays, membership: c.membership,
     audienceMode: c.audienceMode, playerIdsText: c.playerIds.join(", "), playerIds: c.playerIds, fieldIds: c.fieldIds,
     minMatches: c.minMatches, maxMatches: c.maxMatches,
-    startsLocal: c.startsLocal, endsLocal: c.endsLocal, holdoutPercent: c.holdoutPercent, maxRedemptions: c.maxRedemptions,
+    startsLocal: c.startsLocal, endsLocal: c.endsLocal, holdoutPercent: c.holdoutPercent, maxRedemptions: c.maxRedemptions, showTicket: c.showTicket ?? true,
     buttonTarget: c.buttonTarget, buttonMatchId: c.buttonMatchId, copy: {},
   };
   // Stored copy that differs from what the deal would write was typed by someone: keep it as typed.
@@ -388,7 +392,7 @@ export function autoCopy(f: Form, matches: MatchOpt[], cities: City[] = []): Cop
     : n === 1 ? "YOUR NEXT MATCH" : `YOUR NEXT ${n} MATCHES`;
   const where = f.cityIds.length ? ` in ${andList(cityNames(f.cityIds, cities))}` : "";
   const body = m
-    ? `${m.name}, normally ${money(m.price)}. The discount is already on your account.`
+    ? `${matchDay(m)}, normally ${money(m.price)}. The discount is already on your account.`
     : `${n === 1 ? "Any match" : `Any ${n} matches`}${where}. The discount is already on your account.`;
   const eyebrow = f.lastPlayed === "LAPSED" ? `WE MISS YOU, ${FIRST_NAME_TOKEN}` : f.lastPlayed === "NEVER" ? "YOUR FIRST MATCH" : m && m.fieldId !== null && f.fieldIds.includes(m.fieldId) ? "YOUR FIELD" : "JUST FOR YOU";
   const caption = m ? `Your spot at ${m.fieldTitle ?? "the field"} is waiting.` : f.lastPlayed === "LAPSED" ? "Your spot at the field is waiting." : null;
@@ -546,14 +550,16 @@ export function fullBody(f: Form, matches: MatchOpt[], cities: City[]): Record<s
     minMatches: players ? 0 : f.minMatches, maxMatches: players ? null : f.maxMatches, membership: players ? "ANYONE" : f.membership,
     matchIds: m ? [m.id] : [],
     startsLocal: f.startsLocal, endsLocal: f.endsLocal, holdoutPercent: players ? 0 : f.holdoutPercent, maxRedemptions: f.maxRedemptions,
+    showTicket: f.showTicket,
     ...copy, buttonTarget: buttonOf(f, matches).target, buttonMatchId: buttonOf(f, matches).matchId,
   };
 }
 
 // CREATE: the full body with nulls left out (the backend's defaults stand in for them), except a
-// removed section, which is sent as null like any other save.
+// removed section and no end date, which are sent as null like any other save. A shown ticket is the
+// default, so it's left out as well.
 export function createBody(f: Form, matches: MatchOpt[], cities: City[]): Record<string, unknown> {
-  return Object.fromEntries(Object.entries(fullBody(f, matches, cities)).filter(([k, v]) => v !== null || isRemovable(k as CopyKey)));
+  return Object.fromEntries(Object.entries(fullBody(f, matches, cities)).filter(([k, v]) => (k === "showTicket" ? v === false : v !== null || k === "endsLocal" || isRemovable(k as CopyKey))));
 }
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
@@ -566,7 +572,8 @@ export function patchBody(c: Campaign, f: Form, matches: MatchOpt[], cities: Cit
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(full)) {
     if (locked && !EDITABLE_AFTER_LAUNCH.has(k)) continue;
-    if (!same(v, (c as unknown as Record<string, unknown>)[k])) out[k] = v;
+    const stored = k === "showTicket" ? (c.showTicket ?? true) : (c as unknown as Record<string, unknown>)[k];
+    if (!same(v, stored)) out[k] = v;
   }
   return out;
 }
@@ -584,8 +591,9 @@ export function formProblem(f: Form, matches: MatchOpt[], status: CampaignStatus
   if (!f.name.trim()) return "Give the offer a name.";
   if (status === null || status === "DRAFT") { const deal = setPriceProblem(f, pickedMatch(f, matches)); if (deal) return deal; }
   if (f.scope === "MATCH" && !pickedMatch(f, matches)) return "Pick the match.";
-  if (!Number.isFinite(wallMs(f.startsLocal)) || !Number.isFinite(wallMs(f.endsLocal))) return "Set when it starts and ends.";
-  if (wallMs(f.endsLocal) <= wallMs(f.startsLocal)) return "It has to end after it starts.";
+  if (f.endsLocal === null && f.scope === "MATCH") return "A specific match always ends at kickoff.";
+  if (!Number.isFinite(wallMs(f.startsLocal)) || (f.endsLocal !== null && !Number.isFinite(wallMs(f.endsLocal)))) return "Set when it starts and ends.";
+  if (f.endsLocal !== null && wallMs(f.endsLocal) <= wallMs(f.startsLocal)) return "It has to end after it starts.";
   const b = buttonOf(f, matches);
   if (b.target === "MATCH" && !matches.some((x) => x.id === b.matchId)) return "Pick the match the button opens.";
   if (f.maxRedemptions !== null && (!Number.isInteger(f.maxRedemptions) || f.maxRedemptions < 1)) return "The total limit must be 1 or more.";
@@ -630,8 +638,8 @@ export function offerZones(a: Pick<Campaign, "cityIds" | "audienceMode">, matchC
 }
 // The wall clock furthest ahead among those zones: the end reaches it first.
 export const offerWallNow = (zones: string[], now: Date = new Date()) => zones.map((z) => wallNowIn(z, now)).sort().at(-1)!;
-export const endHasPassed = (endsLocal: string, nowWall: string) => wallMs(endsLocal) <= wallMs(nowWall);
-export const launchProblem = (x: { endsLocal: string }, nowWall: string): string | null =>
+export const endHasPassed = (endsLocal: string | null, nowWall: string) => endsLocal !== null && wallMs(endsLocal) <= wallMs(nowWall);
+export const launchProblem = (x: { endsLocal: string | null }, nowWall: string): string | null =>
   endHasPassed(x.endsLocal, nowWall) ? "The end time has already passed. Pick a later end." : null;
 
 // THE LIVE COUNT'S STATE. asked is the body as the form stands; answered is the body the last answer
@@ -678,7 +686,8 @@ function dealAndUntil(f: Form, m: MatchOpt | null, nowWall: string): { deal: str
   const deal = m
     ? (f.dealType === "FREE_MATCH" ? `${m.name} free` : f.dealType === "SET_PRICE" ? `a ${money(f.dealAmount)} spot in ${m.name}` : `${dealText(f.dealType, f.dealAmount)} ${m.name}`)
     : (f.dealType === "FREE_MATCH" ? (n === 1 ? "one free match" : `${n} free matches`) : f.dealType === "SET_PRICE" ? `a ${money(f.dealAmount)} spot in ${one}` : `${dealText(f.dealType, f.dealAmount)} ${one}`);
-  const until = endHasPassed(f.endsLocal, nowWall) ? `until ${wallLabel(f.endsLocal)}, which has already passed`
+  const until = f.endsLocal === null ? "until you end it"
+    : endHasPassed(f.endsLocal, nowWall) ? `until ${wallLabel(f.endsLocal)}, which has already passed`
     : m && f.endsLocal === m.startLocal ? "until kickoff"
     : calendarDaysBetween(nowWall, f.endsLocal) < 7 ? `until ${fmt(wallMs(f.endsLocal), { weekday: "short" })} ${fmt(wallMs(f.endsLocal), { hour: "numeric", minute: "2-digit" })}`
     : `until ${wallDate(f.endsLocal)}`;
@@ -778,6 +787,10 @@ export const notFoundLine = (ids: number[]) => `${ids.length} ID${ids.length ===
 export function progressText(c: Campaign, nowWall: string): string {
   if (c.state === "SCHEDULED") return `Starts ${wallDate(c.startsLocal)}`;
   if (c.state === "DRAFT") return "Not launched";
+  if (c.endsLocal === null) {
+    if (c.state === "ENDED") return "Ended";
+    return `${c.state === "PAUSED" ? "Paused · day" : "Day"} ${Math.max(1, calendarDaysBetween(c.startsLocal, nowWall) + 1)}`;
+  }
   const total = calendarDaysBetween(c.startsLocal, c.endsLocal) + 1;
   const day = Math.min(total, calendarDaysBetween(c.startsLocal, nowWall) + 1);
   if (c.state === "ENDED") return wallMs(nowWall) >= wallMs(c.endsLocal) ? `Ended ${wallDate(c.endsLocal)}` : "Ended early";
