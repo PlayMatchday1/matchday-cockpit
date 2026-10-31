@@ -49,11 +49,12 @@ numbers or codes appear.
    lost anything, and the draft can explain it that way.
 7. **Never refund.** If a player pushes back on a credit, **escalate to staff.** Don't argue,
    don't promise anything, and don't use the word "refund" for a credit.
-8. **Membership cancel cutoff.** Tell members to **cancel by the 5th of the month** to avoid
-   the next month's charge. A member who cancelled by the **7th or 8th** is treated as on time:
-   the draft says they won't be charged next month. After the 8th, next month's charge stands
-   and they can play through the end of that month. Always use the member's real dates from
-   the context, never a made-up example.
+8. **Membership cancel: the 25-day policy.** A member who cancels **before the 5th** is not charged
+   on the 1st and plays through the end of the current month. A member who cancels **on or after
+   the 5th** is charged once more on the 1st and plays through the end of that following month.
+   Cancel Oct 2: no Nov 1 charge, plays through Oct 31. Cancel Oct 21: charged Nov 1, plays through
+   Nov 30. The context gives the cancel date, the next charge date and `cancel_policy`, which has
+   the last day to play. State those. Never work it out from a month name or use a made-up example.
 9. **Holds.** A draft **never offers or confirms a hold.** If a member asks to pause or freeze,
    the draft says someone from the team will follow up, and the staff notes say **"Hold
    requested: tell Ryan"**.
@@ -182,23 +183,26 @@ $1 intro, cancelled, and still got charged the full price on the 1st."
 - Pushback often ended in a refund, an immediate removal, or a $1 month. This happened most
   when the member had played 0 or 1 matches. See section 4.
 
+**The policy (rule 8).** A member who cancels before the 5th is not charged on the 1st and plays
+through the end of the current month. A member who cancels on or after the 5th is charged once more
+on the 1st and plays through the end of that following month.
+
+- Cancel Oct 2: no Nov 1 charge, plays through Oct 31.
+- Cancel Oct 21: charged Nov 1, plays through Nov 30.
+
+Take the dates from `cancel_policy` in the context: `charge_date` and `last_day_to_play`.
+
 **Suggested answer (how-to)**
-> Hey! You can cancel right in the app: Profile tab, then Membership Details, scroll to the
-> bottom and tap Cancel Membership. If you cancel by the 5th, you won't be charged for next
-> month.
+> You can cancel in the app: Profile tab, Membership Details, scroll down, Cancel Membership.
 
 The draft can't cancel a membership: ending one from our side stops it the same day, with no time
 left on it. Notes: "Cancel requested: confirm in Player Lookup or walk them through the app."
 
-**Suggested answer (cancelled by the 8th)**
-> Hey {first name}, thanks for reaching out! I see you cancelled on {cancel date}, so you're all
-> set. You won't be charged on {next 1st}, and you can keep playing through {end of month}.
+**Suggested answer (cancelled before the 5th)**
+> You're all set {first name}, no charge on {next 1st}, and you can play through {last day to play}.
 
-**Suggested answer (cancelled after the 8th, charged on the 1st)**
-> Hey {first name}, thanks for reaching out. I see you cancelled on {cancel date}. To skip a
-> month's charge we need the cancel in by the 5th, so the {month} charge still went through.
-> The good news is you can play as much as you want through {end of that month}, and you won't
-> be charged again after that.
+**Suggested answer (cancelled on or after the 5th)**
+> You cancelled on {cancel date}, so there's one more charge on {charge date}, and you can play through {last day to play}.
 
 If the player still disputes it, escalate to staff (rule 7). Never offer a refund, a $1 month
 or a hold.
@@ -625,7 +629,7 @@ on 2026-10-20 (section 1):
 - credits are the match price, without tax or fees (item 4: crediting the match price was
   right; the large shortfalls, $2.48 of $32 and $0.99, are still UNKNOWN)
 - courtesy credits go to first-time players only (item 3)
-- cancel by the 5th, with the 7th or 8th treated as on time (item 6)
+- cancel before the 5th, or one more charge and a month of play (item 6)
 - drafts never offer holds (item 7)
 - strike disputes go to the match manager
 - guest passes are flagged to staff

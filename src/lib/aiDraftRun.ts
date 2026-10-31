@@ -201,13 +201,13 @@ export async function runDraft(deps: DraftDeps): Promise<DraftResult> {
     if (!("forbidden" in loaded) && staffRepliesConfirmAccount(msgs, loaded.ctx)) confirmedByStaff = loaded;
   }
   if (confirmedByStaff) {
-    ctxIn = { ...confirmedByStaff.ctx, confirmed: true };
+    ctxIn = { ...confirmedByStaff.ctx, confirmed: true, nowMs: deps.now() };
     keys = confirmedByStaff.keys;
     reason = CONFIRMED_BY_STAFF_NOTE;
   } else if (confirmed) {
     const loaded = await deps.loadContext(thread);
     if ("forbidden" in loaded) return { status: "forbidden", message: "This player is outside your city." };
-    ctxIn = { ...loaded.ctx, confirmed: thread.account_confirmed };
+    ctxIn = { ...loaded.ctx, confirmed: thread.account_confirmed, nowMs: deps.now() };
     keys = loaded.keys;
   } else {
     const accountCount = flags.linked ? await deps.countAccounts() : 0;

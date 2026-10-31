@@ -7663,6 +7663,27 @@ for 18596, 18680, 18679, 19700 and `/admin/matches?fromDate&toDate` windows arou
   and below that quote Sonnet figures are what was measured at the time.
 - **`fallbacks` is not set.** A refusal is stored as a failed draft, as it was on Sonnet.
 
+## Membership cancels: the stated policy and what billing does don't match (2026-10-31)
+
+Policy per Ryan, in playbook rule 8: cancel before the 5th, no charge on the 1st; on or after the 5th, charged once more.
+
+- **Nothing in the backend reads the day of the month.** The in-app cancel (`cancelSubscriptions`, `~/Code/backend/apps/api/src/core/subscriptions/subscriptions.service.ts:543`,
+  checkout 7698a52 of 2026-10-13) writes `canceledAt` and calls no Stripe. The only Stripe call is on `invoice.paid` (`stripe.service.ts:798-800`): if `canceledAt` is set,
+  `cancel_at_period_end`. So as written, **every in-app cancel is charged once more on the next 1st**, whatever the day. Stripe's dashboard settings: UNKNOWN.
+- **Measured.** `mdapi_subscriptions` cancels Jan to Sep 2026 (784), joined on `md_membership_id` to paid `stripe_member_invoices`, a paid invoice within 2 days before to 5 days after the next 1st.
+  `cancel_reason` of "Removed by Retool" taken as an admin end:
+
+  | Cancel day (Central) | In-app: charged next 1st / not / no invoices | Retool: charged / not / no invoices |
+  |---|---|---|
+  | before the 5th | **5 / 1** / 0 | 0 / 14 / 0 |
+  | the 5th | none | none |
+  | 6th to 8th | 9 / 0 / 0 | 0 / 4 / 0 |
+  | 9th onward | 347 / 100 / 6 | 2 / 282 / 14 |
+
+- **So "no charge" before the 5th has only been true when staff ended it, and that ends the membership immediately** (this doc, `/end` route) rather than playing through the month. In-app, 5 of 6 were charged. A small sample.
+- **No in-app cancel at all landed on the 2nd to the 6th** in those 9 months: day 1 has 6, day 7 has 4, days 2 to 6 have 0. Why: UNKNOWN. Whether the app blocks it, or `canceledAt` gets rewritten, isn't in evidence.
+- **Not checked:** the 100 in-app cancels after the 8th with no charge. A person may have stepped in.
+
 ## Player Chats: images to the model, Needs a human (2026-10-31)
 
 - **Images reach the model at about $0.09 a draft.** `scripts/ai-draft-live-real.ts --images 4`, real threads with one image each, writes stubbed:

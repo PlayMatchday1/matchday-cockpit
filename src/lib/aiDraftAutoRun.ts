@@ -300,7 +300,7 @@ async function draftOneThread(sb: SupabaseClient, threadId: string, channel: str
       }
       const lastInbound = [...all].reverse().find((m) => m.direction === "inbound");
       const d = decideAutoSend(output, {
-        context, guest,
+        context, guest, msgs: all,
         windowClosed: whatsappWindowExpired(channel, lastInbound?.sent_at ?? null, now),
         humanRepliedRecently: all.some((m) => isStaffReply(m) && now - Date.parse(m.sent_at) < HUMAN_OWNS_THREAD_MS),
       }, effective);

@@ -175,6 +175,8 @@ export type DraftContextIn = {
   matchesPlayed: number | null;
   strikes: { active: number; limit: number; suspended: boolean } | null;
   matches: DraftMatchIn[];
+  /** Today, for what a cancel today would mean. Omitted = not stated. */
+  nowMs?: number;
   /** Has this account had a courtesy credit? From change_log (priorCourtesyFromLog). null = unknown, so not eligible. */
   priorCourtesyCredit?: boolean | null;
   /** Camera coverage for the player's city, field by field (src/lib/aiDraftCamera). */
@@ -217,6 +219,24 @@ export function unconfirmedReason(c: Pick<DraftContextIn, "linked" | "accountCou
   return c.accountCount != null && c.accountCount > 1 ? `Number is on ${c.accountCount} accounts.` : "Number is on more than one account.";
 }
 
+// THE 25-DAY POLICY (Ryan, 2026-10-31). Cancel before the 5th: no charge on the 1st, plays through the end
+// of this month. Cancel on or after the 5th: charged once more on the 1st, plays through the end of that
+// following month. A cancel is an event, so its day is the Central day the member pressed the button.
+export type CancelPolicy = { basis: "cancelled_on" | "if_cancelled_today"; charged_again: boolean; charge_date: string | null; last_day_to_play: string };
+const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+export function cancelPolicyFor(canceledAt: string | null | undefined, nowMs?: number): CancelPolicy | null {
+  const at = canceledAt ? Date.parse(canceledAt) : nowMs;
+  if (at == null || !Number.isFinite(at)) return null;
+  const [y, m, d] = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago" }).format(at).split("-").map(Number);
+  const chargedAgain = d >= 5;
+  // Date.UTC(y, month, 0) is the last day of the month before `month`, and month is 1-based here.
+  const lastMonth = chargedAgain ? m + 1 : m;
+  const last = new Date(Date.UTC(y, lastMonth, 0));
+  const first = new Date(Date.UTC(y, m, 1));
+  const label = (x: Date) => `${MONTH_NAMES[x.getUTCMonth()]} ${x.getUTCDate()}, ${x.getUTCFullYear()}`;
+  return { basis: canceledAt ? "cancelled_on" : "if_cancelled_today", charged_again: chargedAgain, charge_date: chargedAgain ? label(first) : null, last_day_to_play: label(last) };
+}
+
 export function buildDraftContext(c: DraftContextIn) {
   if (!accountConfirmed(c)) {
     // Built from nothing but the two flags: a field not named here cannot leave for the API.
@@ -248,6 +268,7 @@ export function buildDraftContext(c: DraftContextIn) {
           next_charge: dateOnly(c.membership.renews, "UTC"),
           cancelled_on: dateOnly(c.membership.canceledAt, "America/Chicago"),
           price: usd(c.membership.price),
+          cancel_policy: cancelPolicyFor(c.membership.canceledAt, c.nowMs),
         }
       : null,
     credit_balance: usd(c.creditsCents),
@@ -275,7 +296,7 @@ Follow the playbook below exactly. Section 1 is the house rules and overrides ev
 Before you write, work out four things: what the player is actually asking for, the rule in the playbook that applies, the next concrete step, and the single piece of information (if any) needed to take it. Open the reply with the answer or that next step, in plain words.
 
 How to write the reply:
-- Write like a friendly person on the MatchDay team texting a player. Warm, plain words, contractions. Default to one short sentence. Use two only when the answer needs a second fact. A one-word answer is fine when it answers the question.
+- Write like a friendly person on the MatchDay team texting a player. Warm, plain words, contractions. Default to one short sentence. Aim for under 20 words. The hard limit is 30 words, unless the reply has to state two facts, like a date and an amount. A one-word answer is fine when it answers the question.
 - Never end with a closing offer like "just message us if anything comes up" or "let me know if you need anything".
 - Never sound like an AI. No "I understand your frustration", no "Great question", no "I hope this helps", no lists, no headings, no sign-off with a name.
 - Never use an em dash or an en dash. Use a comma, a period, or "and" instead.
@@ -285,6 +306,7 @@ How to write the reply:
 - You can propose one action, which a staff member applies by pressing a button (see "action" below). Without a proposed action, never say a credit, refund, code, strike removal, move, hold or cancellation is done. Say "I'll" or "let me" only for an action staff will take, and name that action in staff_notes.
 - Only offer a courtesy credit when PLAYER CONTEXT says courtesy_credit_eligible is true, and set offers_courtesy_credit to true when you do.
 - A credit action's amount is the match_price of the match in question, never the paid amount. Never propose a credit for a member's match, a match already marked club_cancelled, or a cancel more than 24 hours before kickoff: those are either nothing to credit or credited automatically.
+- A membership's last day to play and whether there's one more charge come from membership.cancel_policy in PLAYER CONTEXT: state last_day_to_play and charge_date as written there. Never work them out from a month name. It's worked out from cancelled_on, or from today if they haven't cancelled yet (basis says which).
 - You cannot cancel a membership. Give the in-app cancel steps and put "Cancel requested: confirm in Player Lookup or walk them through the app." in staff_notes.
 - Answer camera questions only from recorded_fields in PLAYER CONTEXT. It lists the fields in the player's city with a camera on recent or upcoming matches, with how many: recorded_matches lower than matches means the camera rotates, so say it's only on some matches. A field not listed had no camera on those matches. If recorded_fields is empty, say the team will check. Never answer from memory.
 - A player's images may be attached, for the last few images in what they just sent. Describe what the image shows in your first staff note and use it to answer: a Home tab screenshot confirms the member number for guest passes, a strike screen names the match, an error dialog says what failed. Never read a payment number, email or phone number out of an image into the reply or the notes. If you can't make out an attached image, set image_unreadable to true and say the team will check.
@@ -541,6 +563,11 @@ export function guardDraft(raw: DraftOutput, ctx: GuardCtx): GuardResult {
     reply_without_action: action ? sanitizeDraft(raw.reply_without_action ?? "") : "", action,
   };
   const texts = action ? [output.reply, output.reply_without_action ?? ""] : [output.reply];
+  if (output.category === "membership_billing") {
+    const expected = ctx.context?.membership?.cancel_policy?.last_day_to_play;
+    const wrong = expected ? texts.map((t) => lastPlayDateProblem(t, expected)).find(Boolean) : null;
+    if (wrong) return { ok: false, error: `${wrong} Not shown.` };
+  }
   if (ctx.imagesAttached && texts.some((t) => scrubPii(t) !== t)) return { ok: false, error: "Draft quoted an email, phone or card number. Not shown." };
   if (texts.some(hasDash) || output.staff_notes.some(hasDash)) return { ok: false, error: "Draft still contained a dash after cleanup." };
   if (output.offers_courtesy_credit && !ctx.courtesy_credit_eligible) {
@@ -559,6 +586,24 @@ export function guardDraft(raw: DraftOutput, ctx: GuardCtx): GuardResult {
     }
   }
   return { ok: true, output };
+}
+
+// A MEMBERSHIP REPLY NAMING A LAST DAY TO PLAY must name the one the policy gives. Real case, 2026-10-31: a cancel on
+// Oct 21 drafted as "through the end of October" when it's Nov 30. "Your Nov 1 charge will go through" isn't a
+// last-play date: this needs through/until right before the month. Words like "the end of the month" name no
+// month and aren't checked; the instructions tell the model to state the date.
+const MONTH_WORD = "(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)";
+const LAST_PLAY_RX = new RegExp(`\\b(?:through|thru|until|till|up to)\\s+(?:the\\s+)?(?:end\\s+of\\s+)?${MONTH_WORD}\\b\\.?(?:\\s+(\\d{1,2}))?|\\blast day[^.!?]*?\\b${MONTH_WORD}\\b\\.?\\s+(\\d{1,2})`, "gi");
+export function lastPlayDateProblem(reply: string, expected: string): string | null {
+  const [expMonth, expDay] = expected.replace(",", "").split(" ");
+  for (const m of reply.matchAll(LAST_PLAY_RX)) {
+    const month = (m[1] ?? m[3]).slice(0, 3).toLowerCase();
+    const day = m[2] ?? m[4];
+    if (month !== expMonth.toLowerCase() || (day && Number(day) !== Number(expDay))) {
+      return `Draft named a last day to play (${m[0].trim()}) that doesn't match the policy (${expected}).`;
+    }
+  }
+  return null;
 }
 
 // ── proposed actions ───────────────────────────────────────────────────────────────────────────
@@ -792,12 +837,38 @@ export type DecisionContext = {
   windowClosed: boolean;
   /** A person sent a message in this thread in the last 2 hours: they own it. */
   humanRepliedRecently: boolean;
+  /** The conversation. A membership reply can't go out without it. */
+  msgs?: readonly DraftMsg[];
   /** Only needed for a guest code. Absent means it couldn't be read, which is a no. */
   guest?: { active: boolean; over24Hours: boolean; hasActiveCode: boolean } | null;
 };
 
 export const AUTO_HUMAN_FLAGS = ["escalate", "refund_pushback", "strike_dispute", "under_16", "hold_requested", "urgent"];
-export const AUTO_HUMAN_CATEGORIES = ["complaint", "membership_billing", "payment", "account", "other"];
+export const AUTO_HUMAN_CATEGORIES = ["complaint", "payment", "account", "other"];
+export const REPLY_WORD_LIMIT = 40;
+export const wordCount = (s: string) => s.trim().split(/\s+/).filter(Boolean).length;
+
+// WHEN A MEMBERSHIP REPLY CAN'T GO OUT ALONE (Ryan, 2026-10-31). Why it needs a person, or null. Only what
+// the player has sent since our last message counts as what they're saying now.
+const MEMBERSHIP_ESCALATE_RX = /\b(refund\w*|disputes?|disputing|chargebacks?|charge back|banks?|lawyers?|attorneys?|bbb|scam\w*|fraud\w*)\b/i;
+const POLICY_TOLD_RX = /\b25[- ]day|\bcancel[^.!?\n]{0,30}\b(?:by|before) the 5th|\bon or after the 5th|\b(?:be|been|get|got) charged\b|\bcharged (?:on|once)\b|\bnext charge\b|\b(?:the )?\w* ?charge (?:will|still|stands|went)\b/i;
+const STEPS_GIVEN_RX = /\bMembership Details\b|\bCancel Membership\b/i;
+const NOT_WORKING_RX = /\b(?:not|isn'?t|won'?t|doesn'?t|didn'?t|can'?t|cannot|couldn'?t|unable to)\s+(?:let(?:ting)?(?: me)?|work\w*|load\w*|go through|open\w*|click\w*|cancel\w*)\b/i;
+const CANT_FIND_RX = /\b(?:can'?t|cannot|couldn'?t|unable to|don'?t|didn'?t)\s+(?:find|see)\b|\b(?:no|not an?) (?:option|button)\b|\bnot there\b/i;
+export function membershipHumanReason(msgs: readonly DraftMsg[]): string | null {
+  const real = msgs.filter((m) => !(m.direction === "outbound" && m.is_auto_reply === true) && m.media_kind !== "reaction");
+  let split = real.length;
+  while (split > 0 && real[split - 1].direction === "inbound") split--;
+  const said = real.slice(split).map((m) => m.body ?? "").join("\n");
+  const earlier = real.slice(0, split).filter((m) => m.direction === "outbound").map((m) => m.body ?? "");
+  const word = said.match(MEMBERSHIP_ESCALATE_RX);
+  if (word) return `Mentions ${word[1].toLowerCase()}`;
+  if (NOT_WORKING_RX.test(said)) return "In-app cancel isn't working";
+  if (CANT_FIND_RX.test(said) && earlier.some((b) => STEPS_GIVEN_RX.test(b))) return "Can't find the in-app cancel after being given the steps";
+  if (said.trim() && earlier.some((b) => POLICY_TOLD_RX.test(b))) return "Already told the policy in this thread";
+  return null;
+}
+
 const FLAG_REASON: Record<string, string> = {
   escalate: "Escalate", refund_pushback: "Refund pushback", strike_dispute: STRIKE_DISPUTE_NOTE,
   under_16: "Under 16", hold_requested: "Hold requested: tell Ryan", urgent: "Urgent",
@@ -814,9 +885,9 @@ export function strikeReplyProblem(reply: string, disputing: boolean): string | 
   if (disputing && !/\bmatch manager\b/i.test(reply)) return "the reply isn't the holding line";
   return null;
 }
-// strike can send and can never act: it isn't in the action list, and the guard refuses an action on it.
+// strike and membership_billing can send and can never act (there's no membership action): it isn't in the action list, and the guard refuses an action on it.
 // What an admin can turn on. A category the model invents isn't here, so it can't go out on its own.
-export const AUTO_CATEGORIES = ["veo", "logistics", "booking", "age", "strike", "player_cancel", "match_cancelled", "needs_credit", "guest_pass", "promo_code"];
+export const AUTO_CATEGORIES = ["veo", "logistics", "booking", "age", "strike", "membership_billing", "player_cancel", "match_cancelled", "needs_credit", "guest_pass", "promo_code"];
 export const AUTO_ACTION_CATEGORIES = ["player_cancel", "match_cancelled", "needs_credit", "guest_pass", "promo_code"];
 export const HUMAN_OWNS_THREAD_MS = 2 * 3600e3;
 export const isAutoSendLive = (c: Pick<AutoSendConfig, "enabled" | "shadow">) => c.enabled && !c.shadow;
@@ -853,6 +924,14 @@ export function decideAutoSend(draft: DecisionDraft, ctx: DecisionContext, confi
   }
   if (AUTO_HUMAN_CATEGORIES.includes(draft.category)) return human(`Category ${draft.category} always goes to a person.`);
   if (!draft.reply.trim()) return human("The draft has no reply.");
+  if (wordCount(draft.reply) > REPLY_WORD_LIMIT) return human("Reply too long");
+  if (draft.category === "membership_billing") {
+    if (!ctx.context.account_confirmed) return human("The account is unconfirmed.");
+    if (draft.action) return human("A membership reply can't carry an action.");
+    if (!ctx.msgs) return human("The conversation couldn't be read.");
+    const why = membershipHumanReason(ctx.msgs);
+    if (why) return human(why);
+  }
   if (ctx.windowClosed) return human("The WhatsApp window is closed.");
   if (ctx.humanRepliedRecently) return human("A person replied in this thread in the last 2 hours.");
   if (!ctx.context.account_confirmed && statesAccountFact(draft.reply)) return human("The account is unconfirmed and the reply states an account fact.");

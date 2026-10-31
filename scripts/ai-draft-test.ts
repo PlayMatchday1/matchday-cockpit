@@ -18,6 +18,7 @@ import {
   draftEligibility, buildDraftContext, buildDraftRequest, scrubPii, sanitizeDraft, hasDash, guardDraft,
   classifyDraftOutcome, capReached, draftCostUsd, assertAnthropicHost, monthStartUtcIso, DRAFT_INSTRUCTIONS, DRAFT_OUTPUT_SCHEMA,
   AUTO_ACTION_CATEGORIES, AUTO_CATEGORIES, imagesToAttach, toApiRequest, type DraftOutput,
+  cancelPolicyFor, wordCount,
   decideAutoSend, decisionConfig, isAutoSendLive, autoSendAllowed, badAutoSendReplies, KILL_MAX_BAD, type AutoSendConfig, type DecisionContext, type DraftContext,
   parseDraftOutput, priorCourtesyFromLog, staffRepliesConfirmAccount, selectExamples, discardReasonText, DISCARD_CHIPS,
   type DraftMsg, type DraftContextIn, type DraftRequest,
@@ -812,8 +813,8 @@ console.log("\nAUTO-SEND DECISION:");
     ok(`HUMAN: flag ${f}`, r.decision === "human" && r.reason === ({ escalate: "Escalate", refund_pushback: "Refund pushback", strike_dispute: STRIKE_DISPUTE_NOTE, under_16: "Under 16", hold_requested: "Hold requested: tell Ryan", urgent: "Urgent" } as Record<string, string>)[f]);
   }
   ok("POSITIVE CONTROL: the guest_pass and needs_credit flags don't stop it (action drafts carry them)", d({ ...plain, flags: ["guest_pass", "needs_credit"] }, ctx(), on).decision === "auto_send");
-  const everything = { ...on, auto_categories: ["complaint", "membership_billing", "payment", "account", "other"] };
-  for (const c of ["complaint", "membership_billing", "payment", "account", "other"]) {
+  const everything = { ...on, auto_categories: ["complaint", "payment", "account", "other"] };
+  for (const c of ["complaint", "payment", "account", "other"]) {
     ok(`HUMAN: category ${c}, even if someone put it on the list`, d({ ...plain, category: c }, ctx(), everything).decision === "human");
   }
   const unconfirmed = buildDraftContext({ ...lateCancel(0), ambiguous: true, confirmed: false });
@@ -946,6 +947,99 @@ console.log("\nAUTO-SEND DECISION:");
   const noCourtesy = buildDraftContext(lateCancel(0, false, true));
   const g = guardDraft({ reply: "We've credited $12.00.", reply_without_action: "I'll get that added.", category: "needs_credit", flags: [], staff_notes: [], match_ids: [], offers_courtesy_credit: false, action: { kind: "credit", amount_cents: 1200, reason: "staff agreed" } }, { courtesy_credit_eligible: noCourtesy.courtesy_credit_eligible, context: noCourtesy });
   ok("a late cancel under another category, unflagged, fails the guard (seen on a real thread)", !g.ok && /own cancel/.test(g.error));
+}
+
+// ── reply length, the 25-day policy, membership auto-replies ─────────────────────────────────
+console.log("\nREPLY LENGTH:");
+{
+  const on: AutoSendConfig = { auto_categories: ["veo"], action_categories: [], credit_cap_cents: 1500, hold_minutes: 3, enabled: true, shadow: false };
+  const dctx: DecisionContext = { context: buildDraftContext(lateCancel(0)), windowClosed: false, humanRepliedRecently: false, guest: null };
+  const words = (n: number) => Array.from({ length: n }, (_, i) => `word${i}`).join(" ");
+  eq("wordCount counts words", [wordCount(words(40)), wordCount(`  ${words(3)}\n`)], [40, 3]);
+  eq("a reply of exactly 40 words can send", decideAutoSend({ reply: words(40), category: "veo", flags: [], action: null }, dctx, on).decision, "auto_send");
+  eq("41 words goes to a person, Reply too long", decideAutoSend({ reply: words(41), category: "veo", flags: [], action: null }, dctx, on), { decision: "human", reason: "Reply too long" });
+  ok("the instructions aim under 20, with a hard limit of 30 unless there are two facts", /under 20 words/.test(DRAFT_INSTRUCTIONS) && /hard limit is 30 words, unless the reply has to state two facts/.test(DRAFT_INSTRUCTIONS));
+}
+
+console.log("\nTHE 25-DAY POLICY:");
+{
+  const at = (ymdCentral: string) => `${ymdCentral}T17:00:00.000Z`; // midday in Chicago
+  eq("EXAMPLE: cancel Oct 2 → no Nov 1 charge, plays through Oct 31", cancelPolicyFor(at("2026-10-02")), { basis: "cancelled_on", charged_again: false, charge_date: null, last_day_to_play: "Oct 31, 2026" });
+  eq("EXAMPLE: cancel Oct 21 → charged Nov 1, plays through Nov 30", cancelPolicyFor(at("2026-10-21")), { basis: "cancelled_on", charged_again: true, charge_date: "Nov 1, 2026", last_day_to_play: "Nov 30, 2026" });
+  eq("the 4th is before the 5th", cancelPolicyFor(at("2026-10-04"))?.last_day_to_play, "Oct 31, 2026");
+  eq("the 5th itself is charged once more", cancelPolicyFor(at("2026-10-05"))?.last_day_to_play, "Nov 30, 2026");
+  eq("  and the 6th, 7th and 8th have no grace", [cancelPolicyFor(at("2026-10-06"))?.charged_again, cancelPolicyFor(at("2026-10-08"))?.charged_again], [true, true]);
+  eq("December rolls into January", [cancelPolicyFor(at("2026-12-20"))?.charge_date, cancelPolicyFor(at("2026-12-20"))?.last_day_to_play], ["Jan 1, 2027", "Jan 31, 2027"]);
+  eq("January rolls into a short February", cancelPolicyFor(at("2027-01-20"))?.last_day_to_play, "Feb 28, 2027");
+  eq("the day is the Central day: 03:30 UTC on the 5th is still the 4th", cancelPolicyFor("2026-10-05T03:30:00Z")?.last_day_to_play, "Oct 31, 2026");
+  eq("not cancelled yet → what a cancel today would mean", cancelPolicyFor(null, Date.parse(at("2026-10-21")))?.basis, "if_cancelled_today");
+  eq("no cancel and no clock → nothing stated", cancelPolicyFor(null), null);
+  const memberCtx = (canceledAt: string | null, nowMs?: number) => buildDraftContext({ ...lateCancel(0, true), nowMs, membership: { status: "ACTIVE", since: "2026-01-01T00:00:00Z", renews: "2026-11-01T00:00:00Z", canceledAt, price: 6650 } });
+  const c21 = memberCtx(at("2026-10-21")), c2 = memberCtx(at("2026-10-02"));
+  eq("the model gets the cancel date, the next charge date and the last day to play", [c21.membership?.cancelled_on, c21.membership?.next_charge, c21.membership?.cancel_policy?.last_day_to_play], ["Oct 21, 2026", "Nov 1, 2026", "Nov 30, 2026"]);
+  const reply = (r: string, c: DraftContext, category = "membership_billing") => guardDraft({ reply: r, staff_notes: [], category, flags: [], offers_courtesy_credit: false, match_ids: [] }, { courtesy_credit_eligible: false, context: c });
+  ok("EXAMPLE PASSES: Oct 21, plays through Nov 30", reply("One more charge on Nov 1, and you can play through Nov 30.", c21).ok);
+  ok("EXAMPLE PASSES: Oct 21, through the end of November", reply("You can play through the end of November.", c21).ok);
+  ok("EXAMPLE PASSES: Oct 2, plays through Oct 31", reply("No Nov 1 charge, and you can play through Oct 31.", c2).ok);
+  const bad21 = reply("Your Nov 1 charge will go through, and you can keep playing through the end of October.", c21);
+  ok("FAILS, the real case: Oct 21 with \"through the end of October\"", !bad21.ok && /Nov 30/.test(bad21.error));
+  ok("FAILS: Oct 2 with \"through Nov 30\"", !reply("You can play through November 30.", c2).ok);
+  ok("FAILS: the right month and the wrong day", !reply("You can play until Nov 15.", c21).ok);
+  ok("FAILS: \"your last day is Oct 31\" on Oct 21", !reply("Your last day to play is Oct 31.", c21).ok);
+  ok("a charge date alone isn't a last-play date", reply("Your Nov 1 charge will go through.", c2).ok);
+  ok("\"go through, and\" isn't one either", reply("It'll go through, and you're set.", c21).ok);
+  ok("only a membership reply is checked", reply("You can play through Oct 31.", c21, "veo").ok);
+  ok("the reply without an action is checked too", !guardDraft({ reply: "Done.", reply_without_action: "You can play through October 31.", action: { kind: "credit", amount_cents: 1200, reason: "x" }, staff_notes: [], category: "membership_billing", flags: [], offers_courtesy_credit: false, match_ids: [] }, { courtesy_credit_eligible: false, context: c21 }).ok);
+  const noRow = buildDraftContext(lateCancel(0));
+  ok("no membership in context: nothing to check against", reply("You can play through Oct 31.", noRow).ok);
+  const pb = playbookForModel(readFileSync("docs/support/PLAYBOOK.md", "utf8"));
+  ok("POSITIVE CONTROL: the playbook has the rule and both examples", /cancels \*\*before the 5th\*\*/.test(pb) && /Cancel Oct 2: no Nov 1 charge, plays through Oct 31/.test(pb) && /Cancel Oct 21: charged Nov 1, plays through Nov 30/.test(pb));
+  ok("the old 7th-or-8th grace is gone from what the model reads", !/7th or 8th|by the 8th|after the 8th/.test(pb));
+  ok("the instructions say to state it from the context, not the month name", /cancel_policy/.test(DRAFT_INSTRUCTIONS) && /Never work them out from a month name/.test(DRAFT_INSTRUCTIONS));
+  const f = fake({ now: () => Date.parse(at("2026-10-21")), msgs: [{ id: "x", direction: "inbound", body: "how do I cancel", sent_at: at("2026-10-21") }], ctx: { ...lateCancel(0, true), membership: { status: "ACTIVE", since: null, renews: null, canceledAt: null, price: 6650 } } });
+  await runDraft(f.deps);
+  ok("through runDraft, the request carries what a cancel today would mean", f.calls.model[0].messages[0].content.includes('"last_day_to_play": "Nov 30, 2026"') && f.calls.model[0].messages[0].content.includes('"basis": "if_cancelled_today"'));
+}
+
+console.log("\nMEMBERSHIP AUTO-REPLIES:");
+{
+  const on: AutoSendConfig = { auto_categories: ["membership_billing"], action_categories: [], credit_cap_cents: 1500, hold_minutes: 3, enabled: true, shadow: false };
+  const context = buildDraftContext({ ...lateCancel(0, true), membership: { status: "ACTIVE", since: "2026-01-01T00:00:00Z", renews: null, canceledAt: null, price: 6650 } });
+  const reply = "You can cancel in the app: Profile tab, Membership Details, scroll down, Cancel Membership.";
+  const decide = (msgs: DraftMsg[], over: Record<string, unknown> = {}, c: DraftContext = context, cfg = on) =>
+    decideAutoSend({ reply, category: "membership_billing", flags: [], action: null, ...over }, { context: c, windowClosed: false, humanRepliedRecently: false, guest: null, msgs }, cfg);
+  const inb = (b: string, ago = 1 * H) => msg("inbound", b, ago);
+  const out = (b: string, extra: Partial<DraftMsg> = {}) => msg("outbound", b, 3 * H, extra);
+  eq("POSITIVE: a member's first how-to-cancel on a confirmed account auto-sends", decide([inb("How do I cancel my membership?")]).decision, "auto_send");
+  eq("the category can be turned on to send", AUTO_CATEGORIES.includes("membership_billing"), true);
+  eq("it can never be turned on to act", AUTO_ACTION_CATEGORIES.includes("membership_billing"), false);
+  eq("not turned on → human", decide([inb("How do I cancel?")], {}, context, { ...on, auto_categories: [] }).decision, "human");
+  for (const w of ["refund", "refunded", "dispute", "chargeback", "bank", "lawyer", "BBB", "scam", "fraud"]) {
+    const r = decide([inb(`this is about my ${w} and my membership`)]);
+    ok(`HUMAN: mentions ${w}`, r.decision === "human" && r.reason === `Mentions ${w.toLowerCase()}`);
+  }
+  ok("POSITIVE CONTROL: \"banking\" alone isn't \"bank\"", decide([inb("I was banking on playing more, how do I cancel?")]).decision === "auto_send");
+  ok("only what they've said now counts: an old mention, already answered, doesn't", decide([inb("is this a scam?", 9 * H), out("Nope, we're real!"), inb("ok how do I cancel")]).decision === "auto_send");
+  const toldTexts = ["We have a 25-day policy for cancels.", "You'll be charged on Nov 1 and can play through Nov 30.", "Your Nov 1 charge will still go through."];
+  for (const t of toldTexts) {
+    const r = decide([out(t), inb("but I just cancelled, why?")]);
+    ok(`HUMAN: already told "${t}" and they wrote back`, r.decision === "human" && r.reason === "Already told the policy in this thread");
+  }
+  ok("HUMAN: an auto-send told them, and they wrote back", decide([out(toldTexts[0], { auto_sent_draft_id: "d0" }), inb("that makes no sense")]).reason === "Already told the policy in this thread");
+  ok("POSITIVE CONTROL: unrelated earlier reply, then a question", decide([out("Your match is at 7."), inb("how do I cancel?")]).decision === "auto_send");
+  ok("an out-of-hours auto-reply isn't telling them the policy", decide([out("You'll be charged on Nov 1", { is_auto_reply: true }), inb("how do I cancel?")]).decision === "auto_send");
+  const steps = "To cancel your membership: Profile tab, Membership Details, scroll to the bottom, Cancel Membership.";
+  ok("HUMAN: can't find it after being given the steps", /after being given the steps/.test(decide([out(steps), inb("I can't find it")]).reason));
+  ok("  there's no button", decide([out(steps), inb("there's no button")]).decision === "human");
+  eq("POSITIVE CONTROL: can't find it before any steps → gets the steps", decide([inb("I can't find where to cancel")]).decision, "auto_send");
+  for (const w of ["it's not letting me cancel", "the cancel isn't working", "it won't let me", "the button doesn't work", "I can't cancel in the app"]) {
+    eq(`HUMAN: "${w}"`, decide([inb(w)]).reason, "In-app cancel isn't working");
+  }
+  ok("HUMAN: unconfirmed account, even with no fact stated", /unconfirmed/.test(decide([inb("how do I cancel")], {}, buildDraftContext({ ...lateCancel(0), ambiguous: true, confirmed: false })).reason));
+  eq("HUMAN: flag escalate", decide([inb("how do I cancel")], { flags: ["escalate"] }).reason, "Escalate");
+  eq("HUMAN: flag refund_pushback", decide([inb("how do I cancel")], { flags: ["refund_pushback"] }).reason, "Refund pushback");
+  ok("HUMAN: a membership reply with an action", /can't carry an action/.test(decide([inb("how do I cancel")], { action: { kind: "credit", amount_cents: 1200, reason: "x" } }).reason));
+  ok("HUMAN: no conversation to check, fails closed", decideAutoSend({ reply, category: "membership_billing", flags: [], action: null }, { context, windowClosed: false, humanRepliedRecently: false, guest: null }, on).decision === "human");
 }
 
 // ── needs a human, strike holding replies, images ────────────────────────────────────────────
