@@ -103,7 +103,7 @@ console.log("\nTHE REQUEST BODY SENT TO THE API:");
   ok("the last name from the profile is NOT in the context (only first_name is built)", !JSON.stringify(ctx).includes("Realname"));
   ok("staff are labelled, never named", req.messages[0].content.includes("MatchDay staff:") && !body.includes("staff-1"));
   ok("no card, Stripe, member-number or password field names in the body", !/card|last4|stripe|payment_intent|subscription_id|member_number|password/i.test(body));
-  eq("model is claude-sonnet-5-5 at medium effort", [req.model, req.output_config.effort], ["claude-sonnet-5-5", "medium"]);
+  eq("model is claude-opus-5-5 at medium effort", [req.model, req.output_config.effort], ["claude-opus-5-5", "medium"]);
   eq("scrubPii keeps short numbers (a $12 price, a 9pm time)", scrubPii("It was $12 at 9pm, team 4"), "It was $12 at 9pm, team 4");
 }
 
@@ -196,24 +196,25 @@ function fake(over: Partial<DraftDeps> & { msgs?: DraftMsg[]; ctx?: DraftContext
 
 // tsx runs this file as CJS, which has no top-level await: the async sections run inside main().
 async function main() {
-// ── 7. the $60 monthly cap ───────────────────────────────────────────────────────────────────
-console.log("\nTHE $60 MONTHLY CAP:");
+// ── 7. the $150 monthly cap ───────────────────────────────────────────────────────────────────
+console.log("\nTHE $150 MONTHLY CAP:");
 {
-  const under = fake({ spend: 59.99 });
+  const under = fake({ spend: 149.99 });
   const r1 = await runDraft(under.deps);
-  ok("POSITIVE CONTROL: at $59.99 spent, a draft is made (one model call)", r1.status === "ok" && under.calls.model.length === 1);
-  const over = fake({ spend: 60.01 });
+  ok("POSITIVE CONTROL: at $149.99 spent, a draft is made (one model call)", r1.status === "ok" && under.calls.model.length === 1);
+  const over = fake({ spend: 150.01 });
   const r2 = await runDraft(over.deps);
-  ok("cost_usd forced over the cap ($60.01) → drafting stops", r2.status === "cap_reached");
+  ok("cost_usd forced over the cap ($150.01) → drafting stops", r2.status === "cap_reached");
   eq("  and the model is NOT called", over.calls.model.length, 0);
-  ok("  and the card says so plainly", r2.status === "cap_reached" && /paused/.test(r2.message) && r2.message.includes("$60"));
-  const exact = fake({ spend: 60 });
-  ok("exactly $60.00 is already the cap", (await runDraft(exact.deps)).status === "cap_reached" && exact.calls.model.length === 0);
+  ok("  and the card says so plainly", r2.status === "cap_reached" && /paused/.test(r2.message) && r2.message.includes("$150"));
+  const exact = fake({ spend: 150 });
+  ok("exactly $150.00 is already the cap", (await runDraft(exact.deps)).status === "cap_reached" && exact.calls.model.length === 0);
   const broken = fake({ monthSpendUsd: async () => { throw new Error("db down"); } });
   ok("a spend read that FAILS stops drafting too (fails closed)", (await runDraft(broken.deps)).status === "cap_reached" && broken.calls.model.length === 0);
   ok("capReached(NaN) is true", capReached(NaN));
-  eq("cost of 9,000 in / 300 out at $2/$10 per million", draftCostUsd({ input_tokens: 9000, output_tokens: 300 }), 0.021);
-  eq("every insert records its cost (failed ones too)", under.calls.inserts[0].cost_usd, 0.021);
+  eq("cost of 9,000 in / 300 out at $4/$20 per million", draftCostUsd({ input_tokens: 9000, output_tokens: 300 }), 0.042);
+  eq("a cache hit at 0.05x input, the Opus 5.5 rate", draftCostUsd({ cache_read_input_tokens: 1000000 }), 0.2);
+  eq("every insert records its cost (failed ones too)", under.calls.inserts[0].cost_usd, 0.042);
   eq("the cap month starts on the 1st (UTC)", monthStartUtcIso(NOW), "2026-10-01T00:00:00.000Z");
 }
 

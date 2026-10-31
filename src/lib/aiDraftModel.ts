@@ -9,6 +9,10 @@
 // draft", and they press Send. Or, only for a category an admin has turned on and only with
 // decideAutoSend's yes, it goes out through /api/crm/send after a hold anyone can cancel. Shipped off.
 //
+// MODEL AND COST: claude-opus-5-5 at medium effort since 2026-10-31 (it was claude-sonnet-5-5). About
+// $0.08 a draft on real threads, against $0.037 on Sonnet, so the monthly cap is $150. Every message
+// drafted is about $62 a month at October's 763 inbound. docs/matchday-api-facts.md has the measurements.
+//
 // TIME MODEL: messages carry sent_at, a true UTC instant. Match times handed to the model come from
 // startDate, which is LOCAL WALL CLOCK wearing a "Z" (see CLAUDE.md) — it is formatted with
 // timeZone "UTC" so the wall clock prints as written, never re-shifted.
@@ -16,13 +20,14 @@
 import { whatsappWindowExpired } from "@/lib/crmWindow";
 import { dayAndTime, lateReplyProblem, unscheduledTimes, FALLBACK_TZ, type DraftClock, type ScheduleEntry } from "@/lib/aiDraftClock";
 
-export const AI_DRAFT_MODEL = "claude-sonnet-5-5";
+export const AI_DRAFT_MODEL = "claude-opus-5-5";
 export const ANTHROPIC_HOST = "api.anthropic.com";
-export const MONTHLY_CAP_USD = 60;
-// claude-sonnet-5-5 list price, $ per million tokens (input / output). Cost is recorded per draft
+export const MONTHLY_CAP_USD = 150;
+// claude-opus-5-5 list price, $ per million tokens (input / output), read from
+// platform.claude.com/docs/en/about-claude/pricing on 2026-10-31. Cost is recorded per draft
 // in crm_ai_drafts.cost_usd and summed for the cap, so an under-estimate here would let spend run
 // past the cap — keep this in step with Anthropic's pricing page.
-export const PRICE_PER_MTOK = { input: 2, output: 10 } as const;
+export const PRICE_PER_MTOK = { input: 4, output: 20 } as const;
 const HISTORY_LIMIT = 40;
 
 // ── which threads get a draft ──────────────────────────────────────────────────────────────────
@@ -696,7 +701,7 @@ export function discardReasonText(chip: unknown, text: unknown): string | null {
 // ── money ──────────────────────────────────────────────────────────────────────────────────────
 
 export function draftCostUsd(usage: { input_tokens?: number | null; output_tokens?: number | null; cache_creation_input_tokens?: number | null; cache_read_input_tokens?: number | null }): number {
-  const input = (usage.input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0) * 1.25 + (usage.cache_read_input_tokens ?? 0) * 0.1;
+  const input = (usage.input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0) * 1.25 + (usage.cache_read_input_tokens ?? 0) * 0.05;
   const cost = (input * PRICE_PER_MTOK.input + (usage.output_tokens ?? 0) * PRICE_PER_MTOK.output) / 1e6;
   return Math.round(cost * 1e6) / 1e6;
 }

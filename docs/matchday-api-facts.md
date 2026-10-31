@@ -7651,6 +7651,18 @@ for 18596, 18680, 18679, 19700 and `/admin/matches?fromDate&toDate` windows arou
   the guard: a credit whose only matching match is one the player cancelled counts as a courtesy, whatever the category.
 - **Not built:** multi-spot credits. The guard only accepts one match price, so a two-spot late cancel at twice the price is stored failed.
 
+## Claude drafts moved to Opus 5.5 (2026-10-31)
+
+- **`claude-opus-5-5` at $4 input and $20 output per million tokens**, cache hits 0.05x input, read from the model pricing table at
+  `https://platform.claude.com/docs/en/about-claude/pricing` on 2026-10-31. `PRICE_PER_MTOK` carries these, and the cap is computed from them.
+- **The API accepts the model and the schema.** `scripts/ai-draft-live-real.ts 1 10`, 10 real threads, every write stubbed: 10 parsed, all
+  `end_turn`, none failed a guard. **$0.0819 a draft** ($0.0704 to $0.1058), 15.5k to 20.7k input tokens, 217 to 1,152 output, 36.0 words a
+  reply, slowest 13.3 seconds against a 50 second timeout. No action was proposed on any of the 10.
+- **Not a clean comparison with Sonnet:** $0.0374 and 23.5 words came from a different sample of 22 threads, with the same re-drafting method.
+- **Cost:** at 763 inbound messages in 30 days, drafting every message is about $62 a month, under `MONTHLY_CAP_USD` of 150. Entries above
+  and below that quote Sonnet figures are what was measured at the time.
+- **`fallbacks` is not set.** A refusal is stored as a failed draft, as it was on Sonnet.
+
 ## Player Chats auto-send (2026-10-31)
 
 - **`/api/crm/send` refuses a sender with no human by design** (`no_human_actor`, pinned in `scripts/crm-characterize-test.ts`). Ryan's ruling

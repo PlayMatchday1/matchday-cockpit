@@ -13,7 +13,7 @@
 // The decisions (skip, reuse, cap, guards) live in src/lib/aiDraftRun.ts and are tested there
 // with fakes; src/lib/aiDraftDeps.ts wires them to Supabase, the MatchDay profile read and the
 // Anthropic API, and this file adds the person asking.
-// Key: ANTHROPIC_API_KEY, server-side only. Model: claude-sonnet-5-5 at medium effort.
+// Key: ANTHROPIC_API_KEY, server-side only. Model: claude-opus-5-5 at medium effort.
 
 import { authenticateCrm } from "@/lib/crmAuth";
 import { runDraft } from "@/lib/aiDraftRun";
