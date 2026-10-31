@@ -25,9 +25,12 @@ export async function notifyAppPlayerChat(args: { threadId: string; supabase: Su
     const thread = t.data as { id: string; status: "open" | "closed"; created_at: string; player_id: number | null; assigned_to_user_id: string | null; last_message_at: string; last_message_preview: string | null; last_message_direction: "inbound" | "outbound" | null; no_reply_needed_at: string | null };
     if (!isAwaitingReply(thread)) return;
 
-    // When this wait began, by the inbox's clock: episode = latest reopen, else the thread's start.
-    const reopen = await sb.from("crm_thread_status_log").select("performed_at").eq("thread_id", thread.id).in("action", ["reopen", "auto_reopen"]).order("performed_at", { ascending: false }).limit(1);
-    const episodeStart = reopen.data?.[0] ? Date.parse(reopen.data[0].performed_at as string) : Date.parse(thread.created_at);
+    /* When this wait began. The episode starts at the latest CLOSE, not the latest reopen: an
+     * auto_reopen is logged a moment AFTER the player message that caused it (20:34:43.702 message,
+     * 20:34:43.861 reopen, 2026-10-30), so starting at the reopen dropped that very message and no
+     * push went out. Everything after a close belongs to the new episode. Never closed: the start. */
+    const closed = await sb.from("crm_thread_status_log").select("performed_at").eq("thread_id", thread.id).eq("action", "close").order("performed_at", { ascending: false }).limit(1);
+    const episodeStart = closed.data?.[0] ? Date.parse(closed.data[0].performed_at as string) : Date.parse(thread.created_at);
     const msgs = await sb.from("crm_messages").select("direction, body, sent_at, is_auto_reply").eq("thread_id", thread.id).gte("sent_at", new Date(episodeStart).toISOString()).order("sent_at", { ascending: true }).limit(500);
     if (msgs.error || !msgs.data?.length) return;
     const rows = msgs.data as { direction: "inbound" | "outbound"; body: string | null; sent_at: string; is_auto_reply: boolean | null }[];

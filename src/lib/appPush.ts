@@ -24,9 +24,9 @@ import { isAwaitingReply } from "./awaitingReply";
 export type PushEvent = "player_chat" | "match_at_risk";
 const PREF_COLUMN: Record<PushEvent, "player_chats" | "matches_at_risk"> = { player_chat: "player_chats", match_at_risk: "matches_at_risk" };
 
-/* WHILE TESTING (Ryan, 2026-10-30: "send only to my own token"), real pushes reach these accounts
- * and nobody else. Set to null to send to everyone the rules allow. */
-export const PUSH_TEST_ONLY_EMAILS: readonly string[] | null = ["rmancuso@playmatchday.com"];
+/* A TEST-ONLY GATE: when set, real pushes reach these accounts and nobody else. It held every push to
+ * Ryan while testing; lifted once build 2 was Ready (Ryan, 2026-10-30). */
+export const PUSH_TEST_ONLY_EMAILS: readonly string[] | null = null;
 
 export type StaffRow = {
   id: string; email: string;
@@ -72,7 +72,7 @@ export function chatPushText(firstName: string | null, body: string): { title: s
 
 /** PURE. "Bob Jones Park Field 6 · 8:00 PM · 3 short". */
 export function matchRiskText(name: string, wallStart: string, short: number): { title: string; body: string } {
-  return { title: "Match at risk", body: `${name} · ${wallClockOf(wallStart)} · ${short} short` };
+  return { title: "Match at risk", body: `${name.trim()} · ${wallClockOf(wallStart)} · ${short} short` };
 }
 
 /** "8:00 PM" from the API's wall-clock startDate ("2026-10-30T20:00:00.000Z" reads as local 8 PM). */
