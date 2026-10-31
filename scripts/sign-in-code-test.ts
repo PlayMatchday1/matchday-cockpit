@@ -7,7 +7,7 @@
  * The last block is two source assertions, narrowed to the pairing, because the ingest's row and the
  * hook's order of operations sit behind a database and are not observable inside the gate. */
 import { readFileSync } from "node:fs";
-import { signInCodeText, isSignInCodeText, redactForLog, SIGN_IN_CODE_REDACTED, smsGate, CODES_PER_HOUR } from "@/lib/signInCode";
+import { signInCodeText, isSignInCodeText, redactForLog, SIGN_IN_CODE_REDACTED, smsGate, CODES_PER_HOUR, isFictionalTestNumber } from "@/lib/signInCode";
 import { signStandardWebhook, verifyStandardWebhook } from "@/lib/standardWebhook";
 
 let pass = 0, fail = 0;
@@ -82,6 +82,15 @@ yes("the hook records the request before it decides", recordAt > 0 && recordAt <
 yes("…and decides before it sends", gateAt > 0 && gateAt < sendAt, `${gateAt} ${sendAt}`);
 yes("…and verifies the signature before anything else", hook.indexOf("verifyStandardWebhook(") < hook.indexOf('from("app_users")'));
 yes("…and sends the template, not a hand-written text", /text: signInCodeText\(otp\)/.test(hook));
+
+console.log("\n4. fictional test numbers: let through without a text, only on a staff row");
+is("555 0100 is a fictional test number", isFictionalTestNumber("+15555550100"), true);
+is("555 0199 is too", isFictionalTestNumber("+15125550199"), true);
+is("presence control: a real-looking number is not", isFictionalTestNumber("+15125550200"), false);
+is("a non-US number is not", isFictionalTestNumber("+445555550100"), false);
+yes("the hook still looks the number up on app_users before allowing a test number", hook.indexOf('from("app_users")') < hook.indexOf("if (fictional)"));
+yes("the hook still applies the rate gate before allowing a test number", hook.indexOf("if (!gate.send)") < hook.indexOf("if (fictional)"));
+yes("a test number is answered before Telnyx is touched", hook.indexOf("if (fictional)") < hook.indexOf("new Telnyx("));
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
