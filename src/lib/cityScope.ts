@@ -61,3 +61,20 @@ export function cityNameFor(identifier: string | null | undefined): string | nul
 export function isUnknownScope(identifier: string | null | undefined): boolean {
   return !!identifier && cityNameFor(identifier) == null;
 }
+
+/* ── A FREE-TEXT CITY LABEL TO ITS SCOPE IDENTIFIER ─────────────────────────────────────────────
+ * The 2026 Daily Matches rows carry fin_venues.city (or a slot's typed city), which is free text:
+ * "Austin", "Dallas" and "DFW" for one market, "WAW" for another. A confined account's Growth view
+ * keeps a row only when its label resolves HERE to the account's identifier, so a label this list
+ * does not know (Philadelphia, San Diego, a slot with no city) is in no confined city's view.
+ * Exact after trimming and case-folding; the identifier, the full name, and each half of a "A / B"
+ * name all resolve. Nothing fuzzy: a label that needs guessing is not shown inside a boundary. */
+export function cityIdentifierForLabel(label: string | null | undefined): string | null {
+  const k = (label ?? "").trim().toLowerCase();
+  if (!k) return null;
+  for (const c of CITY_SCOPES) {
+    const names = [c.identifier, c.name, ...c.name.split("/")].map((x) => x.trim().toLowerCase());
+    if (names.includes(k)) return c.identifier;
+  }
+  return null;
+}

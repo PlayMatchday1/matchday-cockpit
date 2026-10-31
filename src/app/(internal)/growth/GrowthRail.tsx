@@ -14,11 +14,15 @@ import { GROWTH_SECTIONS } from "./growthSections";
 const COLLAPSE_KEY = "growth:rail-collapsed";
 
 const LABEL = "Growth";
+// A city-confined account is offered 2026 Daily Matches alone (GrowthShell). A constant, not a
+// filter per render: useSectionNav publishes on a change of identity.
+const CONFINED_SECTIONS = GROWTH_SECTIONS.filter((x) => x.key === "daily-matches");
 
-export default function GrowthRail({ children }: { children: React.ReactNode }) {
+export default function GrowthRail({ children, confined = false }: { children: React.ReactNode; confined?: boolean }) {
+  const items = confined ? CONFINED_SECTIONS : GROWTH_SECTIONS;
   /* PUBLISHED TO THE SHELL'S ONE APP BAR instead of rendering a second one inside <main>.
    * See src/components/SectionNav.tsx for why the bar cannot live in here. */
-  useSectionNav({ items: GROWTH_SECTIONS, label: LABEL, showSwitch: false });
+  useSectionNav({ items, label: LABEL, showSwitch: false });
   const [collapsed, setCollapsed] = useState(false);
   useEffect(() => {
     try { setCollapsed(window.localStorage.getItem(COLLAPSE_KEY) === "1"); } catch { /* private mode */ }
@@ -43,7 +47,7 @@ export default function GrowthRail({ children }: { children: React.ReactNode }) 
           height: "calc(100dvh - env(safe-area-inset-top, 0px) - var(--nav-h))",
           width: railW, transition: "width .18s ease-out",
         }}>
-        <ChatsRail collapsed={collapsed} onToggle={toggle} items={GROWTH_SECTIONS} showSwitch={false} label={LABEL} />
+        <ChatsRail collapsed={collapsed} onToggle={toggle} items={items} showSwitch={false} label={LABEL} />
       </div>
       <div
         style={{ "--mo-rail-w": railW } as React.CSSProperties}

@@ -4,6 +4,7 @@
 // rule and someone will eventually "fix" the inconsistency; this fails when they do.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { cityIdentifierForLabel } from "../src/lib/cityScope";
 import { isConfined, confinedCity, confinedCityName, assertConfinedScope, CONFINED_CAPABILITIES, CONFINED_RAIL_KEYS, confinementSummary, assertConfinedRoute, isConfinedRouteAllowed, playerInConfinedScope, playerCityAllowed } from "../src/lib/cityConfinement";
 import { can } from "../src/lib/capabilities";
 import { fieldScopeFor, fieldCityInScope } from "../src/lib/fieldScope";
@@ -38,7 +39,31 @@ console.log("\n── the six still resolve ──");
 for (const cap of ["matchops", "chats"] as const) {
   t(`${cap} resolves true for a confined account`, () => assert.equal(can(WAW, cap), true));
 }
-t("  control — the set names exactly those two", () => assert.deepEqual([...CONFINED_CAPABILITIES].sort(), ["chats", "matchops"]));
+t("  control — the set names exactly those three", () => assert.deepEqual([...CONFINED_CAPABILITIES].sort(), ["chats", "growth", "matchops"]));
+
+console.log("\n── Growth inside a boundary: 2026 Daily Matches, own city, read only (Ryan, 2026-10-31) ──");
+t("a confined account WITHOUT the Growth box is refused growth", () => assert.equal(can(WAW, "growth"), false));
+t("  …and WITH it, holds growth (the box grants, the boundary does not)", () =>
+  assert.equal(can({ ...(WAW as object), can_access_growth: true } as never, "growth"), true));
+t("field-goals is allowed, EXACT", () => assert.equal(isConfinedRouteAllowed("/api/growth/field-goals"), true));
+t("  …the app's growth route is allowed", () => assert.equal(isConfinedRouteAllowed("/api/app/growth"), true));
+for (const p of ["/api/growth/locations", "/api/growth/field-pipeline", "/api/growth/field-goals/x", "/api/growth/ops-plan"]) {
+  t(`  REFUSED: ${p}`, () => assert.equal(isConfinedRouteAllowed(p), false));
+}
+t("city labels resolve to identifiers", () => {
+  assert.equal(cityIdentifierForLabel("Austin"), "ATX");
+  assert.equal(cityIdentifierForLabel("Dallas"), "DFW");
+  assert.equal(cityIdentifierForLabel("DFW"), "DFW");
+  assert.equal(cityIdentifierForLabel("WAW"), "WAW");
+  assert.equal(cityIdentifierForLabel("St. Louis"), "STL");
+  assert.equal(cityIdentifierForLabel("OKC"), "OKC");
+});
+t("  …and an unknown or empty label resolves to nothing", () => {
+  assert.equal(cityIdentifierForLabel("Philadelphia"), null);
+  assert.equal(cityIdentifierForLabel("PHL"), null);
+  assert.equal(cityIdentifierForLabel(null), null);
+  assert.equal(cityIdentifierForLabel("Aus"), null);
+});
 t("write grants still hang off their own column, not the boundary", () => {
   assert.equal(can(WAW, "managePromos"), false);                       // box unticked
   assert.equal(can({ ...(WAW as object), can_manage_promos: true } as never, "managePromos"), true);

@@ -71,8 +71,14 @@ export function confinedCityName(row: ConfinableRow | null | undefined): string 
  * THE SIX PAGES, and nothing else. Keyed on the capability each page gates on today, so this list
  * cannot drift from the permission model: matchops covers Gameday Ops, Player Lookup, Promo Codes
  * and Reviews; chats covers Match Chats and Player Chats.
+ *
+ * GROWTH (Ryan, 2026-10-31): a confined account that HOLDS can_access_growth reads 2026 Daily
+ * Matches for its own city, read only. Confinement still grants nothing: the column must be ticked.
+ * Only /api/growth/field-goals and /api/app/growth are allowed below, and both scope the rows to the
+ * session's city; every other Growth route stays refused by the allowlist, and 0170's
+ * growth_pages_readable() still refuses a confined account every write at PostgREST.
  */
-export const CONFINED_CAPABILITIES: ReadonlySet<string> = new Set(["matchops", "chats"]);
+export const CONFINED_CAPABILITIES: ReadonlySet<string> = new Set(["matchops", "chats", "growth"]);
 
 /** The rail's six, by their MATCH_OPS_SECTIONS keys. The rail is a courtesy; the server decides. */
 export const CONFINED_RAIL_KEYS: readonly string[] = [
@@ -224,6 +230,9 @@ export const CONFINED_ROUTE_PREFIXES: readonly string[] = [
    * then the thread's own city boundary (assertThreadInScope), exactly like /api/crm/threads/{id};
    * without this entry a confined chat account could not open the player of its own thread. */
   "/api/app/chat-players/",
+  /* The staff app's Growth tab (2026 Daily Matches). It reads the desktop field-goals route in
+   * process, which scopes the rows to the session's city; read only. */
+  "/api/app/growth",
 ];
 
 /* ── EXACT ROUTES, NOT SUBTREES ───────────────────────────────────────────────────────────────
@@ -239,6 +248,10 @@ export const CONFINED_ROUTE_PREFIXES: readonly string[] = [
  * in the same commit. /api/veo/cameras, /api/veo/codes, /api/veo/intent and /api/veo/inbound stay
  * refused — a confined account reads its week and changes no fleet configuration. */
 const CONFINED_ROUTE_EXACT: readonly string[] = [
+  /* 2026 DAILY MATCHES, EXACT. "/api/growth/" as a prefix would open Field Pipeline, Locations,
+   * VC Outreach and the rest. The route keeps only the rows whose city resolves to the session's
+   * city (cityIdentifierForLabel) and recomputes the month totals from them. */
+  "/api/growth/field-goals",
   "/api/veo",
   /* THE DAY VIEW, EXACT, for the reason directly above. "/api/veo/" as a prefix would open
    * /api/veo/codes and /api/veo/inbound with it. fetchVeoRange's rule applies here too: the route

@@ -34,5 +34,7 @@ export async function GET(req: Request) {
     canManagePlayers: can(row, "managePlayers", auth.email),
     // Manager Schedule pay changes: the app refuses them to a city-confined account.
     canChangeManagerPay: !auth.confined,
+    // The Growth tab (2026 Daily Matches); /api/app/growth is refused without it.
+    canReadGrowth: can(row, "growth", auth.email),
   });
 }
