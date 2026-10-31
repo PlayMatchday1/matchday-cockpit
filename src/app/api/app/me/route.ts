@@ -29,5 +29,10 @@ export async function GET(req: Request) {
     // The same courtesy for the chat composers. The send routes (/api/crm/send, the match chat
     // reply) re-check can_send_messages themselves before anything is sent.
     canSendMessages: can(row, "sendMessages", auth.email),
+    // Player Lookup's membership and strike controls; every write route re-checks.
+    canEditMemberships: can(row, "editMemberships", auth.email),
+    canManagePlayers: can(row, "managePlayers", auth.email),
+    // Manager Schedule pay changes: the app refuses them to a city-confined account.
+    canChangeManagerPay: !auth.confined,
   });
 }
