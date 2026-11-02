@@ -9,6 +9,7 @@ import { timingSafeEqual } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { refreshUsersLensSnapshot } from "@/lib/usersLensSnapshot";
 import { runWithLog, type TriggeredBy } from "@/lib/syncLogging";
+import { refuseUnlessAdmin } from "@/lib/adminSession";
 
 // Refresh runs ~6s typical (4.6s fetchAll + ~1s aggregate × 6 + small
 // writes). 60s is generous headroom.
@@ -61,6 +62,8 @@ export async function POST(req: Request) {
     if (userErr || !userData?.user) {
       return Response.json({ error: "Invalid session" }, { status: 401 });
     }
+    const adminRefusal = await refuseUnlessAdmin(userData.user.email);
+    if (adminRefusal) return adminRefusal;
   }
   const supabase: SupabaseClient = createClient(supabaseUrl, serviceKey, {
     auth: { persistSession: false, autoRefreshToken: false },

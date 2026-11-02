@@ -172,6 +172,9 @@ export function canAccess(
   // the chrome — every one of which the server refuses. The rail must not offer a door the server
   // will slam; see cityConfinement.ts for why is_admin loses here and wins for city managers.
   if (isConfined(appUser)) {
+    /* GROWTH ONLY WHEN TICKED, and then only 2026 Daily Matches, read only (GrowthShell). The same
+     * can() the server asks, so the rail cannot offer what the route refuses. */
+    if (page === "growth") return can(appUser as unknown as CapRow, "growth", appUser.email);
     return page === "matchops" || page === "chats";
   }
   if (appUser.is_admin) return true;

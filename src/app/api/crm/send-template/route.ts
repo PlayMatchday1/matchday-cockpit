@@ -33,6 +33,7 @@ import { logCrmSend } from "@/lib/crmSendLog";
 import { sendWhatsAppTemplate, WhatsAppApiError } from "@/lib/whatsapp";
 import { getTemplate, WHATSAPP_TEMPLATES, renderTemplateBody } from "@/lib/whatsappTemplates";
 import { writeThreadStatusLog } from "@/lib/crmThreadStatus";
+import { reviewMasked } from "@/lib/reviewAccount";
 
 export const runtime = "nodejs";
 export const maxDuration = 15;
@@ -46,7 +47,7 @@ type Body = {
 };
 
 /** GET: the approved templates, for a client that cannot import the registry (the staff app). */
-export async function GET(req: Request) {
+async function getRoute(req: Request) {
   const auth = await authenticateCrm(req);
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   return Response.json({ templates: Object.values(WHATSAPP_TEMPLATES) }, { status: 200 });
@@ -235,3 +236,5 @@ export async function POST(req: Request) {
   }
   return Response.json({ message: inserted.data }, { status: 200 });
 }
+
+export const GET = reviewMasked(getRoute);

@@ -11,6 +11,7 @@ import { timingSafeEqual } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { syncMdapiSubscriptions } from "@/lib/mdapiSubscriptionsSync";
 import { runWithLog, type TriggeredBy } from "@/lib/syncLogging";
+import { refuseUnlessAdmin } from "@/lib/adminSession";
 
 // mdapi_subscriptions runs ~60s typical (9 cities × 3 statuses, ~200ms
 // per call, ~70-100 calls). 120s gives 2× headroom.
@@ -76,6 +77,8 @@ export async function POST(req: Request) {
     if (userErr || !userData?.user) {
       return Response.json({ error: "Invalid session" }, { status: 401 });
     }
+    const adminRefusal = await refuseUnlessAdmin(userData.user.email);
+    if (adminRefusal) return adminRefusal;
   }
 
   // --- Run with logging ---

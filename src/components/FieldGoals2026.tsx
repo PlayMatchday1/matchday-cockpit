@@ -26,6 +26,8 @@
 
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { supabase } from "@/lib/supabase";
+import { useAuth } from "@/lib/useAuth";
+import { isConfined, confinedCityName } from "@/lib/cityConfinement";
 import { errorText } from "@/lib/errorText";
 import {
   MONTH_LABELS, bandForDisplay, baselineMonth, cityRollup, dailyIn, fmtShownSigned, shownGap, shownTrend, hasNoCompletedDay, cityTotals, fmtSigned, fmtUnit, isDormantFor,
@@ -86,6 +88,12 @@ export default function FieldGoals2026() {
   const [unit, setUnit] = useState<"day" | "week">("day");
   const [open, setOpen] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /* READ ONLY INSIDE A CITY BOUNDARY (Ryan, 2026-10-31). The route sends only the account's own city
+   * and 0170's policy refuses its writes; this disables every control so none is offered. Every
+   * input on the page is already disabled by `busy`, so `locked` stands in for it below. */
+  const { appUser } = useAuth();
+  const readOnly = isConfined(appUser);
+  const locked = busy || readOnly;
   const [nonce, setNonce] = useState(0);
   const [draft, setDraft] = useState<Record<string, string>>({});
   /* BY GAP, DESCENDING, BY DEFAULT. The sheet was already in that order and for the same reason: the
@@ -371,6 +379,11 @@ export default function FieldGoals2026() {
   return (
     <div className="px-4 pb-16 pt-3" data-testid="fg-page">
       <h1 className="mb-3 text-[27px] font-black uppercase tracking-tight" style={{ color: "#003326" }}>{data.year} Daily Matches</h1>
+      {readOnly && (
+        <p className="mb-3 text-[12.5px]" data-testid="fg-scope" style={{ color: "#5C6F66" }}>
+          {confinedCityName(appUser) ?? "Your city"} only, read only. Goals are set from an account without a city boundary.
+        </p>
+      )}
 
       {/* ── THE ONE NUMBER, AND IT IS A MONTH RATHER THAN A DAY. Labelled "Today" it read as today's
              count, which is not what a month-to-date average is. ────────────────────────────── */}
@@ -427,7 +440,7 @@ export default function FieldGoals2026() {
           baseIdx={baseIdx} noBase={noBase} liveDays={liveDays}
           sort={sort} setSort={setSort} grain={grain} setGrain={setGrain}
           openCities={openCities} toggleCity={toggleCity}
-          rowByKey={rowByKey} year={data.year} busy={busy} revert={revert}
+          rowByKey={rowByKey} year={data.year} busy={locked} revert={revert}
           onTarget={setTarget} open={open} setOpen={setOpen} draft={draft} setDraft={setDraft}
           onAddAction={addAction} onToggleAction={toggleAction} onRemoveAction={removeAction}
           onNotCounted={setNotCounted} writeErr={writeErr}
@@ -436,7 +449,7 @@ export default function FieldGoals2026() {
       ) : (
         <>
           <GoalTable
-            title="Existing fields" rows={rows} unit={unit} year={data.year} cur={cur} busy={busy}
+            title="Existing fields" rows={rows} unit={unit} year={data.year} cur={cur} busy={locked}
             open={open} setOpen={setOpen} draft={draft} setDraft={setDraft}
             onTarget={setTarget} onAddAction={addAction} onToggleAction={toggleAction} onRemoveAction={removeAction}
             onNotCounted={setNotCounted} writeErr={writeErr} revert={revert}
@@ -446,7 +459,7 @@ export default function FieldGoals2026() {
             testId="fg-existing"
           />
           <GoalTable
-            title="New fields" rows={slots} unit={unit} year={data.year} cur={cur} busy={busy}
+            title="New fields" rows={slots} unit={unit} year={data.year} cur={cur} busy={locked}
             open={open} setOpen={setOpen} draft={draft} setDraft={setDraft}
             onTarget={setTarget} onAddAction={addAction} onToggleAction={toggleAction} onRemoveAction={removeAction}
             onNotCounted={setNotCounted} writeErr={writeErr} revert={revert} sort={sort}

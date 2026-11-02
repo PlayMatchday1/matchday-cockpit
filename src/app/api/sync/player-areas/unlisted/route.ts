@@ -6,6 +6,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { isLive, refreshUnlisted, type RunRow } from "@/lib/playerAreaSync";
+import { syncLogWritable } from "@/lib/syncLogging";
 
 export const maxDuration = 300;
 export const runtime = "nodejs";
@@ -31,7 +32,7 @@ export async function GET(req: Request) {
   const r = busy
     ? { ok: false, checked: 0, refreshed: 0, scrubbed: 0, gone: 0, apiCalls: 0, error: "Stood down: the night's full player pass is still running." }
     : await refreshUnlisted(sb).catch((e: unknown) => ({ ok: false, checked: 0, refreshed: 0, scrubbed: 0, gone: 0, apiCalls: 0, error: e instanceof Error ? e.message : String(e) }));
-  if (!("skipped" in r && r.skipped)) {
+  if (!("skipped" in r && r.skipped) && syncLogWritable()) {
     await sb.from("fin_sync_log").insert({
       source: "mdapi-users-full", triggered_by: "cron", started_at: startedAt, completed_at: new Date().toISOString(),
       rows_imported: r.refreshed, api_calls: r.apiCalls, run_mode: "unlisted",

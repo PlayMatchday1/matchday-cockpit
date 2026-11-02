@@ -19,6 +19,7 @@ import { timingSafeEqual } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { refreshMembershipPriceSnapshots } from "@/lib/membershipPriceSnapshots";
 import { runWithLog, type TriggeredBy } from "@/lib/syncLogging";
+import { refuseUnlessAdmin } from "@/lib/adminSession";
 
 // Reads ACTIVE mdapi_subscriptions, groups by city, inserts only on a
 // price change. Sub-second in practice; 60s is generous.
@@ -81,6 +82,8 @@ export async function POST(req: Request) {
     if (userErr || !userData?.user) {
       return Response.json({ error: "Invalid session" }, { status: 401 });
     }
+    const adminRefusal = await refuseUnlessAdmin(userData.user.email);
+    if (adminRefusal) return adminRefusal;
     triggeredBy = "manual";
   }
 

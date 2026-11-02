@@ -202,7 +202,12 @@ export function derivePage(rows: ReviewRow[], f: PageFilters): PageDerived {
     return true;
   });
 
-  const venueMode = f.venue !== "all";
+  return derivePeriod(filtered, f.venue !== "all");
+}
+
+/** derivePage's figures over rows ALREADY filtered to a period (a month, or the staff app's Monday to
+ *  Sunday week): one body, so the desktop month and the app's week cannot be computed differently. */
+export function derivePeriod(filtered: ReviewRow[], venueMode = false): PageDerived {
   const { managers, unattributed } = managerAggs(filtered);
   const matches = matchAggs(filtered);
 

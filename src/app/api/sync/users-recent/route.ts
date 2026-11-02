@@ -36,6 +36,7 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { syncMdapiUsers, mdapiUsersLogPatch } from "@/lib/mdapiUsersSync";
 import { runWithLog, type TriggeredBy } from "@/lib/syncLogging";
 import { inNightPassHour, NIGHT_PASS_SKIP } from "@/lib/nightPass";
+import { cronOnlyGet, refuseUnlessAdmin } from "@/lib/adminSession";
 
 /* AN INCREMENTAL RUN IS A COUPLE OF PAGES. 60s is ~20x the observed incremental cost and is
  * deliberately BELOW the 120s that /api/sync/users allows itself, because that headroom exists
@@ -106,6 +107,8 @@ export async function POST(req: Request) {
     if (userErr || !userData?.user) {
       return Response.json({ error: "Invalid session" }, { status: 401 });
     }
+    const adminRefusal = await refuseUnlessAdmin(userData.user.email);
+    if (adminRefusal) return adminRefusal;
     const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
     if (!serviceKey) {
       return Response.json(
@@ -174,4 +177,4 @@ export async function POST(req: Request) {
  * SAME HANDLER, SAME AUTH. The bearer is read from headers and the cron path consumes no body, so
  * the verb is the only difference between the two entry points.
  * https://vercel.com/docs/cron-jobs#how-cron-jobs-work */
-export const GET = POST;
+export const GET = cronOnlyGet(POST);

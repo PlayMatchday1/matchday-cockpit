@@ -11,7 +11,7 @@
 // 0 (a false zero is worse than no badge).
 
 import { useCallback, useEffect, useState } from "react";
-import { supabase } from "@/lib/supabase";
+import { freshAccessToken } from "@/lib/crmSession";
 import { sharedFetch } from "@/lib/sharedBadgeFetch";
 import { useAuth } from "@/lib/useAuth";
 
@@ -30,8 +30,7 @@ export function useCrmAwaitingCount(): number {
       return;
     }
     try {
-      const { data } = await supabase.auth.getSession();
-      const token = data.session?.access_token;
+      const token = await freshAccessToken();
       if (!token) return;
       /* SHARED. ChatsRail, MatchOpsSectionSheet, TopNav and MobileBottomNav all mount badges that
        * ask for this same number, and each used to fetch it for itself — four requests for one

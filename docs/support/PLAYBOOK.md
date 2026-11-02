@@ -1,6 +1,7 @@
 # Player Chats playbook
 
-Draft 3, 2026-10-22 (rules 14, 17, 19 to 21: apologies, next step first, notes). Built from
+Draft 4, 2026-10-31 (rule 5: one courtesy credit per account; actions; shorter replies; camera and
+minimum player facts). Built from
 every Player Chats message from 2026-05-15 to 2026-10-20:
 668 threads, 6,337 messages, read in full. The house rules come from Ryan. Everything else
 describes what the team actually did.
@@ -23,8 +24,10 @@ numbers or codes appear.
 
 ## 1. House rules (decided by Ryan)
 
-1. **Nothing reaches a player without a human clicking Send.** A draft is a suggestion for a
-   staff member to send, edit or throw away.
+1. **A person decides what reaches a player.** A draft is a suggestion for a staff member to send,
+   edit or throw away. The one exception is a category Ryan has turned on for auto-send: then a reply
+   goes out on its own after a short hold that anyone can cancel. Write every reply as if it will be
+   sent as is.
 2. **Tone.** Human and very friendly. Never sound like an AI. **No em dashes, ever.** Short
    sentences, contractions, plain words. No bullet lists or headings in a reply. At most one
    emoji, and usually none. Reply in Spanish when the player writes in Spanish.
@@ -33,23 +36,25 @@ numbers or codes appear.
    uploaded.
 4. **Cancellations.** A cancel **more than 24 hours before kickoff** gets a credit, never a
    refund. Members have a **6 hour** match cancel window.
-5. **Late cancels (inside 24 hours).** A **first-time player**, meaning this was their first
-   match with us and they have never played one, gets a **one-time courtesy credit** to win
-   them back. The draft may offer it, and must flag it for staff to issue. **Everyone else**
-   gets the 24 hour rule, kindly, with no courtesy credit. The context says whether the player
-   is a first-time player (`first_time_player`) and whether the courtesy applies
-   (`courtesy_credit_eligible`). If it says no, the draft does not offer one.
+5. **Late cancels (inside 24 hours).** **One courtesy credit per account, lifetime.** A player
+   who has never had a courtesy credit is eligible once, whether or not they have played before.
+   After that, no: they get the 24 hour rule, kindly. Members pay nothing per match, so there is
+   nothing to credit. The context says whether the courtesy applies (`courtesy_credit_eligible`).
+   If it says no, the draft does not offer one. The record starts on 2026-08-14 and shows only
+   credits made in Clubhouse: for a player who joined before August, staff should check Retool
+   history before pressing a courtesy credit.
 6. **Credit amount: the match price only, not tax or fees.** Why: a booking paid with credits
    is not taxed and carries no card fee, so a credit equal to the match price covers the
    player's whole next game. A player who sees, say, $12 credited against $12.99 paid has not
    lost anything, and the draft can explain it that way.
 7. **Never refund.** If a player pushes back on a credit, **escalate to staff.** Don't argue,
    don't promise anything, and don't use the word "refund" for a credit.
-8. **Membership cancel cutoff.** Tell members to **cancel by the 5th of the month** to avoid
-   the next month's charge. A member who cancelled by the **7th or 8th** is treated as on time:
-   the draft says they won't be charged next month. After the 8th, next month's charge stands
-   and they can play through the end of that month. Always use the member's real dates from
-   the context, never a made-up example.
+8. **Membership cancel: the 25-day policy.** A member who cancels **before the 5th** is not charged
+   on the 1st and plays through the end of the current month. A member who cancels **on or after
+   the 5th** is charged once more on the 1st and plays through the end of that following month.
+   Cancel Oct 2: no Nov 1 charge, plays through Oct 31. Cancel Oct 21: charged Nov 1, plays through
+   Nov 30. The context gives the cancel date, the next charge date and `cancel_policy`, which has
+   the last day to play. State those. Never work it out from a month name or use a made-up example.
 9. **Holds.** A draft **never offers or confirms a hold.** If a member asks to pause or freeze,
    the draft says someone from the team will follow up, and the staff notes say **"Hold
    requested: tell Ryan"**.
@@ -93,9 +98,11 @@ numbers or codes appear.
 
 ### What a draft must never do
 
-- Say a credit, refund, code, strike removal, move, hold or cancellation has been done. A draft
-  can't do anything, so it may only say "I'll" or "let me" when a person is about to take
-  that action, and its notes must name the action for staff.
+- Say a credit, refund, code, strike removal, move, hold or cancellation has been done, unless it
+  proposes that action for a staff member's button (a credit or a guest code). Then `reply` says
+  it's done and `reply_without_action` doesn't. Otherwise it may only say "I'll" or "let me" when
+  a person is about to take that action, and its notes must name the action for staff.
+- Close with an offer like "just message us if anything comes up." Default to one short sentence.
 - Use the word "refund" for a credit, or promise a refund.
 - Offer a courtesy credit to anyone the context doesn't mark as `courtesy_credit_eligible`.
 - Guess an amount, a date or a match. If the context doesn't show it, ask the player or
@@ -176,20 +183,26 @@ $1 intro, cancelled, and still got charged the full price on the 1st."
 - Pushback often ended in a refund, an immediate removal, or a $1 month. This happened most
   when the member had played 0 or 1 matches. See section 4.
 
+**The policy (rule 8).** A member who cancels before the 5th is not charged on the 1st and plays
+through the end of the current month. A member who cancels on or after the 5th is charged once more
+on the 1st and plays through the end of that following month.
+
+- Cancel Oct 2: no Nov 1 charge, plays through Oct 31.
+- Cancel Oct 21: charged Nov 1, plays through Nov 30.
+
+Take the dates from `cancel_policy` in the context: `charge_date` and `last_day_to_play`.
+
 **Suggested answer (how-to)**
-> Hey! You can cancel right in the app: Profile tab, then Membership Details, scroll to the
-> bottom and tap Cancel Membership. If you cancel by the 5th, you won't be charged for next
-> month. Let me know if anything looks off!
+> You can cancel in the app: Profile tab, Membership Details, scroll down, Cancel Membership.
 
-**Suggested answer (cancelled by the 8th)**
-> Hey {first name}, thanks for reaching out! I see you cancelled on {cancel date}, so you're all
-> set. You won't be charged on {next 1st}, and you can keep playing through {end of month}.
+The draft can't cancel a membership: ending one from our side stops it the same day, with no time
+left on it. Notes: "Cancel requested: confirm in Player Lookup or walk them through the app."
 
-**Suggested answer (cancelled after the 8th, charged on the 1st)**
-> Hey {first name}, thanks for reaching out. I see you cancelled on {cancel date}. To skip a
-> month's charge we need the cancel in by the 5th, so the {month} charge still went through.
-> The good news is you can play as much as you want through {end of that month}, and you won't
-> be charged again after that.
+**Suggested answer (cancelled before the 5th)**
+> You're all set {first name}, no charge on {next 1st}, and you can play through {last day to play}.
+
+**Suggested answer (cancelled on or after the 5th)**
+> You cancelled on {cancel date}, so there's one more charge on {charge date}, and you can play through {last day to play}.
 
 If the player still disputes it, escalate to staff (rule 7). Never offer a refund, a $1 month
 or a hold.
@@ -321,13 +334,12 @@ Notes: the requested move, and whether the target team has open spots.
 > back to your account as credit. It's on your Profile tab and applies automatically to your
 > next booking, with no tax or fees on top.
 
-**Suggested answer (inside 24 hours, first-time player)**
-> Hey {first name}! Normally we need 24 hours notice to give a credit, but
-> since this was going to be your first match with us, I'll add a one-time credit so you can
-> come play another day. Hope to see you out there soon!
+**Suggested answer (inside 24 hours, no courtesy credit yet)**
+> We've added a one-time credit of {match price} to your account, it'll apply to your next booking.
 
-Only when the context says `courtesy_credit_eligible: true`. Notes: "Courtesy credit for a
-first-time player: issue {match price}."
+Only when the context says `courtesy_credit_eligible: true`. Propose it as a credit action for the
+match price and set `offers_courtesy_credit`. The reply without the action:
+> Normally we need 24 hours notice for a credit, but let me see what I can do on this one.
 
 **Suggested answer (inside 24 hours, everyone else)**
 > Hey {first name}, our cancellation window is 24 hours before kickoff, so this one isn't
@@ -344,7 +356,7 @@ No courtesy credit (rule 5). If they push back, escalate.
 The member answer must change if the cancel was inside 6 hours. See 2.9.
 
 **Data the draft needs:** cancel time against kickoff in hours, member or not, match price,
-and whether this is a first-time player (no played matches).
+and whether the account has had a courtesy credit (`courtesy_credit_eligible`).
 
 ### 2.6 Veo video: about 64 requests
 
@@ -395,10 +407,11 @@ apology, and nothing is promised about specific clips or goals.
 - Chargebacks: the account is expelled until the player reverses the dispute with their bank.
 
 **Suggested answer**
-> Hey {first name}, thanks for letting us know! I see {n} strike(s) from {match/date}. I need to
-> check with the match manager on that one, and we'll get back to you as soon as we hear.
+> Hey {first name}, thanks for letting us know! I need to check with the match manager on that
+> one, and we'll get back to you as soon as we hear.
 
-Rule 10: honest, friendly, no promise. Notes: "Strike dispute: check with the match manager."
+Rule 10: honest, friendly, no promise, and no strike count in the reply. Notes: "Strike dispute:
+check with the match manager."
 A draft never says a strike is removed, and never debates an expulsion. Expelled and fraud
 appeals go to staff.
 
@@ -420,12 +433,17 @@ appeals go to staff.
   already been issued that year.
 
 **Suggested answer (member)**
-> Hey {first name}! We're processing your guest passes for you now. You'll get one code that
-> works 3 times, and your friends just enter it at checkout while logged into their own
-> MatchDay account.
+> Your guest code is {code}, it works 3 times and goes live in a few minutes. Your friends enter
+> it at checkout while logged into their own MatchDay account.
 
-Rule 11. Notes: "Guest passes: confirm the membership, then issue the code. Active membership
-in context: {yes/no, since date}." The draft never invents or quotes a code.
+Rule 11. Propose it as an `issue_guest_code` action. The server builds the code and fills in
+`{code}`; the draft never invents or quotes one. The server refuses if the player already has an
+active code, or if the membership is under 24 hours old with no staff message confirming it. The
+reply without the action:
+> We're processing your guest passes for you now.
+
+Notes: "Guest passes: confirm the membership, then issue the code. Active membership in context:
+{yes/no, since date}."
 
 **Suggested answer (not an active member)**
 > Guest passes come with a membership. If you'd like, I can tell you how membership works!
@@ -590,13 +608,16 @@ These are fit for drafts:
   - can pay for a guest spot
   - can't pay for a membership
 - **Cancellations by MatchDay:**
-  - a low turnout match is called about 75 minutes before kickoff (one reply said 1 hour)
+  - a low turnout match is called 75 minutes before kickoff
   - players get a text and an email
   - weather calls are made at game time, and only for lightning or a facility closure
 - **Strikes:** members only. 1 for a cancel inside 6 hours, 2 for a no-show. 4 means a 1 week
   suspension or a fine.
 - **Disputes:** filing a bank dispute closes the account until the player reverses it.
-- **Recording:** a camera icon by the field name means the match is recorded.
+- **Recording:** a camera icon by the field name means the match is recorded. Camera coverage is
+  per field and changes. The draft reads it from `recorded_fields`, never from memory.
+- **Minimum players:** typically 12 to run a match, but it depends on the field. Players often join
+  late. The call is made 75 minutes before kickoff.
 - **Languages:** reply in Spanish when the player writes in Spanish.
 
 ---
@@ -608,7 +629,7 @@ on 2026-10-20 (section 1):
 - credits are the match price, without tax or fees (item 4: crediting the match price was
   right; the large shortfalls, $2.48 of $32 and $0.99, are still UNKNOWN)
 - courtesy credits go to first-time players only (item 3)
-- cancel by the 5th, with the 7th or 8th treated as on time (item 6)
+- cancel before the 5th, or one more charge and a month of play (item 6)
 - drafts never offer holds (item 7)
 - strike disputes go to the match manager
 - guest passes are flagged to staff

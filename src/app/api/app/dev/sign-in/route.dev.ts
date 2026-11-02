@@ -9,16 +9,20 @@
 //   - the account is exactly TEST_EMAIL, an app_users row confined to Austin holding no admin flag
 //     and no write grant. It never takes an email from the request, so it can sign in no one else.
 //
+// DEV_SIGN_IN_ACCOUNT=review on the local server signs in the App Store review account instead
+// (lib/reviewAccount.ts), for taking store screenshots as it sees the app; the same checks apply.
+//
 // The session is minted with the service role: a magic link is generated for the account (nothing
 // is sent) and verified at once with the publishable key, and the access and refresh tokens go back
 // to the app, which installs them with supabase.auth.setSession.
 
 import { createClient } from "@supabase/supabase-js";
+import { REVIEW_EMAIL } from "@/lib/reviewAccount";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const TEST_EMAIL = "staff-app-test@playmatchday.com";
+const TEST_EMAIL = process.env.DEV_SIGN_IN_ACCOUNT === "review" ? REVIEW_EMAIL : "staff-app-test@playmatchday.com";
 const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);
 const WRITE_GRANTS = ["is_admin", "is_service_account", "can_edit_matches", "can_send_messages", "can_manage_players",
   "can_manage_promos", "can_edit_credits", "can_edit_memberships"] as const;

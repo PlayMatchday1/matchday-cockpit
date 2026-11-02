@@ -10,6 +10,7 @@ import { timingSafeEqual } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import Stripe from "stripe";
 import { isStrikeCharge, looksLikeMembership } from "@/lib/financeImport";
+import { refuseUnlessAdmin } from "@/lib/adminSession";
 
 export const maxDuration = 120;
 export const runtime = "nodejs";
@@ -61,6 +62,8 @@ export async function POST(req: Request) {
     if (error || !data?.user) {
       return Response.json({ error: "Invalid session" }, { status: 401 });
     }
+    const adminRefusal = await refuseUnlessAdmin(data.user.email);
+    if (adminRefusal) return adminRefusal;
   }
 
   const stripeKey = process.env.STRIPE_SECRET_KEY?.trim();

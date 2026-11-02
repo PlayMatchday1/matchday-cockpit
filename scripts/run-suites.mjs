@@ -136,6 +136,7 @@ const NODE_SUITES = [
   // while a normal message is kept in full; the Send SMS hook sends only to staff numbers, inside
   // the 30 second cooldown and 5 an hour, and only for a correctly signed request.
   "scripts/sign-in-code-test.ts",
+  "scripts/review-account-test.ts",
   // How Clubhouse reads the production MatchDay API (2026-10-21, after the R15 outage): the paced
   // client, a forced 503 stopping the location and matches syncs after one request, the hourly roster
   // pick, reviews from rosters, the night pass's window quarters, Download players from our copy.

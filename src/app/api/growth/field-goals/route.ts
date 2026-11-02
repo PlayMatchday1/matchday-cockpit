@@ -13,6 +13,11 @@
  *
  * ONE MATCH FILTER, countsTowardGoals(), shared with the chart. See fieldGoals.ts.
  *
+ * A CITY-CONFINED ACCOUNT (Ryan, 2026-10-31) gets its own city's rows and slots and nothing else:
+ * a row stays when its city label resolves to the session's city (cityIdentifierForLabel), and the
+ * month totals and counts are recomputed from those rows, so no estate figure reaches it. The city
+ * comes from the session, never from the request.
+ *
  * WRITES DO NOT COME THROUGH HERE. The page writes targets, slots and actions straight to
  * PostgREST with the operator's own token, where 0170's growth policy governs them — the same
  * arrangement the kanban boards use.
@@ -27,6 +32,7 @@ import {
   type GoalMatch,
 } from "@/lib/fieldGoals";
 import { todayBusinessDate } from "@/lib/goalPace";
+import { cityIdentifierForLabel } from "@/lib/cityScope";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -162,8 +168,13 @@ export async function GET(req: Request) {
       };
     }).sort((x, y) => x.name.localeCompare(y.name));
 
+    /* ── THE CITY BOUNDARY ── applied before anything below sums a row. */
+    const scope = auth.confinedCity;
+    const inScope = (city: string | null) => !scope || cityIdentifierForLabel(city) === scope;
+    const rows = computed.filter((r) => inScope(r.city));
+
     // ── the slots: typed rows for fields that do not exist yet ─────────────────────────────────
-    const slots = (goalRows ?? []).filter((r) => r.slot_name != null && String(r.slot_name).trim() !== "").map((r) => ({
+    const allSlots = (goalRows ?? []).filter((r) => r.slot_name != null && String(r.slot_name).trim() !== "").map((r) => ({
       key: `s${r.id}`, rowId: r.id as string, kind: "slot" as const,
       name: r.slot_name as string, city: (r.city as string | null) ?? null, venueId: null, fieldId: null,
       notCounted: (r as Record<string, unknown>).not_counted === true,
@@ -176,6 +187,7 @@ export async function GET(req: Request) {
       actions: actionsOf(r.id as string),
       sortOrder: Number(r.sort_order),
     })).sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name));
+    const slots = allSlots.filter((r) => inScope(r.city));
 
     /* THE YEAR'S TWELVE BUCKETS, off the SAME matches the rows came from — so the chart and the
      * table cannot disagree. Recorded months are computed; October to December have no elapsed days
@@ -186,7 +198,7 @@ export async function GET(req: Request) {
      * sitting above the sum of the rows beneath them. Dormant rows DO count: they are folded in the
      * table, not removed from the year. */
     const countedSpots = new Array(12).fill(0);
-    for (const r of computed) {
+    for (const r of rows) {
       if (!rowCountsTowardTotals(r)) continue;
       r.monthly.forEach((m, i) => { countedSpots[i] += m.spots; });
     }
@@ -205,9 +217,10 @@ export async function GET(req: Request) {
        * derived from `cur` moved with it. */
       currentMonth: businessMonthIndex(now).monthIndex0,
       months,
-      rows: computed,
+      rows,
       slots,
-      counts: { matches: matches.length, rows: computed.length, unmappedFields: computed.filter((r) => r.fieldId != null).length },
+      scopeCity: scope,
+      counts: { matches: scope ? rows.reduce((n, r) => n + r.matches, 0) : matches.length, rows: rows.length, unmappedFields: rows.filter((r) => r.fieldId != null).length },
     }, { headers: { "Cache-Control": "no-store" } });
   } catch (e) {
     console.error("[growth:field-goals]", e);

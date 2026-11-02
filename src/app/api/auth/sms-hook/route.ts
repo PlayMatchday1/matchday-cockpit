@@ -17,6 +17,7 @@ import { normalizePhone } from "@/lib/phone";
 import { phoneLast4 } from "@/lib/changeLog";
 import { verifyStandardWebhook } from "@/lib/standardWebhook";
 import { signInCodeText, smsGate } from "@/lib/signInCode";
+import { reviewCredentials } from "@/lib/reviewAccount";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -36,6 +37,14 @@ export async function POST(req: Request) {
   const phone = normalizePhone(payload.user?.phone ? `+${String(payload.user.phone).replace(/^\+/, "")}` : null);
   const otp = payload.sms?.otp ?? "";
   if (!phone || !/^\d{6}$/.test(otp)) return refuse(400, "Phone or code missing.");
+
+  // The App Store review number is never texted (its code is fixed, lib/reviewAccount.ts). The start
+  // route never asks Supabase for it; this refuses it should anything else ever do so.
+  const review = reviewCredentials();
+  if (review && phone === normalizePhone(review.phone)) {
+    console.warn(`[sms-hook] refused ...${phoneLast4(phone)}: the App Store review number is never texted`);
+    return refuse(403, "Not a staff number.");
+  }
 
   const sb = makeServerClient();
   const staff = await sb.from("app_users").select("id, is_service_account").eq("phone", phone).limit(2);

@@ -55,6 +55,7 @@ import {
 import { stateForPoint } from "./usState";
 import { activeFields } from "./locationsMap";
 import { fetchFieldSnapshots } from "./locationsData";
+import { syncLogWritable } from "./syncLogging";
 
 export const PAGE_LIMIT = 200;
 /** Walking time per leg. The route's maxDuration is 300 s; the rest is the leg's writes and the hand-on. */
@@ -199,7 +200,7 @@ async function finishPass(sb: SupabaseClient, runId: number, f: {
 async function logFullPass(sb: SupabaseClient, runId: number): Promise<void> {
   const got = await sb.from("player_area_sync_runs").select(RUN_COLS).eq("id", runId).maybeSingle<RunRow>();
   const r = got.data;
-  if (got.error || !r || r.kind !== "full") return;
+  if (got.error || !r || r.kind !== "full" || !syncLogWritable()) return;
   const { error } = await sb.from("fin_sync_log").insert({
     source: "mdapi-users-full", triggered_by: r.triggered_by, started_at: r.started_at,
     completed_at: r.finished_at ?? new Date().toISOString(),

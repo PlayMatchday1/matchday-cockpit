@@ -7616,6 +7616,111 @@ for 18596, 18680, 18679, 19700 and `/admin/matches?fromDate&toDate` windows arou
   about 35 hours. With `recent_days` in the clock and the rule against working out elapsed time, the
   reply no longer states it.
 
+## Claude drafts phase 2: courtesy credits, cameras, actions (2026-10-31)
+
+- **A courtesy credit has no marker in the API.** `user_credits` is one balance per currency, `@@unique([userId, currency])`
+  (`~/Code/backend/apps/api/prisma/schema.prisma:722`), and `creditAmount` is an absolute set. There is no ledger.
+  `change_log` is the only record and starts **2026-08-14** (first row of `endpoint like /admin/players/%/profile`,
+  service-role read 2026-10-31: 154 rows, 151 landed production). Retool writes leave nothing, so
+  **a courtesy before that date, or made in Retool, is invisible.**
+- **Staff don't write "courtesy".** 2 of 142 landed Player Lookup credits say it; the rest of the courtesies read "1st time",
+  "1st cancel", "First match". The marker (`COURTESY_REASON_RX`, `src/lib/aiDraftModel.ts`) reads courtesy, grace, experience,
+  one time, 1x, 1st and first (time/match/cancel/game/offense) on a landed production credit. Ryan's call: a false positive
+  costs one credit, a false negative costs the rule. A draft button writes `Courtesy credit: ...`.
+- **`veo_codes` is wrong in both directions as a list of recorded fields.** `mdapi_matches` non-deleted, last 30 days, 🎥 in
+  the name, service-role read 2026-10-31: **Zipp 21 of 21 recorded with no code**, STAR 21 of 22 with no code, Warsaw 12 of 12
+  with no code; **Westlake is coded with 0 of 14 recorded**, NEMP Tournaments coded with 0 of 34. Drafts read the marker
+  per field (`src/lib/aiDraftCamera.ts`, 30 days back, 14 forward); the counts also show rotation (Keswick 3 of 17).
+- **Ending a membership from the admin path is immediate** (`memberships/[subscriptionId]/end/route.ts:8-18`: Stripe cancel now, no
+  proration), which contradicts playbook rule 8's "play through the end of the month". So a draft has no cancel button (Ryan,
+  2026-10-31): it gives the in-app steps and the note "Cancel requested: confirm in Player Lookup or walk them through the app."
+- **Guest codes are `{city_member_slug}FP`.** Of 150 active members' slugs checked, 7 have that exact code in
+  `mdapi_promocodes`; the 4 live ones are all PERCENT 100, 3 uses, ALL_USERS, TOTAL_USAGE. **A member number changes:** 117 of 843
+  players in the first 1,000 `mdapi_subscriptions` rows hold more than one slug, so the existing-code check covers all of them.
+  A code a person named some other way is not detectable. **Not exercised:** the create from a draft has not been pressed on a
+  real player; no write probe was made.
+- **Nothing regenerates drafts on a timer.** All 134 rows had a `requested_by_user_id` on 2026-10-31, and no cron calls the route. The
+  stale check only ever runs when the card asks. The one case with nobody looking was a new message reaching an open background
+  tab, now held until the tab is visible.
+- **`crm_messages.template_name` misses most canned text.** Last 1,000 outbound: 14 with a template, while "To cancel your membership"
+  appears 25 times and the membership policy text 20 times with none. `selectExamples` drops repeats and long text.
+- **Medium effort and the action schema work on the live API.** After a credit top-up on 2026-10-31,
+  `scripts/ai-draft-live-check.ts`: 17 of 17 synthetic threads, $0.0321 a draft. `scripts/ai-draft-live-real.ts`, 22 real threads with
+  every write stubbed: 22 parsed, $0.0374 a draft, 15.6k to 19.6k input tokens, 110 to 1,189 output, 23.5 words a reply. `anyOf` with
+  null is accepted in the structured output schema. At 763 inbound messages in 30 days, drafting every message is about $28.50 a month.
+- **Production drafts failed from 2026-10-30T19:15Z until that top-up**, 400 "Your credit balance is too low"
+  (10 rows in `crm_ai_drafts`, latest billed draft 19:09Z). That is the account balance, not MONTHLY_CAP_USD.
+- **A real thread proposed a credit for a late cancel with no courtesy left**, filed outside `player_cancel` with no courtesy flag. Fixed in
+  the guard: a credit whose only matching match is one the player cancelled counts as a courtesy, whatever the category.
+- **Not built:** multi-spot credits. The guard only accepts one match price, so a two-spot late cancel at twice the price is stored failed.
+
+## Claude drafts moved to Opus 5.5 (2026-10-31)
+
+- **`claude-opus-5-5` at $4 input and $20 output per million tokens**, cache hits 0.05x input, read from the model pricing table at
+  `https://platform.claude.com/docs/en/about-claude/pricing` on 2026-10-31. `PRICE_PER_MTOK` carries these, and the cap is computed from them.
+- **The API accepts the model and the schema.** `scripts/ai-draft-live-real.ts 1 10`, 10 real threads, every write stubbed: 10 parsed, all
+  `end_turn`, none failed a guard. **$0.0819 a draft** ($0.0704 to $0.1058), 15.5k to 20.7k input tokens, 217 to 1,152 output, 36.0 words a
+  reply, slowest 13.3 seconds against a 50 second timeout. No action was proposed on any of the 10.
+- **Not a clean comparison with Sonnet:** $0.0374 and 23.5 words came from a different sample of 22 threads, with the same re-drafting method.
+- **Cost:** at 763 inbound messages in 30 days, drafting every message is about $62 a month, under `MONTHLY_CAP_USD` of 150. Entries above
+  and below that quote Sonnet figures are what was measured at the time.
+- **`fallbacks` is not set.** A refusal is stored as a failed draft, as it was on Sonnet.
+
+## Membership cancels: the stated policy and what billing does don't match (2026-10-31)
+
+Policy per Ryan, in playbook rule 8: cancel before the 5th, no charge on the 1st; on or after the 5th, charged once more.
+
+- **Nothing in the backend reads the day of the month.** The in-app cancel (`cancelSubscriptions`, `~/Code/backend/apps/api/src/core/subscriptions/subscriptions.service.ts:543`,
+  checkout 7698a52 of 2026-10-13) writes `canceledAt` and calls no Stripe. The only Stripe call is on `invoice.paid` (`stripe.service.ts:798-800`): if `canceledAt` is set,
+  `cancel_at_period_end`. So as written, **every in-app cancel is charged once more on the next 1st**, whatever the day. Stripe's dashboard settings: UNKNOWN.
+- **Measured.** `mdapi_subscriptions` cancels Jan to Sep 2026 (784), joined on `md_membership_id` to paid `stripe_member_invoices`, a paid invoice within 2 days before to 5 days after the next 1st.
+  `cancel_reason` of "Removed by Retool" taken as an admin end:
+
+  | Cancel day (Central) | In-app: charged next 1st / not / no invoices | Retool: charged / not / no invoices |
+  |---|---|---|
+  | before the 5th | **5 / 1** / 0 | 0 / 14 / 0 |
+  | the 5th | none | none |
+  | 6th to 8th | 9 / 0 / 0 | 0 / 4 / 0 |
+  | 9th onward | 347 / 100 / 6 | 2 / 282 / 14 |
+
+- **So "no charge" before the 5th has only been true when staff ended it, and that ends the membership immediately** (this doc, `/end` route) rather than playing through the month. In-app, 5 of 6 were charged. A small sample.
+- **No in-app cancel at all landed on the 2nd to the 6th** in those 9 months: day 1 has 6, day 7 has 4, days 2 to 6 have 0. Why: UNKNOWN. Whether the app blocks it, or `canceledAt` gets rewritten, isn't in evidence.
+- **Not checked:** the 100 in-app cancels after the 8th with no charge. A person may have stepped in.
+
+## Player Chats: images to the model, Needs a human (2026-10-31)
+
+- **Images reach the model at about $0.09 a draft.** `scripts/ai-draft-live-real.ts --images 4`, real threads with one image each, writes stubbed:
+  $0.0744 to $0.1020, average $0.0911, 33KB to 51KB after the downscale, 17.4k to 18.0k input tokens, slowest 17.6 seconds. All four were read
+  correctly in staff notes (strike banner, Edit Profile screen, Profile tab credits, Home tab member number). A real thread's output token count
+  moves the cost as much as the image does. 51 inbound images in the 30 days to 2026-10-31.
+- **crm-media downloads work with the service role** (`downloadMessageMedia`, `src/lib/crmMedia.ts`). Stored images are JPEG, 100KB to 175KB.
+- **`sharp` is now a direct dependency** at 0.34.5, the version `next` already pulled in as optional. It works on Vercel: a real inbound image was drafted by the tick on production at 18:43Z on
+  2026-10-31 (`crm_ai_drafts`: `claude-opus-5-5`, context key `images:1`, $0.083264). It loads lazily, so a failure costs one image, not every draft.
+- **`InboxRow.tsx` is dead code.** Nothing imports it; the inbox renders `MistInboxRow` in `CrmClient.tsx`. Between `422a200` and this build the countdown and
+  Cancel existed only in that dead file, so staff had no Cancel while auto-send was live. Measured: 4 auto-sends went out in that time.
+- **The nav badge counts NEEDS A HUMAN, not everyone waiting** (`awaiting-count`, rule in `src/lib/crmAttention.ts`). It falls back to everyone waiting if
+  the sections can't be read. **`counts.awaiting` in the list route, behind the Awaiting filter pill, is still everyone waiting.**
+- **The needs-human push marker is a `change_log` row** at `/crm/human-push/{inbound id}`, checked and written before the push. It is not atomic: two ticks
+  overlapping at that step could both push. A tick runs a minute apart and reaches that step in seconds. Not observed.
+
+## Player Chats auto-send (2026-10-31)
+
+- **`/api/crm/send` refuses a sender with no human by design** (`no_human_actor`, pinned in `scripts/crm-characterize-test.ts`). Ryan's ruling
+  2026-10-31: the one exception is `autoSendAllowed` (`src/lib/aiDraftModel.ts`): hold_status `sending`, hold_until past, config live, a
+  stored yes on that draft, and the body equal to that draft's text.
+- **The credit and promo routes stay closed to the cron secret.** The writes moved to `src/lib/creditWrite.ts` and `src/lib/promoWrite.ts`;
+  the tick calls those with the actor `auto-send@clubhouse.system`.
+- **`crm_send_log` does not exist** (`GET /rest/v1/crm_send_log` 404 PGRST205, 2026-10-31). Sends log to `change_log` through `logCrmSend`; an
+  auto-send carries `draft_id` in the body and the actor `auto-send`. Never the message text.
+- **`crm_messages.auto_sent_draft_id` marks a message nobody typed.** `is_auto_reply` means an out-of-hours acknowledgment that doesn't count
+  as our answer, so it can't be reused.
+- **Shadow reads empty category lists as every category that could be turned on** (`decisionConfig`). Otherwise every shadow decision would
+  read "category isn't turned on" and shadow data would say nothing. Live reads the lists as they are.
+- **Inbound drafting is a cron, not the webhooks:** `/api/crm/auto-send/tick` every minute, threads whose last inbound is 90 seconds to 15 minutes
+  old. A message older than that when the tick reaches it gets its draft from the card.
+- **An action landing and the reply failing leaves money moved and no message.** Nothing retries; the draft goes to a person saying so.
+- **Live mode has never run.** Holds, system writes and the kill switch are tested with fakes only.
+
 ## The admin users CSV export counts only EMAIL-VERIFIED, completed signups; the Acquisition card counts phone-verified ones too (2026-10-21)
 
 Evidence: read-only prod sweep 2026-10-21 of `GET /admin/players/{id}` for every id 93161–95300 (flags

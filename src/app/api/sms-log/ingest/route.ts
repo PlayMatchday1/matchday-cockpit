@@ -15,6 +15,7 @@
 import { createClient } from "@supabase/supabase-js";
 import { authenticateCrm } from "@/lib/crmAuth";
 import { ingestTelnyxSms } from "@/lib/telnyxSmsIngest";
+import { runWithLog } from "@/lib/syncLogging";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -49,12 +50,9 @@ export async function POST(req: Request) {
   });
 
   const sinceISO = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
-  try {
-    const result = await ingestTelnyxSms(service, { sinceISO });
-    return Response.json({ ok: true, hours, ...result }, { status: 200 });
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    console.error("[sms-log:ingest] failed", msg);
-    return Response.json({ error: msg }, { status: 502 });
-  }
+  // Logged as telnyx-sms (manual) like the daily step, so a catch-up run counts as a sync (Ryan, 2026-11-02).
+  const run = await runWithLog("telnyx-sms", "manual", service, (sb) => ingestTelnyxSms(sb, { sinceISO }), (r) => ({ rows_imported: r.rowsUpserted }));
+  if (run.ok) return Response.json({ ok: true, hours, ...run.result }, { status: 200 });
+  console.error("[sms-log:ingest] failed", run.error);
+  return Response.json({ error: run.error }, { status: 502 });
 }

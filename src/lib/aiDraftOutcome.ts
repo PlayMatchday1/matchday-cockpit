@@ -9,24 +9,28 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { classifyDraftOutcome } from "@/lib/aiDraftModel";
 
-export type PendingDraft = { id: string; thread_id: string; outcome: string; draft_text: string | null };
+export type PendingDraft = { id: string; thread_id: string; outcome: string; draft_text: string | null; reply_without_action?: string | null };
 
 export function draftOutcomePatch(
   draft: PendingDraft | null,
   args: { threadId: string; sentBody: string; messageId: string; userId: string | null; nowIso: string },
 ) {
   if (!draft || draft.thread_id !== args.threadId || draft.outcome !== "pending" || draft.draft_text == null) return null;
-  const { outcome, edit_distance } = classifyDraftOutcome(draft.draft_text, args.sentBody);
+  // Staff had two versions when an action was proposed. It counts against whichever is closer.
+  const versions = [draft.draft_text, draft.reply_without_action].filter((t): t is string => !!t);
+  const { outcome, edit_distance } = versions
+    .map((t) => classifyDraftOutcome(t, args.sentBody))
+    .reduce((best, c) => (c.edit_distance < best.edit_distance ? c : best));
   return { outcome, edit_distance, sent_message_id: args.messageId, outcome_at: args.nowIso, outcome_by_user_id: args.userId };
 }
 
-export function discardPatch(draft: PendingDraft | null, args: { threadId: string; userId: string | null; nowIso: string }) {
+export function discardPatch(draft: PendingDraft | null, args: { threadId: string; userId: string | null; nowIso: string; reason?: string | null }) {
   if (!draft || draft.thread_id !== args.threadId || draft.outcome !== "pending") return null;
-  return { outcome: "discarded" as const, outcome_at: args.nowIso, outcome_by_user_id: args.userId };
+  return { outcome: "discarded" as const, outcome_at: args.nowIso, outcome_by_user_id: args.userId, discard_reason: args.reason ?? null };
 }
 
 async function loadDraft(sb: SupabaseClient, draftId: string): Promise<PendingDraft | null> {
-  const r = await sb.from("crm_ai_drafts").select("id, thread_id, outcome, draft_text").eq("id", draftId).maybeSingle();
+  const r = await sb.from("crm_ai_drafts").select("id, thread_id, outcome, draft_text, reply_without_action").eq("id", draftId).maybeSingle();
   if (r.error) throw new Error(r.error.message);
   return (r.data as PendingDraft | null) ?? null;
 }
@@ -49,7 +53,7 @@ export async function recordDraftSent(
 
 export async function recordDraftDiscarded(
   sb: SupabaseClient,
-  args: { draftId: string; threadId: string; userId: string | null },
+  args: { draftId: string; threadId: string; userId: string | null; reason?: string | null },
 ): Promise<boolean> {
   const patch = discardPatch(await loadDraft(sb, args.draftId), { ...args, nowIso: new Date().toISOString() });
   if (!patch) return false;

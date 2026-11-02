@@ -215,6 +215,18 @@ is("exactly TWO routes are on the credits gate", importsCredits.map(rel).sort(),
   is("...it logs the REASON", /field: "Reason"/.test(src), true);
   is("...and never reads a name, phone or email onto the log", /phone|email(?!:? auth\.email|Email)/i.test(src.slice(src.indexOf("const changes"), src.indexOf("supabaseLogStore"))), false);
 }
+// PATH EDIT 2026-10-31. The block above reads importsCredits[0], which is credit-all, so it has never
+// covered the single-player route. That route's write moved to src/lib/creditWrite.ts: the same write
+// assertions, pointed at it, and the gate on the route itself.
+{
+  const route = code("src/app/api/matchday/[env]/players/[playerId]/credits/route.ts");
+  const src = code("src/lib/creditWrite.ts");
+  is("BOTH its GET and its POST are gated", (route.match(/authenticateCredits\(req\)/g) ?? []).length, 2);
+  is("...the write names the credits authority at the apiWrite chokepoint", /"credits"\s*\)/.test(src), true);
+  is("...it re-reads the balance and race-checks before writing", /raceCheck\(/.test(src), true);
+  is("...it goes through recordWrite (never a bare apiWrite)", /recordWrite\(/.test(src), true);
+  is("...it logs the REASON", /field: "Reason"/.test(src), true);
+}
 // no OTHER route may reference the credits flag — a second money surface must be a deliberate edit here
 // A SECOND MONEY SURFACE MUST BE A DELIBERATE EDIT HERE — and this is one, acknowledged rather
 // than filtered away. admin/users/permissions does NOT consume can_edit_credits to authorise a
@@ -293,7 +305,9 @@ is("  …and every one of those is under admin/, bar the one named exception",
 // Phase 18d — every promo WRITE is gated on MANAGE PROMOS, and the check is in the route (not
 // only on the button). A route that forgot it would 200 for any admin.
 for (const f of ["promos/create/route.ts", "promos/edit/[id]/route.ts", "promos/delete/[id]/route.ts"]) {
-  const src = readFileSync(`src/app/api/${f}`, "utf8");
+  // PATH EDIT 2026-10-31: the create route's write moved to src/lib/promoWrite.ts. Comments stripped so a
+  // mention in prose can't satisfy the two assertions below it.
+  const src = code(`src/app/api/${f}`) + (f.startsWith("promos/create") ? code("src/lib/promoWrite.ts") : "");
   is(`${f} checks canManagePromos in the ROUTE`, /canManagePromos/.test(src), true);
   is(`${f} passes requires:"promos" to apiWrite (the unbypassable chokepoint)`, /"promos"/.test(src), true);
   is(`${f} records the write into change_log`, /recordWrite/.test(src), true);

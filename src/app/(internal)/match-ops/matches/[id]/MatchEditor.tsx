@@ -27,6 +27,7 @@ import {
 } from "@/lib/managerAssign";
 import { FULL_EDITOR_ENV } from "@/lib/matchEnv";
 import { useCancelMatch, cancelStakes } from "@/lib/useCancelMatch";
+import CancelReasonPicker from "@/components/CancelReasonPicker";
 import { useCreditEveryone, creditStakes } from "@/lib/useCreditEveryone";
 import { fmtUsd } from "@/lib/creditsModel";
 import MoneyInput from "@/components/MoneyInput";
@@ -1331,13 +1332,16 @@ export default function MatchEditor({ id, mode = "edit", sourceId, fieldId: from
                    text that reads DISABLED, and it was never a requirement. Two buttons, both
                    legible, neither wrapping: .cancelrow gives them room and .nowrap holds them
                    on one line. */
-                <div data-testid="cancel-confirm" className="cancelrow">
+                <div data-testid="cancel-confirm">
+                <CancelReasonPicker cancel={cancel} testPrefix="cancel" />
+                <div className="cancelrow">
                   <button className="secondary nowrap" data-testid="cancel-abort" onClick={cancel.abort}>Keep the match</button>
                   {/* DISABLES ON CLICK and stays disabled until the response returns — `busy` is
                       set before the fetch. A control that stays clickable during a write that
                       texts people is a control that texts them twice. */}
-                  <button className="dbtn nowrap" data-testid="cancel-do" disabled={cancel.busy}
+                  <button className="dbtn nowrap" data-testid="cancel-do" disabled={!cancel.canRun}
                     onClick={() => void cancel.run()}>{cancel.busy ? "Cancelling…" : "Cancel the match"}</button>
+                </div>
                 </div>
               )}
             </div>

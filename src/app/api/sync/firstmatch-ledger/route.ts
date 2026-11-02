@@ -19,6 +19,7 @@ import { timingSafeEqual } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { syncFirstmatchLedger } from "@/lib/firstmatchLedgerSync";
 import { runWithLog, type TriggeredBy } from "@/lib/syncLogging";
+import { refuseUnlessAdmin } from "@/lib/adminSession";
 
 // Scans the full mdapi_match_players table each run; insert-only. ~30s
 // typical, 120s gives comfortable headroom.
@@ -81,6 +82,8 @@ export async function POST(req: Request) {
     if (userErr || !userData?.user) {
       return Response.json({ error: "Invalid session" }, { status: 401 });
     }
+    const adminRefusal = await refuseUnlessAdmin(userData.user.email);
+    if (adminRefusal) return adminRefusal;
     triggeredBy = "manual";
   }
 

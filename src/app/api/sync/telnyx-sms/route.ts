@@ -28,6 +28,7 @@ import { timingSafeEqual } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { ingestTelnyxSms } from "@/lib/telnyxSmsIngest";
 import { runWithLog, type TriggeredBy } from "@/lib/syncLogging";
+import { refuseUnlessAdmin } from "@/lib/adminSession";
 
 // Lists Telnyx MDRs + fetches per-message bodies in throttled batches over
 // a 2-day window (~35 outbound/day sample). ~15s typical; 120s headroom.
@@ -93,6 +94,8 @@ export async function POST(req: Request) {
     if (userErr || !userData?.user) {
       return Response.json({ error: "Invalid session" }, { status: 401 });
     }
+    const adminRefusal = await refuseUnlessAdmin(userData.user.email);
+    if (adminRefusal) return adminRefusal;
     triggeredBy = "manual";
   }
 

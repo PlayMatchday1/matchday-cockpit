@@ -22,6 +22,7 @@ import { timingSafeEqual } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { syncWpSubmissions, type WpSyncResult } from "@/lib/wpSubmissionsSync";
 import { runWithLog, type TriggeredBy } from "@/lib/syncLogging";
+import { cronOnlyGet, refuseUnlessAdmin } from "@/lib/adminSession";
 
 /* An incremental walk from the highest id we hold — a normal night is one page of a handful of
  * rows plus two small writes. 120s is generous. The number to watch is completed_at - started_at
@@ -91,6 +92,8 @@ export async function POST(req: Request) {
     if (userErr || !userData?.user) {
       return Response.json({ error: "Invalid session" }, { status: 401 });
     }
+    const adminRefusal = await refuseUnlessAdmin(userData.user.email);
+    if (adminRefusal) return adminRefusal;
     const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
     if (!serviceKey) {
       return Response.json(
@@ -167,4 +170,4 @@ export async function POST(req: Request) {
  * the verb is the only difference between the two entry points. This is the line /api/sync/cron
  * has carried since it was written, with the Vercel doc reference on it:
  * https://vercel.com/docs/cron-jobs#how-cron-jobs-work */
-export const GET = POST;
+export const GET = cronOnlyGet(POST);

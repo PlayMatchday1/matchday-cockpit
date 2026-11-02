@@ -21,8 +21,10 @@ import { cityNameFor } from "./cityScope";
 import { appAccess, cityAllowed } from "./appModel";
 import { isAwaitingReply } from "./awaitingReply";
 
-export type PushEvent = "player_chat" | "match_at_risk";
-const PREF_COLUMN: Record<PushEvent, "player_chats" | "matches_at_risk"> = { player_chat: "player_chats", match_at_risk: "matches_at_risk" };
+export type PushEvent = "player_chat" | "match_at_risk" | "sync_stale";
+/* sync_stale (migration 0247) is an alert to Ryan alone from the sync watchdog (lib/syncWatchdog.ts):
+ * no personal switch column, only the admin kill switch. */
+const PREF_COLUMN: Record<PushEvent, "player_chats" | "matches_at_risk" | null> = { player_chat: "player_chats", match_at_risk: "matches_at_risk", sync_stale: null };
 
 /* A TEST-ONLY GATE: when set, real pushes reach these accounts and nobody else. It held every push to
  * Ryan while testing; lifted once build 2 was Ready (Ryan, 2026-10-30). */
@@ -125,6 +127,22 @@ async function tokenColumn(sb: SupabaseClient): Promise<boolean> {
   return logHasToken;
 }
 
+let logHasReason: boolean | null = null;
+/** Whether app_push_log has 0245's outcome and reason columns. */
+async function reasonColumns(sb: SupabaseClient): Promise<boolean> {
+  if (logHasReason === null) logHasReason = !(await sb.from("app_push_log").select("outcome, reason").limit(1)).error;
+  return logHasReason;
+}
+
+/** A push that was considered and not sent, with why: one log row with no recipient and no ticket.
+ *  Needs 0245's columns; without them it is only a console line. */
+export async function logPushSkip(sb: SupabaseClient, event: PushEvent, subject: string, reason: string): Promise<void> {
+  console.log(`[app-push] ${event} subject=${subject} SKIPPED ${reason}`);
+  if (!(await reasonColumns(sb))) return;
+  const ins = await sb.from("app_push_log").insert({ event, subject, dry_run: false, outcome: "skipped", reason: reason.slice(0, 300) });
+  if (ins.error) console.error(`[app-push] skip log insert failed: ${ins.error.message}`);
+}
+
 export type SendResult = { event: PushEvent; skipped?: string; recipients: number; tokens: number; ok: number; errors: number; removed: number };
 
 /**
@@ -135,6 +153,8 @@ export type SendResult = { event: PushEvent; skipped?: string; recipients: numbe
 export async function sendAppPush(sb: SupabaseClient, args: {
   event: PushEvent; subject: string; recipientIds: string[]; title: string; body: string;
   data: Record<string, unknown>; dryRun?: boolean;
+  /** Why this push went out, logged on each row (needs 0245's columns; left off before it). */
+  reason?: string;
 }): Promise<SendResult> {
   const res: SendResult = { event: args.event, recipients: 0, tokens: 0, ok: 0, errors: 0, removed: 0 };
   try {
@@ -144,9 +164,13 @@ export async function sendAppPush(sb: SupabaseClient, args: {
       if (sw.data && sw.data.enabled === false) return { ...res, skipped: "turned off by an admin" };
     }
     if (args.recipientIds.length === 0) return { ...res, skipped: "no recipients" };
-    const prefs = await sb.from("app_push_prefs").select(`app_user_id, ${PREF_COLUMN[args.event]}`).in("app_user_id", args.recipientIds);
-    if (prefs.error) return { ...res, skipped: `prefs read failed: ${prefs.error.message}` };
-    const off = new Set((prefs.data ?? []).filter((p) => (p as Record<string, unknown>)[PREF_COLUMN[args.event]] === false).map((p) => String(p.app_user_id)));
+    const col = PREF_COLUMN[args.event];
+    const off = new Set<string>();
+    if (col) {
+      const prefs = await sb.from("app_push_prefs").select(`app_user_id, ${col}`).in("app_user_id", args.recipientIds);
+      if (prefs.error) return { ...res, skipped: `prefs read failed: ${prefs.error.message}` };
+      for (const p of prefs.data ?? []) if ((p as Record<string, unknown>)[col] === false) off.add(String((p as Record<string, unknown>).app_user_id));
+    }
     const ids = args.recipientIds.filter((id) => !off.has(id));
     res.recipients = ids.length;
     if (ids.length === 0) return { ...res, skipped: "everyone has this switched off" };
@@ -156,6 +180,7 @@ export async function sendAppPush(sb: SupabaseClient, args: {
     res.tokens = rows.length;
     if (rows.length === 0) return { ...res, skipped: "no registered devices" };
     const withToken = await tokenColumn(sb);
+    const withReason = await reasonColumns(sb);
     const badges = await badgesFor(sb, ids);
 
     for (let i = 0; i < rows.length; i += 100) {
@@ -184,6 +209,7 @@ export async function sendAppPush(sb: SupabaseClient, args: {
           ticket_id: t.status === "ok" ? t.id : null, ticket_status: t.status,
           ticket_error: t.status === "error" ? [t.details?.error, t.message].filter(Boolean).join(": ").slice(0, 300) : null,
           token_removed: dead, ...(withToken ? { token: r.token } : {}),
+          ...(withReason ? { outcome: "sent", reason: args.reason ?? null } : {}),
           _dead: dead ? r.token : null,
         };
       });

@@ -20,7 +20,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Image as ImageIcon, X } from "lucide-react";
-import { supabase } from "@/lib/supabase";
+import { freshAccessToken } from "@/lib/crmSession";
 
 type CannedResponse = {
   id: string;
@@ -42,8 +42,7 @@ type Props = {
 };
 
 async function bearerHeaders(): Promise<Record<string, string> | null> {
-  const { data } = await supabase.auth.getSession();
-  const token = data.session?.access_token;
+  const token = await freshAccessToken();
   if (!token) return null;
   return {
     Authorization: `Bearer ${token}`,

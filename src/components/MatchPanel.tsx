@@ -24,6 +24,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useCancelMatch, cancelStakes } from "@/lib/useCancelMatch";
+import CancelReasonPicker from "@/components/CancelReasonPicker";
 import { rosterRowCounts, type RosterRow as GamedayRosterRow } from "@/lib/gamedayModel";
 import { useCreditEveryone, creditStakes } from "@/lib/useCreditEveryone";
 import { fmtUsd } from "@/lib/creditsModel";
@@ -2456,12 +2457,13 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange,
                 <p className="mp-cancel-line" data-testid="mp-cancel-line">
                   <b>{cancel.preview.count} player{cancel.preview.count === 1 ? "" : "s"} will be credited ${centsToDollars(cancel.preview.totalCents)}</b> and texted that “{cancel.preview.name}” is off. Each gets a <b>CREDIT</b> of the match value to their MatchDay account: nothing leaves Stripe and no money returns to a card. This fires once and cannot be undone.
                 </p>
+                <CancelReasonPicker cancel={cancel} testPrefix="mp-cancel" />
                 {/* YES / NO. The type box is gone — grey placeholder text that reads disabled. */}
                 <div className="mp-cancel-acts">
                   <button type="button" className="mp-btn mp-nowrap" data-testid="mp-cancel-abort" onClick={cancel.abort}>Keep the match</button>
                   {/* DISABLES ON CLICK: `busy` is set before the fetch and cleared only when it
                       resolves. Writes never retry. */}
-                  <button type="button" className="mp-cancelbtn mp-nowrap" data-testid="mp-cancel-do" disabled={cancel.busy} onClick={() => void cancel.run()}>{cancel.busy ? "Cancelling…" : "Cancel the match"}</button>
+                  <button type="button" className="mp-cancelbtn mp-nowrap" data-testid="mp-cancel-do" disabled={!cancel.canRun} onClick={() => void cancel.run()}>{cancel.busy ? "Cancelling…" : "Cancel the match"}</button>
                 </div>
               </div>
             )}

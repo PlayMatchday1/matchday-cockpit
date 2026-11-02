@@ -109,7 +109,9 @@ console.log("\nTHE ROUTE READS THE RIGHT CLOCK FOR EACH SOURCE, AND PAGES PAST T
    * paragraph explaining that it used to say "the monthly view is UTC", and the control below,
    * reading the raw file, found that sentence and reported the stale claim was still live. A guard
    * that cannot tell code from prose about code is not a guard. */
-  const R = readFileSync("src/app/api/lifecycle/behavior-weekly/route.ts", "utf8");
+  /* The route's body moved into src/lib/behaviorWeeklyCompute.ts (2026-11-01) so the staff app can run
+   * it after its own gate; the route keeps the gate. Both are read, so a rule in either is found. */
+  const R = (readFileSync("src/app/api/lifecycle/behavior-weekly/route.ts", "utf8") + "\n" + readFileSync("src/lib/behaviorWeeklyCompute.ts", "utf8"));
   /* TWO VIEWS OF THE SAME FILE, ON PURPOSE, AND THEY ARE NOT INTERCHANGEABLE. `R` is raw, for the
    * assertions that ask "is this DOCUMENTED" — those want the comments. `Rcode` is comment-blanked,
    * for the assertions that ask "is this IN THE CODE". Scanning the wrong one is how this file
@@ -216,7 +218,9 @@ console.log("\nAND THE MONTHLY BUCKETS ARE UTC — stated where it can be checke
    * paragraph explaining that it used to say "the monthly view is UTC", and the control below,
    * reading the raw file, found that sentence and reported the stale claim was still live. A guard
    * that cannot tell code from prose about code is not a guard. */
-  const R = readFileSync("src/app/api/lifecycle/behavior-weekly/route.ts", "utf8");
+  /* The route's body moved into src/lib/behaviorWeeklyCompute.ts (2026-11-01) so the staff app can run
+   * it after its own gate; the route keeps the gate. Both are read, so a rule in either is found. */
+  const R = (readFileSync("src/app/api/lifecycle/behavior-weekly/route.ts", "utf8") + "\n" + readFileSync("src/lib/behaviorWeeklyCompute.ts", "utf8"));
   /* TWO VIEWS OF THE SAME FILE, ON PURPOSE, AND THEY ARE NOT INTERCHANGEABLE. `R` is raw, for the
    * assertions that ask "is this DOCUMENTED" — those want the comments. `Rcode` is comment-blanked,
    * for the assertions that ask "is this IN THE CODE". Scanning the wrong one is how this file
@@ -331,7 +335,9 @@ console.log("\nTHE FIELD BREAKDOWN IS IN THE ROUTE, AND REGISTRATIONS ARE NOT FA
    * paragraph explaining that it used to say "the monthly view is UTC", and the control below,
    * reading the raw file, found that sentence and reported the stale claim was still live. A guard
    * that cannot tell code from prose about code is not a guard. */
-  const R = readFileSync("src/app/api/lifecycle/behavior-weekly/route.ts", "utf8");
+  /* The route's body moved into src/lib/behaviorWeeklyCompute.ts (2026-11-01) so the staff app can run
+   * it after its own gate; the route keeps the gate. Both are read, so a rule in either is found. */
+  const R = (readFileSync("src/app/api/lifecycle/behavior-weekly/route.ts", "utf8") + "\n" + readFileSync("src/lib/behaviorWeeklyCompute.ts", "utf8"));
   /* TWO VIEWS OF THE SAME FILE, ON PURPOSE, AND THEY ARE NOT INTERCHANGEABLE. `R` is raw, for the
    * assertions that ask "is this DOCUMENTED" — those want the comments. `Rcode` is comment-blanked,
    * for the assertions that ask "is this IN THE CODE". Scanning the wrong one is how this file
@@ -486,7 +492,7 @@ console.log("\nTHE WEEKLY PANEL AND ROUTE — the wiring behind the browser suit
 {
   const raw = readFileSync("src/components/growth/BehaviorPanel.tsx", "utf8");
   const code = raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
-  const rt = readFileSync("src/app/api/lifecycle/behavior-weekly/route.ts", "utf8")
+  const rt = (readFileSync("src/app/api/lifecycle/behavior-weekly/route.ts", "utf8") + "\n" + readFileSync("src/lib/behaviorWeeklyCompute.ts", "utf8"))
     .replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
 
   is("  the change reads the complete pair, not the last two cells", /const li = cmp \? cmp\.last : cells\.length - 1;/.test(code), true);
@@ -548,7 +554,7 @@ console.log("\nTHE WEEKLY PANEL AND ROUTE — the wiring behind the browser suit
 
 console.log("\nONE CITY VOCABULARY — the weekly path used to group on two");
 {
-  const rt = readFileSync("src/app/api/lifecycle/behavior-weekly/route.ts", "utf8")
+  const rt = (readFileSync("src/app/api/lifecycle/behavior-weekly/route.ts", "utf8") + "\n" + readFileSync("src/lib/behaviorWeeklyCompute.ts", "utf8"))
     .replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
   const gv = readFileSync("src/lib/growthFromViews.ts", "utf8")
     .replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");

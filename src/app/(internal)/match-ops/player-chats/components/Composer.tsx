@@ -52,7 +52,7 @@ import {
   Paperclip,
   X,
 } from "lucide-react";
-import { supabase } from "@/lib/supabase";
+import { freshAccessToken } from "@/lib/crmSession";
 import type { CrmChannel } from "@/components/ChannelChip";
 import type { ConversationMessage } from "./MessageBubble";
 import {
@@ -93,8 +93,7 @@ function fmtRemaining(ms: number): string {
 }
 
 async function bearerHeaders(): Promise<Record<string, string> | null> {
-  const { data } = await supabase.auth.getSession();
-  const token = data.session?.access_token;
+  const token = await freshAccessToken();
   if (!token) return null;
   return {
     Authorization: `Bearer ${token}`,
@@ -103,8 +102,7 @@ async function bearerHeaders(): Promise<Record<string, string> | null> {
 }
 
 async function bearerHeadersMultipart(): Promise<Record<string, string> | null> {
-  const { data } = await supabase.auth.getSession();
-  const token = data.session?.access_token;
+  const token = await freshAccessToken();
   if (!token) return null;
   return { Authorization: `Bearer ${token}` };
 }

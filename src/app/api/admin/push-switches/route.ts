@@ -9,7 +9,7 @@ import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const EVENTS = ["player_chat", "match_at_risk"] as const;
+const EVENTS = ["player_chat", "match_at_risk", "sync_stale"] as const;
 const LABEL: Record<string, string> = { player_chat: "Player chat pushes", match_at_risk: "Match at risk pushes" };
 
 export async function GET(req: Request) {

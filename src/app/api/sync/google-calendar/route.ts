@@ -22,6 +22,7 @@ import { timingSafeEqual } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { runWithLog, type TriggeredBy } from "@/lib/syncLogging";
 import { syncAllCalendars, CalendarConfigError } from "@/lib/calendarSync";
+import { refuseUnlessAdmin } from "@/lib/adminSession";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -113,6 +114,8 @@ export async function POST(req: Request) {
     if (userErr || !userData?.user) {
       return Response.json({ ok: false, error: "Invalid session" }, { status: 401 });
     }
+    const adminRefusal = await refuseUnlessAdmin(userData.user.email);
+    if (adminRefusal) return adminRefusal;
     triggeredBy = "manual";
   }
   const supabase = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } });

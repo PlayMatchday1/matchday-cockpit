@@ -1,8 +1,24 @@
 {
   "crons": [
     {
+      "path": "/api/sync/job/subscriptions",
+      "schedule": "40 10 * * *"
+    },
+    {
+      "path": "/api/sync/job/promocodes",
+      "schedule": "50 10 * * *"
+    },
+    {
       "path": "/api/sync/cron",
       "schedule": "0 11 * * *"
+    },
+    {
+      "path": "/api/sync/job/matches",
+      "schedule": "10 11 * * *"
+    },
+    {
+      "path": "/api/sync/job/after-matches",
+      "schedule": "20 11 * * *"
     },
     {
       "path": "/api/sync/users-recent",
@@ -45,6 +61,14 @@
       "schedule": "30 11 * * *"
     },
     {
+      "path": "/api/sync/play-installs",
+      "schedule": "10 12 * * *"
+    },
+    {
+      "path": "/api/sync/app-store-installs",
+      "schedule": "20 12 * * *"
+    },
+    {
       "path": "/api/sync/player-areas",
       "schedule": "0 8 * * *"
     },
@@ -85,8 +109,16 @@
       "schedule": "*/5 * * * *"
     },
     {
+      "path": "/api/crm/auto-send/tick",
+      "schedule": "* * * * *"
+    },
+    {
       "path": "/api/app/push/match-risk",
       "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/sync/watchdog",
+      "schedule": "45 * * * *"
     }
   ]
 }

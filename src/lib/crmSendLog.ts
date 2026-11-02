@@ -34,6 +34,8 @@ export type CrmSendLogArgs = {
   /** Non-PII labels only: which media kind, which approved template. */
   mediaKind?: string | null;
   templateName?: string | null;
+  /** An auto-send: the draft it came from. Nobody typed it, so the actor reads auto-send. */
+  draftId?: string | null;
 };
 
 export function crmSendLogBody(args: CrmSendLogArgs): Record<string, unknown> {
@@ -45,6 +47,7 @@ export function crmSendLogBody(args: CrmSendLogArgs): Record<string, unknown> {
     message_length: args.bodyLength,
     ...(args.mediaKind ? { media_kind: args.mediaKind } : {}),
     ...(args.templateName ? { template_name: args.templateName } : {}),
+    ...(args.draftId ? { draft_id: args.draftId } : {}),
   };
 }
 
@@ -58,7 +61,7 @@ export async function logCrmSend(args: CrmSendLogArgs, store: LogStore = supabas
     await recordWrite(
       {
         env: "production", source: "crm-send",
-        actorName: args.actorEmail ?? (args.appUserId ? args.appUserId : "cron"),
+        actorName: args.actorEmail ?? (args.appUserId ? args.appUserId : args.draftId ? "auto-send" : "cron"),
         actorEmail: args.actorEmail ?? null,
         saveId: randomUUID(),
         matchId: null, matchName: null,

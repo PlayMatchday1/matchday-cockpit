@@ -53,6 +53,7 @@ import { fetchPlayerPayments, type PaymentsResult } from "@/lib/stripePayments";
 import { cityNameFor } from "@/lib/cityScope";
 import { CONFINED_CITY_ERROR } from "@/lib/cityConfinement";
 import { FULL_EDITOR_ENV } from "@/lib/matchEnv";
+import { reviewMasked } from "@/lib/reviewAccount";
 
 export const runtime = "nodejs";
 // WIDER NOW, AND SLOWER BY DESIGN. It makes two MatchDay reads and one Stripe read on top of the
@@ -62,7 +63,7 @@ export const maxDuration = 30;
 
 type RouteCtx = { params: Promise<{ id: string }> };
 
-export async function GET(req: Request, ctx: RouteCtx) {
+async function getRoute(req: Request, ctx: RouteCtx) {
   const auth = await authenticateCrm(req);
   if (!auth.ok) {
     return Response.json({ error: auth.error }, { status: auth.status });
@@ -645,3 +646,5 @@ async function loadPlayed2026Count(
   if (c.error) return null;
   return c.count ?? 0;
 }
+
+export const GET = reviewMasked(getRoute);

@@ -38,7 +38,8 @@ function routeFiles(dir: string): string[] {
 }
 
 const API_DIR = "src/app/api";
-const files = routeFiles(API_DIR);
+// PATH EDIT 2026-10-31: the credit and promo-create writes moved into these two, shared with auto-send.
+const files = [...routeFiles(API_DIR), "src/lib/creditWrite.ts", "src/lib/promoWrite.ts"];
 ok(`scanned ${files.length} API route files under ${API_DIR}`);
 
 // 1) NO bare apiWrite anywhere: every apiWrite( must be preceded by "=> " (i.e. it is

@@ -14,10 +14,12 @@
 
 import { timingSafeEqual } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { revalidateTag } from "next/cache";
 import { runWithLog, type SourceName, type TriggeredBy } from "@/lib/syncLogging";
 import { mintToken } from "@/lib/appStoreInstallsSync";
 import { syncAscDownloads } from "@/lib/ascAnalytics";
 import { ACQ_FLOOR, ACQ_TRAILING_DAYS, googleAnalyticsToken, syncGa4App, syncGa4Web, syncGsc } from "@/lib/acqGoogleSync";
+import { cronOnlyGet, refuseUnlessAdmin } from "@/lib/adminSession";
 
 export const maxDuration = 300;
 export const runtime = "nodejs";
@@ -48,6 +50,8 @@ export async function POST(req: Request) {
     const s = createClient(url, anon, { global: { headers: { Authorization: `Bearer ${token}` } }, auth: { persistSession: false, autoRefreshToken: false } });
     const { data, error } = await s.auth.getUser(token);
     if (error || !data?.user) return Response.json({ error: "Invalid session" }, { status: 401 });
+    const adminRefusal = await refuseUnlessAdmin(data.user.email);
+    if (adminRefusal) return adminRefusal;
     triggeredBy = "manual";
   }
   const sb: SupabaseClient = createClient(url, service, { auth: { persistSession: false, autoRefreshToken: false } });
@@ -84,8 +88,10 @@ export async function POST(req: Request) {
     if (!r.ok) anyFailed = true;
     results[source] = r;
   }
+  // The app Players tab caches finished periods for 6 hours; new download days must show now.
+  revalidateTag("app-players", { expire: 0 });
   return Response.json({ triggeredBy, since, until, durationMs: Date.now() - startedAt, results }, { status: anyFailed ? 500 : 200 });
 }
 
 // Vercel cron sends GET (see /api/sync/meta-ad-spend for the night that was learned).
-export const GET = POST;
+export const GET = cronOnlyGet(POST);

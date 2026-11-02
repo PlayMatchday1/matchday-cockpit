@@ -33,6 +33,7 @@ import { assertThreadInScope } from "@/lib/crmScope";
 import { authenticateCrm } from "@/lib/crmAuth";
 import { logCrmSend } from "@/lib/crmSendLog";
 import { recordDraftSent } from "@/lib/aiDraftOutcome";
+import { autoSendAllowed, type AutoSendCheck, type AutoSendConfig } from "@/lib/aiDraftModel";
 import {
   sendWhatsAppText,
   WhatsAppApiError,
@@ -49,7 +50,7 @@ const MAX_BODY_LEN = 1600; // ~10 SMS segments — sanity bound (WhatsApp's own 
 // those in Phase 1.
 const WHATSAPP_WINDOW_MS = 24 * 60 * 60 * 1000;
 
-type SendBody = { thread_id?: unknown; body?: unknown; draft_id?: unknown };
+type SendBody = { thread_id?: unknown; body?: unknown; draft_id?: unknown; auto_send?: unknown };
 
 export async function POST(req: Request) {
   const startedAt = Date.now();
@@ -91,11 +92,25 @@ export async function POST(req: Request) {
   // route without a human holding the grant. The one legitimate automated path — the inbound-
   // triggered, debounced, reply-only out-of-hours auto-reply — sends via the webhook's own
   // sendWhatsAppText (a bounded system acknowledgment), never here.
+  //
+  // ONE EXCEPTION (Ryan, 2026-10-31): a draft the auto-send tick has moved to `sending`, whose hold has
+  // ended, with auto-send live and a stored yes on that draft, carrying exactly that draft's text
+  // (autoSendAllowed, src/lib/aiDraftModel). Everything else still stops here.
+  let autoSentDraftId: string | null = null;
+  if (!appUserId && parsed.auto_send === true && draftId) {
+    const [d, c] = await Promise.all([
+      supabase.from("crm_ai_drafts").select("thread_id, draft_text, decision, hold_status, hold_until, outcome").eq("id", draftId).maybeSingle(),
+      supabase.from("crm_auto_send_config").select("auto_categories, action_categories, credit_cap_cents, hold_minutes, enabled, shadow").maybeSingle(),
+    ]);
+    if (autoSendAllowed(d.data as AutoSendCheck | null, c.data as AutoSendConfig | null, { threadId, body, now: Date.now() })) autoSentDraftId = draftId;
+  }
   if (!appUserId) {
-    return Response.json(
-      { error: "Sends require a human operator.", reason: "no_human_actor" },
-      { status: 403 },
-    );
+    if (!autoSentDraftId) {
+      return Response.json(
+        { error: "Sends require a human operator.", reason: "no_human_actor" },
+        { status: 403 },
+      );
+    }
   }
 
   if (!body.trim()) {
@@ -134,6 +149,7 @@ export async function POST(req: Request) {
       supabase,
       startedAt,
       draftId,
+      autoSentDraftId,
     });
   }
   // Default branch: SMS. Anything other than the two valid channel
@@ -148,7 +164,17 @@ export async function POST(req: Request) {
     supabase,
     startedAt,
     draftId,
+    autoSentDraftId,
   });
+}
+
+// A person just replied, so a hold on this thread stops. Best-effort: it never fails a delivered send,
+// and the tick checks for a staff message again before it sends anything.
+async function cancelHoldsForHumanSend(supabase: SupabaseClient, threadId: string, appUserId: string | null): Promise<void> {
+  if (appUserId === null) return;
+  const r = await supabase.from("crm_ai_drafts").update({ hold_status: "cancelled", hold_note: "A staff member replied.", hold_cancelled_by_user_id: appUserId })
+    .eq("thread_id", threadId).eq("hold_status", "holding");
+  if (r.error) console.error("[crm:send] hold cancel failed", r.error.message);
 }
 
 // ============================================================
@@ -164,6 +190,7 @@ type SendArgs = {
   supabase: SupabaseClient;
   startedAt: number;
   draftId: string | null;
+  autoSentDraftId: string | null;
 };
 
 async function handleSmsSend({
@@ -175,6 +202,7 @@ async function handleSmsSend({
   supabase,
   startedAt,
   draftId,
+  autoSentDraftId,
 }: SendArgs) {
   const apiKey = process.env.TELNYX_API_KEY?.trim();
   const fromNumber = process.env.TELNYX_FROM_NUMBER?.trim();
@@ -221,6 +249,7 @@ async function handleSmsSend({
       body,
       sent_at: nowIso,
       sent_by_user_id: appUserId,
+      auto_sent_draft_id: autoSentDraftId,
       telnyx_message_id: telnyxMessageId,
       segment_count: segmentCount,
       // TODO Phase 2: process Telnyx delivery receipts so SMS gets
@@ -255,7 +284,8 @@ async function handleSmsSend({
     `[crm:send] done channel=sms thread=${threadId} telnyx_id=${telnyxMessageId ?? "-"} segments=${segmentCount} elapsed=${elapsed}ms${sendError ? ` ERROR=${sendError}` : ""}`,
   );
 
-  await logCrmSend({ kind: "text", path: "/api/crm/send", threadId, toPhone, channel: "sms", appUserId, actorEmail, bodyLength: body.length, sendError, nowIso });
+  await logCrmSend({ kind: "text", path: "/api/crm/send", threadId, toPhone, channel: "sms", appUserId, actorEmail, draftId: autoSentDraftId, bodyLength: body.length, sendError, nowIso });
+  if (!sendError) await cancelHoldsForHumanSend(supabase, threadId, appUserId);
   if (draftId && !sendError) {
     await recordDraftSent(supabase, { draftId, threadId, sentBody: body, messageId: inserted.data.id as string, userId: appUserId });
   }
@@ -282,6 +312,7 @@ async function handleWhatsAppSend({
   supabase,
   startedAt,
   draftId,
+  autoSentDraftId,
 }: SendArgs) {
   // 1. 24-hour session window check. Look up the most recent inbound
   //    message timestamp for this thread; if older than 24h, refuse
@@ -356,6 +387,7 @@ async function handleWhatsAppSend({
       body,
       sent_at: nowIso,
       sent_by_user_id: appUserId,
+      auto_sent_draft_id: autoSentDraftId,
       external_message_id: wamid,
       // segment_count column is SMS-only; WhatsApp has no segments.
       // Leave at the DB default (1).
@@ -395,7 +427,8 @@ async function handleWhatsAppSend({
     `[crm:send] done channel=whatsapp thread=${threadId} wamid=${wamid ?? "-"} elapsed=${elapsed}ms${sendError ? ` ERROR=${sendError}` : ""}`,
   );
 
-  await logCrmSend({ kind: "text", path: "/api/crm/send", threadId, toPhone, channel: "whatsapp", appUserId, actorEmail, bodyLength: body.length, sendError, nowIso });
+  await logCrmSend({ kind: "text", path: "/api/crm/send", threadId, toPhone, channel: "whatsapp", appUserId, actorEmail, draftId: autoSentDraftId, bodyLength: body.length, sendError, nowIso });
+  if (!sendError) await cancelHoldsForHumanSend(supabase, threadId, appUserId);
   if (draftId && !sendError) {
     await recordDraftSent(supabase, { draftId, threadId, sentBody: body, messageId: inserted.data.id as string, userId: appUserId });
   }

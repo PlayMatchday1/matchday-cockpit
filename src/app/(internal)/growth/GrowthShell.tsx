@@ -16,13 +16,28 @@
 // wrapper. It is a CLIENT guard and it is chrome: every route under it is refused server-side on
 // its own gate. See the Push C report for the one place that is not yet true.
 
+import { useEffect } from "react";
+import { usePathname, useRouter } from "next/navigation";
 import PagePermissionGuard from "@/components/PagePermissionGuard";
+import { useAuth } from "@/lib/useAuth";
+import { isConfined } from "@/lib/cityConfinement";
 import GrowthRail from "./GrowthRail";
 
+/* A CITY-CONFINED ACCOUNT HOLDING GROWTH SEES ONE PAGE (Ryan, 2026-10-31): 2026 Daily Matches, its
+ * own city, read only. Any other Growth path lands there; their routes refuse it server side anyway
+ * (the confinement allowlist), so this is chrome, not the boundary. */
+export const CONFINED_GROWTH_PATH = "/growth/daily-matches";
+
 export default function GrowthShell({ children }: { children: React.ReactNode }) {
+  const { appUser } = useAuth();
+  const path = usePathname();
+  const router = useRouter();
+  const confined = isConfined(appUser);
+  const elsewhere = confined && !(path ?? "").startsWith(CONFINED_GROWTH_PATH);
+  useEffect(() => { if (elsewhere) router.replace(CONFINED_GROWTH_PATH); }, [elsewhere, router]);
   return (
     <PagePermissionGuard page="growth">
-      <GrowthRail>{children}</GrowthRail>
+      <GrowthRail confined={confined}>{elsewhere ? null : children}</GrowthRail>
     </PagePermissionGuard>
   );
 }
