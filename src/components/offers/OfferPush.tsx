@@ -7,7 +7,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import {
-  CAP_MAX, CAP_MIN, FIRST_NAME, MATCH_TOKEN, PUSH_BODY_MAX, PUSH_TITLE_MAX, STATUS_TEXT, capLine, fillPush, pushAfterType, pushLocked,
+  CAP_MAX, CAP_MIN, CUT_OFF_NOTE, FIRST_NAME, MATCH_TOKEN, PUSH_BODY_MAX, PUSH_BODY_SOFT, PUSH_TITLE_MAX, PUSH_TITLE_SOFT, STATUS_TEXT, capLine, fillPush, pushAfterType, pushLocked,
   pushText, reachAddsUp, reachRows, sendTimeNote, skippedRows, skippedTotal,
   type CampaignPush, type PushForm, type PushResults, type Reach,
 } from "@/lib/offersPush";
@@ -46,44 +46,52 @@ export function PushSection({ pf, setPf, sugg, scope, match, campaignId, campaig
       </label>
       {stored && stored.status !== "OFF" && <div data-testid="offers-push-status" className="text-[12px]" style={{ color: O.muted }}>Push: {STATUS_TEXT[stored.status]}{locked && stored.status !== "NOT_SENT" ? ". It can't change now." : ""}</div>}
       {pf.enabled && (
-        <div className="flex items-start gap-3.5">
-          <PhonePreview title={fillPush(t.title, match)} body={fillPush(t.body, match)} />
-          <div className="flex min-w-0 flex-1 flex-col gap-2.5">
-            <Field label="Title" value={t.title} max={PUSH_TITLE_MAX} testId="offers-push-title" disabled={off}
-              typed={pf.title !== undefined} onReset={() => { const x = { ...pf }; delete x.title; setPf(x); }}
-              onChange={(v) => setPf(pushAfterType(pf, "title", v, sugg))} />
-            <Field label="Body" value={t.body} max={PUSH_BODY_MAX} rows={3} testId="offers-push-body" disabled={off}
-              typed={pf.body !== undefined} onReset={() => { const x = { ...pf }; delete x.body; setPf(x); }}
-              onChange={(v) => setPf(pushAfterType(pf, "body", v, sugg))} />
-            <div className="text-[11.5px]" style={{ color: O.muted }}>
-              <code className="rounded px-1" style={{ background: O.subtle, color: O.ink }}>{FIRST_NAME}</code> becomes the player&apos;s first name
-              {scope === "MATCH" ? <>, <code className="rounded px-1" style={{ background: O.subtle, color: O.ink }}>{MATCH_TOKEN}</code> the match&apos;s name and time</> : null}.
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <div className="text-[12px] font-medium" style={{ color: O.ink }}>Sends</div>
-              <div className="flex flex-wrap gap-1.5">
-                <Chip testId="offers-push-now" on={!pf.at} disabled={off} onClick={() => setPf({ ...pf, at: false })}>{campaignStatus === "LAUNCHED" ? "Now" : "When it launches"}</Chip>
-                <Chip testId="offers-push-at" on={pf.at} disabled={off} onClick={() => setPf({ ...pf, at: true })}>At a time</Chip>
-              </div>
-              {pf.at && (
-                <label className="relative flex rounded-[8px] border px-3 py-[9px]" style={{ borderColor: O.line, opacity: off ? 0.6 : 1 }}>
-                  <span data-testid="offers-push-at-label" className="text-[13px]" style={{ color: O.ink }}>{wallLabel(`${pf.sendLocal}:00`)}</span>
-                  <input data-testid="offers-push-at-input" type="datetime-local" disabled={off} value={toInput(pf.sendLocal)}
-                    onClick={(e) => { try { e.currentTarget.showPicker?.(); } catch { /* older browsers */ } }}
-                    onChange={(e) => { if (e.target.value) setPf({ ...pf, sendLocal: fromInput(e.target.value) }); }}
-                    className="absolute inset-0 cursor-pointer opacity-0 disabled:cursor-not-allowed" />
-                </label>
+        <div className="flex flex-col gap-3">
+          <div className="flex items-start gap-3.5">
+            <div className="flex w-[180px] shrink-0 flex-col gap-1.5">
+              <PhonePreview title={fillPush(t.title, match)} body={fillPush(t.body, match)} />
+              {(t.title.includes(FIRST_NAME) || t.body.includes(FIRST_NAME)) && (
+                <div data-testid="offers-push-preview-noname" className="text-[11px] leading-[14px]" style={{ color: O.muted }}>
+                  With no first name: <span style={{ color: O.ink }}>{[t.title, t.body].filter((x) => x.includes(FIRST_NAME)).map((x) => fillPush(x, match, null)).join(" / ")}</span>
+                </div>
               )}
-              <div className="text-[11.5px]" style={{ color: O.muted }}>{pf.at ? "At this time in each player's own city." : campaignStatus === "LAUNCHED" ? "As soon as you save." : "As soon as the offer launches."}</div>
-              {note && <div data-testid="offers-push-time-note" className="text-[12px]" style={{ color: O.warnInk }}>{note}</div>}
             </div>
-            {problem && <div data-testid="offers-push-problem" className="text-[12px]" style={{ color: O.warnInk }}>{problem}</div>}
-            <div className="flex flex-wrap items-center gap-2">
-              <Btn testId="offers-push-test" disabled={campaignId === null || testing || !!problem} onClick={sendTest}
-                title={campaignId === null ? "Save it as a draft first" : undefined}>Send test push to my phone</Btn>
-              {campaignId === null && <span className="text-[11.5px]" style={{ color: O.muted }}>Save it as a draft first.</span>}
+            <div className="flex min-w-0 flex-1 flex-col gap-2.5">
+              <Field label="Title" value={t.title} max={PUSH_TITLE_MAX} soft={PUSH_TITLE_SOFT} testId="offers-push-title" disabled={off}
+                typed={pf.title !== undefined} onReset={() => { const x = { ...pf }; delete x.title; setPf(x); }}
+                onChange={(v) => setPf(pushAfterType(pf, "title", v, sugg))} />
+              <Field label="Body" value={t.body} max={PUSH_BODY_MAX} soft={PUSH_BODY_SOFT} rows={4} testId="offers-push-body" disabled={off}
+                typed={pf.body !== undefined} onReset={() => { const x = { ...pf }; delete x.body; setPf(x); }}
+                onChange={(v) => setPf(pushAfterType(pf, "body", v, sugg))} />
             </div>
-            <div className="text-[11.5px]" style={{ color: O.muted }}>Only to the phones signed in to your own account. Never counted in results.</div>
+          </div>
+          <div data-testid="offers-push-hint" className="text-[11.5px] leading-[17px]" style={{ color: O.muted }}>
+            <Token>{FIRST_NAME}</Token> becomes the player&apos;s first name, left out with its comma if they have none.{" "}
+            <Token>{MATCH_TOKEN}</Token> becomes the match&apos;s name, day and time{scope === "MATCH" ? "" : " (on an offer for a specific match only)"}.
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <div className="text-[12px] font-medium" style={{ color: O.ink }}>Sends</div>
+            <div className="flex flex-nowrap gap-1.5">
+              <Chip testId="offers-push-now" on={!pf.at} disabled={off} onClick={() => setPf({ ...pf, at: false })}>{campaignStatus === "LAUNCHED" ? "Now" : "When it launches"}</Chip>
+              <Chip testId="offers-push-at" on={pf.at} disabled={off} onClick={() => setPf({ ...pf, at: true })}>At a time</Chip>
+            </div>
+            {pf.at && (
+              <label className="relative flex max-w-[260px] rounded-[8px] border px-3 py-[9px]" style={{ borderColor: O.line, opacity: off ? 0.6 : 1 }}>
+                <span data-testid="offers-push-at-label" className="text-[13px]" style={{ color: O.ink }}>{wallLabel(`${pf.sendLocal}:00`)}</span>
+                <input data-testid="offers-push-at-input" type="datetime-local" disabled={off} value={toInput(pf.sendLocal)}
+                  onClick={(e) => { try { e.currentTarget.showPicker?.(); } catch { /* older browsers */ } }}
+                  onChange={(e) => { if (e.target.value) setPf({ ...pf, sendLocal: fromInput(e.target.value) }); }}
+                  className="absolute inset-0 cursor-pointer opacity-0 disabled:cursor-not-allowed" />
+              </label>
+            )}
+            <div className="text-[11.5px]" style={{ color: O.muted }}>{pf.at ? "At this time in each player's own city." : campaignStatus === "LAUNCHED" ? "As soon as you save." : "As soon as the offer launches."}</div>
+            {note && <div data-testid="offers-push-time-note" className="text-[12px]" style={{ color: O.warnInk }}>{note}</div>}
+          </div>
+          {problem && <div data-testid="offers-push-problem" className="text-[12px]" style={{ color: O.warnInk }}>{problem}</div>}
+          <div className="flex flex-col items-start gap-1.5">
+            {campaignId === null && <div data-testid="offers-push-save-first" className="text-[11.5px]" style={{ color: O.muted }}>Save it as a draft first.</div>}
+            <Btn testId="offers-push-test" disabled={campaignId === null || testing || !!problem} onClick={sendTest}>Send test push to my phone</Btn>
+            <div className="text-[11.5px]" style={{ color: O.muted }}>Goes only to phones signed in to your account. Not counted in results.</div>
             {test && <VerdictLine outcome={test} />}
           </div>
         </div>
@@ -92,18 +100,22 @@ export function PushSection({ pf, setPf, sugg, scope, match, campaignId, campaig
   );
 }
 
-function Field({ label, value, max, rows, testId, disabled, typed, onReset, onChange }: {
-  label: string; value: string; max: number; rows?: number; testId: string; disabled: boolean; typed: boolean; onReset: () => void; onChange: (v: string) => void;
+const Token = ({ children }: { children: React.ReactNode }) => <code className="rounded px-1" style={{ background: O.subtle, color: O.ink }}>{children}</code>;
+
+function Field({ label, value, max, soft, rows, testId, disabled, typed, onReset, onChange }: {
+  label: string; value: string; max: number; soft: number; rows?: number; testId: string; disabled: boolean; typed: boolean; onReset: () => void; onChange: (v: string) => void;
 }) {
+  const long = value.length > soft && value.length <= max;
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex items-baseline justify-between gap-2">
         <span className="text-[12px] font-medium" style={{ color: O.ink }}>{label}</span>
-        <span className="text-[11px]" style={{ color: value.length > max ? O.critInk : O.label }}>{value.length}/{max}</span>
+        <span className="text-[11px]" style={{ color: value.length > max ? O.critInk : long ? O.warnInk : O.label }}>{value.length}/{max}</span>
       </div>
       {rows
         ? <textarea data-testid={testId} rows={rows} disabled={disabled} className={inputCls} style={inputStyle} value={value} onChange={(e) => onChange(e.target.value)} />
         : <input data-testid={testId} disabled={disabled} className={inputCls} style={inputStyle} value={value} onChange={(e) => onChange(e.target.value)} />}
+      {long && <div data-testid={`${testId}-long`} className="text-[11.5px]" style={{ color: O.warnInk }}>{CUT_OFF_NOTE}</div>}
       {typed && !disabled && <button type="button" data-testid={`${testId}-reset`} className="self-start text-[11.5px] font-medium" style={{ color: O.ok }} onClick={onReset}>Reset to suggested</button>}
     </div>
   );
@@ -116,7 +128,11 @@ function PhonePreview({ title, body }: { title: string; body: string }) {
       <div className="text-center text-[22px] font-light text-white">9:41</div>
       <div className="flex flex-col gap-0.5 rounded-[12px] px-2.5 py-2" style={{ background: "rgba(255,255,255,0.88)" }}>
         <div className="flex items-center justify-between text-[9px] font-semibold" style={{ color: "#555" }}>
-          <span className="flex items-center gap-1"><span className="inline-block size-3 rounded-[3px]" style={{ background: "#003326" }} />MATCHDAY</span><span>now</span>
+          <span className="flex items-center gap-1">
+            {/* The app's own icon (frontend ios AppIcon.appiconset/Icon-120.png), copied here. */}
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img data-testid="offers-push-preview-icon" alt="" src="/offers/app-icon.png" width={12} height={12} className="block rounded-[3px]" />MATCHDAY
+          </span><span>now</span>
         </div>
         <div data-testid="offers-push-preview-title" className="text-[11px] font-semibold leading-[14px]" style={{ color: "#111" }}>{title}</div>
         <div data-testid="offers-push-preview-body" className="text-[10.5px] leading-[13px]" style={{ color: "#222" }}>{body}</div>

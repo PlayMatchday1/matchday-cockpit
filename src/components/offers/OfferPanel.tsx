@@ -85,8 +85,8 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
   // THE PUSH (src/components/offers/OfferPush.tsx). Only where the server allows the controls; saved after the
   // offer itself, with its own request (PUT .../push), and before a launch so the launch can queue it.
   const pushOn = !!data.pushes;
-  const pushSugg = pushSuggestion(f, copy, m, data.fields);
-  const [pf, setPf] = useState<PushForm>(() => pushFormOf(c?.push, pushSuggestion(start, copyOf(start, data.matches, data.cities, data.fields), pickedMatch(start, data.matches), data.fields), defaultSendLocal(nowWall)));
+  const pushSugg = pushSuggestion(f, m, data.fields);
+  const [pf, setPf] = useState<PushForm>(() => pushFormOf(c?.push, pushSuggestion(start, pickedMatch(start, data.matches), data.fields), defaultSendLocal(nowWall)));
   const pushIsDirty = pushOn && !matchUnread && !pushLocked(c?.push, c?.status ?? null) && pushDirty(c?.push, pf, pushSugg);
   const pushProb = pushOn && !matchUnread ? pushProblem(pf, pushSugg, f.scope) : null;
   const offerDirty = c === null || Object.keys(diff ?? {}).length > 0;

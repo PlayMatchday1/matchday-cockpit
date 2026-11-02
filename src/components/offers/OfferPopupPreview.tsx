@@ -1,6 +1,7 @@
 "use client";
 
-// THE POPUP AS A PLAYER SEES IT, at half size (Figma 20571:400). It draws exactly what the app's
+// THE POPUP AS A PLAYER SEES IT, at half size (Figma 20571:400; the border from section 14 · Targeted Offer Popup,
+// 20568:20243: 3px #2CDB87 inside the edge, radius 15, photo clipped by the card, so 1.5px and 7.5 here). It draws exactly what the app's
 // OfferPopup.tsx draws (frontend feature/offers): photo with the eyebrow pill, headline with its last
 // word in green italic, the spaced line, the body, the dashed ticket (end time, Auto-applied), the
 // button (upper-cased by the app) and the dismiss link, with the caption on the photo. {firstName}
@@ -24,8 +25,8 @@ export default function OfferPopupPreview({ copy: raw, ends, showTicket }: { cop
   const copy = Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, k === "photoUrl" ? v : withPreviewName(v as string | null)])) as Copy;
   const { lead, accent } = splitHeadline(copy.headline);
   return (
-    <div data-testid="offers-popup-preview" className="flex w-[156px] shrink-0 flex-col overflow-hidden rounded-[7.5px]" style={{ background: "#f4eee1" }}>
-      <div className="relative h-[84px] w-[156px] shrink-0 overflow-hidden">
+    <div data-testid="offers-popup-preview" className="flex w-[156px] shrink-0 flex-col overflow-hidden rounded-[7.5px] border-[1.5px] border-solid" style={{ background: "#f4eee1", borderColor: "#2cdb87" }}>
+      <div className="relative h-[84px] w-full shrink-0 overflow-hidden">
         {copy.photoUrl
           // eslint-disable-next-line @next/next/no-img-element
           ? <img alt="" src={copy.photoUrl} className="absolute inset-0 size-full object-cover" />
@@ -47,7 +48,7 @@ export default function OfferPopupPreview({ copy: raw, ends, showTicket }: { cop
           </p>
           {copy.line ? <p className={`${titillium.className} text-center text-[8px] font-bold tracking-[1.25px]`} style={{ color: "#5d7a6f" }}>{copy.line}</p> : null}
         </div>
-        {copy.body ? <p className={`${heebo.className} w-[136px] text-center text-[7.5px] leading-[10.5px]`} style={{ color: "#637973" }}>{copy.body}</p> : null}
+        {copy.body ? <p className={`${heebo.className} w-full text-center text-[7.5px] leading-[10.5px]`} style={{ color: "#637973" }}>{copy.body}</p> : null}
         {showTicket && (
           <div data-testid="offers-preview-ticket" className={`flex w-full items-center rounded-[5px] border-[0.5px] border-dashed bg-white px-[6px] py-[5.5px] ${ends ? "justify-between" : "justify-center"}`} style={{ borderColor: "#bac7c3" }}>
             {ends ? (

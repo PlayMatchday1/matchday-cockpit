@@ -24,7 +24,7 @@ import { readOffersConfig } from "../src/lib/offersConfig";
 import { assertAllowedHost, preflightWrite } from "../src/lib/matchdayStageApi";
 import { makePacer, OFFERS_READ_PACE_MS, READS_STOPPED } from "../src/lib/offersPacing";
 import {
-  capLine, defaultSendLocal, fillPush, matchForPush, pushAfterType, pushBodyOf, pushDirty, pushFormOf, pushLocked, pushProblem, pushSuggestion, pushText,
+  CUT_OFF_NOTE, PUSH_BODY_MAX, PUSH_BODY_SOFT, PUSH_TITLE_MAX, PUSH_TITLE_SOFT, capLine, defaultSendLocal, fillPush, matchForPush, pushAfterType, pushBodyOf, pushDirty, pushFormOf, pushLocked, pushProblem, pushSuggestion, pushText,
   pushesVisible, reachAddsUp, sendTimeNote, skippedTotal, type CampaignPush,
 } from "../src/lib/offersPush";
 
@@ -715,16 +715,20 @@ eq("an admin account is one; a player or a backend without the type isn't", [isA
 // ── OFFER PUSHES (backend docs/offer-push.md) ────────────────────────────────────────────────────
 {
   const F2 = [{ id: 1, title: "Riverside Fields", cityId: 1, cover: null }];
-  const any = { ...nowF, name: "x" };
-  const onMatch = { ...nowF, name: "x", scope: "MATCH" as const, matchId: 116 };
-  const hl = { headline: "50% OFF" };
-  eq("the title is the popup's headline", pushSuggestion(any, hl, null, F2).title, "50% OFF");
-  eq("the body says the deal, for any match", pushSuggestion(any, hl, null, F2).body, "{first_name}, 50% off your next match. It's already on your account.");
-  eq("...for a specific match, by its placeholder", pushSuggestion(onMatch, hl, matches[0], F2).body, "{first_name}, 50% off {match}. It's already on your account.");
-  eq("...for a field", pushSuggestion({ ...any, scope: "FIELD", appliesFieldIds: [1] }, hl, null, F2).body, "{first_name}, 50% off any match at Riverside Fields. It's already on your account.");
-  eq("...each deal", [pushSuggestion({ ...any, dealType: "AMOUNT_OFF", dealAmount: 300 }, hl, null, F2).body, pushSuggestion({ ...any, dealType: "SET_PRICE", dealAmount: 500 }, hl, null, F2).body, pushSuggestion({ ...onMatch, dealType: "FREE_MATCH", dealAmount: 0 }, hl, matches[0], F2).body, pushSuggestion({ ...any, usesPerPlayer: 3 }, hl, null, F2).body],
-    ["{first_name}, $3 off your next match. It's already on your account.", "{first_name}, a $5 spot in your next match. It's already on your account.", "{first_name}, {match} is free for you. It's already on your account.", "{first_name}, 50% off your next 3 matches. It's already on your account."]);
-  eq("a long headline is cut to the title's limit", pushSuggestion(any, { headline: "x".repeat(80) }, null, F2).title.length, 64);
+  const any = { ...nowF, name: "x", endsLocal: "2026-11-08 23:59:00" };
+  const onMatch = { ...any, scope: "MATCH" as const, matchId: 116 };
+  const onField = { ...any, scope: "FIELD" as const, appliesFieldIds: [1] };
+  eq("any match: the deal in the title, the end day in the body", pushSuggestion(any, null, F2), { title: "Your next match is 50% off", body: "{first_name}, it's already on your account. Ends Sun, Nov 8." });
+  eq("...each deal, and more than one use", [pushSuggestion({ ...any, dealType: "FREE_MATCH", dealAmount: 0 }, null, F2).title, pushSuggestion({ ...any, dealType: "SET_PRICE", dealAmount: 500 }, null, F2).title, pushSuggestion({ ...any, dealType: "AMOUNT_OFF", dealAmount: 300 }, null, F2).title, pushSuggestion({ ...any, usesPerPlayer: 3 }, null, F2).title],
+    ["Your next match is free", "Your next match is $5", "Your next match is $3 off", "Your next 3 matches are 50% off"]);
+  eq("...no end date: no Ends", pushSuggestion({ ...any, endsLocal: null }, null, F2).body, "{first_name}, it's already on your account.");
+  eq("a specific match: deal and its name, then its day and time", pushSuggestion(onMatch, matches[0], F2), { title: "50% off Riverside Thursday", body: "{first_name}, Mon Nov 2 7:00 PM. Already applied." });
+  eq("...free reads as a word", pushSuggestion({ ...onMatch, dealType: "FREE_MATCH", dealAmount: 0 }, matches[0], F2).title, "Free Riverside Thursday");
+  eq("a field: deal at the field", pushSuggestion(onField, null, F2), { title: "50% off at Riverside Fields", body: "{first_name}, any match there. Already applied." });
+  eq("a long match name is cut to the title's limit", pushSuggestion(onMatch, { ...matches[0], name: "x".repeat(80) }, F2).title.length, 64);
+  eq("no first name: dropped with its comma, as the backend's fillFirstName does", [fillPush("{first_name}, it's already on your account.", null, null), fillPush("See you, {first_name}!", null, null), fillPush("No name here.", null, null), fillPush("{first_name}, it's on.", null)],
+    ["it's already on your account.", "See you!", "No name here.", "Luis, it's on."]);
+  eq("past 50 or 110 characters: a warning, still under the limits", [PUSH_TITLE_SOFT, PUSH_BODY_SOFT, PUSH_TITLE_SOFT < PUSH_TITLE_MAX, PUSH_BODY_SOFT < PUSH_BODY_MAX, CUT_OFF_NOTE], [50, 110, true, true, "May be cut off on the lock screen."]);
   const sugg = { title: "50% OFF", body: "{first_name}, 50% off your next match. It's already on your account." };
   const off = pushFormOf(null, sugg, "2026-11-03 10:00");
   eq("no push stored: off, nothing to send", [off.enabled, pushDirty(null, off, sugg), pushDirty(undefined, off, sugg)], [false, false, false]);

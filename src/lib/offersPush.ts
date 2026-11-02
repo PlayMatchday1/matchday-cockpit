@@ -6,11 +6,11 @@
 // OFFER_PUSH_MODE (off, allowlist, live); the Clubhouse never decides that. A test push goes only to the
 // signed-in person's own devices.
 //
-// TEXT. Title and body follow the popup until someone types, like the popup's own text. Placeholders are
+// TEXT. Title and body follow the deal until someone types, like the popup's own text. Placeholders are
 // {first_name} and, on a specific match only, {match}; the backend fills both per player. Popup copy uses
 // {firstName}; the push contract uses {first_name}, and the two are not interchangeable.
 
-import { dealText, matchTitle, money, wallMs, type Copy, type FieldOpt, type Form, type MatchOpt } from "./offersModel";
+import { matchTitle, money, wallMs, type FieldOpt, type Form, type MatchOpt } from "./offersModel";
 
 export type PushStatus = "OFF" | "WAITING" | "SCHEDULED" | "SENT" | "NOT_SENT";
 export type CampaignPush = { enabled: boolean; title: string | null; body: string | null; sendLocal: string | null; status: PushStatus; queuedAt: string | null };
@@ -24,6 +24,10 @@ export type PushResults = {
 
 export const PUSH_TITLE_MAX = 64;
 export const PUSH_BODY_MAX = 240;
+// Past these a lock screen may cut the text off: a warning, never a block.
+export const PUSH_TITLE_SOFT = 50;
+export const PUSH_BODY_SOFT = 110;
+export const CUT_OFF_NOTE = "May be cut off on the lock screen.";
 export const FIRST_NAME = "{first_name}";
 export const MATCH_TOKEN = "{match}";
 export const PREVIEW_NAME = "Luis";
@@ -32,15 +36,29 @@ export const PREVIEW_NAME = "Luis";
 export const pushLocked = (p: CampaignPush | null | undefined, campaignStatus: string | null) =>
   campaignStatus === "ENDED" || (!!p && (p.status === "SCHEDULED" || p.status === "SENT" || p.status === "NOT_SENT"));
 
-// THE SUGGESTION: the title is the popup's headline; the body says the deal and where.
-export function pushSuggestion(f: Pick<Form, "dealType" | "dealAmount" | "usesPerPlayer" | "scope" | "appliesFieldIds">, copy: Pick<Copy, "headline">, m: MatchOpt | null, fields: FieldOpt[]): { title: string; body: string } {
-  const n = m ? 1 : f.usesPerPlayer;
-  const at = f.scope === "FIELD" ? f.appliesFieldIds.map((id) => fields.find((x) => x.id === id)?.title).filter(Boolean) as string[] : [];
-  const where = m ? MATCH_TOKEN : at.length ? `any match at ${at.length === 1 ? at[0] : `${at.slice(0, -1).join(", ")} and ${at[at.length - 1]}`}` : n === 1 ? "your next match" : `your next ${n} matches`;
-  const what = f.dealType === "FREE_MATCH" ? (m ? `${MATCH_TOKEN} is free for you` : `a free match: ${where}`)
-    : f.dealType === "SET_PRICE" ? `a ${money(f.dealAmount)} spot in ${where}`
-    : `${dealText(f.dealType, f.dealAmount)} ${where}`;
-  return { title: copy.headline.slice(0, PUSH_TITLE_MAX), body: `${FIRST_NAME}, ${what}. It's already on your account.` };
+// THE SUGGESTION, from the deal. Any match: "Your next match is 50% off" / "{first_name}, it's already on your
+// account. Ends Sun, Nov 8." (no "Ends" with no end date). A specific match: "50% off Parmer Thursday" /
+// "{first_name}, Thu Nov 5 7:00 PM. Already applied." A field: "50% off at Riverside Fields" / "{first_name}, any
+// match there. Already applied." Names and times are written in, not left as {match}.
+const dealWord = (type: Form["dealType"], amount: number) =>
+  type === "PERCENT_OFF" ? `${amount}% off` : type === "AMOUNT_OFF" ? `${money(amount)} off` : type === "SET_PRICE" ? money(amount) : "free";
+const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+const andJoin = (xs: string[]) => (xs.length <= 1 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`);
+export function pushSuggestion(f: Pick<Form, "dealType" | "dealAmount" | "usesPerPlayer" | "scope" | "appliesFieldIds" | "endsLocal">, m: MatchOpt | null, fields: FieldOpt[]): { title: string; body: string } {
+  const w = dealWord(f.dealType, f.dealAmount);
+  let title: string, body: string;
+  if (f.scope === "MATCH" && m) {
+    title = `${cap(w)} ${matchTitle(m)}`;
+    body = `${FIRST_NAME}, ${matchWhen(m)}. Already applied.`;
+  } else if (f.scope === "FIELD" && f.appliesFieldIds.length) {
+    const at = f.appliesFieldIds.map((id) => fields.find((x) => x.id === id)?.title).filter(Boolean) as string[];
+    title = `${cap(w)} at ${andJoin(at)}`;
+    body = `${FIRST_NAME}, any match there. Already applied.`;
+  } else {
+    title = f.usesPerPlayer === 1 ? `Your next match is ${w}` : `Your next ${f.usesPerPlayer} matches are ${w}`;
+    body = `${FIRST_NAME}, it's already on your account.${f.endsLocal === null ? "" : ` Ends ${endDay(f.endsLocal)}.`}`;
+  }
+  return { title: title.slice(0, PUSH_TITLE_MAX), body };
 }
 
 // "At a time" starts at the next whole hour, Chicago wall clock, as "YYYY-MM-DD HH:mm".
@@ -95,12 +113,32 @@ export function pushProblem(pf: PushForm, sugg: { title: string; body: string },
 // THE PREVIEW, as one player sees it: {first_name} as Luis, {match} as the backend writes it
 // ("ZZ probe offers A, Tue Nov 3 7:00 PM": the match's name, then its day and time).
 const fmt = (ms: number, o: Intl.DateTimeFormatOptions) => new Intl.DateTimeFormat("en-US", { timeZone: "UTC", ...o }).format(new Date(ms));
-export const matchForPush = (m: MatchOpt) => {
+// "Thu Nov 5 7:00 PM", the match's own wall clock, as the backend's matchLabel writes it.
+const matchWhen = (m: MatchOpt) => {
   const ms = wallMs(m.startLocal);
-  return `${matchTitle(m)}, ${fmt(ms, { weekday: "short" })} ${fmt(ms, { month: "short" })} ${fmt(ms, { day: "numeric" })} ${fmt(ms, { hour: "numeric", minute: "2-digit" })}`;
+  return `${fmt(ms, { weekday: "short" })} ${fmt(ms, { month: "short" })} ${fmt(ms, { day: "numeric" })} ${fmt(ms, { hour: "numeric", minute: "2-digit" })}`;
 };
-export const fillPush = (text: string, m: MatchOpt | null) =>
-  text.split(FIRST_NAME).join(PREVIEW_NAME).split(MATCH_TOKEN).join(m ? matchForPush(m) : MATCH_TOKEN);
+// "Sun, Nov 8"
+const endDay = (endsLocal: string) => {
+  const ms = wallMs(endsLocal);
+  return `${fmt(ms, { weekday: "short" })}, ${fmt(ms, { month: "short" })} ${fmt(ms, { day: "numeric" })}`;
+};
+export const matchForPush = (m: MatchOpt) => `${matchTitle(m)}, ${matchWhen(m)}`;
+// With no first name, the backend (personalize.ts fillFirstName) drops the token with the comma or space it
+// would leave, and leaves case as written. This is that, so the preview shows what is sent.
+export function dropFirstName(text: string): string {
+  if (!text.includes(FIRST_NAME)) return text;
+  return text
+    .replace(/\s*,\s*\{first_name\}\s*,/g, "")
+    .replace(/\s*,\s*\{first_name\}/g, "")
+    .replace(/\{first_name\}\s*,\s*/g, "")
+    .split(FIRST_NAME).join("")
+    .replace(/\s+([!?.,;:])/g, "$1")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+export const fillPush = (text: string, m: MatchOpt | null, name: string | null = PREVIEW_NAME) =>
+  (name === null ? dropFirstName(text) : text.split(FIRST_NAME).join(name)).split(MATCH_TOKEN).join(m ? matchForPush(m) : MATCH_TOKEN);
 
 // The send time against the offer's run: a push before it starts or after it ends promises nothing usable.
 export function sendTimeNote(pf: PushForm, startsLocal: string, endsLocal: string | null): string | null {

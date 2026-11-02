@@ -94,7 +94,9 @@ export default function OffersView() {
       <div className="mb-5 flex flex-wrap items-center gap-3">
         <h1 className="m-0 text-[25px] font-bold" style={{ color: O.ink }}>Offers</h1>
         <div className="ml-auto" />
-        {data?.pushes && <Btn testId="offers-push-limit" onClick={() => setPushLimit((v) => !v)}>Push limit</Btn>}
+        {/* Drawn at once, disabled until the page says whether pushes may be seen, so a click during the load
+            never lands on nothing; hidden once it says no, or the load failed. */}
+        {(data ? data.pushes : !err) && <Btn testId="offers-push-limit" disabled={!data} title={!data ? "Loading…" : undefined} onClick={() => setPushLimit((v) => !v)}>{data ? "Push limit" : "Push limit…"}</Btn>}
         <Btn onClick={() => setKey((k) => k + 1)}>Refresh</Btn>
       </div>
       {banner && <Banner outcome={banner} onDismiss={() => setBanner(null)} />}
