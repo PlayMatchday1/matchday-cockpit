@@ -1,8 +1,24 @@
 {
   "crons": [
     {
+      "path": "/api/sync/job/subscriptions",
+      "schedule": "40 10 * * *"
+    },
+    {
+      "path": "/api/sync/job/promocodes",
+      "schedule": "50 10 * * *"
+    },
+    {
       "path": "/api/sync/cron",
       "schedule": "0 11 * * *"
+    },
+    {
+      "path": "/api/sync/job/matches",
+      "schedule": "10 11 * * *"
+    },
+    {
+      "path": "/api/sync/job/after-matches",
+      "schedule": "20 11 * * *"
     },
     {
       "path": "/api/sync/users-recent",
@@ -99,6 +115,10 @@
     {
       "path": "/api/app/push/match-risk",
       "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/sync/watchdog",
+      "schedule": "45 * * * *"
     }
   ]
 }

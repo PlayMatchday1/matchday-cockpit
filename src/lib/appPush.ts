@@ -21,8 +21,10 @@ import { cityNameFor } from "./cityScope";
 import { appAccess, cityAllowed } from "./appModel";
 import { isAwaitingReply } from "./awaitingReply";
 
-export type PushEvent = "player_chat" | "match_at_risk";
-const PREF_COLUMN: Record<PushEvent, "player_chats" | "matches_at_risk"> = { player_chat: "player_chats", match_at_risk: "matches_at_risk" };
+export type PushEvent = "player_chat" | "match_at_risk" | "sync_stale";
+/* sync_stale (migration 0247) is an alert to Ryan alone from the sync watchdog (lib/syncWatchdog.ts):
+ * no personal switch column, only the admin kill switch. */
+const PREF_COLUMN: Record<PushEvent, "player_chats" | "matches_at_risk" | null> = { player_chat: "player_chats", match_at_risk: "matches_at_risk", sync_stale: null };
 
 /* A TEST-ONLY GATE: when set, real pushes reach these accounts and nobody else. It held every push to
  * Ryan while testing; lifted once build 2 was Ready (Ryan, 2026-10-30). */
@@ -162,9 +164,13 @@ export async function sendAppPush(sb: SupabaseClient, args: {
       if (sw.data && sw.data.enabled === false) return { ...res, skipped: "turned off by an admin" };
     }
     if (args.recipientIds.length === 0) return { ...res, skipped: "no recipients" };
-    const prefs = await sb.from("app_push_prefs").select(`app_user_id, ${PREF_COLUMN[args.event]}`).in("app_user_id", args.recipientIds);
-    if (prefs.error) return { ...res, skipped: `prefs read failed: ${prefs.error.message}` };
-    const off = new Set((prefs.data ?? []).filter((p) => (p as Record<string, unknown>)[PREF_COLUMN[args.event]] === false).map((p) => String(p.app_user_id)));
+    const col = PREF_COLUMN[args.event];
+    const off = new Set<string>();
+    if (col) {
+      const prefs = await sb.from("app_push_prefs").select(`app_user_id, ${col}`).in("app_user_id", args.recipientIds);
+      if (prefs.error) return { ...res, skipped: `prefs read failed: ${prefs.error.message}` };
+      for (const p of prefs.data ?? []) if ((p as Record<string, unknown>)[col] === false) off.add(String((p as Record<string, unknown>).app_user_id));
+    }
     const ids = args.recipientIds.filter((id) => !off.has(id));
     res.recipients = ids.length;
     if (ids.length === 0) return { ...res, skipped: "everyone has this switched off" };

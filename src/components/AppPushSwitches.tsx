@@ -6,11 +6,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 
-type Sw = { event: "player_chat" | "match_at_risk"; enabled: boolean; updated_by: string | null; updated_at: string | null };
-const LABEL: Record<Sw["event"], string> = { player_chat: "Player chats", match_at_risk: "Matches at risk" };
+type Sw = { event: "player_chat" | "match_at_risk" | "sync_stale"; enabled: boolean; updated_by: string | null; updated_at: string | null };
+const LABEL: Record<Sw["event"], string> = { player_chat: "Player chats", match_at_risk: "Matches at risk", sync_stale: "Stopped syncs" };
 const HINT: Record<Sw["event"], string> = {
   player_chat: "A player message that leaves a conversation waiting on a reply",
   match_at_risk: "A match below its minimum an hour before it auto-cancels",
+  sync_stale: "A data sync with no clean run in 2 days (to Ryan only, once a day)",
 };
 
 async function bearer(): Promise<string | null> {

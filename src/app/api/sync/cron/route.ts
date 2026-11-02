@@ -1,63 +1,23 @@
-// POST /api/sync/cron — orchestrator that runs seven daily steps:
-// stripe-api → mdapi-reviews → mdapi-subscriptions → mdapi-promocodes
-// → mdapi-matches → firstmatch-ledger → mdapi-users →
-// membership-snapshots. Sequential, per-source error isolation.
+// POST|GET /api/sync/cron: the daily 11:00 UTC job, since Nov 2, 2026 four short steps:
+// stripe-api, google-calendar, mdapi-users, telnyx-sms (about 20s of its 300s). The slow steps run on
+// their own schedules; the list and the reason are at the top of POST's body. Each step gets its own
+// fin_sync_log row through lib/syncJob.ts. HTTP 200 if stripe, users and telnyx succeed, else 500.
 //
-// Skip-on-fail rules:
-//   - Snapshot refresh skips if mdapi-subscriptions failed (active
-//     count is the load-bearing KPI; member data must be fresh).
-//   - Snapshot refresh runs even if mdapi-matches failed (only the
-//     avg_matches stat goes stale; member metrics still fresh).
-//   - All other steps are independent.
-//
-// Each step gets its own fin_sync_log row. A throw in one wrapper
-// does NOT prevent the others from running. HTTP status: 200 if all
-// six succeed, 500 if any failed (Vercel cron monitoring surfaces
-// non-2xx as a failed cron — operator gets visibility on partial
-// failures even when 5/6 succeed).
-//
-// Timeout headroom: estimated ~280s typical (~93% of 300s
-// maxDuration). If observed timeouts, optimize matches via
-// updatedAt-watermark (cuts ~150s → ~30s).
-//
-// Auth: same dual-mode pattern as /api/sync/stripe.
-//   Cron mode:   Bearer ${CRON_SECRET} (constant-time compare),
-//                service-role supabase client.
+// Auth: dual mode, as /api/sync/stripe.
+//   Cron mode:   Bearer ${CRON_SECRET} (constant-time compare), service-role supabase client.
 //   Manual mode: Bearer <user-session-token>, session-scoped client.
-// Manual mode lets operators curl this endpoint to verify end-to-end
-// before relying on the scheduled trigger.
-//
-// Why direct lib calls instead of HTTP fan-out to per-source
-// endpoints? Same process, no extra latency, single timeout budget.
-// Vercel Hobby tier has 1 cron slot/day; this is the only daily
-// run. Per-source manual sync endpoints land in Phase 2.
 
 import { timingSafeEqual } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { commitStripe } from "@/lib/financeImport";
 import { syncStripeCharges } from "@/lib/stripeSync";
-import { syncMdapiSubscriptions } from "@/lib/mdapiSubscriptionsSync";
-import { syncMdapiPromocodes } from "@/lib/mdapiPromocodesSync";
-import {
-  syncMdapiMatches,
-  defaultIncrementalWindow,
-  logReviewsFromRosters,
-  matchesLogPatch,
-} from "@/lib/mdapiMatchesSync";
-import { syncFirstmatchLedger } from "@/lib/firstmatchLedgerSync";
 import { syncMdapiUsers, mdapiUsersLogPatch } from "@/lib/mdapiUsersSync";
-import { refreshMembershipSnapshots } from "@/lib/membershipSnapshots";
-import { refreshMembershipPriceSnapshots } from "@/lib/membershipPriceSnapshots";
-import { recomputeManagerPayIntoFinExpenses } from "@/lib/managerPayCompute";
 import { ingestTelnyxSms } from "@/lib/telnyxSmsIngest";
 import { syncAllCalendars, CalendarConfigError } from "@/lib/calendarSync";
-import { runWithLog, type TriggeredBy, type SourceName } from "@/lib/syncLogging";
+import { type TriggeredBy } from "@/lib/syncLogging";
+import { syncJob } from "@/lib/syncJob";
 import { refreshGrowthViews } from "@/lib/growthViews";
 
-// Stripe ~60s + mdapi_reviews ~10s + mdapi_subscriptions ~60s +
-// snapshot refresh ~2s. 300s gives ~2× headroom; if we ever hit
-// it, the right answer is async-trigger pattern, not just bumping
-// the cap further.
 export const maxDuration = 300;
 export const runtime = "nodejs";
 
@@ -162,93 +122,37 @@ export async function POST(req: Request) {
     }
   }
 
-  // ── THE TIME BUDGET ────────────────────────────────────────────────────────
-  // maxDuration is 300s and the pipeline has already been killed mid-step (app-store-installs
-  // started at +288s and never completed; google-calendar, then step 15, never started at all and
-  // so left NO row). A step that dies to the platform runs no code and cannot log — so the guard
-  // stops BEFORE the kill and records why, which is what makes the next drift visible.
-  const BUDGET_MS = 300_000;
-  const SAFETY_MS = 25_000; // stop with enough left to write the rows and return a response
-  const elapsedMs = () => Date.now() - startedAt;
-  const budgetLeftMs = () => BUDGET_MS - SAFETY_MS - elapsedMs();
-  const skippedForBudget: string[] = [];
-  // Records the skip in fin_sync_log so "never ran" is a visible fact, not an absence.
-  async function skipForBudget(source: SourceName): Promise<{ ok: false; error: string }> {
-    const msg = `Skipped: cron budget exhausted (${Math.round(elapsedMs() / 1000)}s of ${BUDGET_MS / 1000}s used before this step)`;
-    skippedForBudget.push(source);
-    await supabase.from("fin_sync_log").insert({
-      source, triggered_by: triggeredBy,
-      started_at: new Date().toISOString(), completed_at: new Date().toISOString(),
-      error_message: msg,
-    });
-    console.warn(`[cron] ${source}: ${msg}`);
-    return { ok: false, error: msg };
-  }
+  // ── FOUR SHORT STEPS, ABOUT 20s (Ryan, 2026-11-02) ─────────────────────────────────────────────
+  // This job used to run fifteen steps in its 300s and from Oct 22 the platform killed it mid-step.
+  // The slow steps now run on their own schedules (vercel.json, lib/syncJob.ts):
+  //   10:40  /api/sync/job/subscriptions   mdapi-subscriptions, membership-snapshots, membership-prices
+  //   10:50  /api/sync/job/promocodes      mdapi-promocodes
+  //   11:10  /api/sync/job/matches         mdapi-matches (and mdapi-reviews from its rosters)
+  //   11:20  /api/sync/job/after-matches   firstmatch-ledger, manager-pay-recompute
+  //   12:10  /api/sync/play-installs, 12:20 /api/sync/app-store-installs
+  // What stays is quick and independent. Every step goes through the job runner, so one reached with
+  // the budget spent, or cut off, writes a fin_sync_log row saying so.
+  const job = syncJob(supabase, triggeredBy, maxDuration * 1000);
 
-  // --- Run all three syncs sequentially with per-source isolation ---
-  const stripeResult = await runWithLog(
-    "stripe-api",
-    triggeredBy,
-    supabase,
-    runStripeSync,
-    (r) => ({
-      rows_imported: r.rows.length,
-      rows_replaced: r.rowsReplaced,
-      charges_fetched: r.totalCharges,
-      charges_succeeded: r.paidRows,
-      charges_skipped: r.skippedNonPaid + r.skippedNonUsd,
-    }),
-  );
+  const stripeResult = await job.step("stripe-api", runStripeSync, (r) => ({
+    rows_imported: r.rows.length,
+    rows_replaced: r.rowsReplaced,
+    charges_fetched: r.totalCharges,
+    charges_succeeded: r.paidRows,
+    charges_skipped: r.skippedNonPaid + r.skippedNonUsd,
+  }));
 
-  // REVIEWS: NO WALK HERE since 2026-10-21. New reviews arrive with the matches step below (read off
-  // the rosters it refreshes, logged as mdapi-reviews 'from-rosters'); the full walk of
-  // /admin/matches/reviews is the night pass's (lib/nightPass.ts). Kept as a result so the response
-  // shape and the anyFailed gate below are unchanged.
-  const reviewsResult = { ok: true as const, result: { skipped: "reviews arrive with the matches step; full walk at night" } };
-
-  const subscriptionsResult = await runWithLog(
-    "mdapi-subscriptions",
-    triggeredBy,
-    supabase,
-    syncMdapiSubscriptions,
-    (r) => ({ rows_imported: r.upserted, api_calls: r.apiCalls }),
-  );
-
-  // Promocodes — independent of upstream syncs (no skip-on-fail
-  // dependency). Cheap (~2s for ~6k rows) so position doesn't matter
-  // for budget. Placed here so all mdapi_* steps are grouped before
-  // the snapshot refresh.
-  const promocodesResult = await runWithLog(
-    "mdapi-promocodes",
-    triggeredBy,
-    supabase,
-    syncMdapiPromocodes,
-    (r) => ({ rows_imported: r.upserted, api_calls: r.apiCalls }),
-  );
-
-  // Matches — incremental refresh of mdapi_matches + mdapi_match_players
-  // for the now-14d → now+60d window. Independent of upstream syncs;
-  // snapshots will run even if this fails (only avg_matches stat goes
-  // stale, member metrics stay fresh). The HOURLY kind since 2026-10-21: rosters for recent, new or
-  // changed matches only (rostersToRefresh); every roster is re-read by the night pass.
-  // ── GOOGLE CALENDAR — MOVED EARLY, DELIBERATELY ────────────────────────────
-  // It used to be step 15 of 15. The orchestrator's maxDuration is 300s and the run reached
-  // app-store-installs at +288s, so the function was killed before this step ever started —
-  // which is why it produced NO fin_sync_log row at all (runWithLog was never called) and sat
-  // frozen for 8 days while every earlier step logged cleanly. It is a ~5s step; starving it
-  // behind a 288s tail was purely an ordering accident.
+  // Google Calendar: isolated, kept out of anyFailed (a not yet propagated Workspace grant must not
+  // fail the job). The SA key never reaches the log: CalendarConfigError is normalized here.
   let googleCalendarResult: { ok: boolean; rows?: number; note?: string };
   if (triggeredBy !== "cron") {
     googleCalendarResult = { ok: true, rows: 0, note: "manual mode: skipped (needs service role + runtime SA key)" };
   } else {
-    const run = await runWithLog("google-calendar", triggeredBy, supabase, async () => {
+    const run = await job.step("google-calendar", async () => {
       try {
-        const summary = await syncAllCalendars(supabase, new Date());
-        return { rows: summary.eventsStored };
+        return { rows: (await syncAllCalendars(supabase, new Date())).eventsStored };
       } catch (e) {
-        if (e instanceof CalendarConfigError) {
-          throw new Error(`Calendar sync config: ${e.message}`);
-        }
+        if (e instanceof CalendarConfigError) throw new Error(`Calendar sync config: ${e.message}`);
         throw e;
       }
     }, (r) => ({ rows_imported: r.rows }));
@@ -256,218 +160,20 @@ export async function POST(req: Request) {
     if (!run.ok) console.error("[cron] google-calendar step failed (isolated, non-fatal):", run.error);
   }
 
-  const matchesStart = new Date().toISOString();
-  const matchesResult = await runWithLog(
-    "mdapi-matches",
-    triggeredBy,
-    supabase,
-    (sb) => syncMdapiMatches(sb, { ...defaultIncrementalWindow(), rosters: "changed", mode: "incremental" }),
-    matchesLogPatch,
-  );
-  if (matchesResult.ok) await logReviewsFromRosters(supabase, triggeredBy, matchesStart, matchesResult.result);
+  // Users: the incremental /admin/players walk (one or two pages a day).
+  const usersResult = await job.step("mdapi-users", syncMdapiUsers, mdapiUsersLogPatch);
 
-  // First-match abuse ledger — captures one-way phone/email hashes for
-  // is_first_match=true claims so delete-and-remake repeat abuse is
-  // detectable for human review. Reads mdapi_match_players, so it runs
-  // after the matches sync. Insert-only (a row's hashes are write-once),
-  // so it processes the full accumulated table each run; independent of
-  // matches success (no skip-on-fail) — if matches failed it just won't
-  // see today's newest claims, which the next run picks up.
-  const firstmatchLedgerResult = await runWithLog(
-    "firstmatch-ledger",
-    triggeredBy,
-    supabase,
-    (sb) => syncFirstmatchLedger(sb, "sync"),
-    (r) => ({ rows_imported: r.inserted }),
-  );
+  // Telnyx SMS log: a 2 day lookback, upserted. The ingest needs the service role, so a manual run
+  // is a successful no-op with an advisory (POST /api/sms-log/ingest does a manual ingest).
+  const telnyxSmsResult = await job.step("telnyx-sms", async (sb) => {
+    if (triggeredBy !== "cron") {
+      return { skipped: "manual mode: ingest needs the service role; use POST /api/sms-log/ingest", rowsUpserted: 0 };
+    }
+    const r = await ingestTelnyxSms(sb, { sinceISO: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString() });
+    return { skipped: null as string | null, rowsUpserted: r.rowsUpserted };
+  }, (r) => (r.skipped ? { rows_imported: 0, error_message: r.skipped } : { rows_imported: r.rowsUpserted }));
 
-  // Manager Pay recompute — rolls per-(city, payDate) totals into
-  // fin_expenses for the Finance Manager Pay grid. Runs AFTER
-  // mdapi-matches so it sees the freshly-synced manager assignments
-  // + player counts. Skips if mdapi-matches failed (recomputing
-  // against stale data would silently produce wrong totals;
-  // surfacing the skip in fin_sync_log gives operator visibility).
-  // Pre-cutover Thursdays are guaranteed untouched — the helper
-  // enforces a hard floor at MANAGER_PAY_CUTOVER_PAY_DATE.
-  const managerPayResult = await runWithLog(
-    "manager-pay-recompute",
-    triggeredBy,
-    supabase,
-    async (sb) => {
-      if (!matchesResult.ok) {
-        throw new Error(
-          "Skipped: mdapi-matches sync failed; recompute would use stale data",
-        );
-      }
-      return recomputeManagerPayIntoFinExpenses(sb);
-    },
-    (r) => ({ rows_imported: r.rowsWritten }),
-  );
-
-  // Users — INCREMENTAL /admin/players sync into mdapi_users. Walks
-  // newest→oldest on a watermark (updatedAt if the API ever exposes it,
-  // else createdAt) and stops once it pages past the last-synced cutoff,
-  // so a typical day fetches ~1-2 pages instead of all ~96. This was the
-  // cron's budget-killer: the old full re-sync (~140s) pushed the
-  // orchestrator past its 300s maxDuration and got killed mid-step,
-  // stranding the four steps after it. First run (no watermark) still
-  // does a full sync to bootstrap. console.time keeps operator
-  // visibility on actual duration.
-  console.time("mdapi-users sync");
-  const usersResult = await runWithLog(
-    "mdapi-users",
-    triggeredBy,
-    supabase,
-    syncMdapiUsers,
-    mdapiUsersLogPatch,
-  );
-  console.timeEnd("mdapi-users sync");
-
-  // Users lens snapshot — must run AFTER mdapi-users so the snapshot
-  // reflects fresh data. Estimated ~6s. Skips if mdapi-users failed
-  // (snapshot would just reproduce yesterday's data with a fresh
-  // computed_at, masking the upstream failure).
-
-  // ── THE TWO SLOW STEPS, RUN CONCURRENTLY ───────────────────────────────────
-  // These were 84s + 57s = 141s of the ~289s that exhausted the budget. They are INDEPENDENT of
-  // each other: users-lens depends on mdapi-users, membership-snapshots depends on
-  // mdapi-subscriptions, and they write different tables. Overlapping them costs max(84,57)=84s
-  // instead of 141s — ~57s of margin, which is what actually gets the pipeline under budget.
-  // (Reordering alone did NOT: moving google-calendar to step 5 pushed every later step ~5s out,
-  // so app-store-installs started LATER, not earlier. The starvation rotated; it did not end.)
-  //
-  // Promise.all is safe here because runWithLog never throws — it returns a discriminated union —
-  // so one failing does not cancel the other or reject the pair.
-  // ── mdapi-users-lens-snapshot: REMOVED ────────────────────────────────────────────────────────
-  //
-  // It was a CACHE WARMER, and it had been a no-op for 14 consecutive runs.
-  //
-  // refreshUsersLensSnapshot calls fetchAll() in /api/cities/users-lens, which selectAll's the
-  // whole of mdapi_users AND mdapi_match_players (~203,000 rows) to pre-compute six windows
-  // including all_time. Every run timed out at ~113s and wrote nothing: the snapshot's newest
-  // computed_at was 14.4 days old while the step "ran" nightly.
-  //
-  // NOBODY NOTICED, and that is the evidence. The read path treats a snapshot older than 25h as
-  // stale and falls through to live aggregation, so /cities kept working — 4.6s slower, silently.
-  // A warmer whose absence is invisible for two weeks is not earning 113s of a 300s budget that
-  // app-store-installs was being starved out of.
-  //
-  // The TABLE and the READ PATH are untouched: mdapi_users_lens_snapshot still exists, still
-  // holds its 54 + 6 rows, and the route still serves them when fresh. Only the nightly rebuild
-  // is gone. Re-adding it needs an incremental or materialised approach — an all_time window
-  // cannot be date-bounded the way membership-snapshots just was.
-  const snapshotResult = await runWithLog(
-    "membership-snapshots",
-    triggeredBy,
-    supabase,
-    async (sb) => {
-      if (!subscriptionsResult.ok) {
-        throw new Error(
-          "Skipped: mdapi_subscriptions sync failed; snapshot needs fresh data",
-        );
-      }
-      return refreshMembershipSnapshots({ client: sb, sourceFileName: "cron" });
-    },
-    // rows_imported = months written; rows_replaced = months the
-    // regression guard refused (so the preflight is visible in
-    // fin_sync_log — a non-zero rows_replaced means a guard fired).
-    (r) => ({
-      rows_imported: r.writtenMonths.length,
-      rows_replaced: r.guardedMonths.length,
-    }),
-  );
-
-  // Membership price snapshots — per-city MAX(active price). Same
-  // mdapi_subscriptions dependency as the broader members_monthly
-  // snapshot below, so skip-on-fail follows the same rule. Cheap
-  // (< 1s for ~425 active subs, single-row inserts only on change).
-  // Placed before the members_monthly refresh because both consume
-  // the same dataset and grouping the dependent steps keeps the
-  // ordering tractable.
-  const membershipPricesResult = await runWithLog(
-    "membership-prices",
-    triggeredBy,
-    supabase,
-    async (sb) => {
-      if (!subscriptionsResult.ok) {
-        throw new Error(
-          "Skipped: mdapi_subscriptions sync failed; price snapshot needs fresh data",
-        );
-      }
-      return refreshMembershipPriceSnapshots(sb);
-    },
-    (r) => ({ rows_imported: r.changesInserted }),
-  );
-
-  // Snapshot refresh consumes mdapi_subscriptions data, so it only
-  // runs if that sync succeeded. The throw-on-skip pattern lets
-  // runWithLog handle the log row uniformly — error_message records
-  // why the snapshot was skipped so it shows up in Recent Syncs.
-
-  // Telnyx SMS log — refresh the local outbound-SMS cache (migration
-  // 0063) so the /sms-log dashboard has fresh data and bodies are
-  // captured before Telnyx's ~10-day retention drops them. Independent
-  // of every other step (no skip-on-fail); 2-day lookback so a run that
-  // straddles the day boundary loses nothing (upsert makes the overlap
-  // idempotent). Cheap for a daily window (~35 outbound/day in the
-  // 7-day sample). Errors are isolated by runWithLog and only flip this
-  // one step + the cron's HTTP status, never block the steps above.
-  const telnyxSmsResult = await runWithLog(
-    "telnyx-sms",
-    triggeredBy,
-    supabase,
-    async (sb) => {
-      // telnyx_sms_log is SELECT-only for authenticated by design; the
-      // ingest upsert/prune need the service role. Cron mode has it;
-      // manual (session-token) mode does not. Skip in manual mode as a
-      // SUCCESSFUL no-op with an advisory (not a throw — a throw would
-      // flip the whole cron to HTTP 500 on every manual verification
-      // run). The dedicated POST /api/sms-log/ingest does the manual
-      // ingest with its own service-role client.
-      if (triggeredBy !== "cron") {
-        return {
-          skipped: "manual mode: ingest needs the service role; use POST /api/sms-log/ingest",
-          rowsUpserted: 0,
-        };
-      }
-      const r = await ingestTelnyxSms(sb, {
-        sinceISO: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
-      });
-      return { skipped: null as string | null, rowsUpserted: r.rowsUpserted };
-    },
-    (r) =>
-      r.skipped
-        ? { rows_imported: 0, error_message: r.skipped }
-        : { rows_imported: r.rowsUpserted },
-  );
-
-  // Google Play installs and App Store installs left this orchestrator on Nov 2, 2026: from Oct 22
-  // the steps above used the whole 300s budget before reaching them (fin_sync_log: "Skipped: cron
-  // budget exhausted", then no row at all). Each now runs daily from vercel.json on its own route,
-  // /api/sync/play-installs and /api/sync/app-store-installs, still through runWithLog.
-
-  // Google Calendar — this week's meetings (2+ people, non-private) for the seeded
-  // team accounts via domain-wide delegation. Like the install syncs (now their own routes), it
-  // is a NEW integration and deliberately isolated: a transient delegation/Google
-  // error (or a not-yet-propagated Workspace grant) must never abort the daily
-  // sync, so it is kept OUT of `anyFailed`. It runs through runWithLog so every run
-  // leaves a fin_sync_log row (started_at + rows_imported on success, error_message
-  // on failure) — the KPI's status label reads that row. The SA key never reaches
-  // the log: the lib throws sanitized messages only and CalendarConfigError is
-  // normalized here.
-
-  const anyFailed =
-    !stripeResult.ok ||
-    !reviewsResult.ok ||
-    !subscriptionsResult.ok ||
-    !promocodesResult.ok ||
-    !matchesResult.ok ||
-    !firstmatchLedgerResult.ok ||
-    !managerPayResult.ok ||
-    !usersResult.ok ||
-    !membershipPricesResult.ok ||
-    !snapshotResult.ok ||
-    !telnyxSmsResult.ok;
+  const anyFailed = !stripeResult.ok || !usersResult.ok || !telnyxSmsResult.ok;
 
   // Refresh the growth_* materialized views nightly after the mirror syncs.
   await refreshGrowthViews(supabase);
@@ -476,29 +182,12 @@ export async function POST(req: Request) {
     {
       triggeredBy,
       durationMs: Date.now() - startedAt,
-      // The margin, reported every run. "It fits today" is not a guarantee — this is the number to
-      // watch, and skippedForBudget names any step that did not get to run.
-      budget: {
-        limitMs: BUDGET_MS,
-        safetyMs: SAFETY_MS,
-        usedMs: Date.now() - startedAt,
-        marginMs: budgetLeftMs(),
-        skippedForBudget,
-      },
+      notRun: job.notRun,
       results: {
         stripe: stripeResult,
-        mdapi_reviews: reviewsResult,
-        mdapi_subscriptions: subscriptionsResult,
-        mdapi_promocodes: promocodesResult,
-        mdapi_matches: matchesResult,
-        firstmatch_ledger: firstmatchLedgerResult,
-        manager_pay_recompute: managerPayResult,
         mdapi_users: usersResult,
-        membership_prices: membershipPricesResult,
-        membership_snapshots: snapshotResult,
         telnyx_sms: telnyxSmsResult,
-        // Informational only — intentionally excluded from `anyFailed` so a
-        // transient Google delegation error cannot fail the daily cron.
+        // Informational only: excluded from anyFailed.
         google_calendar: googleCalendarResult,
       },
     },
