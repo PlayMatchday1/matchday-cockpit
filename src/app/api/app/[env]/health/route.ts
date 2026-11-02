@@ -2,7 +2,8 @@
 // month, by city and field, with a six-period trend. READ ONLY. See src/lib/healthModel.ts for the
 // math and src/lib/healthLoad.ts for the read (the Gameday Ops board's own live read and shaping).
 //
-//   GET ?period=week|month&start=YYYY-MM-DD[&city=<name>]
+//   GET ?period=week|month&start=YYYY-MM-DD[&city=<name>][&fresh=1]
+//       fresh=1 (pull to refresh): the chosen period is read live and replaces its cached copy.
 //       start defaults to the last full week, or the current month so far; forward stops at the
 //       current period. city: just that city (404 when it is not in the caller's view).
 //
@@ -41,7 +42,8 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string }> 
     const t0 = Date.now();
     const periods: Period[] = [p];
     for (let i = 1; i < TREND; i++) periods.unshift(stepPeriod(periods[0], -1, today));
-    const loaded = await Promise.all(periods.map((x) => loadPeriod(auth.supabase, env, x.from, x.to, scope, x.current)));
+    const fresh = q.get("fresh") === "1";
+    const loaded = await Promise.all(periods.map((x, i) => loadPeriod(auth.supabase, env, x.from, x.to, scope, x.current, fresh && i === periods.length - 1)));
     const now = loaded[loaded.length - 1], prev = loaded.length > 1 ? loaded[loaded.length - 2] : null;
     const next = stepPeriod(p, 1, today);
     const label = p.current ? "So far" : kind === "week" ? (stepPeriod(p, 1, today).current ? "Last full week" : null) : (next.current ? "Last full month" : null);
@@ -62,6 +64,8 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string }> 
       previous: prev ? { from: prev.from, to: prev.to, cancelRate: prev.total.cancelRate, fillRate: prev.total.fillRate } : null,
       cities,
       spotsError: now.spotsError,
+      // readAt: when the shown period was read from MatchDay (it can be up to 5 minutes old).
+      readAt: now.readAt,
       timing: { ms: Date.now() - t0, cached: loaded.map((x) => x.cached) },
     }, { headers: { "Cache-Control": "no-store" } });
   } catch (e) {

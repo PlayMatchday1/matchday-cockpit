@@ -122,7 +122,8 @@ export function useCancelMatch(opts: {
 
   const run = useCallback(async () => {
     // NO RETRIES, and no second firing while the first is in flight.
-    if (!preview || busy || reasonProblem(reason, note)) return;
+    if (!preview || busy) return;
+    if (reasonProblem(reason, note)) return;   // a reason is required; the button is disabled until then
     const headers = await authHeaders();
     if (!headers) { setResult("No active session — sign in again."); return; }
     setBusy(true); setResult(null);

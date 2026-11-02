@@ -4,10 +4,13 @@ import "server-only"; // no-op under --conditions=react-server
 // range (fromDate..toDate, the same parameters), then the same trimMatch, the same city filter for a
 // confined account BEFORE anything is decorated, withVenueMaxPlayers and withSpots.
 //
-// CACHED WHEN COMPLETE (Ryan, 2026-11-01): a period that has ended is kept in the Next.js data cache
-// for 6 hours, keyed by environment, dates and city scope; the current period is always read live.
+// CACHED (Ryan, 2026-11-01), in the Next.js data cache, keyed by environment, dates and city scope:
+//   a period that has ended   6 hours;
+//   the current period        5 minutes, served at once and refreshed in the background once stale
+//                             (unstable_cache is stale-while-revalidate). A pull to refresh (fresh)
+//                             expires it first, so that read is live and becomes the cached copy.
 
-import { unstable_cache } from "next/cache";
+import { revalidateTag, unstable_cache } from "next/cache";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { apiGet, type MatchdayEnv } from "./matchdayStageApi";
 import { fetchVenueMaxPlayers, trimMatch, withVenueMaxPlayers, type Raw } from "./gamedayApiShape";
@@ -65,12 +68,16 @@ async function loadLive(sb: SupabaseClient, env: MatchdayEnv, from: string, to: 
   return { ...s, spotsError, matches: withCounts.length, readAt: new Date(nowMs).toISOString(), cancelReasonsUnavailable: facts.storedUnavailable };
 }
 
-/** A period, live when it is current, from the 6-hour cache when it has ended. */
-export async function loadPeriod(sb: SupabaseClient, env: MatchdayEnv, from: string, to: string, scopeCity: string | null, current: boolean): Promise<LoadedPeriod & { cached: boolean }> {
-  if (current) return { ...(await loadLive(sb, env, from, to, scopeCity, Date.now())), cached: false };
-  let fresh = false;
-  const cached = unstable_cache(async () => { fresh = true; return loadLive(sb, env, from, to, scopeCity, Date.now()); },
-    ["health-period-v3", env, from, to, scopeCity ?? "all"], { revalidate: COMPLETED_TTL_S, tags: ["health"] });
+export const CURRENT_TTL_S = 5 * 60;
+
+/** A period from the data cache: 5 minutes when current, 6 hours when ended. `fresh` reads it live. */
+export async function loadPeriod(sb: SupabaseClient, env: MatchdayEnv, from: string, to: string, scopeCity: string | null, current: boolean, fresh = false): Promise<LoadedPeriod & { cached: boolean }> {
+  const tag = `health:${env}:${from}:${to}:${scopeCity ?? "all"}`;
+  if (fresh) revalidateTag(tag, { expire: 0 });
+  let live = false;
+  const cached = unstable_cache(async () => { live = true; return loadLive(sb, env, from, to, scopeCity, Date.now()); },
+    ["health-period-v4", current ? "current" : "ended", env, from, to, scopeCity ?? "all"],
+    { revalidate: current ? CURRENT_TTL_S : COMPLETED_TTL_S, tags: ["health", tag] });
   const r = await cached();
-  return { ...r, cached: !fresh };
+  return { ...r, cached: !live };
 }
