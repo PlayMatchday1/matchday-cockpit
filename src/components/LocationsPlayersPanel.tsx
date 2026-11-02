@@ -7,7 +7,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { downloadCsv } from "@/components/growth/format";
-import { idList, klaviyoRows, OFFERS_ID_CAP, playsHere, type AreaPlayer } from "@/lib/areaPlayers";
+import { idList, klaviyoRows, playsHere, type AreaPlayer } from "@/lib/areaPlayers";
 import { copyText } from "@/lib/copyText";
 import { ACTIVITIES, ACTIVITY_FILL, ACTIVITY_LABEL, ACTIVITY_SHORT, type Activity } from "@/lib/wherePlayed";
 
@@ -73,7 +73,7 @@ export default function LocationsPlayersPanel({ title, within, rows, loading, er
   const copyAll = async () => {
     const n = new Set(shown.map((r) => r.id)).size;
     const ok = await copyText(idList(shown));
-    show(ok ? `Copied ${n.toLocaleString("en-US")} ${n === 1 ? "ID" : "IDs"}${n > OFFERS_ID_CAP ? ` · Offers uses the first ${OFFERS_ID_CAP.toLocaleString("en-US")}` : ""}`
+    show(ok ? `Copied ${n.toLocaleString("en-US")} ${n === 1 ? "ID" : "IDs"}`
       : "Couldn't copy: clipboard unavailable", ok);
   };
   const copyOne = async (id: number) => {
@@ -96,7 +96,7 @@ export default function LocationsPlayersPanel({ title, within, rows, loading, er
         <div className="lp-actions">
         {flash && <span className={"lp-flash" + (flash.ok ? "" : " lp-flash-bad")} role="status" data-testid="area-players-copied">{flash.text}</span>}
         <button type="button" className="loc-btn lp-export" data-testid="area-players-copy-ids" disabled={loading || shown.length === 0}
-          title={shown.length === 0 ? "No players to copy" : `Every player ID in the table, comma-separated, for the Offers page's Specific players box${shown.length > OFFERS_ID_CAP ? ` (it uses the first ${OFFERS_ID_CAP.toLocaleString("en-US")})` : ""}`}
+          title={shown.length === 0 ? "No players to copy" : `Every player ID in the table, comma-separated, for the Offers page's Specific players box`}
           onClick={copyAll}>
           Copy IDs ({shown.length.toLocaleString("en-US")})
         </button>
