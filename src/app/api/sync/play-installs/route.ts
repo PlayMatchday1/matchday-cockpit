@@ -17,6 +17,7 @@
 
 import { timingSafeEqual } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
+import { revalidateTag } from "next/cache";
 import { runWithLog, type TriggeredBy } from "@/lib/syncLogging";
 import {
   listInstalls,
@@ -120,6 +121,8 @@ export async function POST(req: Request) {
   //    refresh needed for the KPI. Refresh the other growth_* matviews anyway so
   //    any download-derived series stay coherent; best-effort, never fatal.
   if (ingest.ok && rowsWritten > 0) await refreshGrowthViews(supabase);
+  // The app Players tab caches finished periods for 6 hours; new download days must show now.
+  if (ingest.ok) revalidateTag("app-players", { expire: 0 });
 
   // 4) Read back the truth: app_downloads summary + the freshest fin_sync_log row.
   const { count: adCount } = await supabase

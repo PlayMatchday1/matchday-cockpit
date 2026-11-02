@@ -20,6 +20,7 @@
 
 import { timingSafeEqual } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
+import { revalidateTag } from "next/cache";
 import { runWithLog, type TriggeredBy } from "@/lib/syncLogging";
 import { ingestAppStore, AppleAuthError } from "@/lib/appStoreInstallsSync";
 
@@ -90,6 +91,8 @@ export async function POST(req: Request) {
   );
 
   const summary = run.ok ? run.result : undefined;
+  // The app Players tab caches finished periods for 6 hours; new download days must show now.
+  if (run.ok) revalidateTag("app-players", { expire: 0 });
   const runError = run.ok ? null : run.error;
 
   // Read back the truth: app_downloads(ios) summary + the freshest fin_sync_log row.

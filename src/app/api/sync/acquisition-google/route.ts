@@ -14,6 +14,7 @@
 
 import { timingSafeEqual } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { revalidateTag } from "next/cache";
 import { runWithLog, type SourceName, type TriggeredBy } from "@/lib/syncLogging";
 import { mintToken } from "@/lib/appStoreInstallsSync";
 import { syncAscDownloads } from "@/lib/ascAnalytics";
@@ -84,6 +85,8 @@ export async function POST(req: Request) {
     if (!r.ok) anyFailed = true;
     results[source] = r;
   }
+  // The app Players tab caches finished periods for 6 hours; new download days must show now.
+  revalidateTag("app-players", { expire: 0 });
   return Response.json({ triggeredBy, since, until, durationMs: Date.now() - startedAt, results }, { status: anyFailed ? 500 : 200 });
 }
 
