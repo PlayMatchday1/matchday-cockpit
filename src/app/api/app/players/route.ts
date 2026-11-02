@@ -15,7 +15,7 @@
 
 import { authenticateApp } from "@/lib/appAuth";
 import { todayBusinessDate } from "@/lib/goalPace";
-import { ACTIVE_CITIES, acquisitionPeriod, activityPeriods, androidPeriod, periodOf, scopeNames, stepOf, type Kind, type Period } from "@/lib/appPlayers";
+import { ACTIVE_CITIES, acquisitionPeriod, activityPeriods, androidPeriod, downloadSyncStale, periodOf, scopeNames, stepOf, type Kind, type Period } from "@/lib/appPlayers";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -51,9 +51,10 @@ export async function GET(req: Request) {
   try {
     const t0 = Date.now();
     // Downloads (both pages) and Meta: the Acquisition route per period; Android from app_downloads.
-    const [acq, android] = await Promise.all([
+    const [acq, android, stale] = await Promise.all([
       Promise.all(periods.map((x) => acquisitionPeriod(auth.supabase, x, current(x)))),
       Promise.all(periods.map((x) => androidPeriod(auth.supabase, x, current(x)))),
+      downloadSyncStale(auth.supabase),
     ]);
     const through = { iphone: acq[SEL].iphoneThrough, android: android[SEL].androidThrough, meta: acq[SEL].metaThrough };
     const downloads = (i: number) => (scope ? null : { iphone: acq[i].iphone, android: android[i].android, total: acq[i].iphone == null ? null : acq[i].iphone! + android[i].android });
@@ -84,6 +85,8 @@ export async function GET(req: Request) {
     }
     return Response.json({
       page, kind, today, scopeCity: scope?.city ?? null, through,
+      // A download source with no clean sync in 3 days: the Downloads tile names its last day.
+      stale,
       period: { ...p, current: current(p), canForward: next.from <= today },
       // periods[selected] is the chosen period; periods[selected + 1], when present, is the one after it.
       selected: SEL,

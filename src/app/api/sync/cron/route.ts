@@ -50,8 +50,6 @@ import { refreshMembershipSnapshots } from "@/lib/membershipSnapshots";
 import { refreshMembershipPriceSnapshots } from "@/lib/membershipPriceSnapshots";
 import { recomputeManagerPayIntoFinExpenses } from "@/lib/managerPayCompute";
 import { ingestTelnyxSms } from "@/lib/telnyxSmsIngest";
-import { listInstalls, ingestAllMonths, PlayGrantPendingError } from "@/lib/playInstallsSync";
-import { ingestAppStore, AppleAuthError } from "@/lib/appStoreInstallsSync";
 import { syncAllCalendars, CalendarConfigError } from "@/lib/calendarSync";
 import { runWithLog, type TriggeredBy, type SourceName } from "@/lib/syncLogging";
 import { refreshGrowthViews } from "@/lib/growthViews";
@@ -443,91 +441,13 @@ export async function POST(req: Request) {
         : { rows_imported: r.rowsUpserted },
   );
 
-  // Google Play installs — re-download the CURRENT month in full and upsert every
-  // daily row (never append; late restatements of earlier days overwrite). This
-  // is a NEW integration and is deliberately isolated: a failure here — including
-  // the PlayGrantPendingError that is expected for up to 24h while the Play bucket
-  // grant propagates — must never abort the daily sync, so it is kept OUT of
-  // `anyFailed`. But it now runs through runWithLog like every other source, so
-  // every run leaves a fin_sync_log row (started_at + rows_imported on success,
-  // error_message on failure) — the KPI's status label reads that row to tell
-  // "never run" from "ran and failed with X" from "ran, no data". The SA key never
-  // reaches the log: the ingest throws sanitized messages only.
-  //
-  // Listing-driven: list the bucket, then ingest EVERY available month by its real
-  // filename (never a constructed one), re-downloading each month in full so late
-  // restatements overwrite. Same path the manual /api/sync/play-installs run uses.
-  let playInstallsResult: { ok: boolean; rows?: number; note?: string };
-  if (triggeredBy !== "cron") {
-    playInstallsResult = { ok: true, rows: 0, note: "manual mode: skipped (needs service role + runtime SA key)" };
-  } else if (budgetLeftMs() <= 0) {
-    // Out of time. Stop HERE and record it, rather than starting a step the platform will kill
-    // mid-flight — that leaves a started-but-never-completed row, or for a step that never begins,
-    // no row at all. This is the signal that says which step ran out of budget and when.
-    playInstallsResult = { ok: false, note: (await skipForBudget("play-installs")).error };
-  } else {
-    const run = await runWithLog("play-installs", triggeredBy, supabase, async () => {
-      try {
-        const list = await listInstalls();
-        if (!list.ok) {
-          throw new Error(
-            `GCS list ${list.status === 403 ? "403 (grant missing/insufficient)" : list.status === 404 ? "404 (bad bucket path)" : list.status || "error"}: ${list.error ?? list.statusText}`,
-          );
-        }
-        const summary = await ingestAllMonths(supabase, list.objects ?? [], new Date());
-        return { rows: summary.rowsWritten };
-      } catch (e) {
-        // Normalize the expected grant-propagation 403 to a clear, stable message
-        // that the status label can surface verbatim; re-throw so runWithLog
-        // records it as this run's error_message.
-        if (e instanceof PlayGrantPendingError) {
-          throw new Error("Play grant still propagating (403) — expected for up to 24h after granting, non-fatal");
-        }
-        throw e;
-      }
-    }, (r) => ({ rows_imported: r.rows }));
-    playInstallsResult = run.ok ? { ok: true, rows: run.result.rows } : { ok: false, note: run.error };
-    if (!run.ok) console.error("[cron] play-installs step failed (isolated, non-fatal):", run.error);
-  }
-
-  // App Store installs (iOS) — the Apple mirror of the Play step above. Backfills
-  // every available Sales report day and re-fetches the trailing window in full so
-  // late restatements overwrite. This is a NEW integration and, like play-installs,
-  // is deliberately isolated: a transient App Store Connect error (auth/JWT
-  // propagation, Apple 5xx) must never abort the daily sync, so it is kept OUT of
-  // `anyFailed`. It runs through runWithLog so every run leaves a fin_sync_log row
-  // (started_at + rows_imported on success, error_message on failure) — the KPI's
-  // status label reads that row. The .p8 key never reaches the log: the ingest
-  // throws sanitized messages only and AppleAuthError is normalized here.
-  let appStoreInstallsResult: { ok: boolean; rows?: number; note?: string };
-  if (triggeredBy !== "cron") {
-    appStoreInstallsResult = { ok: true, rows: 0, note: "manual mode: skipped (needs service role + runtime SA key)" };
-  } else if (budgetLeftMs() <= 0) {
-    // Out of time. Stop HERE and record it, rather than starting a step the platform will kill
-    // mid-flight — that leaves a started-but-never-completed row, or for a step that never begins,
-    // no row at all. This is the signal that says which step ran out of budget and when.
-    appStoreInstallsResult = { ok: false, note: (await skipForBudget("app-store-installs")).error };
-  } else {
-    const run = await runWithLog("app-store-installs", triggeredBy, supabase, async () => {
-      try {
-        const summary = await ingestAppStore(supabase, new Date());
-        return { rows: summary.rowsWritten };
-      } catch (e) {
-        // Normalize the Apple auth/credential failure to a clear, stable message
-        // that the status label can surface verbatim; re-throw so runWithLog
-        // records it as this run's error_message.
-        if (e instanceof AppleAuthError) {
-          throw new Error(`App Store Connect auth failed: ${e.message}`);
-        }
-        throw e;
-      }
-    }, (r) => ({ rows_imported: r.rows }));
-    appStoreInstallsResult = run.ok ? { ok: true, rows: run.result.rows } : { ok: false, note: run.error };
-    if (!run.ok) console.error("[cron] app-store-installs step failed (isolated, non-fatal):", run.error);
-  }
+  // Google Play installs and App Store installs left this orchestrator on Nov 2, 2026: from Oct 22
+  // the steps above used the whole 300s budget before reaching them (fin_sync_log: "Skipped: cron
+  // budget exhausted", then no row at all). Each now runs daily from vercel.json on its own route,
+  // /api/sync/play-installs and /api/sync/app-store-installs, still through runWithLog.
 
   // Google Calendar — this week's meetings (2+ people, non-private) for the seeded
-  // team accounts via domain-wide delegation. Like the two install steps above, it
+  // team accounts via domain-wide delegation. Like the install syncs (now their own routes), it
   // is a NEW integration and deliberately isolated: a transient delegation/Google
   // error (or a not-yet-propagated Workspace grant) must never abort the daily
   // sync, so it is kept OUT of `anyFailed`. It runs through runWithLog so every run
@@ -577,12 +497,6 @@ export async function POST(req: Request) {
         membership_prices: membershipPricesResult,
         membership_snapshots: snapshotResult,
         telnyx_sms: telnyxSmsResult,
-        // Informational only — intentionally excluded from `anyFailed` so a
-        // propagating Play grant (403) cannot fail the daily cron.
-        play_installs: playInstallsResult,
-        // Informational only — intentionally excluded from `anyFailed` so a
-        // transient App Store Connect error cannot fail the daily cron.
-        app_store_installs: appStoreInstallsResult,
         // Informational only — intentionally excluded from `anyFailed` so a
         // transient Google delegation error cannot fail the daily cron.
         google_calendar: googleCalendarResult,

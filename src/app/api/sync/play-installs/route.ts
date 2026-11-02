@@ -193,3 +193,7 @@ export async function POST(req: Request) {
     { status: 200 },
   );
 }
+
+// Vercel cron sends GET (vercel.json runs this daily on its own, outside /api/sync/cron, whose
+// 300s budget ran out before this step from Oct 22, 2026). Same handler, same CRON_SECRET bearer.
+export const GET = POST;

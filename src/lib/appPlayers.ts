@@ -153,3 +153,20 @@ export async function androidPeriod(sb: SupabaseClient, p: Period, current: bool
     return { android: (r.data ?? []).reduce((a, x) => a + Number(x.count), 0), androidThrough: (last.data?.[0]?.period_date as string | undefined) ?? null };
   });
 }
+
+/* DOWNLOAD SYNC FRESHNESS: a source is stale when its last clean run in fin_sync_log (completed, no
+ * error, an ADVISORY note counts as clean) is more than 3 days old, or it has none. iPhone is the App
+ * Store Analytics files (asc-analytics), Android the Play Console reports (play-installs). */
+const DOWNLOAD_SOURCES = { iphone: "asc-analytics", android: "play-installs" } as const;
+export async function downloadSyncStale(sb: SupabaseClient, now = new Date()): Promise<{ iphone: boolean; android: boolean }> {
+  const cutoff = now.getTime() - 3 * 24 * 60 * 60 * 1000;
+  const one = async (source: string) => {
+    const r = await sb.from("fin_sync_log").select("completed_at, error_message").eq("source", source)
+      .not("completed_at", "is", null).order("started_at", { ascending: false }).limit(20);
+    if (r.error) throw new Error(`fin_sync_log: ${r.error.message}`);
+    const ok = (r.data ?? []).find((x) => !x.error_message || String(x.error_message).startsWith("ADVISORY"));
+    return !ok || new Date(String(ok.completed_at)).getTime() < cutoff;
+  };
+  const [iphone, android] = await Promise.all([one(DOWNLOAD_SOURCES.iphone), one(DOWNLOAD_SOURCES.android)]);
+  return { iphone, android };
+}
