@@ -38,8 +38,8 @@ export const pushLocked = (p: CampaignPush | null | undefined, campaignStatus: s
 
 // THE SUGGESTION, from the deal. Any match: "Your next match is 50% off" / "{first_name}, it's already on your
 // account. Ends Sun, Nov 8." (no "Ends" with no end date). A specific match: "50% off Parmer Thursday" /
-// "{first_name}, Thu Nov 5 7:00 PM. Already applied." A field: "50% off at Riverside Fields" / "{first_name}, any
-// match there. Already applied." Names and times are written in, not left as {match}.
+// "{first_name}, Thu Nov 5 7:00 PM. Already applied." (free: "Parmer Thursday is free"). A field: "50% off at Riverside Fields" / "{first_name}, any
+// match there. Already applied." (free: "Any match at Riverside Fields is free"). Names and times are written in, not left as {match}.
 const dealWord = (type: Form["dealType"], amount: number) =>
   type === "PERCENT_OFF" ? `${amount}% off` : type === "AMOUNT_OFF" ? `${money(amount)} off` : type === "SET_PRICE" ? money(amount) : "free";
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
@@ -48,11 +48,11 @@ export function pushSuggestion(f: Pick<Form, "dealType" | "dealAmount" | "usesPe
   const w = dealWord(f.dealType, f.dealAmount);
   let title: string, body: string;
   if (f.scope === "MATCH" && m) {
-    title = `${cap(w)} ${matchTitle(m)}`;
+    title = f.dealType === "FREE_MATCH" ? `${matchTitle(m)} is free` : `${cap(w)} ${matchTitle(m)}`;
     body = `${FIRST_NAME}, ${matchWhen(m)}. Already applied.`;
   } else if (f.scope === "FIELD" && f.appliesFieldIds.length) {
     const at = f.appliesFieldIds.map((id) => fields.find((x) => x.id === id)?.title).filter(Boolean) as string[];
-    title = `${cap(w)} at ${andJoin(at)}`;
+    title = f.dealType === "FREE_MATCH" ? `Any match at ${andJoin(at)} is free` : `${cap(w)} at ${andJoin(at)}`;
     body = `${FIRST_NAME}, any match there. Already applied.`;
   } else {
     title = f.usesPerPlayer === 1 ? `Your next match is ${w}` : `Your next ${f.usesPerPlayer} matches are ${w}`;

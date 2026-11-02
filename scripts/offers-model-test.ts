@@ -723,8 +723,9 @@ eq("an admin account is one; a player or a backend without the type isn't", [isA
     ["Your next match is free", "Your next match is $5", "Your next match is $3 off", "Your next 3 matches are 50% off"]);
   eq("...no end date: no Ends", pushSuggestion({ ...any, endsLocal: null }, null, F2).body, "{first_name}, it's already on your account.");
   eq("a specific match: deal and its name, then its day and time", pushSuggestion(onMatch, matches[0], F2), { title: "50% off Riverside Thursday", body: "{first_name}, Mon Nov 2 7:00 PM. Already applied." });
-  eq("...free reads as a word", pushSuggestion({ ...onMatch, dealType: "FREE_MATCH", dealAmount: 0 }, matches[0], F2).title, "Free Riverside Thursday");
+  eq("...free says the match is free", pushSuggestion({ ...onMatch, dealType: "FREE_MATCH", dealAmount: 0 }, matches[0], F2).title, "Riverside Thursday is free");
   eq("a field: deal at the field", pushSuggestion(onField, null, F2), { title: "50% off at Riverside Fields", body: "{first_name}, any match there. Already applied." });
+  eq("...free says any match there is free", pushSuggestion({ ...onField, dealType: "FREE_MATCH", dealAmount: 0 }, null, F2).title, "Any match at Riverside Fields is free");
   eq("a long match name is cut to the title's limit", pushSuggestion(onMatch, { ...matches[0], name: "x".repeat(80) }, F2).title.length, 64);
   eq("no first name: dropped with its comma, as the backend's fillFirstName does", [fillPush("{first_name}, it's already on your account.", null, null), fillPush("See you, {first_name}!", null, null), fillPush("No name here.", null, null), fillPush("{first_name}, it's on.", null)],
     ["it's already on your account.", "See you!", "No name here.", "Luis, it's on."]);
