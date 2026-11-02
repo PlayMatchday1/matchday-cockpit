@@ -35,6 +35,7 @@
  */
 
 import { useCallback, useState } from "react";
+import { REASON_LABEL, reasonProblem, type StaffReason } from "./cancelReasons";
 
 export type CancelPreview = {
   name: string;
@@ -68,6 +69,12 @@ export type CancelState = {
   busy: boolean;
   preview: CancelPreview | null;
   result: string | null;
+  /** THE REASON (Ryan, 2026-11-01): required; Cancel stays disabled until `canRun`. */
+  reason: StaffReason | null; setReason: (r: StaffReason | null) => void;
+  note: string; setNote: (n: string) => void;
+  /** Null when the reason is complete, else the sentence that says what is missing. */
+  reasonMissing: string | null;
+  canRun: boolean;
   open: () => Promise<void>;
   abort: () => void;
   run: () => Promise<void>;
@@ -87,6 +94,9 @@ export function useCancelMatch(opts: {
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState<CancelPreview | null>(null);
   const [result, setResult] = useState<string | null>(null);
+  const [reason, setReason] = useState<StaffReason | null>(null);
+  const [note, setNote] = useState("");
+  const reasonMissing = reasonProblem(reason, note);
   const path = `/api/matchday/${env}/matches/${matchId}/cancel`;
 
   const open = useCallback(async () => {
@@ -108,11 +118,11 @@ export function useCancelMatch(opts: {
     }
   }, [busy, authHeaders, path]);
 
-  const abort = useCallback(() => setPreview(null), []);
+  const abort = useCallback(() => { setPreview(null); setReason(null); setNote(""); }, []);
 
   const run = useCallback(async () => {
     // NO RETRIES, and no second firing while the first is in flight.
-    if (!preview || busy) return;
+    if (!preview || busy || reasonProblem(reason, note)) return;
     const headers = await authHeaders();
     if (!headers) { setResult("No active session — sign in again."); return; }
     setBusy(true); setResult(null);
@@ -120,22 +130,23 @@ export function useCancelMatch(opts: {
       const res = await fetch(path, {
         method: "POST",
         headers: { ...headers, "Content-Type": "application/json" },
-        body: JSON.stringify({ confirmName: preview.name, source }),
+        body: JSON.stringify({ confirmName: preview.name, source, reason, note: note.trim() || undefined }),
       });
       const j = await res.json();
       setBusy(false);
       if (!res.ok) { setResult(`Cancel failed: ${j.error || res.status}. Nothing was credited.`); return; }
-      setPreview(null);
-      // FROM THE RE-READ, never the status code.
+      setPreview(null); setReason(null); setNote("");
+      // FROM THE RE-READ, never the status code. A reason that did not save is said, not hidden.
+      const why = j.landed ? (j.reasonSaved ? ` Reason: ${REASON_LABEL[j.reason as StaffReason]}.` : ` The reason was NOT saved (${j.reasonError ?? "unknown error"}); this cancel will read as Unknown.`) : "";
       setResult(j.landed
-        ? `LANDED — “${j.name}” is cancelled. ${j.count} player(s) credited $${dollars(j.totalCents)} and texted (re-read confirmed).`
+        ? `LANDED — “${j.name}” is cancelled. ${j.count} player(s) credited $${dollars(j.totalCents)} and texted (re-read confirmed).${why}`
         : `NOT APPLIED — the re-read shows the match is NOT cancelled; nothing was credited. Reload and check before retrying.`);
       await onCancelled?.(!!j.landed);
     } catch (e) {
       setBusy(false);
       setResult(`UNKNOWN — ${e instanceof Error ? e.message : String(e)}. Reload before acting.`);
     }
-  }, [preview, busy, authHeaders, path, source, onCancelled]);
+  }, [preview, busy, authHeaders, path, source, onCancelled, reason, note]);
 
-  return { busy, preview, result, open, abort, run };
+  return { busy, preview, result, open, abort, run, reason, setReason, note, setNote, reasonMissing, canRun: !busy && !!preview && !reasonMissing };
 }

@@ -7,6 +7,12 @@
 //
 // GET  = a LIVE preview: { name, count, total, alreadyCancelled } read at confirm time (never a stale
 //        render), so the confirmation states real numbers.
+// REASON (Ryan, 2026-11-01): every Clubhouse cancel carries one of the five staff reasons (Other with a
+// note), checked BEFORE anything is sent. It is written to change_log with the cancel, and to
+// match_cancel_reasons only AFTER the re-read says the cancel landed, so a reason never exists for a
+// match that was not cancelled. If that write fails the response says so (reasonSaved: false); it is
+// not retried.
+//
 // POST = execute: requires the typed match NAME to match the LIVE name (re-checked server-side), fires
 //        once (writes never retry), recordWrite'd WITHOUT any player identity, then re-reads and reports
 //        LANDED / NOT APPLIED from match.isCancelled — not the status code.
@@ -18,6 +24,7 @@ import { apiGet, apiWrite, AmbiguousWriteError, WriteFailedError, DeniedFieldErr
 import { rosterRowIsFake, rosterRowCancelled, type RosterRow } from "@/lib/gamedayModel";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
 import { refreshMatchMirror } from "@/lib/mirrorWriteThrough";
+import { REASON_LABEL, reasonProblem, surfaceOf, type StaffReason } from "@/lib/cancelReasons";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -73,9 +80,14 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
   }
   if (!isEnv(env)) return Response.json({ error: `unknown environment ${JSON.stringify(env)}` }, { status: 400 });
   if (!/^\d+$/.test(id)) return Response.json({ error: "Match id must be numeric" }, { status: 400 });
-  const body = (await req.json().catch(() => null)) as { confirmName?: string; saveId?: string; source?: string } | null;
+  const body = (await req.json().catch(() => null)) as { confirmName?: string; saveId?: string; source?: string; reason?: string; note?: string } | null;
   const confirmName = (body?.confirmName ?? "").trim();
   if (!confirmName) return Response.json({ error: "Type the match name to confirm the cancellation." }, { status: 400 });
+  const problem = reasonProblem(body?.reason, body?.note);
+  if (problem) return Response.json({ error: problem, reasonRequired: true }, { status: 400 });
+  const reason = body!.reason as StaffReason;
+  const note = (body?.note ?? "").trim() || null;
+  const source = body?.source || "Match panel · cancel";
 
   if (!auth.canEditMatches) {
     console.warn(`[edit-matches] 403: ${auth.email} attempted CANCEL match ${id} without EDIT MATCHES`);
@@ -95,13 +107,16 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
     let cached = live.match; let reads = 0;
     const { outcome, error, logged } = await recordWrite(
       {
-        env, source: body?.source || "Match panel · cancel", actorName: auth.email, actorEmail: auth.email,
+        env, source, actorName: auth.email, actorEmail: auth.email,
         saveId: body?.saveId || randomUUID(), matchId: Number(id), matchName: view.name,
         method: "PATCH", path: `/admin/matches/${id}/cancel`,
         // NEVER a player identity in the log — only the counts a reviewer needs.
-        body: { credited_players: view.count, credit_total_cents: view.totalCents },
+        body: { credited_players: view.count, credit_total_cents: view.totalCents, reason, note },
         keys: [], label: (k) => k,
-        changes: [{ key: "cancel", field: "Cancel match", before: "active", after: `cancelled — ${view.count} player(s) credited ${view.totalCents}¢` }],
+        changes: [
+          { key: "cancel", field: "Cancel match", before: "active", after: `cancelled — ${view.count} player(s) credited ${view.totalCents}¢` },
+          { key: "reason", field: "Cancel reason", before: "", after: note ? `${REASON_LABEL[reason]}: ${note}` : REASON_LABEL[reason] },
+        ],
         applied: (_b, a) => (a.match as Record<string, unknown> | undefined)?.isCancelled === true,
       },
       {
@@ -122,8 +137,18 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
      * value from THIS re-read; a mirror hiccup cannot turn a landed cancel into a reported
      * failure. */
     if (landed && after) await refreshMatchMirror(auth.supabase, env, Number(id), ["isCancelled"], after, "landed");
+    // THE REASON, only once the cancel is known to have landed. Never retried.
+    let reasonSaved = false, reasonError: string | null = null;
+    if (landed) {
+      const ins = await auth.supabase.from("match_cancel_reasons").upsert({
+        env, match_id: Number(id), reason, note, surface: surfaceOf(source),
+        set_by_app_user_id: auth.appUserId, set_by_email: auth.email,
+      }, { onConflict: "env,match_id" });
+      reasonSaved = !ins.error;
+      if (ins.error) { reasonError = ins.error.message; console.error(`[cancel] reason not saved for ${env} match ${id}: ${ins.error.message}`); }
+    }
     return Response.json({
-      ok: true, outcome, logRecorded: logged, landed,
+      ok: true, outcome, logRecorded: logged, landed, reason, reasonSaved, reasonError,
       status: landed ? "LANDED" : "NOT APPLIED",
       count: view.count, totalCents: view.totalCents, name: view.name,
     });

@@ -5,5 +5,10 @@
 // and both the routing and the badge move together.
 import type { BadgeEnv } from "./matchEnvBadge";
 
-export const DRAWER_ENV: BadgeEnv = "production";
-export const FULL_EDITOR_ENV: BadgeEnv = "production";
+/* A LOCAL STAGING SWITCH, for testing writes that must never touch a real match (cancels, 2026-11-01).
+ * Honoured only under `next dev` AND with NEXT_PUBLIC_DEV_MATCH_ENV=staging; a production build has
+ * NODE_ENV "production", so this is always "production" there and the branch is dropped. */
+const LOCAL_STAGING = process.env.NODE_ENV === "development" && process.env.NEXT_PUBLIC_DEV_MATCH_ENV === "staging";
+
+export const DRAWER_ENV: BadgeEnv = LOCAL_STAGING ? "staging" : "production";
+export const FULL_EDITOR_ENV: BadgeEnv = LOCAL_STAGING ? "staging" : "production";
