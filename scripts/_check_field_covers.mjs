@@ -3,8 +3,10 @@
  *
  *   node --env-file=.env.local scripts/_check_field_covers.mjs
  *
- * Needs: the backend on http://localhost:3010 (feature/field-covers, FRESH seed), this Clubhouse under
- * `next dev -p 3012` with MATCHDAY_LOCAL_API=1 and NEXT_PUBLIC_MATCHDAY_LOCAL_API=1 (.env.development.local).
+ * Needs: the combined 1.88 backend (feature/offers with covers merged) on http://localhost:3070 and its database
+ * matchday_release_local, FRESH seed; this Clubhouse under `next dev -p 3072` with MATCHDAY_LOCAL_API=1 and
+ * NEXT_PUBLIC_MATCHDAY_LOCAL_API=1 (.env.development.local). Before the merge (2026-11-02) it was 3010 / 3012 /
+ * matchday_covers_local; COVERS_API, COVERS_BASE and COVERS_DB override, and stay localhost and matchday_* only.
  * WRITES ONLY TO THE LOCAL SEED: in local mode the Clubhouse refuses staging and production. Every write is read back
  * from the local API (and, for who uses a cover, the local database) directly, not through the Clubhouse.
  *
@@ -15,9 +17,11 @@ import { execFileSync } from 'node:child_process';
 import { installHarnessGuard, storageStateFor } from './e2e/_session.mjs';
 installHarnessGuard();
 
-const BASE = 'http://localhost:3012';
-const API = 'http://localhost:3010';
-if (new URL(API).host !== 'localhost:3010' || new URL(BASE).host !== 'localhost:3012') throw new Error('local only');
+const BASE = process.env.COVERS_BASE ?? 'http://localhost:3072';
+const API = process.env.COVERS_API ?? 'http://localhost:3070';
+const DB = process.env.COVERS_DB ?? 'matchday_release_local';
+const localHost = (u) => { const x = new URL(u); return x.protocol === 'http:' && /^localhost:\d{2,5}$/.test(x.host) && x.pathname === '/'; };
+if (!localHost(API) || !localHost(BASE) || !/^matchday_[a-z0-9_]+$/.test(DB)) throw new Error('local only');
 const SHOTS = process.env.SHOTS ?? '/tmp';
 const IMG_SQUARE = process.env.IMG_SQUARE, IMG_TALL = process.env.IMG_TALL;
 
@@ -32,8 +36,8 @@ const covers = (f) => api(`/admin/fields/${f}/covers`);
 const matchCover = (m) => api(`/admin/matches/${m}/cover`);
 // WHO USES A COVER comes from the LOCAL database: GET /admin/matches leaves out past matches unless fromDate is sent,
 // and an earlier version of this script read "0 past" off that list and passed on an empty set.
-const db = (q) => execFileSync('/opt/homebrew/opt/postgresql@16/bin/psql', ['-d', 'matchday_covers_local', '-Atc', q], { encoding: 'utf8' }).trim();
-if (db('select current_database()') !== 'matchday_covers_local') throw new Error('local database only');
+const db = (q) => execFileSync('/opt/homebrew/opt/postgresql@16/bin/psql', ['-d', DB, '-Atc', q], { encoding: 'utf8' }).trim();
+if (db('select current_database()') !== DB) throw new Error('local database only');
 const ids = (q) => db(q).split(/\s+/).filter(Boolean).map(Number);
 const usersOf = (coverId) => ids(`select id from matches where cover_id = ${Number(coverId)}`);
 const wallDate = (id) => db(`select to_char(start_date, 'YYYY-MM-DD') from matches where id = ${Number(id)}`);
