@@ -7,7 +7,8 @@
 //
 // ACCESS: the desktop Player Lifecycle permission (is_admin or can_access_lifecycle). A city-confined
 // account holding it gets its own city only, filtered here on the server (Ryan, 2026-11-01); the
-// desktop lifecycle routes it reads through do not filter, so nothing unfiltered leaves this route.
+// desktop lifecycle routes refuse a confined account (2026-11-02), so this route runs their computations
+// directly (src/lib/appPlayers.ts) and nothing unfiltered leaves it.
 //
 // DATA THROUGH: each response says the last day each source has (iphone, android, meta); the app
 // stops Downloads and Acquisition's Day at the last synced day and labels a period that runs past it.
@@ -51,7 +52,7 @@ export async function GET(req: Request) {
     const t0 = Date.now();
     // Downloads (both pages) and Meta: the Acquisition route per period; Android from app_downloads.
     const [acq, android] = await Promise.all([
-      Promise.all(periods.map((x) => acquisitionPeriod(req, x, current(x)))),
+      Promise.all(periods.map((x) => acquisitionPeriod(auth.supabase, x, current(x)))),
       Promise.all(periods.map((x) => androidPeriod(auth.supabase, x, current(x)))),
     ]);
     const through = { iphone: acq[SEL].iphoneThrough, android: android[SEL].androidThrough, meta: acq[SEL].metaThrough };
@@ -59,7 +60,7 @@ export async function GET(req: Request) {
 
     let out: Record<string, unknown>[];
     if (page === "activity") {
-      const act = await activityPeriods(req, auth.supabase, periods, today);
+      const act = await activityPeriods(auth.supabase, periods, today);
       out = periods.map((x, i) => {
         const a = act[i];
         const cityNames = scope ? [scope.city] : [...new Set([...ACTIVE_CITIES, ...Object.keys(a.cities).filter((c) => (a.cities[c].spots ?? 0) > 0 && c !== "Unassigned")])];

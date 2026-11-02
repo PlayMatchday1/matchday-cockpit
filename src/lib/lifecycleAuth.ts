@@ -8,6 +8,7 @@
 import "server-only";
 
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { CONFINED_ERROR, isConfined } from "./cityConfinement";
 
 export type CitiesAuthOk = { ok: true; email: string; supabase: SupabaseClient };
 export type CitiesAuthErr = { ok: false; status: number; error: string };
@@ -44,7 +45,7 @@ export async function authenticateLifecycle(
   });
   const appUser = await sb
     .from("app_users")
-    .select("is_admin, can_access_lifecycle")
+    .select("is_admin, can_access_lifecycle, city_identifier")
     .ilike("email", email)
     .maybeSingle();
   if (appUser.error || !appUser.data) {
@@ -53,5 +54,9 @@ export async function authenticateLifecycle(
   if (appUser.data.is_admin !== true && appUser.data.can_access_lifecycle !== true) {
     return { ok: false, status: 403, error: "Player Lifecycle access required" };
   }
+  /* A CITY-CONFINED ACCOUNT IS REFUSED (Ryan, 2026-11-02), as /api/lifecycle/behavior-weekly already
+   * refuses it: these routes return company-wide figures and filter by no city. The staff app's
+   * Players route reads the same computations after its own gate and filters to the account's city. */
+  if (isConfined(appUser.data)) return { ok: false, status: 403, error: CONFINED_ERROR };
   return { ok: true, email, supabase: sb };
 }

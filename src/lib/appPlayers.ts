@@ -19,12 +19,11 @@ import "server-only"; // no-op under --conditions=react-server
 
 import { unstable_cache } from "next/cache";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { callDesktop } from "./appCall";
 import { behaviorWeeklyResponse } from "./behaviorWeeklyCompute";
 import { marketLabel } from "./acquisitionModel";
 import { addDays, addMonths, monthStart, mondayOf } from "./healthModel";
-import { GET as lifecycleGet } from "@/app/api/lifecycle/route";
-import { GET as acquisitionGet } from "@/app/api/lifecycle/acquisition/route";
+import { readGrowthFromViews } from "./growthFromViews";
+import { acquisitionResponse } from "./acquisitionCompute";
 
 export type Kind = "month" | "week" | "day";
 export type Period = { kind: Kind; from: string; to: string };
@@ -46,7 +45,7 @@ export const stepOf = (p: Period, by: number): Period =>
   periodOf(p.kind, p.kind === "day" ? addDays(p.from, by) : p.kind === "week" ? addDays(p.from, 7 * by) : addMonths(p.from, by));
 
 const cached = <T,>(key: string[], current: boolean, fn: () => Promise<T>) =>
-  unstable_cache(fn, ["app-players-v1", ...key], { revalidate: current ? 300 : 6 * 3600, tags: ["app-players"] })();
+  unstable_cache(fn, ["app-players-v2", ...key], { revalidate: current ? 300 : 6 * 3600, tags: ["app-players"] })();
 
 /* ── PLAYER ACTIVITY ──────────────────────────────────────────────────────────────────────────── */
 export type Activity = { registrations: number | null; newPlayers: number | null; totalPlayers: number | null; spots: number | null; returning: number | null; returningPct: number | null };
@@ -59,11 +58,12 @@ const act = (p: Point | undefined): Activity => {
 export type ActivityPeriod = { overall: Activity; cities: Record<string, Activity>; fields: Record<string, { label: string; city: string; v: Activity }> };
 
 /** The desktop's monthly rows for every month (one read, cached 5 minutes as the monthly payload is live). */
-async function monthly(req: Request): Promise<Row> {
+/* THE DESKTOP'S OWN COMPUTATIONS, CALLED DIRECTLY (2026-11-02): the desktop lifecycle routes now refuse
+ * a city-confined account, so this module runs what they run (readGrowthFromViews, acquisitionResponse)
+ * after the app route's own gate, and the app route filters to the account's city. */
+async function monthly(sb: SupabaseClient): Promise<Row> {
   return cached(["lifecycle-monthly"], true, async () => {
-    const c = await callDesktop(req, lifecycleGet, "/api/lifecycle");
-    if (!c.ok || !c.json) throw new Error(`lifecycle: ${c.status} ${String(c.json?.error ?? "")}`);
-    const j = c.json as Row;
+    const j = (await readGrowthFromViews(sb, new Date().toISOString(), {})) as unknown as Row;
     return { behaviorOverall: j.behaviorOverall, behaviorByCity: j.behaviorByCity, behaviorByField: j.behaviorByField };
   });
 }
@@ -78,10 +78,10 @@ async function weekly(sb: SupabaseClient, grain: "weekly" | "daily", start: stri
   });
 }
 
-export async function activityPeriods(req: Request, sb: SupabaseClient, periods: Period[], today: string): Promise<ActivityPeriod[]> {
+export async function activityPeriods(sb: SupabaseClient, periods: Period[], today: string): Promise<ActivityPeriod[]> {
   const kind = periods[0].kind;
   if (kind === "month") {
-    const m = await monthly(req);
+    const m = await monthly(sb);
     const pick = (ps: unknown, key: string) => ((ps as (Point & { m: string })[]) ?? []).find((x) => x.m === key);
     return periods.map((p) => {
       const key = p.from.slice(0, 7);
@@ -122,11 +122,11 @@ const acqOf = (m: Row | null, ours: Row | null): Acq => ({
   allRegs: Number(ours?.registrations ?? 0), firstTime: Number(ours?.firstTime ?? 0),
 });
 
-export async function acquisitionPeriod(req: Request, p: Period, current: boolean): Promise<AcqPeriod> {
+export async function acquisitionPeriod(sb: SupabaseClient, p: Period, current: boolean): Promise<AcqPeriod> {
   return cached(["acq", p.from, p.to], current, async () => {
-    const c = await callDesktop(req, acquisitionGet, `/api/lifecycle/acquisition?since=${p.from}&until=${p.to}`);
-    if (!c.ok || !c.json) throw new Error(`acquisition: ${c.status} ${String(c.json?.error ?? "")}`);
-    const j = c.json as Row;
+    const res = await acquisitionResponse({ supabase: sb }, new URL(`http://app.local/api/lifecycle/acquisition?since=${p.from}&until=${p.to}`));
+    const j = (await res.json()) as Row;
+    if (!res.ok) throw new Error(`acquisition: ${res.status} ${String(j.error ?? "")}`);
     const markets: Record<string, Acq> = {};
     for (const r of (j.markets as Row[]) ?? []) {
       const cur = r.cur as Row;
