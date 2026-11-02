@@ -55,6 +55,8 @@ is("chat body hidden", chat.messages[0].text, "Message hidden");
 is("chat sender masked, time kept", [chat.messages[0].senderName, chat.messages[0].sentAt], ["Sam R.", "2026-11-02T10:00:00Z"]);
 is("chat media gone", chat.messages[0].mediaUrl, null);
 is("thread name, preview and phone", [chat.thread.display_name, chat.thread.last_message, chat.thread.phone], ["Sam R.", "Message hidden", null]);
+is("a match chat sender is masked", (maskForReview({ last_message: { body: "hi", sent_by: "Sam Rivera" } }) as { last_message: { sent_by: string } }).last_message.sent_by, "Sam R.");
+is("prefixed name keys too", maskForReview({ match: { manager_first_name: "Jordan", manager_last_name: "Blake", manager_display_name: "Jordan Blake", city_name: "Austin", field_title: "Zilker Park Field 3" } }), { match: { manager_first_name: "Jordan", manager_last_name: "B.", manager_display_name: "Jordan B.", city_name: "Austin", field_title: "Zilker Park Field 3" } });
 is("notes hidden", (maskForReview({ player: { name: "Sam Rivera", note: "owes $10" } }) as { player: { note: string } }).player.note, "Note hidden");
 is("an email or phone in free text is scrubbed", maskForReview({ detail: "changed to sam@x.com from (512) 555-0101 on 2026-11-02" }), { detail: "changed to hidden from hidden on 2026-11-02" });
 is("a date is never taken for a phone", maskForReview({ from: "2026-11-02", to: "2026-11-08" }), { from: "2026-11-02", to: "2026-11-08" });

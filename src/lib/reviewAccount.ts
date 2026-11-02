@@ -91,8 +91,12 @@ export function shortName(s: string): string {
 
 const FULL_NAME_KEYS = new Set(["fullName", "full_name", "displayName", "display_name", "playerName", "player_name", "managerName",
   "primaryManagerName", "contactName", "contact_name", "senderName", "sender_name", "authorName", "author_name", "profileName",
-  "profile_name", "customerName", "customer_name", "memberName", "member_name", "whatsappName", "whatsapp_name"]);
-const LAST_NAME_KEYS = new Set(["lastName", "last_name", "surname"]);
+  "profile_name", "customerName", "customer_name", "memberName", "member_name", "whatsappName", "whatsapp_name", "sent_by", "sentBy", "sender",
+  "author", "created_by_name", "createdByName", "closed_by_name", "closedByName", "operator_name", "operatorName", "assignee_name", "assigneeName"]);
+const LAST_NAME_RX = /last_?name$|^surname$/i;
+// A person's name under any prefix (manager_name, primaryManagerName, contact_display_name...); never
+// cityName, fieldName, teamName or matchName.
+const PERSON_NAME_RX = /(full|display|player|manager|contact|sender|author|customer|member|profile|whatsapp|operator|assignee|created_?by|closed_?by|reviewer|staff)_?name$/i;
 const MESSAGE_KEYS = new Set(["body", "text", "message", "messageBody", "message_body", "content", "preview", "snippet", "lastMessage",
   "last_message", "lastMessageText", "last_message_text", "lastMessagePreview", "last_message_preview", "caption", "transcript",
   "transcription", "quote", "quoted", "quotedText", "quoted_text"]);
@@ -121,8 +125,8 @@ export function maskForReview(value: unknown, parentKey = ""): unknown {
     for (const [k, v] of Object.entries(o)) {
       if (typeof v === "string") {
         if (/phone|email/i.test(k)) out[k] = null;
-        else if (FULL_NAME_KEYS.has(k) || (k === "name" && person)) out[k] = shortName(v);
-        else if (LAST_NAME_KEYS.has(k)) out[k] = v.trim() ? `${v.trim()[0].toUpperCase()}.` : v;
+        else if (FULL_NAME_KEYS.has(k) || PERSON_NAME_RX.test(k) || (k === "name" && person)) out[k] = shortName(v);
+        else if (LAST_NAME_RX.test(k)) out[k] = v.trim() ? `${v.trim()[0].toUpperCase()}.` : v;
         else if (COMMENT_KEYS.has(k)) out[k] = v.trim() ? HIDDEN_COMMENT : v;
         else if (MESSAGE_KEYS.has(k)) out[k] = !v.trim() ? v : inComments ? HIDDEN_COMMENT : HIDDEN_MESSAGE;
         else if (NOTE_KEYS.has(k)) out[k] = v.trim() ? HIDDEN_NOTE : v;
