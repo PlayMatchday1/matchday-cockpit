@@ -50,6 +50,8 @@ export type Campaign = Copy & {
   buttonTarget: ButtonTarget; buttonMatchId: number | null; status: CampaignStatus; state: CampaignState;
   createdByStaffEmail: string | null; launchedByStaffEmail: string | null; launchedAt: string | null; updatedAt?: string;
   results: Results;
+  // The push that goes with it (backend docs/offer-push.md); absent on a backend without pushes.
+  push?: import("./offersPush").CampaignPush;
 };
 
 // timeZone is the city's IANA name (admin/cities: timeZone.name), used for when an offer's end has passed.

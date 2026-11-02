@@ -23,6 +23,10 @@ import { _setOffersGateDepsForTest, errorText, MAX_MATCH_PAGES, mismatches, offe
 import { readOffersConfig } from "../src/lib/offersConfig";
 import { assertAllowedHost, preflightWrite } from "../src/lib/matchdayStageApi";
 import { makePacer, OFFERS_READ_PACE_MS, READS_STOPPED } from "../src/lib/offersPacing";
+import {
+  capLine, defaultSendLocal, fillPush, matchForPush, pushAfterType, pushBodyOf, pushDirty, pushFormOf, pushLocked, pushProblem, pushSuggestion, pushText,
+  pushesVisible, reachAddsUp, sendTimeNote, skippedTotal, type CampaignPush,
+} from "../src/lib/offersPush";
 
 let pass = 0, fail = 0;
 const eq = (name: string, got: unknown, want: unknown) => {
@@ -707,6 +711,51 @@ eq("an admin account is one; a player or a backend without the type isn't", [isA
   eq("with no field, just the time", noField.body, "Mon 7:00 PM, normally $15. The discount is already on your account.");
 }
 
+
+// ── OFFER PUSHES (backend docs/offer-push.md) ────────────────────────────────────────────────────
+{
+  const F2 = [{ id: 1, title: "Riverside Fields", cityId: 1, cover: null }];
+  const any = { ...nowF, name: "x" };
+  const onMatch = { ...nowF, name: "x", scope: "MATCH" as const, matchId: 116 };
+  const hl = { headline: "50% OFF" };
+  eq("the title is the popup's headline", pushSuggestion(any, hl, null, F2).title, "50% OFF");
+  eq("the body says the deal, for any match", pushSuggestion(any, hl, null, F2).body, "{first_name}, 50% off your next match. It's already on your account.");
+  eq("...for a specific match, by its placeholder", pushSuggestion(onMatch, hl, matches[0], F2).body, "{first_name}, 50% off {match}. It's already on your account.");
+  eq("...for a field", pushSuggestion({ ...any, scope: "FIELD", appliesFieldIds: [1] }, hl, null, F2).body, "{first_name}, 50% off any match at Riverside Fields. It's already on your account.");
+  eq("...each deal", [pushSuggestion({ ...any, dealType: "AMOUNT_OFF", dealAmount: 300 }, hl, null, F2).body, pushSuggestion({ ...any, dealType: "SET_PRICE", dealAmount: 500 }, hl, null, F2).body, pushSuggestion({ ...onMatch, dealType: "FREE_MATCH", dealAmount: 0 }, hl, matches[0], F2).body, pushSuggestion({ ...any, usesPerPlayer: 3 }, hl, null, F2).body],
+    ["{first_name}, $3 off your next match. It's already on your account.", "{first_name}, a $5 spot in your next match. It's already on your account.", "{first_name}, {match} is free for you. It's already on your account.", "{first_name}, 50% off your next 3 matches. It's already on your account."]);
+  eq("a long headline is cut to the title's limit", pushSuggestion(any, { headline: "x".repeat(80) }, null, F2).title.length, 64);
+  const sugg = { title: "50% OFF", body: "{first_name}, 50% off your next match. It's already on your account." };
+  const off = pushFormOf(null, sugg, "2026-11-03 10:00");
+  eq("no push stored: off, nothing to send", [off.enabled, pushDirty(null, off, sugg), pushDirty(undefined, off, sugg)], [false, false, false]);
+  const on = { ...off, enabled: true };
+  eq("ticking it is a change, and sends the suggestion for now", [pushDirty(null, on, sugg), pushBodyOf(on, sugg)], [true, { enabled: true, title: "50% OFF", body: sugg.body, sendLocal: null }]);
+  eq("at a time sends the local time", pushBodyOf({ ...on, at: true }, sugg).sendLocal, "2026-11-03 10:00");
+  eq("off sends only enabled false", pushBodyOf(off, sugg), { enabled: false });
+  const stored: CampaignPush = { enabled: true, title: "50% OFF", body: sugg.body, sendLocal: null, status: "WAITING", queuedAt: null };
+  const loaded = pushFormOf(stored, sugg, "2026-11-03 10:00");
+  eq("stored like the suggestion: following it, nothing to send", [loaded.title, loaded.body, pushDirty(stored, loaded, sugg)], [undefined, undefined, false]);
+  eq("stored text that differs was typed", pushFormOf({ ...stored, title: "Hey" }, sugg, "x").title, "Hey");
+  eq("...and the deal moving doesn't make it a change", pushDirty({ ...stored, title: "Hey" }, pushFormOf({ ...stored, title: "Hey" }, sugg, "x"), { ...sugg, title: "40% OFF" }), false);
+  eq("following text moves with the deal, and that is a change to save", pushDirty(stored, loaded, { ...sugg, title: "40% OFF" }), true);
+  eq("typing the suggestion goes back to following it", pushAfterType({ ...loaded, title: "Hey" }, "title", "50% OFF", sugg).title, undefined);
+  eq("turning it off is a change", pushDirty(stored, { ...loaded, enabled: false }, sugg), true);
+  eq("problems: empty, too long, a bad time", [pushProblem({ ...on, title: " " }, sugg, "ANY"), pushProblem({ ...on, body: "" }, sugg, "ANY"), pushProblem({ ...on, title: "x".repeat(65) }, sugg, "ANY"), pushProblem({ ...on, body: "x".repeat(241) }, sugg, "ANY"), pushProblem({ ...on, at: true, sendLocal: "2026-11-03 10:00:00" }, sugg, "ANY")],
+    ["The push needs a title.", "The push needs a body.", "The push title is over 64 characters.", "The push body is over 240 characters.", "Set when the push goes out."]);
+  eq("{match} only on a specific match", [pushProblem({ ...on, body: "{match}" }, sugg, "ANY"), pushProblem({ ...on, body: "{match}" }, sugg, "FIELD"), pushProblem({ ...on, body: "{match}" }, sugg, "MATCH")], ["{match} only works on an offer for a specific match.", "{match} only works on an offer for a specific match.", null]);
+  eq("off has no problems, whatever the text", pushProblem({ ...off, title: "" }, sugg, "ANY"), null);
+  eq("a good push has none (the control)", pushProblem(on, sugg, "ANY"), null);
+  eq("the preview fills both placeholders as the backend does", [matchForPush(matches[0]), fillPush("{first_name}, 50% off {match}.", matches[0])], ["Riverside Thursday, Mon Nov 2 7:00 PM", "Luis, 50% off Riverside Thursday, Mon Nov 2 7:00 PM."]);
+  eq("a send time before the start or after the end is called out", [sendTimeNote({ ...on, at: true, sendLocal: "2026-10-28 10:00" }, "2026-10-29 10:00:00", "2026-11-08 23:59:00") !== null, sendTimeNote({ ...on, at: true, sendLocal: "2026-11-09 10:00" }, "2026-10-29 10:00:00", "2026-11-08 23:59:00") !== null, sendTimeNote({ ...on, at: true, sendLocal: "2026-11-01 10:00" }, "2026-10-29 10:00:00", "2026-11-08 23:59:00"), sendTimeNote({ ...on, at: true, sendLocal: "2026-12-01 10:00" }, "2026-10-29 10:00:00", null)], [true, true, null, null]);
+  eq("queued, sent or not sent locks it; ended locks it; waiting doesn't", [pushLocked({ ...stored, status: "SCHEDULED" }, "LAUNCHED"), pushLocked({ ...stored, status: "SENT" }, "LAUNCHED"), pushLocked({ ...stored, status: "NOT_SENT" }, "PAUSED"), pushLocked(stored, "ENDED"), pushLocked(stored, "DRAFT"), pushLocked(null, "LAUNCHED")], [true, true, true, true, false, false]);
+  eq("the reach adds up, or says it doesn't", [reachAddsUp({ audience: 1240, heldBack: 118, noConsent: 402, noDevice: 61, capped: 23, reachable: 636 }), reachAddsUp({ audience: 10, heldBack: 1, noConsent: 0, noDevice: 0, capped: 0, reachable: 10 })], [true, false]);
+  eq("skipped is every reason", skippedTotal({ heldBack: 118, noConsent: 402, noDevice: 61, capped: 23, notAllowed: 5 }), 609);
+  eq("staging shows the controls to anyone with Offers; production to nobody until listed", [pushesVisible("staging", "a@b.c", {}), pushesVisible("local", null, {}), pushesVisible("production", "rmancuso@playmatchday.com", {}), pushesVisible("production", "RMancuso@PlayMatchday.com", { OFFERS_PUSH_ACCOUNTS: " rmancuso@playmatchday.com " }), pushesVisible("production", "x@y.z", { OFFERS_PUSH_ACCOUNTS: "rmancuso@playmatchday.com" })], [true, true, false, true, false]);
+  eq("the limit's line says what it counts", [capLine(2).includes("at most 2 marketing pushes in any 7 days"), capLine(2).includes("never count"), capLine(0).startsWith("No marketing pushes")], [true, true, true]);
+  eq("at a time starts at the next whole hour", [defaultSendLocal("2026-11-02 08:37:57"), defaultSendLocal("2026-11-02 23:10:00")], ["2026-11-02 09:00", "2026-11-03 00:00"]);
+  eq("the title as sent follows the form", pushText({ ...on, body: "typed" }, sugg), { title: "50% OFF", body: "typed" });
+}
+
 // ── THE COUNT'S STATE ────────────────────────────────────────────────────────────────────────────
 eq("the debounce is 800 ms", COUNT_DEBOUNCE_MS, 800);
 eq("no answer yet: loading", countState("a", null, false), "loading");
@@ -1012,6 +1061,97 @@ function routeFiles(dir: string): string[] {
       eq("no read here ever touched admin/matches", urls.some((u) => new URL(u).pathname === "/admin/matches"), false);
     }
     globalThis.fetch = realFetch;
+    _setOffersGateDepsForTest(null);
+  }
+
+
+  // THE PUSH ROUTES, real handlers, fetch stubbed: nothing leaves this process.
+  {
+    const realFetch2 = globalThis.fetch;
+    const JWT2 = `x.${Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600 })).toString("base64")}.y`;
+    const seen: { m: string; path: string; body: string | null; staff: string | null }[] = [];
+    let answer: (path: string, m: string, body: unknown) => Response = () => new Response("{}", { status: 200 });
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input instanceof Request ? input.url : input));
+      if (url.pathname === "/auth/signin") return new Response(JSON.stringify({ accessToken: JWT2 }), { status: 200 });
+      const body = typeof init?.body === "string" ? init.body : null;
+      seen.push({ m: init?.method ?? "GET", path: url.pathname, body, staff: new Headers(init?.headers).get("X-Acting-Staff-Email") });
+      return answer(url.pathname, init?.method ?? "GET", body ? JSON.parse(body) : null);
+    }) as typeof fetch;
+    const rows2: { source: string; outcome: string; body: unknown }[] = [];
+    const store2 = () => ({ insert: async (r: unknown) => { rows2.push(r as (typeof rows2)[number]); }, resolve: async () => undefined, recent: async () => [] }) as never;
+    const stage = () => ({ ok: true as const, config: { env: "staging" as const, baseUrl: "https://matchday-stage.herokuapp.com", uploadHost: "b.s3.amazonaws.com" } });
+    const prod = () => ({ ok: true as const, config: { env: "production" as const, baseUrl: "https://playmatchday.herokuapp.com", uploadHost: "b.s3.amazonaws.com" } });
+    Object.assign(process.env, { MATCHDAY_STAGE_API_BASE_URL: "https://matchday-stage.herokuapp.com", MATCHDAY_STAGE_API_EMAIL: "s@example.com", MATCHDAY_STAGE_API_PASSWORD: "x" });
+    delete process.env.OFFERS_PUSH_ACCOUNTS;
+    const asStaff = asRow({ can_access_matchops: true }, "staff@playmatchday.com");
+    _setOffersGateDepsForTest({ sleep: async () => undefined, logStore: store2, authenticate: asStaff, config: stage, now: () => Date.now() + 120_000 });
+    const mod = (p: string) => import(resolve(process.cwd(), p)) as Promise<Record<string, (r: Request, c: unknown) => Promise<Response>>>;
+    const put = await mod("src/app/api/offers/[id]/push/route.ts");
+    const test = await mod("src/app/api/offers/[id]/push/test/route.ts");
+    const reach = await mod("src/app/api/offers/[id]/push/reachable/route.ts");
+    const results = await mod("src/app/api/offers/[id]/push/results/route.ts");
+    const settings = await mod("src/app/api/offers/push-settings/route.ts");
+    const ctx = { params: Promise.resolve({ id: "9" }) };
+    const req = (m: string, body?: unknown) => new Request("http://localhost/x", { method: m, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+    const json = async (r: Response) => ({ status: r.status, ...(await r.json()) });
+    const campaignWith = (push: unknown) => new Response(JSON.stringify({ id: 9, status: "DRAFT", push }), { status: 200 });
+    const want = { enabled: true, title: "50% OFF", body: "{first_name}, 50% off your next match.", sendLocal: "2026-11-03 10:00" };
+    answer = (_p, _m, b) => campaignWith({ ...(b as object), status: "WAITING", queuedAt: null });
+    seen.length = 0;
+    const saved = await json(await put.PUT(req("PUT", want), ctx));
+    eq("save: one PUT with the push, LANDED on the campaign it returns", [saved.status, saved.verdict, seen.map((x) => `${x.m} ${x.path}`), JSON.parse(seen[0].body!)], [200, "LANDED", ["PUT /admin/offers/campaigns/9/push"], want]);
+    eq("...as a logged write, with the staff header", [rows2.at(-1)?.source, rows2.at(-1)?.outcome, seen[0].staff], ["offers:push", "landed", "staff@playmatchday.com"]);
+    answer = () => campaignWith({ ...want, title: "Something else", status: "WAITING", queuedAt: null });
+    eq("a 2xx whose push differs: NOT APPLIED", (await json(await put.PUT(req("PUT", want), ctx))).verdict, "NOT APPLIED");
+    answer = () => new Response("{}", { status: 200 });
+    eq("a 2xx with no campaign: unknown, in the route and the log", [(await json(await put.PUT(req("PUT", want), ctx))).verdict, rows2.at(-1)?.outcome], ["UNKNOWN", "unknown"]);
+    answer = () => new Response(JSON.stringify({ errorCode: "OFFER_PUSH_LOCKED", message: "Offer push is locked: queued" }), { status: 400 });
+    eq("queued already: said plainly", (await json(await put.PUT(req("PUT", want), ctx))).error, "The push is already queued, so it can't change now. Nothing was saved.");
+    answer = () => new Response(JSON.stringify({ message: "Cannot PUT /admin/offers/campaigns/9/push", error: "Not Found", statusCode: 404 }), { status: 404 });
+    eq("a backend without pushes: said plainly", (await json(await put.PUT(req("PUT", want), ctx))).error, "This backend doesn't have offer pushes yet, so nothing was sent or saved.");
+    seen.length = 0;
+    eq("a bad push is refused before any request", [(await json(await put.PUT(req("PUT", { ...want, title: "" }), ctx))).status, (await json(await put.PUT(req("PUT", { title: "x" }), ctx))).status, seen.length], [400, 400, 0]);
+    answer = () => campaignWith({ enabled: false, title: null, body: null, sendLocal: null, status: "OFF", queuedAt: null });
+    eq("off sends only enabled false", [(await json(await put.PUT(req("PUT", { enabled: false, title: "ignored" }), ctx))).verdict, JSON.parse(seen.at(-1)!.body!)], ["LANDED", { enabled: false }]);
+    // THE TEST: only text goes, never who.
+    answer = () => new Response(JSON.stringify({ pushId: 9081, devices: 2, sent: 2, failed: 0 }), { status: 201 });
+    seen.length = 0;
+    const t = await json(await test.POST(req("POST", { title: "Hi", body: "There", userIds: [7, 8], email: "someone@else.com", tokens: ["abc"] }), ctx));
+    eq("test: SENT, to the phones the backend names", [t.verdict, t.sent, t.devices], ["SENT", 2, 2]);
+    eq("...the request carries only the text, and the signed-in person as staff", [seen.map((x) => `${x.m} ${x.path}`), JSON.parse(seen[0].body!), seen[0].staff], [["POST /admin/offers/campaigns/9/push/test"], { title: "Hi", body: "There" }, "staff@playmatchday.com"]);
+    eq("...and is logged as the test it is", [rows2.at(-1)?.source, rows2.at(-1)?.outcome], ["offers:push-test", "landed"]);
+    answer = () => new Response(JSON.stringify({ errorCode: "NOT_FOUND_PREVIEW_PLAYER", message: "x" }), { status: 404 });
+    eq("no player account for that email: said", (await json(await test.POST(req("POST", {}), ctx))).error, "No player account in the app uses staff@playmatchday.com. Sign up in the app with that email, then try again.");
+    answer = () => new Response("{}", { status: 201 });
+    eq("a 2xx that names no phones: UNKNOWN", (await json(await test.POST(req("POST", {}), ctx))).verdict, "UNKNOWN");
+    // READS.
+    answer = () => new Response(JSON.stringify({ audience: 1240, heldBack: 118, noConsent: 402, noDevice: 61, capped: 23, reachable: 636 }), { status: 200 });
+    seen.length = 0;
+    eq("reach: one GET, passed through", [(await json(await reach.GET(req("GET"), ctx))).reachable, seen.map((x) => `${x.m} ${x.path}`)], [636, ["GET /admin/offers/campaigns/9/push/reachable"]]);
+    answer = () => new Response(JSON.stringify({ status: "SENT", sent: 612, failed: 4, skipped: { heldBack: 118, noConsent: 402, noDevice: 61, capped: 23, notAllowed: 0 }, opened: 97, bookedWithin72h: 41, devices: 701 }), { status: 200 });
+    eq("results: passed through", (await json(await results.GET(req("GET"), ctx))).bookedWithin72h, 41);
+    // THE WEEKLY LIMIT.
+    answer = (_p, m, b) => new Response(JSON.stringify(m === "PUT" ? b : { weeklyCap: 2 }), { status: 200 });
+    eq("limit: read, then saved and LANDED", [(await json(await settings.GET(req("GET"), {}))).weeklyCap, (await json(await settings.PUT(req("PUT", { weeklyCap: 3 }), {}))).verdict, rows2.at(-1)?.source], [2, "LANDED", "offers:push-settings"]);
+    answer = () => new Response(JSON.stringify({ message: "Not Found", statusCode: 404 }), { status: 404 });
+    eq("a backend without pushes that says only Not Found (the local build): said plainly", (await json(await settings.GET(req("GET"), {}))).error, "This backend doesn't have offer pushes yet, so nothing was sent or saved.");
+    answer = (_p, m, b) => new Response(JSON.stringify(m === "PUT" ? b : { weeklyCap: 2 }), { status: 200 });
+    seen.length = 0;
+    eq("limit outside 0 to 14: refused, no request", [(await json(await settings.PUT(req("PUT", { weeklyCap: 15 }), {}))).status, (await json(await settings.PUT(req("PUT", { weeklyCap: -1 }), {}))).status, (await json(await settings.PUT(req("PUT", { weeklyCap: 1.5 }), {}))).status, seen.length], [400, 400, 400, 0]);
+    answer = () => new Response(JSON.stringify({ weeklyCap: 2 }), { status: 200 });
+    eq("limit answered with another number: NOT APPLIED", (await json(await settings.PUT(req("PUT", { weeklyCap: 4 }), {}))).verdict, "NOT APPLIED");
+    // PRODUCTION: hidden, every push route answers as missing and sends nothing.
+    _setOffersGateDepsForTest({ sleep: async () => undefined, logStore: store2, authenticate: asStaff, config: prod, now: () => Date.now() + 120_000 });
+    seen.length = 0;
+    const hidden = [await put.PUT(req("PUT", want), ctx), await test.POST(req("POST", {}), ctx), await reach.GET(req("GET"), ctx), await results.GET(req("GET"), ctx), await settings.GET(req("GET"), {}), await settings.PUT(req("PUT", { weeklyCap: 2 }), {})].map((r) => r.status);
+    eq("production: every push route is 404, and nothing reaches the backend", [hidden, seen.length], [[404, 404, 404, 404, 404, 404], 0]);
+    process.env.OFFERS_PUSH_ACCOUNTS = "staff@playmatchday.com";
+    answer = () => new Response(JSON.stringify({ audience: 1, heldBack: 0, noConsent: 0, noDevice: 0, capped: 0, reachable: 1 }), { status: 200 });
+    Object.assign(process.env, { MATCHDAY_PROD_BASE_URL: "https://playmatchday.herokuapp.com", MATCHDAY_PROD_API_EMAIL: "p@example.com", MATCHDAY_PROD_API_PASSWORD: "x" });
+    eq("...except for a listed account (the control)", (await reach.GET(req("GET"), ctx)).status, 200);
+    delete process.env.OFFERS_PUSH_ACCOUNTS;
+    globalThis.fetch = realFetch2;
     _setOffersGateDepsForTest(null);
   }
 

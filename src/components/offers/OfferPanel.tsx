@@ -17,6 +17,8 @@ import {
   type Campaign, type City, type Count, type FieldOpt, type Lookup, type UploadedPhoto, type CopyKey, type ListChange, type DealType, type Form, type MatchOpt, type WrittenFor,
 } from "@/lib/offersModel";
 import MatchPicker from "./MatchPicker";
+import { PushReach, PushSection } from "./OfferPush";
+import { defaultSendLocal, pushBodyOf, pushDirty, pushFormOf, pushLocked, pushProblem, pushSuggestion, pushText, type PushForm } from "@/lib/offersPush";
 import OfferPopupPreview from "./OfferPopupPreview";
 import {
   Btn, Chip, ConfirmDialog, Labeled, O, PanelSection, VerdictLine, authed, inputCls, inputStyle, outcomeOf, settled, type WriteOutcome,
@@ -26,7 +28,7 @@ import {
 // them (the match, its button, its text) is wrong, so nothing can be edited or launched. Pause, End and
 // Delete still work, so an offer whose match can't be read can always be stopped.
 export type MatchRead = "ok" | "loading" | "failed";
-type Data = { campaigns: Campaign[]; cities: City[]; fields: FieldOpt[]; matches: MatchOpt[]; matchesComplete: boolean; matchesError: string | null };
+type Data = { campaigns: Campaign[]; cities: City[]; fields: FieldOpt[]; matches: MatchOpt[]; matchesComplete: boolean; matchesError: string | null; pushes?: boolean };
 const DEALS: { type: DealType; label: string }[] = [
   { type: "PERCENT_OFF", label: "% off" }, { type: "AMOUNT_OFF", label: "$ off" }, { type: "SET_PRICE", label: "Set price" }, { type: "FREE_MATCH", label: "Free match" },
 ];
@@ -80,7 +82,15 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
   const offerWall = () => offerWallNow(offerZones(f, m?.cityId ?? null, data.cities));
   const problem = matchUnread ? null : formProblem(f, data.matches, c?.status ?? null);
   const diff = c && !matchUnread ? patchBody(c, f, data.matches, data.cities, data.fields) : null;
-  const dirty = c === null || Object.keys(diff ?? {}).length > 0;
+  // THE PUSH (src/components/offers/OfferPush.tsx). Only where the server allows the controls; saved after the
+  // offer itself, with its own request (PUT .../push), and before a launch so the launch can queue it.
+  const pushOn = !!data.pushes;
+  const pushSugg = pushSuggestion(f, copy, m, data.fields);
+  const [pf, setPf] = useState<PushForm>(() => pushFormOf(c?.push, pushSuggestion(start, copyOf(start, data.matches, data.cities, data.fields), pickedMatch(start, data.matches), data.fields), defaultSendLocal(nowWall)));
+  const pushIsDirty = pushOn && !matchUnread && !pushLocked(c?.push, c?.status ?? null) && pushDirty(c?.push, pf, pushSugg);
+  const pushProb = pushOn && !matchUnread ? pushProblem(pf, pushSugg, f.scope) : null;
+  const offerDirty = c === null || Object.keys(diff ?? {}).length > 0;
+  const dirty = offerDirty || pushIsDirty;
   const needPool = !loaded.matchesComplete && poolWanted && !ended;
   const poolKey = f.cityIds.join(",");
   useEffect(() => {
@@ -140,9 +150,9 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
   // ── writes ──
   const [busy, setBusy] = useState(false);
   const [outcome, setOutcome] = useState<WriteOutcome | null>(null);
-  const [confirm, setConfirm] = useState<null | "launch" | "pause" | "end" | "delete">(null);
+  const [confirm, setConfirm] = useState<null | "launch" | "pause" | "end" | "delete" | "push">(null);
   const inFlight = useRef(false);
-  const send = useCallback(async (path: string, method: "POST" | "PATCH", body: unknown, landed: string) => {
+  const send = useCallback(async (path: string, method: "POST" | "PUT" | "PATCH", body: unknown, landed: string) => {
     const r = await authed(path, { method, body: body === undefined ? undefined : JSON.stringify(body) });
     return { o: outcomeOf(r, landed), after: (r.json.after ?? null) as Campaign | null };
   }, []);
@@ -154,19 +164,34 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
 
   // Save: create a draft, or send only what changed.
   const savedAs = (after: Campaign | null): ListChange | undefined => (after ? { kind: "saved", campaign: after } : undefined);
+  // The push, once the offer it belongs to has landed. Its failure is said on its own: the offer is saved.
+  async function savePush(id: number, offer: { o: WriteOutcome; after: Campaign | null }) {
+    if (!pushIsDirty) return offer;
+    const p = await send(`/api/offers/${id}/push`, "PUT", pushBodyOf(pf, pushSugg), pf.enabled ? "Saved the push." : "Turned the push off.");
+    if (p.o.verdict === "LANDED") return { o: { ...p.o, text: `${offer.o.text === "Nothing to save." ? "" : `${offer.o.text} `}${p.o.text}` }, after: p.after ?? offer.after };
+    return { o: { ...p.o, text: `${offer.o.text === "Nothing to save." ? "" : `${offer.o.text} But `}the push did not save: ${p.o.text}` }, after: offer.after };
+  }
   async function save(): Promise<{ o: WriteOutcome; id: number | null; after: Campaign | null }> {
     if (c === null) {
       const { o, after } = await send("/api/offers", "POST", createBody(f, data.matches, data.cities, data.fields), `Saved "${f.name.trim()}" as a draft.`);
       // A new offer's uploads move to its id, so they are still tiles when it reopens.
       if (after?.id) { keepUploads(after.id, uploaded); keepWritten(after.id, writtenFor); }
-      return { o, id: after?.id ?? null, after };
+      if (o.verdict !== "LANDED" || !after?.id) return { o, id: after?.id ?? null, after };
+      return { ...(await savePush(after.id, { o, after })), id: after.id };
     }
     if (!dirty) return { o: { verdict: "LANDED", text: "Nothing to save." }, id: c.id, after: null };
-    const { o, after } = await send(`/api/offers/${c.id}`, "PATCH", diff, `Saved changes to "${f.name.trim()}".`);
-    if (o.verdict === "LANDED") keepWritten(c.id, writtenFor);
-    return { o, id: c.id, after };
+    let offer: { o: WriteOutcome; after: Campaign | null } = { o: { verdict: "LANDED", text: "Nothing to save." }, after: null };
+    if (offerDirty) {
+      offer = await send(`/api/offers/${c.id}`, "PATCH", diff, `Saved changes to "${f.name.trim()}".`);
+      if (offer.o.verdict !== "LANDED") return { ...offer, id: c.id };
+      keepWritten(c.id, writtenFor);
+    }
+    return { ...(await savePush(c.id, offer)), id: c.id };
   }
+  // On a live offer, saving a push queues it at once: ask first.
+  const pushGoesNow = c?.status === "LAUNCHED" && pushIsDirty && pf.enabled;
   async function onSave() {
+    if (pushGoesNow && confirm !== "push") { setConfirm("push"); return; }
     const r = await once(save);
     if (!r) return;
     setOutcome(r.o);
@@ -439,7 +464,7 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
   };
   const dl = locked || frozen; // deal, audience and run locked
   const passed = endHasPassed(f.endsLocal, offerWall());
-  const launchWhy = matchUnread ? matchUnreadText(matchRead) : problem ?? launchProblem(f, offerWall()) ?? COUNT_BLOCK[countNow];
+  const launchWhy = matchUnread ? matchUnreadText(matchRead) : problem ?? pushProb ?? launchProblem(f, offerWall()) ?? COUNT_BLOCK[countNow];
   const dealWarn = setPriceProblem(f, m);
   const anyWarn = setPriceAnyWarning(f, data.matches);
 
@@ -673,6 +698,7 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
             : count ? <><b>≈ {count.count.toLocaleString("en-US")} {count.count === 1 ? "player" : "players"}</b><span>match right now</span></>
             : <span>Counting…</span>}
         </div>}
+        {pushOn && pf.enabled && !players && !matchUnread && <PushReach campaignId={c?.id ?? null} refreshKey={String(c?.id ?? "")} />}
       </PanelSection>
 
       {/* POPUP */}
@@ -760,6 +786,15 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
         </div>
       </PanelSection>
 
+      {/* PUSH */}
+      {pushOn && (
+        <PanelSection title="Push" testId="offers-push-section">
+          <PushSection pf={pf} setPf={setPf} sugg={pushSugg} scope={f.scope} match={m} campaignId={c?.id ?? null} campaignStatus={c?.status ?? null}
+            stored={c?.push} startsLocal={f.startsLocal} endsLocal={f.endsLocal} disabled={matchUnread} problem={pushProb} />
+          {players && pf.enabled && <PushReach campaignId={c?.id ?? null} refreshKey={String(c?.id ?? "")} />}
+        </PanelSection>
+      )}
+
       {/* RUNS */}
       <PanelSection title="Runs" testId="offers-runs">
         <div className="flex items-center gap-2">
@@ -804,7 +839,7 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
             )}
             {c?.status === "PAUSED" && <Btn kind="primary" testId="offers-resume" disabled={busy || dirty || passed} title={passed ? "The end time has already passed." : dirty ? "Save or undo your changes first" : undefined} onClick={() => setConfirm("launch")}>Resume</Btn>}
             {(c === null || dirty) && (
-              <Btn testId="offers-save" disabled={busy || !!problem || (c !== null && settled(outcome) && !dirty)} onClick={onSave}>{c === null ? "Save draft" : "Save changes"}</Btn>
+              <Btn testId="offers-save" disabled={busy || !!problem || !!pushProb || (c !== null && settled(outcome) && !dirty)} onClick={onSave}>{c === null ? "Save draft" : "Save changes"}</Btn>
             )}
             {c?.status === "LAUNCHED" && <Btn testId="offers-pause" disabled={busy} onClick={() => setConfirm("pause")}>Pause</Btn>}
             {(c?.status === "LAUNCHED" || c?.status === "PAUSED") && <Btn kind="danger" testId="offers-end" disabled={busy} onClick={() => setConfirm("end")}>End</Btn>}
@@ -841,10 +876,15 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
 
       {confirm === "launch" && (
         <ConfirmDialog title={c?.status === "PAUSED" ? `Resume ${f.name.trim()}?` : `Launch ${f.name.trim()}?`}
-          note={c?.status === "PAUSED" ? "Players who match start getting it again the next time they open the app." : `${summary(f, count, data.matches, data.cities, offerWall(), data.fields)} After launch the deal, who gets it and when it runs can't change.`}
+          note={c?.status === "PAUSED" ? "Players who match start getting it again the next time they open the app." : `${summary(f, count, data.matches, data.cities, offerWall(), data.fields)} After launch the deal, who gets it and when it runs can't change.${pushOn && pf.enabled ? ` Also sends a push, "${pushText(pf, pushSugg).title}", ${pf.at ? `at ${pf.sendLocal} in each player's city` : "as soon as it launches"}.` : ""}`}
           warnings={staleLines(stale, f)}
           action={c?.status === "PAUSED" ? "Resume" : stale.length > 0 ? "Launch anyway" : "Launch"} onCancel={() => setConfirm(null)}
           onConfirm={async () => { const o = await once(launch); if (o) { setOutcome(o); if (o.verdict === "LANDED") setConfirm(null); } return o; }} />
+      )}
+      {confirm === "push" && (
+        <ConfirmDialog title="Queue the push now?" note={`${f.name.trim()} is live, so saving queues its push ${pf.at ? `for ${pf.sendLocal} in each player's city` : "to go right away"}. It goes to the players this offer reaches who allow pushes, as far as the backend's push switch lets it. It can't be changed once queued.`}
+          action="Save and queue" onCancel={() => setConfirm(null)}
+          onConfirm={async () => { const r = await once(save); if (!r) return null; setOutcome(r.o); if (r.o.verdict === "LANDED") { setConfirm(null); onLanded(r.o, r.id ?? undefined, savedAs(r.after)); } return r.o; }} />
       )}
       {confirm === "delete" && (
         <ConfirmDialog title={`Delete the draft ${c!.name}?`} kind="dangerSolid" note="It was never launched, so no player has it. This can't be undone."

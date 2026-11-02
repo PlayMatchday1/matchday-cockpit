@@ -19,6 +19,7 @@ import { OFFERS_NOT_FOUND } from "@/lib/offersAccess";
 import { readOffersConfig, type OffersConfig, type OffersConfigResult } from "@/lib/offersConfig";
 import { chicagoWallNow, offerMatchOpt, offersLogBody, photoUrlOk, pickerRange, wallFromMatch, type ApiOfferMatch, type Campaign, type City, type FieldOpt, type MatchOpt } from "@/lib/offersModel";
 import { OFFERS_READ_PACE_MS, READS_STOPPED, makePacer } from "@/lib/offersPacing";
+import { pushesVisible, type CampaignPush, type PushResults, type Reach } from "@/lib/offersPush";
 import { STAFF_NOT_ALLOWED_PLAIN, WHO_ARE_YOU, staffEmailOf, staffErrorKind } from "@/lib/staffIdentity";
 
 export const CAMPAIGNS = "/admin/offers/campaigns";
@@ -72,11 +73,16 @@ export function errorText(e: unknown): string {
     return STAFF_NOT_ALLOWED_PLAIN;
   }
   // A route the backend doesn't have can answer 200 with a web page (staging did, 2026-10-30).
+  // A backend without offer pushes yet answers their routes with a 404 that carries no errorCode: Nest's own
+  // ("Cannot PUT ...") or, on the local build, {"message":"Not Found"}. The push 404s it means carry one.
+  if (e instanceof WriteFailedError && e.status === 404 && /\/push(\/|-settings|\b)/.test(raw) && backendMessage(e).code === null) return "This backend doesn't have offer pushes yet, so nothing was sent or saved.";
   if (e instanceof SyntaxError) { console.error(`[offers] the backend's answer was not JSON: ${raw.slice(0, 200)}`); return "The backend answered with something that isn't JSON. Offers may not be deployed there."; }
   if (e instanceof Error && e.name === READS_STOPPED) return "The backend just had a problem, so reads have stopped for a moment. Try again in 30 seconds.";
   const { code, message } = backendMessage(e);
   if (code === "OFFER_CAMPAIGN_FIELD_LOCKED") return `Those parts can't change once it has launched (${message?.split(": ")[1] ?? "locked fields"}). Nothing was saved.`;
   if (code === "INVALID_OFFER_CAMPAIGN") return `The backend refused it: ${message?.split(": ").slice(1).join(": ") || "the offer is not valid"}. Nothing was saved.`;
+  if (code === "OFFER_PUSH_LOCKED") return "The push is already queued, so it can't change now. Nothing was saved.";
+  if (code === "INVALID_OFFER_PUSH") return `The backend refused the push: ${message?.split(": ").slice(1).join(": ") || message || "the push is not valid"}. Nothing was sent.`;
   if (code === "OFFER_CAMPAIGN_STATUS_CHANGE_NOT_ALLOWED") return "It can't move to that status from where it is now. Refresh to see its current status.";
   if (code === "NOT_FOUND_OFFER_CAMPAIGN") return "That offer no longer exists. Refresh the list.";
   if (e instanceof WriteFailedError && e.status === 400 && message) return `The backend refused it: ${message}. Nothing was saved.`;
@@ -180,7 +186,7 @@ export const readMatch = async (id: number): Promise<MatchOpt> => matchOpt(await
 // edit, whose route reads first because change_log records each field's value before.
 export type Verdict = "LANDED" | "FAILED" | "NOT APPLIED" | "UNKNOWN";
 
-export function offersApiWrite<T = unknown>(auth: OffersAuth, method: "POST" | "PATCH" | "DELETE", path: string, body?: unknown): Promise<T> {
+export function offersApiWrite<T = unknown>(auth: OffersAuth, method: "POST" | "PUT" | "PATCH" | "DELETE", path: string, body?: unknown): Promise<T> {
   const staff = staffEmailOf(auth.email);
   if (!staff) return Promise.reject(new Error(WHO_ARE_YOU));
   const { env, baseUrl } = cfg();
@@ -199,7 +205,7 @@ export function mismatches(expected: Record<string, unknown>, after: Record<stri
 export type WriteResult = { verdict: Verdict; after: Campaign | null; error?: string; detail?: string };
 
 export async function offersWrite(opts: {
-  auth: OffersAuth; source: string; method: "POST" | "PATCH" | "DELETE"; path: string;
+  auth: OffersAuth; source: string; method: "POST" | "PUT" | "PATCH" | "DELETE"; path: string;
   // undefined = a bodyless write (launch, pause, end): no body and no content-type, which the
   // backend requires (Fastify rejects an empty JSON body).
   body?: Record<string, unknown>;
@@ -210,6 +216,8 @@ export async function offersWrite(opts: {
   expectGone?: boolean;
   // The campaign as the route just read it, so it isn't read a second time before the write.
   before?: Campaign;
+  // What the read-back must show, when it isn't simply expect's keys (the push PUT checks campaign.push).
+  check?: (after: Record<string, unknown>) => string[];
 }): Promise<WriteResult> {
   let createdId: number | null = opts.id;
   const read = async () => (createdId === null ? null : await readCampaign(createdId));
@@ -223,7 +231,7 @@ export async function offersWrite(opts: {
       matchId: null, matchName: null, method: opts.method, path: opts.path,
       body: offersLogBody(opts.body ?? {}), keys: Object.keys(opts.expect), label: (k) => k,
       // The same three answers the route gives below, so the log and the page can't disagree.
-      applied: (_b, seen) => (after === undefined ? "unknown" : opts.expectGone ? seen.missing === true : mismatches(opts.expect, seen).length === 0),
+      applied: (_b, seen) => (after === undefined ? "unknown" : opts.expectGone ? seen.missing === true : (opts.check ?? ((x) => mismatches(opts.expect, x)))(seen).length === 0),
     },
     {
       readResource: async () => {
@@ -244,7 +252,7 @@ export async function offersWrite(opts: {
     },
     gateDeps.logStore(),
   );
-  const missing = mismatches(opts.expect, (after ?? null) as unknown as Record<string, unknown> | null);
+  const missing = opts.check && after ? opts.check(after as unknown as Record<string, unknown>) : mismatches(opts.expect, (after ?? null) as unknown as Record<string, unknown> | null);
   const verdict: Verdict = error
     ? (outcome === "unknown" ? "UNKNOWN" : "FAILED")
     : after === undefined ? "UNKNOWN"
@@ -363,3 +371,76 @@ export const readPlayerLookup = (auth: OffersAuth, ids: number[]) => paced(() =>
   const { env, baseUrl } = cfg();
   return apiWrite<PlayerLookup>(env, "POST", "/admin/offers/players/lookup", { ids }, auth.actor, "offers", undefined, undefined, baseUrl);
 });
+
+// ── OFFER PUSHES (backend docs/offer-push.md) ──────────────────────────────────────────────────
+// Hidden on production until sign-off, except for OFFERS_PUSH_ACCOUNTS (src/lib/offersPush.ts pushesVisible). A route
+// asked by someone who may not see them answers as if it did not exist.
+export const pushesAllowed = (auth: OffersAuth) => pushesVisible(cfg().env, auth.email, process.env);
+export const pushNotFound = () => Response.json(OFFERS_NOT_FOUND, { status: 404 });
+
+// Reads, paced like every other: who it would reach now, and how it went.
+export const readReach = (id: number) => offersGet<Reach>(`${CAMPAIGNS}/${id}/push/reachable`);
+export const readPushResults = (id: number) => offersGet<PushResults>(`${CAMPAIGNS}/${id}/push/results`);
+export const readPushSettings = () => offersGet<{ weeklyCap: number }>("/admin/offers/push-settings");
+
+// THE SAVE (PUT .../push). LANDED when the campaign it returns carries the push as sent.
+export function pushMismatches(want: Record<string, unknown>, after: Record<string, unknown>): string[] {
+  const p = after.push as Partial<CampaignPush> | undefined;
+  if (!p || typeof p !== "object") return ["push"];
+  return (["enabled", "title", "body", "sendLocal"] as const).filter((k) => k in want && (want[k] ?? null) !== (p[k] ?? null));
+}
+export const savePush = (auth: OffersAuth, id: number, body: Record<string, unknown>) => offersWrite({
+  auth, source: "offers:push", method: "PUT", path: `${CAMPAIGNS}/${id}/push`, body, id, expect: body,
+  check: (after) => pushMismatches(body, after),
+});
+
+// THE TEST PUSH (POST .../push/test): the signed-in person's own devices, and nobody else's. The backend
+// takes no ids, emails or tokens, and reads who from X-Acting-Staff-Email. A 2xx is SENT, never "arrived".
+export async function sendTestPush(auth: OffersAuth, id: number, text: { title?: string; body?: string }): Promise<Response> {
+  const path = `${CAMPAIGNS}/${id}/push/test`;
+  let answer: { pushId?: number; devices?: number; sent?: number; failed?: number } | null = null;
+  const { outcome, error } = await recordWrite(
+    {
+      env: cfg().env, source: "offers:push-test", actorName: auth.email, actorEmail: auth.email, saveId: randomUUID(),
+      matchId: null, matchName: null, method: "POST", path, body: text, keys: [], label: (k) => k,
+      applied: () => (answer && typeof answer.sent === "number" ? true : "unknown"),
+    },
+    {
+      readResource: async () => ({}),
+      write: async () => { const r = await offersApiWrite<typeof answer>(auth, "POST", path, text); answer = r ?? null; return r; },
+      now: () => new Date().toISOString(),
+    },
+    gateDeps.logStore(),
+  );
+  if (error) {
+    const { code } = backendMessage(error);
+    const msg = code === "NOT_FOUND_PREVIEW_PLAYER" ? `No player account in the app uses ${auth.email}. Sign up in the app with that email, then try again.` : errorText(error);
+    return Response.json({ verdict: outcome === "unknown" ? "UNKNOWN" : "FAILED", error: msg }, { status: outcome === "unknown" ? 200 : 502 });
+  }
+  const a = answer as { pushId?: number; devices?: number; sent?: number; failed?: number } | null;
+  if (!a || typeof a.sent !== "number") return Response.json({ verdict: "UNKNOWN", detail: "The backend answered without saying how many phones it sent to. Check your phone before trying again." });
+  return Response.json({ verdict: "SENT", devices: a.devices ?? null, sent: a.sent, failed: a.failed ?? 0 });
+}
+
+// THE SHARED WEEKLY LIMIT (PUT /admin/offers/push-settings). It returns the settings; LANDED when they match.
+export async function savePushSettings(auth: OffersAuth, weeklyCap: number): Promise<Response> {
+  const path = "/admin/offers/push-settings";
+  let answer: { weeklyCap?: number } | null = null;
+  const { outcome, error } = await recordWrite(
+    {
+      env: cfg().env, source: "offers:push-settings", actorName: auth.email, actorEmail: auth.email, saveId: randomUUID(),
+      matchId: null, matchName: null, method: "PUT", path, body: { weeklyCap }, keys: [], label: (k) => k,
+      applied: () => (answer && typeof answer.weeklyCap === "number" ? answer.weeklyCap === weeklyCap : "unknown"),
+    },
+    {
+      readResource: async () => ({}),
+      write: async () => { const r = await offersApiWrite<{ weeklyCap?: number }>(auth, "PUT", path, { weeklyCap }); answer = r ?? null; return r; },
+      now: () => new Date().toISOString(),
+    },
+    gateDeps.logStore(),
+  );
+  if (error) return Response.json({ verdict: outcome === "unknown" ? "UNKNOWN" : "FAILED", error: errorText(error) }, { status: outcome === "unknown" ? 200 : 502 });
+  const a = answer as { weeklyCap?: number } | null;
+  if (!a || typeof a.weeklyCap !== "number") return Response.json({ verdict: "UNKNOWN", detail: "The backend answered without the limit. Refresh to see what it holds." });
+  return Response.json({ verdict: a.weeklyCap === weeklyCap ? "LANDED" : "NOT APPLIED", weeklyCap: a.weeklyCap });
+}

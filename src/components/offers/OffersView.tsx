@@ -16,10 +16,11 @@ import {
   withCovers, mergeMatches, type ListChange, type Campaign, type City, type FieldOpt, type MatchOpt,
 } from "@/lib/offersModel";
 import OfferPanel, { type MatchRead } from "./OfferPanel";
+import { PushResultsRow, PushSettingsCard } from "./OfferPush";
 import { Banner, Btn, NotFound, O, Split, StateChip, authed, type WriteOutcome } from "./offersUi";
 import { useOffersAccessState } from "./useOffersAccess";
 
-type Data = { campaigns: Campaign[]; cities: City[]; fields: FieldOpt[]; matches: MatchOpt[]; matchesComplete: boolean; matchesError: string | null };
+type Data = { campaigns: Campaign[]; cities: City[]; fields: FieldOpt[]; matches: MatchOpt[]; matchesComplete: boolean; matchesError: string | null; pushes?: boolean };
 const COLS = "grid grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)_minmax(0,1.3fr)_88px] items-center gap-3";
 
 export default function OffersView() {
@@ -34,6 +35,7 @@ export default function OffersView() {
   // Bumped on every + New offer, so a second click starts a fresh form instead of keeping the last one.
   const [newN, setNewN] = useState(0);
   const [banner, setBanner] = useState<WriteOutcome | null>(null);
+  const [pushLimit, setPushLimit] = useState(false);
 
   useEffect(() => {
     if (access !== true) return;
@@ -92,9 +94,11 @@ export default function OffersView() {
       <div className="mb-5 flex flex-wrap items-center gap-3">
         <h1 className="m-0 text-[25px] font-bold" style={{ color: O.ink }}>Offers</h1>
         <div className="ml-auto" />
+        {data?.pushes && <Btn testId="offers-push-limit" onClick={() => setPushLimit((v) => !v)}>Push limit</Btn>}
         <Btn onClick={() => setKey((k) => k + 1)}>Refresh</Btn>
       </div>
       {banner && <Banner outcome={banner} onDismiss={() => setBanner(null)} />}
+      {data?.pushes && pushLimit && <PushSettingsCard onClose={() => setPushLimit(false)} />}
       {err ? (
         <div data-testid="offers-error" className="rounded-[10px] border px-3 py-2.5 text-[12.5px]" style={{ background: O.critBg, borderColor: O.critLine, color: O.critInk }}>Could not load: {err}</div>
       ) : !view ? <div className="py-6 text-[13px]" style={{ color: O.muted }}>Loading…</div> : (
@@ -143,7 +147,7 @@ export default function OffersView() {
                   Shows on app open. One popup per open, never right after another popup. Used = booked with the offer. Came back = booked again at full price within 30 days.
                 </div>
               </div>
-              {current && current.state !== "DRAFT" && <ResultsCard c={current} nowWall={nowWall} />}
+              {current && current.state !== "DRAFT" && <ResultsCard c={current} nowWall={nowWall} pushes={!!view.pushes} />}
             </div>
           } />
       )}
@@ -180,7 +184,7 @@ function Stat({ value, label, testId }: { value: string; label: string; testId: 
   );
 }
 
-function ResultsCard({ c, nowWall }: { c: Campaign; nowWall: string }) {
+function ResultsCard({ c, nowWall, pushes }: { c: Campaign; nowWall: string; pushes: boolean }) {
   const r = c.results;
   const up = usedPct(r);
   const extra = extraBookingsLine(r, c.audienceMode);
@@ -198,6 +202,7 @@ function ResultsCard({ c, nowWall }: { c: Campaign; nowWall: string }) {
       </div>
       <div data-testid="offers-comparison" className="rounded-[8px] px-3 py-[9px] text-[13px] font-medium" style={{ background: O.mint, color: O.ok }}>{comparisonLine(r)}</div>
       {extra && <div data-testid="offers-extra" className="px-3 text-[13px] font-medium" style={{ color: O.ink }}>{extra}</div>}
+      {pushes && c.push?.enabled && <PushResultsRow campaignId={c.id} />}
     </div>
   );
 }
