@@ -18,6 +18,11 @@ older backend stores 0, so a save should read back NOT APPLIED on `holdoutPercen
 Goes in the backend's `docs/offers/RELEASE-CHECKLIST.md` too. Read at `src/lib/offersConfig.ts`. Who may use it is not a variable: anyone with Match Ops access. Every one is server-only (none has a `NEXT_PUBLIC_` prefix). Anything unset or
 wrong closes the whole page for everyone: every `/api/offers/*` route answers 503.
 
+**Field cover photos ride on the same variables** (merged into feature/offers 2026-11-02): every `/api/covers/*`
+route reads this config too, so unset or wrong, the Fields drawer's COVER PHOTOS and the match panel's cover field
+render nothing. Covers keep their own stricter write rule (EDIT MATCHES), and refuse a city-confined account. Their
+staging and production prerequisites are in `docs/field-covers/launch-checklist.md` section 0.
+
 | Variable | Value | Notes |
 |---|---|---|
 | `OFFERS_ENV` | `local`, `staging` or `production` | No default. `local` needs local mode on; the other two need it off. |
