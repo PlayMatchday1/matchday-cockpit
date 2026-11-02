@@ -7,8 +7,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import {
-  CAP_MAX, CAP_MIN, CUT_OFF_NOTE, FIRST_NAME, MATCH_TOKEN, PUSH_BODY_MAX, PUSH_BODY_SOFT, PUSH_TITLE_MAX, PUSH_TITLE_SOFT, STATUS_TEXT, capLine, fillPush, pushAfterType, pushLocked,
-  pushText, reachAddsUp, reachRows, sendTimeNote, skippedRows, skippedTotal,
+  CAP_MAX, CAP_MIN, CUT_OFF_NOTE, FIRST_NAME, MATCH_TOKEN, PUSH_BODY_MAX, PUSH_BODY_SOFT, PUSH_TITLE_MAX, PUSH_TITLE_SOFT, STATUS_TEXT, capLine, fillPush, mayCutOff, pushAfterType, pushLocked,
+  pushText, reachAddsUp, reachRows, sendTimeNote, sendsToLine, skippedRows, skippedTotal,
   type CampaignPush, type PushForm, type PushResults, type Reach,
 } from "@/lib/offersPush";
 import { wallLabel, type MatchOpt } from "@/lib/offersModel";
@@ -57,10 +57,10 @@ export function PushSection({ pf, setPf, sugg, scope, match, campaignId, campaig
               )}
             </div>
             <div className="flex min-w-0 flex-1 flex-col gap-2.5">
-              <Field label="Title" value={t.title} max={PUSH_TITLE_MAX} soft={PUSH_TITLE_SOFT} testId="offers-push-title" disabled={off}
+              <Field label="Title" value={t.title} max={PUSH_TITLE_MAX} long={mayCutOff(t.title, PUSH_TITLE_SOFT, PUSH_TITLE_MAX, match)} testId="offers-push-title" disabled={off}
                 typed={pf.title !== undefined} onReset={() => { const x = { ...pf }; delete x.title; setPf(x); }}
                 onChange={(v) => setPf(pushAfterType(pf, "title", v, sugg))} />
-              <Field label="Body" value={t.body} max={PUSH_BODY_MAX} soft={PUSH_BODY_SOFT} rows={4} testId="offers-push-body" disabled={off}
+              <Field label="Body" value={t.body} max={PUSH_BODY_MAX} long={mayCutOff(t.body, PUSH_BODY_SOFT, PUSH_BODY_MAX, match)} rows={4} testId="offers-push-body" disabled={off}
                 typed={pf.body !== undefined} onReset={() => { const x = { ...pf }; delete x.body; setPf(x); }}
                 onChange={(v) => setPf(pushAfterType(pf, "body", v, sugg))} />
             </div>
@@ -102,10 +102,10 @@ export function PushSection({ pf, setPf, sugg, scope, match, campaignId, campaig
 
 const Token = ({ children }: { children: React.ReactNode }) => <code className="rounded px-1" style={{ background: O.subtle, color: O.ink }}>{children}</code>;
 
-function Field({ label, value, max, soft, rows, testId, disabled, typed, onReset, onChange }: {
-  label: string; value: string; max: number; soft: number; rows?: number; testId: string; disabled: boolean; typed: boolean; onReset: () => void; onChange: (v: string) => void;
+// long: past the lock-screen length once filled in (mayCutOff), not the template's own length.
+function Field({ label, value, max, long, rows, testId, disabled, typed, onReset, onChange }: {
+  label: string; value: string; max: number; long: boolean; rows?: number; testId: string; disabled: boolean; typed: boolean; onReset: () => void; onChange: (v: string) => void;
 }) {
-  const long = value.length > soft && value.length <= max;
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex items-baseline justify-between gap-2">
@@ -171,6 +171,25 @@ export function PushReach({ campaignId, refreshKey }: { campaignId: number | nul
       )}
     </div>
   );
+}
+
+// In the confirm before a push goes (launch with a push, or queueing one on a live offer): who it reaches, read
+// fresh when the dialog opens. campaignId null: the audience isn't saved yet, so there is nothing to count.
+export function SendsTo({ campaignId }: { campaignId: number | null }) {
+  const [line, setLine] = useState<{ text: string; bad: boolean } | null>(null);
+  useEffect(() => {
+    if (campaignId === null) return;
+    let cancelled = false;
+    (async () => {
+      const r = await authed(`/api/offers/${campaignId}/push/reachable`);
+      if (cancelled) return;
+      const reach = r.json as unknown as Reach;
+      setLine(r.ok && typeof reach.reachable === "number" ? { text: sendsToLine(reach.reachable), bad: false } : { text: `Couldn't count who the push reaches: ${String(r.json.error ?? "no count came back")}`, bad: true });
+    })();
+    return () => { cancelled = true; };
+  }, [campaignId]);
+  const text = campaignId === null ? "How many players it sends to is counted once the offer is saved." : line?.text ?? "Counting who it sends to…";
+  return <span data-testid="offers-confirm-sends-to" style={{ color: line?.bad ? O.critInk : line ? O.ink : O.muted, fontWeight: line && !line.bad ? 600 : 400 }}>{text}</span>;
 }
 
 // On the results card, beside the popup's numbers.

@@ -40,8 +40,10 @@ export const pushLocked = (p: CampaignPush | null | undefined, campaignStatus: s
 
 // THE SUGGESTION, from the deal. Any match: "Your next match is 50% off" / "{first_name}, it's already on your
 // account. Ends Sun, Nov 8." (no "Ends" with no end date). A specific match: "50% off Parmer Thursday" /
-// "{first_name}, Thu Nov 5 7:00 PM. Already applied." (free: "Parmer Thursday is free"). A field: "50% off at Riverside Fields" / "{first_name}, any
-// match there. Already applied." (free: "Any match at Riverside Fields is free"). Names and times are written in, not left as {match}.
+// "{first_name}, Thu Nov 5 7:00 PM. Already applied." (free: "Parmer Thursday is free", set price: "$5 spot at Parmer Thursday"). A field:
+// "50% off at Riverside Fields" / "{first_name}, any match there. Already applied." (free: "Any match at Riverside Fields is free"); with no
+// field name to hand, the title is the deal alone ("50% off", "$5 spots", "Free match") and the body has no "there". Names and times are
+// written in, not left as {match}.
 const dealWord = (type: Form["dealType"], amount: number) =>
   type === "PERCENT_OFF" ? `${amount}% off` : type === "AMOUNT_OFF" ? `${money(amount)} off` : type === "SET_PRICE" ? money(amount) : "free";
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
@@ -50,12 +52,17 @@ export function pushSuggestion(f: Pick<Form, "dealType" | "dealAmount" | "usesPe
   const w = dealWord(f.dealType, f.dealAmount);
   let title: string, body: string;
   if (f.scope === "MATCH" && m) {
-    title = f.dealType === "FREE_MATCH" ? `${matchTitle(m)} is free` : `${cap(w)} ${matchTitle(m)}`;
+    title = f.dealType === "FREE_MATCH" ? `${matchTitle(m)} is free` : f.dealType === "SET_PRICE" ? `${w} spot at ${matchTitle(m)}` : `${cap(w)} ${matchTitle(m)}`;
     body = `${FIRST_NAME}, ${matchWhen(m)}. Already applied.`;
   } else if (f.scope === "FIELD" && f.appliesFieldIds.length) {
     const at = f.appliesFieldIds.map((id) => fields.find((x) => x.id === id)?.title).filter(Boolean) as string[];
-    title = f.dealType === "FREE_MATCH" ? `Any match at ${andJoin(at)} is free` : `${cap(w)} at ${andJoin(at)}`;
-    body = `${FIRST_NAME}, any match there. Already applied.`;
+    if (at.length) {
+      title = f.dealType === "FREE_MATCH" ? `Any match at ${andJoin(at)} is free` : `${cap(w)} at ${andJoin(at)}`;
+      body = `${FIRST_NAME}, any match there. Already applied.`;
+    } else {
+      title = f.dealType === "FREE_MATCH" ? "Free match" : f.dealType === "SET_PRICE" ? `${w} spots` : cap(w);
+      body = `${FIRST_NAME}, it's already on your account.`;
+    }
   } else {
     title = f.usesPerPlayer === 1 ? `Your next match is ${w}` : `Your next ${f.usesPerPlayer} matches are ${w}`;
     body = `${FIRST_NAME}, it's already on your account.${f.endsLocal === null ? "" : ` Ends ${endDay(f.endsLocal)}.`}`;
@@ -126,11 +133,12 @@ const endDay = (endsLocal: string) => {
   return `${fmt(ms, { weekday: "short" })}, ${fmt(ms, { month: "short" })} ${fmt(ms, { day: "numeric" })}`;
 };
 export const matchForPush = (m: MatchOpt) => `${matchTitle(m)}, ${matchWhen(m)}`;
-// With no first name, the backend (personalize.ts fillFirstName) drops the token with the comma or space it
-// would leave, and leaves case as written. This is that, so the preview shows what is sent.
+// With no first name, the backend (push-copy.ts fillPushText over personalize.ts fillFirstName) drops the token
+// with the comma or space it would leave, and when the text opened with it, capitalizes what is left ("It's
+// already on your account"). This is that, so the preview shows what is sent.
 export function dropFirstName(text: string): string {
   if (!text.includes(FIRST_NAME)) return text;
-  return text
+  const left = text
     .replace(/\s*,\s*\{first_name\}\s*,/g, "")
     .replace(/\s*,\s*\{first_name\}/g, "")
     .replace(/\{first_name\}\s*,\s*/g, "")
@@ -138,9 +146,16 @@ export function dropFirstName(text: string): string {
     .replace(/\s+([!?.,;:])/g, "$1")
     .replace(/\s{2,}/g, " ")
     .trim();
+  return text.trimStart().startsWith(FIRST_NAME) ? left.charAt(0).toUpperCase() + left.slice(1) : left;
 }
 export const fillPush = (text: string, m: MatchOpt | null, name: string | null = PREVIEW_NAME) =>
   (name === null ? dropFirstName(text) : text.split(FIRST_NAME).join(name)).split(MATCH_TOKEN).join(m ? matchForPush(m) : MATCH_TOKEN);
+// The lock-screen warning counts what a player sees (as the preview fills it), not the template: {match} alone
+// writes in the match's name, day and time. Past the hard limit the limit's own message says it instead.
+export const mayCutOff = (text: string, soft: number, max: number, m: MatchOpt | null) => text.length <= max && fillPush(text, m).length > soft;
+
+// The confirm before a push goes: who it reaches, from GET .../push/reachable.
+export const sendsToLine = (reachable: number) => `Sends to ${reachable.toLocaleString("en-US")} ${reachable === 1 ? "player" : "players"}.`;
 
 // The send time against the offer's run: a push before it starts or after it ends promises nothing usable.
 export function sendTimeNote(pf: PushForm, startsLocal: string, endsLocal: string | null): string | null {

@@ -17,7 +17,7 @@ import {
   type Campaign, type City, type Count, type FieldOpt, type Lookup, type UploadedPhoto, type CopyKey, type ListChange, type DealType, type Form, type MatchOpt, type WrittenFor,
 } from "@/lib/offersModel";
 import MatchPicker from "./MatchPicker";
-import { PushReach, PushSection } from "./OfferPush";
+import { PushReach, PushSection, SendsTo } from "./OfferPush";
 import { defaultSendLocal, pushBodyOf, pushDirty, pushFormOf, pushLocked, pushProblem, pushSuggestion, pushText, type PushForm } from "@/lib/offersPush";
 import OfferPopupPreview from "./OfferPopupPreview";
 import { lookupInBatches, MAX_OFFER_PLAYER_IDS, pastedLine } from "@/lib/offersModel";
@@ -898,12 +898,14 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
       {confirm === "launch" && (
         <ConfirmDialog title={c?.status === "PAUSED" ? `Resume ${f.name.trim()}?` : `Launch ${f.name.trim()}?`}
           note={c?.status === "PAUSED" ? "Players who match start getting it again the next time they open the app." : `${summary(f, count, data.matches, data.cities, offerWall(), data.fields)} After launch the deal, who gets it and when it runs can't change.${pushOn && pf.enabled ? ` Also sends a push, "${pushText(pf, pushSugg).title}", ${pf.at ? `at ${pf.sendLocal} in each player's city` : "as soon as it launches"}.` : ""}`}
+          extra={c?.status !== "PAUSED" && pushOn && pf.enabled ? <SendsTo campaignId={c && !offerDirty ? c.id : null} /> : null}
           warnings={staleLines(stale, f)}
           action={c?.status === "PAUSED" ? "Resume" : stale.length > 0 ? "Launch anyway" : "Launch"} onCancel={() => setConfirm(null)}
           onConfirm={async () => { const o = await once(launch); if (o) { setOutcome(o); if (o.verdict === "LANDED") setConfirm(null); } return o; }} />
       )}
       {confirm === "push" && (
         <ConfirmDialog title="Queue the push now?" note={`${f.name.trim()} is live, so saving queues its push ${pf.at ? `for ${pf.sendLocal} in each player's city` : "to go right away"}. It goes to the players this offer reaches who allow pushes, as far as the backend's push switch lets it. It can't be changed once queued.`}
+          extra={<SendsTo campaignId={c?.id ?? null} />}
           action="Save and queue" onCancel={() => setConfirm(null)}
           onConfirm={async () => { const r = await once(save); if (!r) return null; setOutcome(r.o); if (r.o.verdict === "LANDED") { setConfirm(null); onLanded(r.o, r.id ?? undefined, savedAs(r.after)); } return r.o; }} />
       )}

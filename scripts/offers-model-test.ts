@@ -24,7 +24,7 @@ import { readOffersConfig } from "../src/lib/offersConfig";
 import { assertAllowedHost, preflightWrite } from "../src/lib/matchdayStageApi";
 import { makePacer, OFFERS_READ_PACE_MS, READS_STOPPED } from "../src/lib/offersPacing";
 import {
-  CUT_OFF_NOTE, PUSH_BODY_MAX, PUSH_BODY_SOFT, PUSH_TITLE_MAX, PUSH_TITLE_SOFT, capLine, defaultSendLocal, fillPush, matchForPush, pushAfterType, pushBodyOf, pushDirty, pushFormOf, pushLocked, pushProblem, pushSuggestion, pushText,
+  CUT_OFF_NOTE, PUSH_BODY_MAX, PUSH_BODY_SOFT, PUSH_TITLE_MAX, PUSH_TITLE_SOFT, capLine, defaultSendLocal, fillPush, mayCutOff, matchForPush, sendsToLine, pushAfterType, pushBodyOf, pushDirty, pushFormOf, pushLocked, pushProblem, pushSuggestion, pushText,
   pushesVisible, reachAddsUp, reachRows, sendTimeNote, skippedRows, skippedTotal, type CampaignPush,
 } from "../src/lib/offersPush";
 
@@ -743,7 +743,15 @@ eq("an admin account is one; a player or a backend without the type isn't", [isA
   eq("...free says any match there is free", pushSuggestion({ ...onField, dealType: "FREE_MATCH", dealAmount: 0 }, null, F2).title, "Any match at Riverside Fields is free");
   eq("a long match name is cut to the title's limit", pushSuggestion(onMatch, { ...matches[0], name: "x".repeat(80) }, F2).title.length, 64);
   eq("no first name: dropped with its comma, as the backend's fillFirstName does", [fillPush("{first_name}, it's already on your account.", null, null), fillPush("See you, {first_name}!", null, null), fillPush("No name here.", null, null), fillPush("{first_name}, it's on.", null)],
-    ["it's already on your account.", "See you!", "No name here.", "Luis, it's on."]);
+    ["It's already on your account.", "See you!", "No name here.", "Luis, it's on."]);
+  eq("no first name: a capital only when the text opened with it, as backend 7fadcae does", [fillPush("  {first_name} your spot is waiting", null, null), fillPush("see you soon, {first_name}", null, null), fillPush("{first_name}, 50% off tonight", null, null), fillPush("{first_name}, {match} has spots", matches[0], null)],
+    ["Your spot is waiting", "see you soon", "50% off tonight", "Riverside Thursday, Mon Nov 2 7:00 PM has spots"]);
+  eq("set price on a specific match: a spot at it", pushSuggestion({ ...onMatch, dealType: "SET_PRICE", dealAmount: 500 }, matches[0], F2).title, "$5 spot at Riverside Thursday");
+  eq("a field with no name to hand: the deal alone, no dangling \"at\" or \"there\"", [pushSuggestion({ ...onField, appliesFieldIds: [999] }, null, F2), pushSuggestion({ ...onField, appliesFieldIds: [999], dealType: "SET_PRICE", dealAmount: 500 }, null, F2).title, pushSuggestion({ ...onField, appliesFieldIds: [999], dealType: "FREE_MATCH", dealAmount: 0 }, null, F2).title],
+    [{ title: "50% off", body: "{first_name}, it's already on your account." }, "$5 spots", "Free match"]);
+  eq("the cut-off warning counts the filled text: {match} alone is long, a short template filled stays short", [mayCutOff("{match}, 50% off now", PUSH_TITLE_SOFT, PUSH_TITLE_MAX, { ...matches[0], name: "Riverside Fields Thursday Night Lights" }), mayCutOff("{match}", PUSH_TITLE_SOFT, PUSH_TITLE_MAX, matches[0]), mayCutOff("x".repeat(51), PUSH_TITLE_SOFT, PUSH_TITLE_MAX, null), mayCutOff("x".repeat(65), PUSH_TITLE_SOFT, PUSH_TITLE_MAX, null)],
+    [true, false, true, false]);
+  eq("the confirm says who it sends to", [sendsToLine(636), sendsToLine(1), sendsToLine(12400)], ["Sends to 636 players.", "Sends to 1 player.", "Sends to 12,400 players."]);
   eq("past 50 or 110 characters: a warning, still under the limits", [PUSH_TITLE_SOFT, PUSH_BODY_SOFT, PUSH_TITLE_SOFT < PUSH_TITLE_MAX, PUSH_BODY_SOFT < PUSH_BODY_MAX, CUT_OFF_NOTE], [50, 110, true, true, "May be cut off on the lock screen."]);
   const sugg = { title: "50% OFF", body: "{first_name}, 50% off your next match. It's already on your account." };
   const off = pushFormOf(null, sugg, "2026-11-03 10:00");
@@ -1179,6 +1187,13 @@ function routeFiles(dir: string): string[] {
     eq("reach: one GET, passed through", [(await json(await reach.GET(req("GET"), ctx))).reachable, seen.map((x) => `${x.m} ${x.path}`)], [636, ["GET /admin/offers/campaigns/9/push/reachable"]]);
     answer = () => new Response(JSON.stringify({ status: "SENT", sent: 612, failed: 4, skipped: { heldBack: 118, noConsent: 402, noDevice: 61, capped: 23, notAllowed: 0 }, opened: 97, bookedWithin72h: 41, devices: 701 }), { status: 200 });
     eq("results: passed through", (await json(await results.GET(req("GET"), ctx))).bookedWithin72h, 41);
+    // A push route answered 200 with a web page: no pushes, on that card, and the next read still goes.
+    const resultsOk = answer;
+    answer = (p) => (p.endsWith("/push/reachable") ? new Response("<!DOCTYPE html>", { status: 200, headers: { "content-type": "text/html" } }) : resultsOk(p, "GET", null));
+    seen.length = 0;
+    const html = await json(await reach.GET(req("GET"), ctx));
+    eq("a web page on a push read: no pushes here, and reads aren't stopped (results read straight after)", [html.status, html.error, (await json(await results.GET(req("GET"), ctx))).bookedWithin72h, seen.map((x) => x.path)],
+      [502, "This backend doesn't have offer pushes yet, so nothing was sent or saved.", 41, ["/admin/offers/campaigns/9/push/reachable", "/admin/offers/campaigns/9/push/results"]]);
     // THE WEEKLY LIMIT.
     answer = (_p, m, b) => new Response(JSON.stringify(m === "PUT" ? b : { weeklyCap: 2 }), { status: 200 });
     eq("limit: read, then saved and LANDED", [(await json(await settings.GET(req("GET"), {}))).weeklyCap, (await json(await settings.PUT(req("PUT", { weeklyCap: 3 }), {}))).verdict, rows2.at(-1)?.source], [2, "LANDED", "offers:push-settings"]);

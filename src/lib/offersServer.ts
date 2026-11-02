@@ -64,6 +64,8 @@ function backendMessage(e: unknown): { code: string | null; message: string | nu
     return { code: j.errorCode ?? null, message: Array.isArray(j.message) ? j.message.join("; ") : j.message ?? null };
   } catch { return { code: null, message: null }; }
 }
+const NO_PUSHES = "This backend doesn't have offer pushes yet, so nothing was sent or saved.";
+const NO_PUSH_ROUTE = "OffersNoPushRoute";
 export function errorText(e: unknown): string {
   const raw = e instanceof Error ? e.message : String(e);
   const staff = staffErrorKind(raw);
@@ -75,7 +77,8 @@ export function errorText(e: unknown): string {
   // A route the backend doesn't have can answer 200 with a web page (staging did, 2026-10-30).
   // A backend without offer pushes yet answers their routes with a 404 that carries no errorCode: Nest's own
   // ("Cannot PUT ...") or, on the local build, {"message":"Not Found"}. The push 404s it means carry one.
-  if (e instanceof WriteFailedError && e.status === 404 && /\/push(\/|-settings|\b)/.test(raw) && backendMessage(e).code === null) return "This backend doesn't have offer pushes yet, so nothing was sent or saved.";
+  if (e instanceof WriteFailedError && e.status === 404 && /\/push(\/|-settings|\b)/.test(raw) && backendMessage(e).code === null) return NO_PUSHES;
+  if (e instanceof Error && e.name === NO_PUSH_ROUTE) return NO_PUSHES;
   if (e instanceof SyntaxError) { console.error(`[offers] the backend's answer was not JSON: ${raw.slice(0, 200)}`); return "The backend answered with something that isn't JSON. Offers may not be deployed there."; }
   if (e instanceof Error && e.name === READS_STOPPED) return "The backend just had a problem, so reads have stopped for a moment. Try again in 30 seconds.";
   const { code, message } = backendMessage(e);
@@ -379,9 +382,22 @@ export const pushesAllowed = (auth: OffersAuth) => pushesVisible(cfg().env, auth
 export const pushNotFound = () => Response.json(OFFERS_NOT_FOUND, { status: 404 });
 
 // Reads, paced like every other: who it would reach now, and how it went.
-export const readReach = (id: number) => offersGet<Reach>(`${CAMPAIGNS}/${id}/push/reachable`);
-export const readPushResults = (id: number) => offersGet<PushResults>(`${CAMPAIGNS}/${id}/push/results`);
-export const readPushSettings = () => offersGet<{ weeklyCap: number }>("/admin/offers/push-settings");
+// A backend without push routes can answer them 200 with a web page (as staging did for other routes). That
+// says "no pushes here", about that card alone: it is answered inside the pacer, so it does not stop every
+// other offer read for 30 seconds the way a real failure does, and is thrown only once outside it.
+function pushGet<T>(path: string): Promise<T> {
+  const { env, baseUrl } = cfg();
+  return paced(async () => {
+    try { return { ok: await apiGet<T>(env, path, undefined, baseUrl) }; }
+    catch (e) { if (e instanceof SyntaxError) return { none: true as const }; throw e; }
+  }).then((r) => {
+    if ("none" in r) { const e = new Error(`${path}: answered 200 with something that isn't JSON`); e.name = NO_PUSH_ROUTE; throw e; }
+    return r.ok;
+  });
+}
+export const readReach = (id: number) => pushGet<Reach>(`${CAMPAIGNS}/${id}/push/reachable`);
+export const readPushResults = (id: number) => pushGet<PushResults>(`${CAMPAIGNS}/${id}/push/results`);
+export const readPushSettings = () => pushGet<{ weeklyCap: number }>("/admin/offers/push-settings");
 
 // THE SAVE (PUT .../push). LANDED when the campaign it returns carries the push as sent.
 export function pushMismatches(want: Record<string, unknown>, after: Record<string, unknown>): string[] {
