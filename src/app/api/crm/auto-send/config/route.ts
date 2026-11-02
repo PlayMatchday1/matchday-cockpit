@@ -10,6 +10,7 @@ import { authenticateCrm } from "@/lib/crmAuth";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
 import { AUTO_ACTION_CATEGORIES, AUTO_CATEGORIES, isAutoSendLive, type AutoSendConfig } from "@/lib/aiDraftModel";
 import { cancelAllHolds } from "@/lib/aiDraftAutoRun";
+import { reviewMasked } from "@/lib/reviewAccount";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -17,7 +18,7 @@ export const dynamic = "force-dynamic";
 const COLS = "auto_categories, action_categories, credit_cap_cents, hold_minutes, enabled, shadow, disabled_reason, disabled_at, updated_at";
 const MAX_CAP_CENTS = 20000;
 
-export async function GET(req: Request) {
+async function getRoute(req: Request) {
   const auth = await authenticateCrm(req);
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   const r = await auth.supabase.from("crm_auto_send_config").select(COLS).maybeSingle();
@@ -91,3 +92,5 @@ export async function PATCH(req: Request) {
   if (after && !isAutoSendLive(after)) await cancelAllHolds(supabase, patch.enabled === false ? `Auto-send turned off by ${auth.email}.` : "Auto-send is off.").catch(() => {});
   return Response.json({ config: after, outcome });
 }
+
+export const GET = reviewMasked(getRoute);

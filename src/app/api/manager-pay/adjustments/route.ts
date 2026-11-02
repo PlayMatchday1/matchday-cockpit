@@ -14,6 +14,7 @@
 
 import { timingSafeEqual } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
+import { refuseUnlessAdmin } from "@/lib/adminSession";
 
 export const runtime = "nodejs";
 export const maxDuration = 10;
@@ -68,6 +69,8 @@ export async function POST(req: Request) {
     if (error || !data?.user) {
       return Response.json({ error: "Invalid session" }, { status: 401 });
     }
+    const adminRefusal = await refuseUnlessAdmin(data.user.email);
+    if (adminRefusal) return adminRefusal;
   }
 
   const supabase = createClient(supabaseUrl, serviceKey, {

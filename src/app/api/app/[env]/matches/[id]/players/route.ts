@@ -18,6 +18,7 @@ import { CONFINED_CITY_ERROR } from "@/lib/cityConfinement";
 import { can } from "@/lib/capabilities";
 import { buildProfile } from "@/lib/playerProfile";
 import { phoneLast4, searchTerm } from "@/lib/appMatchV2";
+import { reviewMasked } from "@/lib/reviewAccount";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -42,7 +43,7 @@ async function profileOf(env: MatchdayEnv, playerId: number) {
   };
 }
 
-export async function GET(req: Request, ctx: { params: Promise<{ env: string; id: string }> }) {
+async function getRoute(req: Request, ctx: { params: Promise<{ env: string; id: string }> }) {
   const auth = await authenticateApp(req);
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   const refused = readRefusal(auth);
@@ -95,3 +96,5 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string; id
     return Response.json({ error: msg }, { status: 502 });
   }
 }
+
+export const GET = reviewMasked(getRoute);

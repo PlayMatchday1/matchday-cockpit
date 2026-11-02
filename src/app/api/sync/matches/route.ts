@@ -29,6 +29,7 @@ import {
 import { runWithLog, type TriggeredBy } from "@/lib/syncLogging";
 import { inNightPassHour, NIGHT_PASS_SKIP } from "@/lib/nightPass";
 import { refreshGrowthViews, refreshPlayerFinderViews } from "@/lib/growthViews";
+import { refuseUnlessAdmin } from "@/lib/adminSession";
 
 // Incremental sync runs ~15-20s typical, measured off fin_sync_log
 // (the older ~150s note predated the window narrowing). 300s is far
@@ -95,6 +96,8 @@ export async function POST(req: Request) {
     if (userErr || !userData?.user) {
       return Response.json({ error: "Invalid session" }, { status: 401 });
     }
+    const adminRefusal = await refuseUnlessAdmin(userData.user.email);
+    if (adminRefusal) return adminRefusal;
   }
 
   // Read-only dry-run: fetch matches + rosters and return coverage diagnostics

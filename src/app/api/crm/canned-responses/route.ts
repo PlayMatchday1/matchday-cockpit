@@ -25,6 +25,7 @@ import {
   CANNED_RESPONSE_BUCKET,
   uploadCannedResponseImage,
 } from "@/lib/crmCannedResponses";
+import { reviewMasked } from "@/lib/reviewAccount";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -50,7 +51,7 @@ type CannedResponseRow = {
   updated_at: string;
 };
 
-export async function GET(req: Request) {
+async function getRoute(req: Request) {
   const auth = await authenticateCrm(req);
   if (!auth.ok) {
     return Response.json({ error: auth.error }, { status: auth.status });
@@ -231,3 +232,5 @@ async function rollbackUpload(
     console.error("[crm:canned-responses.create] rollback failed", err);
   }
 }
+
+export const GET = reviewMasked(getRoute);

@@ -16,6 +16,7 @@ import { apiGet } from "@/lib/matchdayStageApi";
 import { callDesktop, passThrough } from "@/lib/appCall";
 import { GET as matchGet, PUT as matchPut } from "@/app/api/matchday/[env]/matches/[id]/route";
 import { confirmLines } from "@/lib/managerAssign";
+import { reviewMasked } from "@/lib/reviewAccount";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -36,7 +37,7 @@ async function gate(req: Request, ctx: { params: Promise<{ env: string; id: stri
   return { env, id };
 }
 
-export async function GET(req: Request, ctx: { params: Promise<{ env: string; id: string }> }) {
+async function getRoute(req: Request, ctx: { params: Promise<{ env: string; id: string }> }) {
   const g = await gate(req, ctx);
   if ("error" in g) return g.error;
   const c = await callDesktop(req, matchGet, `/api/matchday/${g.env}/matches/${g.id}`, {}, { env: g.env, id: g.id });
@@ -98,3 +99,5 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
     return Response.json({ error: e instanceof Error ? e.message : String(e) }, { status: 502 });
   }
 }
+
+export const GET = reviewMasked(getRoute);

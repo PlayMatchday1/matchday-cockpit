@@ -14,6 +14,7 @@ import { timingSafeEqual } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { syncMdapiPromocodes } from "@/lib/mdapiPromocodesSync";
 import { runWithLog, type TriggeredBy } from "@/lib/syncLogging";
+import { refuseUnlessAdmin } from "@/lib/adminSession";
 
 // ~6k rows in ~2s typical. 60s is plenty.
 export const maxDuration = 60;
@@ -77,6 +78,8 @@ export async function POST(req: Request) {
     if (userErr || !userData?.user) {
       return Response.json({ error: "Invalid session" }, { status: 401 });
     }
+    const adminRefusal = await refuseUnlessAdmin(userData.user.email);
+    if (adminRefusal) return adminRefusal;
   }
 
   const result = await runWithLog(

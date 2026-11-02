@@ -37,6 +37,7 @@ import {
   type MatchChatInboxResponse,
   type MatchChatInboxRow,
 } from "@/lib/matchChats";
+import { reviewMasked } from "@/lib/reviewAccount";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -64,7 +65,7 @@ type MatchRow = {
   is_cancelled: boolean | null;
 };
 
-export async function GET(req: Request) {
+async function getRoute(req: Request) {
   const auth = await authenticateCrm(req);
   if (!auth.ok) {
     return Response.json({ error: auth.error }, { status: auth.status });
@@ -324,3 +325,5 @@ export async function GET(req: Request) {
   const body: MatchChatInboxResponse = { active, upcoming, past };
   return Response.json(body, { status: 200 });
 }
+
+export const GET = reviewMasked(getRoute);

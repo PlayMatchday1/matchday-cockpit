@@ -9,6 +9,7 @@
 
 import { authenticateCrm } from "@/lib/crmAuth";
 import { getSignedCannedResponseUrl } from "@/lib/crmCannedResponses";
+import { reviewMasked } from "@/lib/reviewAccount";
 
 export const runtime = "nodejs";
 export const maxDuration = 10;
@@ -17,7 +18,7 @@ const TTL_S = 3600; // 1 hour per spec
 
 type RouteCtx = { params: Promise<{ id: string }> };
 
-export async function GET(req: Request, ctx: RouteCtx) {
+async function getRoute(req: Request, ctx: RouteCtx) {
   const auth = await authenticateCrm(req);
   if (!auth.ok) {
     return Response.json({ error: auth.error }, { status: auth.status });
@@ -54,3 +55,5 @@ export async function GET(req: Request, ctx: RouteCtx) {
   }
   return Response.json({ url, ttl_seconds: TTL_S }, { status: 200 });
 }
+
+export const GET = reviewMasked(getRoute);

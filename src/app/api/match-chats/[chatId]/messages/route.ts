@@ -12,6 +12,7 @@ import { authenticateCrm } from "@/lib/crmAuth";
 import { assertMatchInScope } from "@/lib/matchOpsAuth";
 import { firestore } from "@/lib/firebaseAdmin";
 import { createdAtToIso, isValidChatId, MATCHDAY_SENDER_NAME, type FirestoreMessage } from "@/lib/matchChats";
+import { reviewMasked } from "@/lib/reviewAccount";
 
 export const runtime = "nodejs";
 export const maxDuration = 10;
@@ -20,7 +21,7 @@ const LIMIT = 100;
 
 type RouteCtx = { params: Promise<{ chatId: string }> };
 
-export async function GET(req: Request, ctx: RouteCtx) {
+async function getRoute(req: Request, ctx: RouteCtx) {
   const auth = await authenticateCrm(req);
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   const { chatId } = await ctx.params;
@@ -54,3 +55,5 @@ export async function GET(req: Request, ctx: RouteCtx) {
     .reverse();
   return Response.json({ chat_id: chatId, messages, limit: LIMIT }, { status: 200 });
 }
+
+export const GET = reviewMasked(getRoute);

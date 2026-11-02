@@ -18,13 +18,14 @@ import { authenticateCrm } from "@/lib/crmAuth";
 import { crmScopedAssignees } from "@/lib/crmScope";
 import { isAwaitingReply } from "@/lib/awaitingReply";
 import { loadAttention, strikeHoldingThreadIds } from "@/lib/crmAttentionLoad";
+import { reviewMasked } from "@/lib/reviewAccount";
 
 export const runtime = "nodejs";
 export const maxDuration = 10;
 
 const PAGE = 1000;
 
-export async function GET(req: Request) {
+async function getRoute(req: Request) {
   const auth = await authenticateCrm(req);
   if (!auth.ok) {
     return Response.json({ error: auth.error }, { status: auth.status });
@@ -92,3 +93,5 @@ export async function GET(req: Request) {
     return Response.json({ count: 0 }, { status: 200 });
   }
 }
+
+export const GET = reviewMasked(getRoute);

@@ -8,6 +8,7 @@ import { timingSafeEqual } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { syncMdapiUsers, mdapiUsersLogPatch } from "@/lib/mdapiUsersSync";
 import { runWithLog, type TriggeredBy } from "@/lib/syncLogging";
+import { refuseUnlessAdmin } from "@/lib/adminSession";
 
 // Incremental by default (see mdapiUsersSync): a typical run fetches a
 // couple of pages. The first run / no-watermark case still does a full
@@ -78,6 +79,8 @@ export async function POST(req: Request) {
     if (userErr || !userData?.user) {
       return Response.json({ error: "Invalid session" }, { status: 401 });
     }
+    const adminRefusal = await refuseUnlessAdmin(userData.user.email);
+    if (adminRefusal) return adminRefusal;
     const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
     if (!serviceKey) {
       return Response.json(

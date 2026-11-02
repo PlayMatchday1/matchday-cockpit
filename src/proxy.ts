@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+import { isReviewToken, reviewRefusal } from "@/lib/reviewAccount";
 
 // Next 16: this file replaces the historical `middleware.ts`. Today
 // it's a no-op pass-through, but it explicitly declares /partners/* as
@@ -8,6 +9,15 @@ import type { NextRequest } from "next/server";
 // blocking, etc.), partner routes are exempted by file convention.
 
 export function proxy(request: NextRequest) {
+  // THE APP STORE REVIEW ACCOUNT IS READ ONLY, on every API route at once (lib/reviewAccount.ts).
+  // Everyone else's API requests pass straight through.
+  if (request.nextUrl.pathname.startsWith("/api/")) {
+    if (isReviewToken(request.headers.get("authorization"))) {
+      const refusal = reviewRefusal(request.method, request.nextUrl.pathname);
+      if (refusal) return NextResponse.json({ error: refusal.error }, { status: refusal.status });
+    }
+    return NextResponse.next();
+  }
   // Field Ops lost its ?fo= tab strip. These land the old deep links on their new
   // homes and STRIP the now-meaningless fo param — done here rather than in
   // next.config because a config redirect passes the query through, which both
@@ -30,5 +40,7 @@ export const config = {
   // Belt-and-suspenders alongside the route-group structural isolation.
   matcher: [
     "/((?!_next/static|_next/image|favicon\\.ico|matchday-badge\\.svg|api|partners).*)",
+    // The API, for the review account's read-only check only.
+    "/api/:path*",
   ],
 };

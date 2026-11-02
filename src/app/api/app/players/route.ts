@@ -16,6 +16,7 @@
 import { authenticateApp } from "@/lib/appAuth";
 import { todayBusinessDate } from "@/lib/goalPace";
 import { ACTIVE_CITIES, acquisitionPeriod, activityPeriods, androidPeriod, downloadSyncStale, periodOf, scopeNames, stepOf, type Kind, type Period } from "@/lib/appPlayers";
+import { reviewMasked } from "@/lib/reviewAccount";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -23,7 +24,7 @@ export const maxDuration = 60;
 
 const TREND = 6;
 
-export async function GET(req: Request) {
+async function getRoute(req: Request) {
   const auth = await authenticateApp(req);
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   if (!(auth.row.is_admin === true || auth.row.can_access_lifecycle === true)) {
@@ -97,3 +98,5 @@ export async function GET(req: Request) {
     return Response.json({ error: e instanceof Error ? e.message : String(e) }, { status: 502 });
   }
 }
+
+export const GET = reviewMasked(getRoute);

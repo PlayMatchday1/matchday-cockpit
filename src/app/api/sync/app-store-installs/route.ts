@@ -23,6 +23,7 @@ import { createClient } from "@supabase/supabase-js";
 import { revalidateTag } from "next/cache";
 import { runWithLog, type TriggeredBy } from "@/lib/syncLogging";
 import { ingestAppStore, AppleAuthError } from "@/lib/appStoreInstallsSync";
+import { cronOnlyGet, refuseUnlessAdmin } from "@/lib/adminSession";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -67,6 +68,8 @@ export async function POST(req: Request) {
     if (userErr || !userData?.user) {
       return Response.json({ ok: false, error: "Invalid session" }, { status: 401 });
     }
+    const adminRefusal = await refuseUnlessAdmin(userData.user.email);
+    if (adminRefusal) return adminRefusal;
     triggeredBy = "manual";
   }
   const supabase = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } });
@@ -147,4 +150,4 @@ export async function POST(req: Request) {
 
 // Vercel cron sends GET (vercel.json runs this daily on its own, outside /api/sync/cron, whose
 // 300s budget ran out before this step from Oct 22, 2026). Same handler, same CRON_SECRET bearer.
-export const GET = POST;
+export const GET = cronOnlyGet(POST);

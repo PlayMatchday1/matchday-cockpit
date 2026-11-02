@@ -35,6 +35,7 @@ import { POST as desktopRosterPost } from "@/app/api/matchday/[env]/roster/[matc
 import { PUT as desktopMatchPut } from "@/app/api/matchday/[env]/matches/[id]/route";
 import { GET as convertGet, POST as convertPost } from "@/app/api/matchday/[env]/matches/[id]/convert-4/route";
 import { GET as reduceGet, POST as reducePost } from "@/app/api/matchday/[env]/matches/[id]/reduce-2/route";
+import { reviewMasked } from "@/lib/reviewAccount";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -93,7 +94,7 @@ async function gate(req: Request, ctx: { params: Promise<{ env: string; id: stri
 }
 
 /** GET ?preview=teams&target=N: spots before and after and the path, for the confirm sheet. */
-export async function GET(req: Request, ctx: { params: Promise<{ env: string; id: string }> }) {
+async function getRoute(req: Request, ctx: { params: Promise<{ env: string; id: string }> }) {
   try {
     const g = await gate(req, ctx);
     if ("error" in g) return g.error;
@@ -291,3 +292,5 @@ function fail(e: unknown) {
   if (/HTTP 404/.test(msg)) return Response.json({ error: "No match with that id." }, { status: 404 });
   return Response.json({ error: msg }, { status: 502 });
 }
+
+export const GET = reviewMasked(getRoute);

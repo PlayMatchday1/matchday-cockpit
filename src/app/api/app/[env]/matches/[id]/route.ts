@@ -21,6 +21,7 @@ import { trimMatch, type Raw } from "@/lib/gamedayApiShape";
 import { rosterRowIsFake } from "@/lib/gamedayModel";
 import { apiGet, StageConfigError, StageHostGuardError } from "@/lib/matchdayStageApi";
 import { CONFINED_CITY_ERROR } from "@/lib/cityConfinement";
+import { reviewMasked } from "@/lib/reviewAccount";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -28,7 +29,7 @@ export const maxDuration = 30;
 
 type Row = Record<string, unknown>;
 
-export async function GET(req: Request, ctx: { params: Promise<{ env: string; id: string }> }) {
+async function getRoute(req: Request, ctx: { params: Promise<{ env: string; id: string }> }) {
   const auth = await authenticateApp(req);
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   const refused = readRefusal(auth);
@@ -85,3 +86,5 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string; id
     return Response.json({ error: msg }, { status: 502 });
   }
 }
+
+export const GET = reviewMasked(getRoute);

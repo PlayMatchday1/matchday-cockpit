@@ -14,12 +14,13 @@ import { todayBusinessDate } from "@/lib/goalPace";
 import { addDays, addMonths, mondayOf, monthStart } from "@/lib/healthModel";
 import { canonCity } from "@/lib/reviewsDerive";
 import { loadReviewRows, matchIds, reviewsView } from "@/lib/appReviews";
+import { reviewMasked } from "@/lib/reviewAccount";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-export async function GET(req: Request) {
+async function getRoute(req: Request) {
   const auth = await authenticateApp(req);
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   const refused = readRefusal(auth);
@@ -56,3 +57,5 @@ export async function GET(req: Request) {
     return Response.json({ error: e instanceof Error ? e.message : String(e) }, { status: 502 });
   }
 }
+
+export const GET = reviewMasked(getRoute);

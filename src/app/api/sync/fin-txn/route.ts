@@ -28,6 +28,7 @@ import { runWithLog, type TriggeredBy } from "@/lib/syncLogging";
 import { syncFinTxn, finTxnLogPatch, windowDaysBack, windowForMonth, windowPart } from "@/lib/finTxnSync";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
 import { mirrorVenmo } from "@/lib/finTxnVenmo";
+import { refuseUnlessAdmin } from "@/lib/adminSession";
 
 /* 300s IS THE CEILING AND A MONTH IS THE UNIT. September alone is ~6,100 balance transactions at
  * 100 per page with `expand[]=data.source` — about 61 sequential Stripe calls. A 3-day window is a
@@ -88,6 +89,8 @@ export async function runFinTxnSync(req: Request, forced?: { days: number; part?
     });
     const { data: userData, error: userErr } = await sessionClient.auth.getUser(token);
     if (userErr || !userData?.user) return Response.json({ error: "Not signed in" }, { status: 401 });
+    const adminRefusal = await refuseUnlessAdmin(userData.user.email);
+    if (adminRefusal) return adminRefusal;
     const email = userData.user.email ?? null;
     /* THE ADMIN CHECK, READ FRESH FROM THE DATABASE ON EVERY REQUEST — never from the JWT. This is
      * the Phase 17 rule and the reason there is no new permission column: app_users membership IS

@@ -13,6 +13,7 @@ import { runWithLog, type TriggeredBy } from "@/lib/syncLogging";
 import { windowDaysBack, windowForMonth } from "@/lib/finTxnSync";
 import { backfillChargeCustomers, peopleLogPatch, syncMemberInvoices, syncStripeCustomers, type PeopleJob } from "@/lib/stripePeopleSync";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
+import { refuseUnlessAdmin } from "@/lib/adminSession";
 
 export const maxDuration = 300;
 export const runtime = "nodejs";
@@ -45,6 +46,8 @@ export async function runStripePeopleSync(req: Request, forced?: { jobs: PeopleJ
     });
     const { data: userData, error: userErr } = await sessionClient.auth.getUser(token);
     if (userErr || !userData?.user) return Response.json({ error: "Not signed in" }, { status: 401 });
+    const adminRefusal = await refuseUnlessAdmin(userData.user.email);
+    if (adminRefusal) return adminRefusal;
     // select("*") deliberately, the adminAuth precedent. Read fresh on every request.
     const { data: appUser } = await admin.from("app_users").select("*").eq("email", userData.user.email ?? "").maybeSingle();
     if (!appUser) return Response.json({ error: "Not authorised" }, { status: 403 });

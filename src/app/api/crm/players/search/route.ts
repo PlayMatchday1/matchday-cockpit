@@ -14,12 +14,13 @@
 import { authenticateCrm } from "@/lib/crmAuth";
 import { resolveCityScope, cityNameFor } from "@/lib/cityScope";
 import { phoneDigits10, phoneShapes } from "@/lib/aiDraftModel";
+import { reviewMasked } from "@/lib/reviewAccount";
 
 export const runtime = "nodejs";
 
 type Row = { id: number; first_name: string | null; last_name: string | null; phone_number: string | null; preferable_city_normalized: string | null; is_member: boolean | null; created_at: string | null };
 
-export async function GET(req: Request) {
+async function getRoute(req: Request) {
   const auth = await authenticateCrm(req);
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   const { supabase } = auth;
@@ -61,3 +62,5 @@ export async function GET(req: Request) {
     }),
   }, { headers: { "cache-control": "no-store" } });
 }
+
+export const GET = reviewMasked(getRoute);

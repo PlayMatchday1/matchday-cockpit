@@ -30,6 +30,7 @@ import { timingSafeEqual } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { syncMetaAdSpend, syncMetaBilling, coverageVerdict, notAttributedVerdict, type MetaBillingResult, type MetaSyncResult } from "@/lib/metaAdSpendSync";
 import { runWithLog, type TriggeredBy } from "@/lib/syncLogging";
+import { cronOnlyGet, refuseUnlessAdmin } from "@/lib/adminSession";
 
 /* A 28-day window at day granularity with one geo breakdown is a handful of paged GETs plus two
  * small writes. 120s is generous; the number to watch is completed_at - started_at in fin_sync_log
@@ -99,6 +100,8 @@ export async function POST(req: Request) {
     if (userErr || !userData?.user) {
       return Response.json({ error: "Invalid session" }, { status: 401 });
     }
+    const adminRefusal = await refuseUnlessAdmin(userData.user.email);
+    if (adminRefusal) return adminRefusal;
     const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
     if (!serviceKey) {
       return Response.json(
@@ -221,4 +224,4 @@ export async function POST(req: Request) {
  * the verb is the only difference between the two entry points. This is the line /api/sync/cron
  * has carried since it was written, with the Vercel doc reference on it:
  * https://vercel.com/docs/cron-jobs#how-cron-jobs-work */
-export const GET = POST;
+export const GET = cronOnlyGet(POST);

@@ -27,6 +27,7 @@ import {
   maskPhone,
   type NotifyTemplateId,
 } from "@/lib/matchNotify";
+import { reviewMasked } from "@/lib/reviewAccount";
 
 export const runtime = "nodejs";
 // One Telnyx call per recipient, run in parallel. 60s leaves headroom
@@ -45,7 +46,7 @@ function matchApiIdFrom(chatId: string): number | null {
 
 // ---------------- GET: recipient preview ----------------
 
-export async function GET(req: Request, ctx: RouteCtx) {
+async function getRoute(req: Request, ctx: RouteCtx) {
   const auth = await authenticateCrm(req);
   if (!auth.ok) {
     return Response.json({ error: auth.error }, { status: auth.status });
@@ -298,3 +299,5 @@ export async function POST(req: Request, ctx: RouteCtx) {
     { status: 200 },
   );
 }
+
+export const GET = reviewMasked(getRoute);

@@ -11,13 +11,14 @@
 import { authenticateCrm } from "@/lib/crmAuth";
 import { assertThreadInScope } from "@/lib/crmScope";
 import { toNationalDigits } from "@/lib/phone";
+import { reviewMasked } from "@/lib/reviewAccount";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 type Row = Record<string, unknown>;
 
-export async function GET(req: Request, ctx: { params: Promise<{ threadId: string }> }) {
+async function getRoute(req: Request, ctx: { params: Promise<{ threadId: string }> }) {
   const auth = await authenticateCrm(req);
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   const { threadId } = await ctx.params;
@@ -53,3 +54,5 @@ export async function GET(req: Request, ctx: { params: Promise<{ threadId: strin
   }
   return Response.json({ threadId, linkedPlayerId: linked, ambiguous, players });
 }
+
+export const GET = reviewMasked(getRoute);

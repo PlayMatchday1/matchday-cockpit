@@ -15,6 +15,7 @@ import { timingSafeEqual } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { computeManagerPayForWeek, ISO_DATE_RX, mondayOf } from "@/lib/managerPayCompute";
 import { getArrivalInfo } from "@/lib/managerPayArrival";
+import { refuseUnlessStaff } from "@/lib/adminSession";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -47,6 +48,8 @@ async function requireSession(req: Request): Promise<{ ok: true } | { ok: false;
   });
   const { data, error } = await sessionClient.auth.getUser(token);
   if (error || !data?.user) return { ok: false, status: 401, error: "Invalid session" };
+  const staffRefusal = await refuseUnlessStaff(data.user.email);
+  if (staffRefusal) return { ok: false, status: staffRefusal.status, error: "Not a cockpit user" };
   return { ok: true };
 }
 

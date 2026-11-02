@@ -15,6 +15,7 @@ import { isEnv } from "@/lib/appLive";
 import { todayBusinessDate } from "@/lib/goalPace";
 import { loadPeriod } from "@/lib/healthLoad";
 import { defaultStart, periodOf, stepPeriod, type Period } from "@/lib/healthModel";
+import { reviewMasked } from "@/lib/reviewAccount";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -22,7 +23,7 @@ export const maxDuration = 60;
 
 const TREND = 6;
 
-export async function GET(req: Request, ctx: { params: Promise<{ env: string }> }) {
+async function getRoute(req: Request, ctx: { params: Promise<{ env: string }> }) {
   const auth = await authenticateApp(req);
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   const refused = readRefusal(auth);
@@ -72,3 +73,5 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string }> 
     return Response.json({ error: e instanceof Error ? e.message : String(e) }, { status: 502 });
   }
 }
+
+export const GET = reviewMasked(getRoute);

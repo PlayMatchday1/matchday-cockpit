@@ -13,6 +13,7 @@ import { authenticateApp, readRefusal } from "@/lib/appAuth";
 import { isEnv } from "@/lib/appLive";
 import { callDesktop, passThrough } from "@/lib/appCall";
 import { GET as cancelGet, POST as cancelPost } from "@/app/api/matchday/[env]/matches/[id]/cancel/route";
+import { reviewMasked } from "@/lib/reviewAccount";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -31,7 +32,7 @@ async function gate(req: Request, ctx: Ctx) {
   return { env, id };
 }
 
-export async function GET(req: Request, ctx: Ctx) {
+async function getRoute(req: Request, ctx: Ctx) {
   const g = await gate(req, ctx);
   if ("res" in g) return g.res;
   return passThrough(await callDesktop(req, cancelGet, `/api/matchday/${g.env}/matches/${g.id}/cancel`, {}, { env: g.env, id: g.id }));
@@ -45,3 +46,5 @@ export async function POST(req: Request, ctx: Ctx) {
     method: "POST", body: { confirmName: body?.confirmName, reason: body?.reason, note: body?.note, source: "Staff app · cancel", saveId: randomUUID() },
   }, { env: g.env, id: g.id }));
 }
+
+export const GET = reviewMasked(getRoute);

@@ -20,6 +20,7 @@ import { apiGet } from "@/lib/matchdayStageApi";
 import { GOAL_MONTHS, growthView, type GoalMonth, type Payload } from "@/lib/appGrowth";
 import type { CompareFrom, GoalSort } from "@/lib/fieldGoals";
 import { GET as fieldGoalsGet } from "@/app/api/growth/field-goals/route";
+import { reviewMasked } from "@/lib/reviewAccount";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -27,7 +28,7 @@ export const maxDuration = 60;
 
 const pick = <T extends string>(v: string | null, ok: readonly T[], dflt: T): T => (ok.includes(v as T) ? (v as T) : dflt);
 
-export async function GET(req: Request) {
+async function getRoute(req: Request) {
   const auth = await authenticateApp(req);
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   if (auth.confined && !auth.scopeCity) return Response.json({ error: "Your account's city is not one the Clubhouse recognises. Ask an admin to fix it." }, { status: 403 });
@@ -69,3 +70,5 @@ export async function GET(req: Request) {
     return Response.json({ error: e instanceof Error ? e.message : String(e) }, { status: 502 });
   }
 }
+
+export const GET = reviewMasked(getRoute);

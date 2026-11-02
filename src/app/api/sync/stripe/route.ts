@@ -20,6 +20,7 @@ import { commitStripe } from "@/lib/financeImport";
 import { syncStripeCharges, stripeClassifierProbe } from "@/lib/stripeSync";
 import { refreshGrowthViews } from "@/lib/growthViews";
 import { syncLogWritable } from "@/lib/syncLogging";
+import { refuseUnlessAdmin } from "@/lib/adminSession";
 
 // Bumped from 60s to 300s on 2026-05-14 after a Jan 1-7 backfill
 // click via the new date-range UI hit Vercel's function-timeout
@@ -146,6 +147,8 @@ export async function POST(req: Request) {
     if (userErr || !userData?.user) {
       return Response.json({ error: "Invalid session" }, { status: 401 });
     }
+    const adminRefusal = await refuseUnlessAdmin(userData.user.email);
+    if (adminRefusal) return adminRefusal;
     const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
     if (!serviceKey) {
       return Response.json(

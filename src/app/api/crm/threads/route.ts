@@ -29,6 +29,7 @@ import { authenticateCrm } from "@/lib/crmAuth";
 import { crmScopedAssignees } from "@/lib/crmScope";
 import { isAwaitingReply, waitingSinceMs } from "@/lib/awaitingReply";
 import { loadAttention, type LoadedAttention } from "@/lib/crmAttentionLoad";
+import { reviewMasked } from "@/lib/reviewAccount";
 
 export const runtime = "nodejs";
 export const maxDuration = 10;
@@ -90,7 +91,7 @@ type AssigneeRow = {
   full_name: string | null;
 };
 
-export async function GET(req: Request) {
+async function getRoute(req: Request) {
   const auth = await authenticateCrm(req);
   if (!auth.ok) {
     return Response.json({ error: auth.error }, { status: auth.status });
@@ -498,3 +499,5 @@ export async function GET(req: Request) {
   });
   return Response.json({ threads: withAuto, counts }, { status: 200 });
 }
+
+export const GET = reviewMasked(getRoute);

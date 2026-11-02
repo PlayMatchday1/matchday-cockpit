@@ -5,13 +5,14 @@
 // are the discard chips, and a Disagree needs one.
 import { authenticateCrm } from "@/lib/crmAuth";
 import { discardReasonText } from "@/lib/aiDraftModel";
+import { reviewMasked } from "@/lib/reviewAccount";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const WEEK_MS = 7 * 86400e3;
 
-export async function GET(req: Request) {
+async function getRoute(req: Request) {
   const auth = await authenticateCrm(req);
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   if (auth.confinedCity) return Response.json({ error: "This review covers every city." }, { status: 403 });
@@ -57,3 +58,5 @@ export async function POST(req: Request) {
   if ((u.data ?? []).length !== 1) return Response.json({ error: "That isn't a shadow decision." }, { status: 404 });
   return Response.json({ ok: true });
 }
+
+export const GET = reviewMasked(getRoute);

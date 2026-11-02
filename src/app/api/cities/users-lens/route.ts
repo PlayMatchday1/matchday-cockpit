@@ -27,6 +27,7 @@ import { selectAll } from "@/lib/supabasePagination";
 import { canonicalVenueName } from "@/lib/venueResolver";
 import { matchStartMs } from "@/lib/matchTime";
 import { isActiveByLastPlay, isPaidActiveSub, isValidPlayRow } from "@/lib/playerActivity";
+import { refuseUnlessStaff } from "@/lib/adminSession";
 
 export const runtime = "nodejs";
 // Heaviest computation: paginated fetch of 24k users + 38k match_players
@@ -839,6 +840,8 @@ export async function GET(req: Request) {
     if (userErr || !userData?.user) {
       return Response.json({ error: "Invalid session" }, { status: 401 });
     }
+    const staffRefusal = await refuseUnlessStaff(userData.user.email);
+    if (staffRefusal) return staffRefusal;
   }
   const supabase = createClient(supabaseUrl, serviceKey, {
     auth: { persistSession: false, autoRefreshToken: false },

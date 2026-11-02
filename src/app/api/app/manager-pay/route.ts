@@ -24,6 +24,7 @@ import { GET as aliasesGet } from "@/app/api/manager-pay/aliases/route";
 import { GET as directoryGet } from "@/app/api/manager-pay/directory/route";
 import { POST as adjustmentsPost } from "@/app/api/manager-pay/adjustments/route";
 import { POST as addedPost } from "@/app/api/manager-pay/added/route";
+import { reviewMasked } from "@/lib/reviewAccount";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -43,7 +44,7 @@ async function week(req: Request, weekStart: string, scopeCity: string | null) {
   return { payload: { ...payload, cities, network: scopeCity ? null : payload.network }, tiles };
 }
 
-export async function GET(req: Request) {
+async function getRoute(req: Request) {
   const auth = await authenticateApp(req);
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   const refused = readRefusal(auth);
@@ -103,3 +104,5 @@ export async function POST(req: Request) {
     return Response.json({ error: e instanceof Error ? e.message : String(e) }, { status: 502 });
   }
 }
+
+export const GET = reviewMasked(getRoute);

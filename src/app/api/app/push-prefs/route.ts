@@ -2,13 +2,14 @@
 // (Ryan, 2026-10-30). No row means both on. Only ever this person's own row.
 
 import { authenticateApp } from "@/lib/appAuth";
+import { reviewMasked } from "@/lib/reviewAccount";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const KEYS = ["player_chats", "matches_at_risk"] as const;
 
-export async function GET(req: Request) {
+async function getRoute(req: Request) {
   const auth = await authenticateApp(req);
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   const r = await auth.supabase.from("app_push_prefs").select("player_chats, matches_at_risk").eq("app_user_id", auth.appUserId).maybeSingle();
@@ -31,3 +32,5 @@ export async function POST(req: Request) {
   if (r.error) return Response.json({ error: r.error.message }, { status: 500 });
   return Response.json({ playerChats: r.data.player_chats, matchesAtRisk: r.data.matches_at_risk });
 }
+
+export const GET = reviewMasked(getRoute);

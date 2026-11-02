@@ -17,6 +17,7 @@ import { syncAllCalendars, CalendarConfigError } from "@/lib/calendarSync";
 import { type TriggeredBy } from "@/lib/syncLogging";
 import { syncJob } from "@/lib/syncJob";
 import { refreshGrowthViews } from "@/lib/growthViews";
+import { cronOnlyGet, refuseUnlessAdmin } from "@/lib/adminSession";
 
 export const maxDuration = 300;
 export const runtime = "nodejs";
@@ -120,6 +121,8 @@ export async function POST(req: Request) {
     if (userErr || !userData?.user) {
       return Response.json({ error: "Invalid session" }, { status: 401 });
     }
+    const adminRefusal = await refuseUnlessAdmin(userData.user.email);
+    if (adminRefusal) return adminRefusal;
   }
 
   // ── FOUR SHORT STEPS, ABOUT 20s (Ryan, 2026-11-02) ─────────────────────────────────────────────
@@ -198,4 +201,4 @@ export async function POST(req: Request) {
 // Vercel cron triggers send HTTP GET
 // (https://vercel.com/docs/cron-jobs#how-cron-jobs-work). Same handler,
 // same auth — the bearer token is read from headers, no body is consumed.
-export const GET = POST;
+export const GET = cronOnlyGet(POST);

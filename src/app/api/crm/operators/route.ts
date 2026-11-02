@@ -13,11 +13,12 @@
 // Response: { operators: Array<{ id, email, full_name }> }
 
 import { authenticateCrm } from "@/lib/crmAuth";
+import { reviewMasked } from "@/lib/reviewAccount";
 
 export const runtime = "nodejs";
 export const maxDuration = 10;
 
-export async function GET(req: Request) {
+async function getRoute(req: Request) {
   const auth = await authenticateCrm(req);
   if (!auth.ok) {
     return Response.json({ error: auth.error }, { status: auth.status });
@@ -36,3 +37,5 @@ export async function GET(req: Request) {
 
   return Response.json({ operators: res.data ?? [] }, { status: 200 });
 }
+
+export const GET = reviewMasked(getRoute);

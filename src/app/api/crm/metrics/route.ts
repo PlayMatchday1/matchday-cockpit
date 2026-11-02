@@ -32,6 +32,7 @@ import {
   type PeriodMetrics,
 } from "@/lib/supportMetrics";
 import { isAwaitingReply } from "@/lib/awaitingReply";
+import { reviewMasked } from "@/lib/reviewAccount";
 
 export const runtime = "nodejs";
 export const maxDuration = 10;
@@ -85,7 +86,7 @@ async function fetchAll<T>(
   return { rows, error: null };
 }
 
-export async function GET(req: Request) {
+async function getRoute(req: Request) {
   const auth = await authenticateCrm(req);
   if (!auth.ok) {
     return Response.json({ error: auth.error }, { status: auth.status });
@@ -294,3 +295,5 @@ export async function GET(req: Request) {
 
   return Response.json(body, { status: 200, headers: { "x-cache": "miss" } });
 }
+
+export const GET = reviewMasked(getRoute);
