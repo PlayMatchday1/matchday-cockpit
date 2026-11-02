@@ -46,6 +46,7 @@
  * somewhere nobody chose. One attempt per write, one verdict per write.
  */
 
+import { pathEnv, type PathEnv } from "@/lib/localMode";
 import { randomUUID } from "node:crypto";
 import { authenticateCapability } from "@/lib/capabilityAuth";
 import { apiGet, apiWrite } from "@/lib/matchdayStageApi";
@@ -63,7 +64,8 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
 
-const isEnv = (e: string): e is "production" | "staging" => e === "production" || e === "staging";
+// "local" only while local mode is on (src/lib/localMode.ts pathEnv); staging/production unchanged.
+const isEnv = (x: string): x is PathEnv => pathEnv(x) !== null;
 
 /** The operating timezone's today, as TEXT. Never touches a match's startDate: see reduceRefusal. */
 const todayYmd = () => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago" }).format(new Date());
@@ -105,7 +107,7 @@ const ladderNow = (m: ApiMatch, nowMs: number) => {
   return { hours, mark, rung };
 };
 
-async function planFor(env: "production" | "staging", id: string, perTeamAsked: number | null) {
+async function planFor(env: PathEnv, id: string, perTeamAsked: number | null) {
   const m = await apiGet<ApiMatch>(env, `/admin/matches/${id}`);
   const teamCount = (m.teams ?? []).length;
   const perTeam = perTeamAsked ?? defaultPerTeam(m.maxTeamSize2Team);

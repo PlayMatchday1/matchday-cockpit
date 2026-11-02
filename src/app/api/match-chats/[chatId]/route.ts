@@ -7,6 +7,7 @@
 //
 // Auth: admin-only via src/lib/crmAuth.
 
+import { localModeRefusal } from "@/lib/localMode";
 import { authenticateCrm } from "@/lib/crmAuth";
 import { assertMatchInScope } from "@/lib/matchOpsAuth";
 import { isValidChatId } from "@/lib/matchChats";
@@ -18,6 +19,7 @@ export const maxDuration = 10;
 type RouteCtx = { params: Promise<{ chatId: string }> };
 
 async function getRoute(req: Request, ctx: RouteCtx) {
+  { const local = localModeRefusal("Match chat"); if (local) return local; }
   const auth = await authenticateCrm(req);
   if (!auth.ok) {
     return Response.json({ error: auth.error }, { status: auth.status });

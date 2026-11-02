@@ -23,6 +23,7 @@
  * read this comment.
  */
 
+import { pathEnv, type PathEnv } from "@/lib/localMode";
 import { randomUUID } from "node:crypto";
 import { authenticateCapability } from "@/lib/capabilityAuth";
 import { assertMatchInScope } from "@/lib/matchOpsAuth";
@@ -38,7 +39,8 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-const isEnv = (x: string): x is MatchdayEnv => x === "staging" || x === "production";
+// "local" only while local mode is on (src/lib/localMode.ts pathEnv); staging/production unchanged.
+const isEnv = (x: string): x is PathEnv => pathEnv(x) !== null;
 
 export async function POST(req: Request, ctx: { params: Promise<{ env: string; id: string }> }) {
   const auth = await authenticateCapability(req, "editMatches");

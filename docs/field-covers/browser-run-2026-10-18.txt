@@ -1,0 +1,44 @@
+PASS  [-] Fields drawer (real page) shows the API's 2 extra covers
+PASS  [-] the old "Cover image" control is folded into COVER PHOTOS (not shown twice)
+PASS  [-] Venue & cost says it is off in local mode (production finance rows)
+PASS  [9] Default, tall image: shapes card, header, partners, share
+PASS  [9] Default, tall image: card frame 215×129 (ratio 1.669, want 1.669), image set
+PASS  [9] Default, tall image: header frame 215×162 (ratio 1.333, want 1.333), image set
+PASS  [9] Default, tall image: partners frame 215×133 (ratio 1.618, want 1.618), image set
+PASS  [9] Default, tall image: share frame 215×113 (ratio 1.905, want 1.905), image set
+PASS  [9] Default, tall image: "keep text in the center" guide drawn (369×194)
+PASS  [2] Default replaced: LANDED; API Default url changed
+PASS  [9] extra cover, square image (no Field Partners card): shapes card, header, share
+PASS  [9] extra cover, square image (no Field Partners card): card frame 215×129 (ratio 1.669, want 1.669), image set
+PASS  [9] extra cover, square image (no Field Partners card): header frame 215×162 (ratio 1.333, want 1.333), image set
+PASS  [9] extra cover, square image (no Field Partners card): share frame 215×113 (ratio 1.905, want 1.905), image set
+PASS  [9] extra cover, square image (no Field Partners card): "keep text in the center" guide drawn (369×194)
+PASS  [2] add: LANDED: cover "Rooftop lights" added (read back from the API). — API lists "Rooftop lights" as cover 4
+PASS  [2] rename: LANDED: renamed to "Rooftop lights Friday" (read back from the API). — API name "Rooftop lights Friday"
+PASS  [2] replace: LANDED: the image of "Rooftop lights Friday" replaced (read back from the API). — API url changed
+PASS  [2] the replaced image serves as an image
+PASS  [4] an upcoming Default match in the same slot as a Winter league match, to start from: 104
+PASS  [4] Gameday Ops panel (real page) shows match 104 on Default
+PASS  [4] the board says LOCAL, not PRODUCTION
+PASS  [4] Change lists Default + this field's 3 covers
+PASS  [4] set: LANDED: the cover is Rooftop lights Friday (read back from the API). — API: match 104 on "Rooftop lights Friday"
+PASS  [4] the offer has both cases: on Default 105, 106; on another cover 103 (Winter league)
+PASS  [4] the offer is exactly the API's same-slot upcoming matches: 103, 105, 106
+PASS  [4] matches on Default start TICKED: 105, 106
+PASS  [4] matches already on another cover start UNTICKED and show it: 103 "now Winter league"
+PASS  [4] apply: LANDED: 2 more matches on Rooftop lights Friday (read back from the API). — API: 105→Rooftop lights Friday, 106→Rooftop lights Friday
+PASS  [4] the unticked match kept its cover: 103→Winter league
+PASS  [4] "Manage covers on the field" lands on the Fields drawer for field 1
+PASS  [3] remove "Rooftop lights Friday" asks: "Remove “Rooftop lights Friday”? 3 upcoming matches go back to Default." (API: 3 upcoming, 0 past)
+PASS  [3] read-back covers the dialog's 3 upcoming and 0 past matches (got 3 and 0)
+PASS  [3] removed: "LANDED: "Rooftop lights Friday" removed (read back from the API). 3 upcoming matches went back to Default." — API: 3 upcoming on Default, 0 past still on it (marked removed)
+PASS  [3] "Rooftop lights Friday" gone from the field's list
+PASS  [3] remove "Night games" asks: "Remove “Night games”? 4 upcoming matches go back to Default. 3 past matches keep it, so its history and old share links look the same." (API: 4 upcoming, 3 past)
+PASS  [3] read-back covers the dialog's 4 upcoming and 3 past matches (got 4 and 3)
+PASS  [3] removed: "LANDED: "Night games" removed (read back from the API). 4 upcoming matches went back to Default; 3 past matches keep it." — API: 4 upcoming on Default, 3 past still on it (marked removed)
+PASS  [3] "Night games" gone from the field's list
+PASS  [3] played match 107 in Gameday Ops: "Removed from the field. This match has been played, so it keeps the photo.", image is Night games
+PASS  [-] the panel's Chat tab says it is off in local mode (seed ids are real chat ids)
+PASS  [-] no page errors
+
+42 PASS · 0 FAIL

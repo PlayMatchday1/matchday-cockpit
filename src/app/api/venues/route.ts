@@ -35,6 +35,7 @@
 // surface a PARTIAL SUCCESS rather than a lie. Here the field record itself is a third write and it
 // goes to the MatchDay API from the client, so this route owns two of the three and reports its own
 // two honestly. It never returns LANDED for a half-done job.
+import { localModeRefusal } from "@/lib/localMode";
 import { randomUUID } from "node:crypto";
 import { authenticateCapability } from "@/lib/capabilityAuth";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
@@ -51,6 +52,7 @@ export const dynamic = "force-dynamic";
  * manager changing a rate is not. So the section renders for matchops with its values and its
  * refusal, and every write above is refused without can_access_finance. */
 export async function GET(req: Request) {
+  { const local = localModeRefusal("Venues (field finance settings)"); if (local) return local; }
   const auth = await authenticateMatchOpsRead(req);
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   const fieldId = Number(new URL(req.url).searchParams.get("fieldId"));
@@ -122,6 +124,7 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
+  { const local = localModeRefusal("Venues (field finance settings)"); if (local) return local; }
   const auth = await authenticateCapability(req, "finance");
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
 
@@ -191,6 +194,7 @@ export async function POST(req: Request) {
 }
 
 export async function PATCH(req: Request) {
+  { const local = localModeRefusal("Venues (field finance settings)"); if (local) return local; }
   const auth = await authenticateCapability(req, "finance");
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
 
@@ -245,6 +249,7 @@ export async function PATCH(req: Request) {
  * read-back), fin_change_log for the table's history (row_id = mdapi_field_id, the convention both
  * existing writers use). One attempt, no retry; the UNIQUE on mdapi_field_id is the race guard. */
 export async function PUT(req: Request) {
+  { const local = localModeRefusal("Venues (field finance settings)"); if (local) return local; }
   const auth = await authenticateCapability(req, "finance");
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
 

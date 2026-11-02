@@ -1,0 +1,61 @@
+
+Staff identity (same rules as the Match Manager admin endpoints)
+  PASS  [4] service account without X-Acting-Staff-Email is refused  — 400 STAFF_EMAIL_REQUIRED
+  PASS  [4] a non-service admin may not send the header  — 403
+  PASS  [4] a player is refused on all 10 cover routes  — [401, 401, 401, 401, 401, 401, 401, 401, 401, 401]
+  PASS  [4] …and nothing changed (Night games still named, still live; match still Default)
+
+4. Set a cover on one match, then apply it to the others in the same slot
+  PASS  [4] set match 104 to Winter league  — 200, read back {'id': 2, 'name': 'Winter league', 'removed': False}
+  PASS  [4] database agrees  — 2
+  PASS  [4] same-slot list = upcoming matches at the same field, weekday and time  — Tue 19:00: [103, 105, 106]
+  PASS  [4] applied to 3 other matches, each read back  — 200, [(103, 'Winter league'), (105, 'Winter league'), (106, 'Winter league')]
+
+5. A cover from another field is refused
+  PASS  [5] single: a Parmer cover on a Pier 40 match → 400  — 400 That cover belongs to a different field. A match can only use its own field's covers.
+  PASS  [5] …and the match still reads Default
+  PASS  [5] batch: a Pier 40 cover on [Pier 40 match, NEMP match] → 400, names the NEMP one  — 400 {'matchIds': [117], 'coverFieldId': 3}
+  PASS  [5] …and nothing in the batch was written, not even the Pier 40 match (all-or-nothing)
+  PASS  [5] the database itself refuses it (two-column FK)  — ERROR:  insert or update on table "matches" violates foreign key constraint "matches_cover_id_field_id_fkey"
+  PASS  [5] a cover in use cannot change field (ON UPDATE RESTRICT)  — ERROR:  update or delete on table "field_covers" violates foreign key constraint "matches_cover_id_field_id_fkey" on table "matches"
+
+6. Moving a match to another field clears its cover
+  PASS  [6] PUT /admin/matches/110 {fieldId: NEMP} (the vendor updateMatch)  — 200 
+  PASS  [6] …reads back on NEMP, on Default, with NEMP's default URL  — field 2, cover None
+  PASS  [6] a raw field move that keeps the cover is refused by the database  — ERROR:  insert or update on table "matches" violates foreign key constraint "matches_cover_id_field_id_fkey"
+
+7. A cloned week carries the cover
+  PASS  [7] POST /admin/matches/111/copy → new match 128 carries Night games  — 1|1
+  PASS  [7] POST /admin/matches/copy-by-week 2026-10-26 → 2026-11-30: every copy has its source's cover  — copies: Default,Winter league,Default,Night games,Night games | sources: Default,Winter league,Default,Night games,Night games
+
+8. Payloads: the resolved cover in match.field.cover AND match.coverUrl; GET /fields keeps the Default
+  PASS  [8] GET /matches/:id (app): match 112 (Night games)
+  PASS  [8] GET /admin/matches/:id: match 112 (Night games)
+  PASS  [8] GET /matches/:id (app): match 117 (Default)
+  PASS  [8] GET /admin/matches/:id: match 117 (Default)
+  PASS  [8] GET /matches (app list): match 112 (Night games)
+  PASS  [8] GET /matches (app list): match 117 (Default)
+  PASS  [8] GET /matches/my-matches contains match 112  — 19 rows
+  PASS  [8] GET /matches/my-matches: match 112 (Night games)
+  PASS  [8] GET /admin/matches (list): match 112 (Night games)
+  PASS  [8] GET /admin/matches (list): match 117 (Default)
+  PASS  [8] GET /fields/:id still shows the Default  — http://localhost:3010/dev/uploads/images/00000000-0000-4000-8000-000000000001
+  PASS  [8] GET /fields (Field Partners list) still shows the Default  — http://localhost:3010/dev/uploads/images/00000000-0000-4000-8000-000000000001
+
+3. Remove: the count; UPCOMING matches back on Default; started ones keep the removed cover (Ryan 2026-10-18)
+  PASS  [3] usage: 6 upcoming, 3 past = the database's 6 and 3
+  PASS  [3] remove answers with the same counts  — 200 {'coverId': 1, 'removed': True, 'upcomingMatchesReset': 6, 'notStartedCleared': 6, 'pastMatchesKept': 3}
+  PASS  [3] the 6 not-started matches are off it in the database; the 3 started ones still point at it
+  PASS  [3] all 6 upcoming matches read back on Default (Clubhouse read)
+  PASS  [3] …and in the app payload (field.cover and coverUrl)
+  PASS  [3] all 3 past matches still read the removed cover, marked removed (Clubhouse read)  — [(107, {'id': 1, 'name': 'Night games', 'removed': True}), (108, {'id': 1, 'name': 'Night games', 'removed': True}), (109, {'id': 1, 'name': 'Night games', 'removed': True})]
+  PASS  [3] …and the app payload still serves its image for them (field.cover and coverUrl)
+  PASS  [3] …and that image itself still loads  — 200 image/jpeg
+  PASS  [3] the cover row is soft-deleted with the staff email  — t|verify@example.com
+  PASS  [3] it is gone from the field's list
+  PASS  [3] a removed cover can no longer be chosen  — 404
+  PASS  [3] …or renamed  — 404
+  PASS  [3] edge: past week 2026-09-28 copied to 2026-12-07 → 1 upcoming copy(ies) carrying the removed cover id  — 201 [135]
+  PASS  [3] …which show the Default in the app payload and the Clubhouse read, not the removed photo
+
+45 checks · 45 PASS · 0 FAIL
