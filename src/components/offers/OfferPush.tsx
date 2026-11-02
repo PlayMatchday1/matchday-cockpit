@@ -7,8 +7,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import {
-  CAP_MAX, CAP_MIN, CUT_OFF_NOTE, FIRST_NAME, MATCH_TOKEN, PUSH_BODY_MAX, PUSH_BODY_SOFT, PUSH_TITLE_MAX, PUSH_TITLE_SOFT, STATUS_TEXT, capLine, fillPush, mayCutOff, pushAfterType, pushLocked,
-  pushText, reachAddsUp, reachRows, sendTimeNote, sendsToLine, skippedRows, skippedTotal,
+  CAP_MAX, CAP_MIN, CUT_OFF_NOTE, FIRST_NAME, MATCH_TOKEN, PUSH_BODY_MAX, PUSH_BODY_SOFT, PUSH_TITLE_MAX, PUSH_TITLE_SOFT, capLine, fillPush, mayCutOff, pushAfterType, pushLocked,
+  pushStatusText, pushText, reachAddsUp, reachRows, sendTimeNote, sendsToLine, skippedRows, skippedTotal,
   type CampaignPush, type PushForm, type PushResults, type Reach,
 } from "@/lib/offersPush";
 import { wallLabel, type MatchOpt } from "@/lib/offersModel";
@@ -44,7 +44,7 @@ export function PushSection({ pf, setPf, sugg, scope, match, campaignId, campaig
         <input data-testid="offers-push-on" type="checkbox" checked={pf.enabled} disabled={off} onChange={(e) => setPf({ ...pf, enabled: e.target.checked })} />
         Also send as a push
       </label>
-      {stored && stored.status !== "OFF" && <div data-testid="offers-push-status" className="text-[12px]" style={{ color: O.muted }}>Push: {STATUS_TEXT[stored.status]}{locked && stored.status !== "NOT_SENT" ? ". It can't change now." : ""}</div>}
+      {stored && stored.status !== "OFF" && <div data-testid="offers-push-status" className="text-[12px]" style={{ color: O.muted }}><b className="font-semibold">Push</b> · {pushStatusText(stored)}{locked && stored.status !== "NOT_SENT" ? ". It can't change now." : ""}</div>}
       {pf.enabled && (
         <div className="flex flex-col gap-3">
           <div className="flex items-start gap-3.5">
@@ -218,7 +218,7 @@ export function PushResultsRow({ campaignId }: { campaignId: number }) {
         <span>{n(res.opened)} opened</span>
         <span>{n(res.bookedWithin72h)} booked within 72 hours</span>
         {res.failed > 0 && <span style={{ color: O.warnInk }}>{n(res.failed)} failed</span>}
-        <span className="text-[12px]" style={{ color: O.muted }}>{STATUS_TEXT[res.status]}</span>
+        <span className="text-[12px]" style={{ color: O.muted }}>{pushStatusText(res)}</span>
       </div>
       {open && (
         <div data-testid="offers-push-skipped-rows" className="flex flex-col gap-0.5 text-[12px]">

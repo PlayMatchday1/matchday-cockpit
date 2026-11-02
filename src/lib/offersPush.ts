@@ -13,14 +13,20 @@
 import { matchTitle, money, wallMs, type FieldOpt, type Form, type MatchOpt } from "./offersModel";
 
 export type PushStatus = "OFF" | "WAITING" | "SCHEDULED" | "SENT" | "NOT_SENT";
-export type CampaignPush = { enabled: boolean; title: string | null; body: string | null; sendLocal: string | null; status: PushStatus; queuedAt: string | null };
+// Why a NOT_SENT push didn't go (backend docs/offer-push.md, 2026-11-02); null otherwise.
+export type NotSentReason = "PUSHES_OFF" | "NO_ONE_REACHED" | "NO_AUDIENCE" | "PAUSED_OR_ENDED";
+// notSentReason and sent are absent on a backend from before them.
+export type CampaignPush = {
+  enabled: boolean; title: string | null; body: string | null; sendLocal: string | null; status: PushStatus; queuedAt: string | null;
+  notSentReason?: NotSentReason | null; sent?: number;
+};
 // absent title or body: following the suggestion. at false: send "now" (at launch, or at once if already live).
 export type PushForm = { enabled: boolean; title?: string; body?: string; at: boolean; sendLocal: string };
 // oldApp (the backend's skip reason OLD_APP): players whose app is older than 1.88. Absent on a backend that
 // doesn't send it, and then no row is drawn for it.
 export type Reach = { audience: number; heldBack: number; noConsent: number; noDevice: number; oldApp?: number; capped: number; reachable: number };
 export type PushResults = {
-  status: PushStatus; sent: number; failed: number; opened: number; bookedWithin72h: number; devices: number;
+  status: PushStatus; notSentReason?: NotSentReason | null; sent: number; failed: number; opened: number; bookedWithin72h: number; devices: number;
   skipped: { heldBack: number; noConsent: number; noDevice: number; oldApp?: number; capped: number; notAllowed: number };
 };
 
@@ -178,8 +184,18 @@ export const skippedRows = (s: PushResults["skipped"]): [string, number][] => [
   ["Held back to measure", s.heldBack], ["Pushes turned off", s.noConsent], ["No phone", s.noDevice],
   ...(hasOld(s) ? [["Old app", s.oldApp!] as [string, number]] : []), ["At the weekly limit", s.capped], ["Not allowed yet (safety switch)", s.notAllowed],
 ];
+// The push's state in words. NOT_SENT says the backend's reason; with none (an older backend) it says only "Not sent"
+// rather than guess one. SENT says how many players when the backend says.
+const NOT_SENT_TEXT: Record<NotSentReason, string> = {
+  PUSHES_OFF: "Not sent: pushes are off", NO_ONE_REACHED: "Not sent: nobody could be reached", NO_AUDIENCE: "Not sent: no players match", PAUSED_OR_ENDED: "Not sent: offer was paused or ended",
+};
+export function pushStatusText(p: { status: PushStatus; notSentReason?: NotSentReason | null; sent?: number }): string {
+  if (p.status === "NOT_SENT") return (p.notSentReason && NOT_SENT_TEXT[p.notSentReason]) || "Not sent";
+  if (p.status === "SENT" && typeof p.sent === "number") return `Sent to ${p.sent.toLocaleString("en-US")} ${p.sent === 1 ? "player" : "players"}`;
+  return STATUS_TEXT[p.status];
+}
 export const STATUS_TEXT: Record<PushStatus, string> = {
-  OFF: "Off", WAITING: "Goes when the offer launches", SCHEDULED: "Queued, sending", SENT: "Sent", NOT_SENT: "Not sent: the offer was paused or ended first",
+  OFF: "Off", WAITING: "Goes when the offer launches", SCHEDULED: "Queued, sending", SENT: "Sent", NOT_SENT: "Not sent",
 };
 
 // The shared weekly limit (push-settings): 0 to 14, 0 stops all marketing pushes.

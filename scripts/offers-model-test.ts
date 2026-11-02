@@ -25,7 +25,7 @@ import { assertAllowedHost, preflightWrite } from "../src/lib/matchdayStageApi";
 import { makePacer, OFFERS_READ_PACE_MS, READS_STOPPED } from "../src/lib/offersPacing";
 import {
   CUT_OFF_NOTE, PUSH_BODY_MAX, PUSH_BODY_SOFT, PUSH_TITLE_MAX, PUSH_TITLE_SOFT, capLine, defaultSendLocal, fillPush, mayCutOff, matchForPush, sendsToLine, pushAfterType, pushBodyOf, pushDirty, pushFormOf, pushLocked, pushProblem, pushSuggestion, pushText,
-  pushesVisible, reachAddsUp, reachRows, sendTimeNote, skippedRows, skippedTotal, type CampaignPush,
+  pushesVisible, pushStatusText, reachAddsUp, reachRows, sendTimeNote, skippedRows, skippedTotal, type CampaignPush,
 } from "../src/lib/offersPush";
 
 let pass = 0, fail = 0;
@@ -791,6 +791,10 @@ eq("an admin account is one; a player or a backend without the type isn't", [isA
   eq("a good push has none (the control)", pushProblem(on, sugg, "ANY"), null);
   eq("the preview fills both placeholders as the backend does", [matchForPush(matches[0]), fillPush("{first_name}, 50% off {match}.", matches[0])], ["Riverside Thursday, Mon Nov 2 7:00 PM", "Luis, 50% off Riverside Thursday, Mon Nov 2 7:00 PM."]);
   eq("a send time before the start or after the end is called out", [sendTimeNote({ ...on, at: true, sendLocal: "2026-10-28 10:00" }, "2026-10-29 10:00:00", "2026-11-08 23:59:00") !== null, sendTimeNote({ ...on, at: true, sendLocal: "2026-11-09 10:00" }, "2026-10-29 10:00:00", "2026-11-08 23:59:00") !== null, sendTimeNote({ ...on, at: true, sendLocal: "2026-11-01 10:00" }, "2026-10-29 10:00:00", "2026-11-08 23:59:00"), sendTimeNote({ ...on, at: true, sendLocal: "2026-12-01 10:00" }, "2026-10-29 10:00:00", null)], [true, true, null, null]);
+  eq("not sent says the backend's reason", (["PUSHES_OFF", "NO_ONE_REACHED", "NO_AUDIENCE", "PAUSED_OR_ENDED"] as const).map((r) => pushStatusText({ status: "NOT_SENT", notSentReason: r })),
+    ["Not sent: pushes are off", "Not sent: nobody could be reached", "Not sent: no players match", "Not sent: offer was paused or ended"]);
+  eq("...and with no reason (an older backend), only that it wasn't sent", [pushStatusText({ status: "NOT_SENT" }), pushStatusText({ status: "NOT_SENT", notSentReason: null })], ["Not sent", "Not sent"]);
+  eq("sent says how many, when the backend does", [pushStatusText({ status: "SENT", sent: 612 }), pushStatusText({ status: "SENT", sent: 1 }), pushStatusText({ status: "SENT" }), pushStatusText({ status: "WAITING", sent: 0 })], ["Sent to 612 players", "Sent to 1 player", "Sent", "Goes when the offer launches"]);
   eq("queued, sent or not sent locks it; ended locks it; waiting doesn't", [pushLocked({ ...stored, status: "SCHEDULED" }, "LAUNCHED"), pushLocked({ ...stored, status: "SENT" }, "LAUNCHED"), pushLocked({ ...stored, status: "NOT_SENT" }, "PAUSED"), pushLocked(stored, "ENDED"), pushLocked(stored, "DRAFT"), pushLocked(null, "LAUNCHED")], [true, true, true, true, false, false]);
   eq("the reach adds up, or says it doesn't", [reachAddsUp({ audience: 1240, heldBack: 118, noConsent: 402, noDevice: 61, capped: 23, reachable: 636 }), reachAddsUp({ audience: 10, heldBack: 1, noConsent: 0, noDevice: 0, capped: 0, reachable: 10 })], [true, false]);
   eq("skipped is every reason", skippedTotal({ heldBack: 118, noConsent: 402, noDevice: 61, capped: 23, notAllowed: 5 }), 609);
