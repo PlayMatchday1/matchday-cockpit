@@ -11,7 +11,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { sendAppPush } from "./appPush";
-import type { SourceName } from "./syncLogging";
+import { syncLogWritable, type SourceName } from "./syncLogging";
 
 /** Every scheduled source. Not watched: stripe-txn-backfill (a one-off walk) and
  *  mdapi-users-lens-snapshot (its nightly rebuild was removed on purpose). */
@@ -53,7 +53,7 @@ export async function runSyncWatchdog(sb: SupabaseClient, now = new Date()) {
     .eq("triggered_by", "cron").lt("started_at", cutBefore).limit(500);
   if (open.error) throw new Error(`fin_sync_log read: ${open.error.message}`);
   let markedCutOff = 0;
-  for (const r of open.data ?? []) {
+  for (const r of syncLogWritable() ? open.data ?? [] : []) {
     const at = String(r.started_at).slice(0, 16).replace("T", " ");
     const u = await sb.from("fin_sync_log").update({ error_message: `Cut off: started ${at} UTC and never completed (the function ended mid-step)` })
       .eq("id", r.id).is("completed_at", null).is("error_message", null);

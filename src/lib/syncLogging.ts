@@ -90,6 +90,13 @@ export function withLogPatch<E>(e: E, patch: LogPatch): E {
   return e;
 }
 
+/* PRODUCTION WRITES THE SYNC LOG; A LOCAL RUN DOES NOT (Ryan, 2026-11-02). A sync run from a laptop
+ * (next dev, a tsx script) reads and writes the same database as production, and its failures (no
+ * MatchDay login locally, say) landed in fin_sync_log as false production failures on the Data page.
+ * Off Vercel, nothing writes fin_sync_log unless the run sets SYNC_LOG_LOCAL=1 on purpose (a backfill
+ * that should leave a record). Every writer checks this. */
+export const syncLogWritable = (): boolean => process.env.VERCEL === "1" || process.env.SYNC_LOG_LOCAL === "1";
+
 export type RunResult<T> =
   | { ok: true; result: T }
   | { ok: false; error: string };
@@ -101,6 +108,17 @@ export async function runWithLog<T>(
   fn: (sb: SupabaseClient) => Promise<T>,
   toLogPatch: (result: T) => LogPatch,
 ): Promise<RunResult<T>> {
+  if (!syncLogWritable()) {
+    try {
+      const result = await fn(supabase);
+      console.info(`[sync-log] ${source}: local run, not logged (set SYNC_LOG_LOCAL=1 to log)`);
+      return { ok: true, result };
+    } catch (e) {
+      const msg = `${e instanceof Error ? e.constructor.name : typeof e}: ${e instanceof Error ? e.message : String(e)}`;
+      console.info(`[sync-log] ${source}: local run failed, not logged: ${msg}`);
+      return { ok: false, error: msg };
+    }
+  }
   // Insert log row at start so a crash mid-sync still leaves a trace
   // (started_at set, completed_at + error_message stay null).
   const { data: logInsert, error: logErr } = await supabase

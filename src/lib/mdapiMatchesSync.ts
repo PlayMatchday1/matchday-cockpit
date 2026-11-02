@@ -33,7 +33,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getPacedClient, MatchdayApiError, type PacedClient } from "./matchdayApi";
-import { withLogPatch, type LogPatch, type TriggeredBy } from "./syncLogging";
+import { syncLogWritable, withLogPatch, type LogPatch, type TriggeredBy } from "./syncLogging";
 
 const PAGE_LIMIT = 100;
 const UPSERT_BATCH = 500;
@@ -1013,6 +1013,7 @@ export function matchesLogPatch(r: MdapiMatchesSyncResult): LogPatch {
  * the source the Reviews lens and the Data page read their freshness from. run_mode 'from-rosters', no
  * MatchDay requests of its own. Best effort: the matches row is the run's record. */
 export async function logReviewsFromRosters(sb: SupabaseClient, triggeredBy: TriggeredBy, startedAt: string, r: MdapiMatchesSyncResult): Promise<void> {
+  if (!syncLogWritable()) return;
   const { error } = await sb.from("fin_sync_log").insert({
     source: "mdapi-reviews", triggered_by: triggeredBy, started_at: startedAt, completed_at: new Date().toISOString(),
     rows_imported: r.reviewsUpserted, api_calls: 0, run_mode: "from-rosters",

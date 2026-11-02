@@ -16,7 +16,7 @@
 
 import { timingSafeEqual } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { runWithLog, type LogPatch, type RunResult, type SourceName, type TriggeredBy } from "./syncLogging";
+import { runWithLog, syncLogWritable, type LogPatch, type RunResult, type SourceName, type TriggeredBy } from "./syncLogging";
 
 export type SyncJob = {
   supabase: SupabaseClient;
@@ -42,10 +42,11 @@ export function cronClient(req: Request): { supabase: SupabaseClient } | Respons
 
 /** A completed fin_sync_log row that only says something (a skip or a cut off). */
 export async function logLine(sb: SupabaseClient, source: SourceName, triggeredBy: TriggeredBy, message: string): Promise<void> {
+  console.warn(`[sync-job] ${source}: ${message}`);
+  if (!syncLogWritable()) return;
   const now = new Date().toISOString();
   const { error } = await sb.from("fin_sync_log").insert({ source, triggered_by: triggeredBy, started_at: now, completed_at: now, error_message: message.slice(0, 500) });
   if (error) console.warn(`[sync-job] log line for ${source} failed: ${error.message}`);
-  console.warn(`[sync-job] ${source}: ${message}`);
 }
 
 /**

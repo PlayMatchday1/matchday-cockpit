@@ -19,6 +19,7 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { commitStripe } from "@/lib/financeImport";
 import { syncStripeCharges, stripeClassifierProbe } from "@/lib/stripeSync";
 import { refreshGrowthViews } from "@/lib/growthViews";
+import { syncLogWritable } from "@/lib/syncLogging";
 
 // Bumped from 60s to 300s on 2026-05-14 after a Jan 1-7 backfill
 // click via the new date-range UI hit Vercel's function-timeout
@@ -172,16 +173,11 @@ export async function POST(req: Request) {
     }
   }
 
-  // --- Insert fin_sync_log row at the start so a crash leaves a trace ---
-  const { data: logInsert, error: logErr } = await supabase
-    .from("fin_sync_log")
-    .insert({
-      source: "stripe-api",
-      triggered_by: triggeredBy,
-      started_at: startedAtIso,
-    })
-    .select("id")
-    .single();
+  // --- Insert fin_sync_log row at the start so a crash leaves a trace (production only: syncLogWritable) ---
+  const logWritable = syncLogWritable();
+  const { data: logInsert, error: logErr } = logWritable
+    ? await supabase.from("fin_sync_log").insert({ source: "stripe-api", triggered_by: triggeredBy, started_at: startedAtIso }).select("id").single()
+    : { data: { id: "" }, error: null };
   if (logErr || !logInsert) {
     return Response.json(
       { error: `Failed to create sync log row: ${logErr?.message ?? "unknown"}` },
@@ -194,6 +190,7 @@ export async function POST(req: Request) {
   // the log itself is non-fatal — the API response is the
   // authoritative result either way.
   async function finalizeLog(patch: Record<string, unknown>) {
+    if (!logWritable) return;
     const { error } = await supabase
       .from("fin_sync_log")
       .update({ completed_at: new Date().toISOString(), ...patch })
