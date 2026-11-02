@@ -13,7 +13,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FIRST_NAME_TOKEN, isAdminAccount, MAX_TEST_IDS, SECTION_ADD, addSection, autoCopy, canReset, copyAfterType, isRemovable, staleLines, staleSections, writtenForOnLoad, removeSection, resetCopy, sectionCollapsed, canHidePhoto, copyAfterHide, hideUpload, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, MAX_USES_PER_PLAYER, notFoundLine, parsePlayerIds, playerLine, PREVIEW_FIRST_NAME, amountText, limitLine, stepLimit, stepUses, usesLine, audienceBody, buttonMatchNote, buttonOf, opensText, chicagoWallNow, copyOf, createBody, defaultRun, endsTicket, formOf, formProblem, fromInput, matchInfo,
-  newForm, on188Line, heldBackLine, playersHoldoutOn, PLAYERS_HOLDOUT_MIN, patchBody, playedAtSuggestions, mergeMatches, withCovers, endNote, pauseNote, ranUntil, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, countWanted, lockedSummary, endHasPassed, launchProblem, offerWallNow, offerZones, setPriceAnyWarning, setPriceProblem, pickedMatch, startLabel, STEPPER, summary, toInput, wallLabel,
+  newForm, coverTiles, on188Line, heldBackLine, playersHoldoutOn, PLAYERS_HOLDOUT_MIN, patchBody, playedAtSuggestions, mergeMatches, withCovers, endNote, pauseNote, ranUntil, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, countWanted, lockedSummary, endHasPassed, launchProblem, offerWallNow, offerZones, setPriceAnyWarning, setPriceProblem, pickedMatch, startLabel, STEPPER, summary, toInput, wallLabel,
   type Campaign, type City, type Count, type FieldOpt, type Lookup, type UploadedPhoto, type CopyKey, type ListChange, type DealType, type Form, type MatchOpt, type WrittenFor,
 } from "@/lib/offersModel";
 import MatchPicker from "./MatchPicker";
@@ -348,15 +348,17 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
   // forced and locked to the deal's match when the offer is for a specific match.
   const photoName = (url: string | null) => {
     if (!url) return "MatchDay photo";
-    const fx = data.fields.find((x) => x.cover === url);
-    return fx ? `${fx.title} cover` : "Custom photo";
+    const tile = coverTiles(data.fields, []).find((x) => x.url === url);
+    return tile ? `${tile.title} cover` : "Custom photo";
   };
   const btn = buttonOf(f, data.matches);
   const btnMatch = data.matches.find((x) => x.id === btn.matchId) ?? null;
-  // ── Photo (no mock): field cover photos for fields in the offer's cities, name and city under each.
-  // Picking one stores its URL as the photo; MatchDay photo is the app's default. No uploads in v1.
-  // A specific match's own field cover is the default for that offer. Editable after launch.
-  const coverFields = data.fields.filter((x) => x.cover && (f.cityIds.length === 0 || (x.cityId !== null && f.cityIds.includes(x.cityId))));
+  // ── Photo (no mock): every cover of the fields in the offer's cities (the Default, then each named extra cover),
+  // name and city under each. Picking one stores its URL as the photo; MatchDay photo is the app's default.
+  // A specific match's own cover (its chosen cover, else the field's Default) is the default for that offer.
+  // Editable after launch.
+  const tiles = coverTiles(data.fields, f.cityIds);
+  const fieldCity = (fieldId: number) => data.fields.find((x) => x.id === fieldId)?.cityId ?? null;
   const cityName = (id: number | null) => data.cities.find((x) => x.id === id)?.name ?? "";
   // UPLOAD: the tile after the covers (click or drop). The file goes straight from this browser to the
   // backend's link, with progress, then is registered and selected. The backend keeps no list of an
@@ -390,7 +392,7 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
       setF((v) => ({ ...v, copy: { ...v.copy, photoUrl: url } }));
     } finally { setUpPct(null); }
   }
-  const coverUrls = coverFields.map((x) => x.cover as string);
+  const coverUrls = tiles.map((x) => x.url);
   // The × hides an upload from this offer's tiles in this browser. The file itself is not deleted.
   function hidePhoto(url: string) {
     const next = hideUpload(uploaded, url);
@@ -422,7 +424,7 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
       <div className="text-[12px] font-medium" style={{ color: O.ink }}>Photo</div>
       <div className="grid grid-cols-2 gap-2">
         {photoTile("default", null, "MatchDay photo", "Default")}
-        {coverFields.map((x) => photoTile(`field-${x.id}`, x.cover, x.title, cityName(x.cityId)))}
+        {tiles.map((x) => photoTile(x.key, x.url, x.title, cityName(fieldCity(x.fieldId))))}
         {uploadTiles(uploaded, c?.photoUrl ?? null, coverUrls).map((p, i) => photoTile(`upload-${i}`, p.url, p.name, "Uploaded", canHidePhoto(p.url, c?.photoUrl ?? null) ? () => hidePhoto(p.url) : undefined))}
         {!ended && (
           <button type="button" data-testid="offers-photo-upload" disabled={upPct !== null}

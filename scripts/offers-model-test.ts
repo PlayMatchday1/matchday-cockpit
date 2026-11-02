@@ -17,7 +17,7 @@ import { join, resolve } from "node:path";
 import {
   audienceBody, chicagoWallNow, comparisonLine, costCeiling, createBody, defaultRun, endsTicket, formOf, newForm, patchBody, priceWithDeal,
   summary, wallFromMatch, withPreviewName, buttonOf, opensText, formProblem, stepUses, usesLine, stepLimit, limitLine, copyOf,
-  addSection, autoCopy, canReset, copyAfterType, staleLines, staleSections, writtenForOnLoad, isRemovable, removeSection, resetCopy, sectionCollapsed, REMOVABLE_KEYS, canHidePhoto, copyAfterHide, hideUpload, extraBookingsLine, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, audienceText, parsePlayerIds, playerLine, notFoundLine, usedOfLimit, resultsLines, playedAtSuggestions, isAdminAccount, scopeFieldsLine, setPriceAnyWarning as anyPriceWarn, matchPicked, matchTitle, matchWhere, ranUntil, endNote, pauseNote, progressText, campaignsAfter, countWanted, lockedSummary, offerWallNow, offerZones, wallNowIn, mergeMatches, offerMatchOpt, pickerRange, withCovers, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, endHasPassed, launchProblem, namedMatchIds, offersLogBody, pickerDayLabel, pickerView, fillText, fillFraction, setPriceAnyWarning, setPriceProblem, on188Line, fullBody, type Campaign, type City, type MatchOpt, type Results,
+  addSection, autoCopy, canReset, copyAfterType, staleLines, staleSections, writtenForOnLoad, isRemovable, removeSection, resetCopy, sectionCollapsed, REMOVABLE_KEYS, canHidePhoto, copyAfterHide, hideUpload, extraBookingsLine, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, audienceText, parsePlayerIds, playerLine, notFoundLine, usedOfLimit, resultsLines, playedAtSuggestions, isAdminAccount, scopeFieldsLine, setPriceAnyWarning as anyPriceWarn, matchPicked, matchTitle, matchWhere, ranUntil, endNote, pauseNote, progressText, campaignsAfter, countWanted, lockedSummary, offerWallNow, offerZones, wallNowIn, mergeMatches, offerMatchOpt, pickerRange, withCovers, coverTiles, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, endHasPassed, launchProblem, namedMatchIds, offersLogBody, pickerDayLabel, pickerView, fillText, fillFraction, setPriceAnyWarning, setPriceProblem, on188Line, fullBody, type Campaign, type City, type MatchOpt, type Results,
 } from "../src/lib/offersModel";
 import { _setOffersGateDepsForTest, errorText, MAX_MATCH_PAGES, mismatches, offersGate, offersWrite, photoLinkProblem, readFirstMatchPage, readMatchesForCities, sendPreview, type OffersAuth } from "../src/lib/offersServer";
 import { readOffersConfig } from "../src/lib/offersConfig";
@@ -519,6 +519,19 @@ eq("the production base passes the client's host guard, an Offers write passes p
   eq("a saved match offer with its cover is not a change", patchBody(saved, formOf(saved, withCover, cities), withCover, cities).photoUrl, undefined);
   eq("later lists win, and nothing doubles", mergeMatches([offerMatchOpt(api)], [offerMatchOpt({ ...api, playersIn: 12 })]).map((m) => [m.id, m.players]), [[5, 12]]);
   eq("the range is today and the next 13 days, across a month", pickerRange("2026-10-30 23:59:00"), { from: "2026-10-30", to: "2026-11-12" });
+  // FIELD COVERS (1.88): the match's own resolved cover, and every cover as a tile.
+  const chosen = { ...api, coverUrl: "https://c/tournament.jpg" };
+  eq("a match's resolved cover (coverUrl) is its photo, and the field's Default doesn't replace it", [offerMatchOpt(chosen).fieldCover, withCovers([offerMatchOpt(chosen)], fields)[0].fieldCover], ["https://c/tournament.jpg", "https://c/tournament.jpg"]);
+  eq("...and it is the suggested photo for a specific-match offer", copyOf({ ...newForm("2026-11-02 12:00:00"), scope: "MATCH", matchId: 5 }, withCovers([offerMatchOpt(chosen)], fields), cities).photoUrl, "https://c/tournament.jpg");
+  eq("an older backend without coverUrl still gets the field's Default (the control)", copyOf({ ...newForm("2026-11-02 12:00:00"), scope: "MATCH", matchId: 5 }, withCovers([offerMatchOpt(api)], fields), cities).photoUrl, "https://c/n.jpg");
+  const withExtras = [
+    { id: 3, title: "NEMP", cityId: 1, cover: "https://c/n.jpg", covers: [{ id: null, name: "Default", url: "https://c/n.jpg" }, { id: 7, name: "Tournament nights", url: "https://c/tournament.jpg" }] },
+    { id: 4, title: "Parmer", cityId: 2, cover: null, covers: [{ id: 9, name: "Lights", url: "https://c/p.jpg" }] },
+    { id: 5, title: "Old backend", cityId: 1, cover: "https://c/o.jpg" },
+  ];
+  eq("tiles: every cover, the Default first, names after the field; a field from an older backend gives its Default", coverTiles(withExtras, []).map((t) => [t.key, t.title, t.url]), [
+    ["field-3", "NEMP", "https://c/n.jpg"], ["field-3-cover-7", "NEMP · Tournament nights", "https://c/tournament.jpg"], ["field-4-cover-9", "Parmer · Lights", "https://c/p.jpg"], ["field-5", "Old backend", "https://c/o.jpg"]]);
+  eq("...only the offer's cities when it has some", coverTiles(withExtras, [2]).map((t) => t.key), ["field-4-cover-9"]);
 }
 
 // ── THE MATCH PICKER ─────────────────────────────────────────────────────────────────────────────

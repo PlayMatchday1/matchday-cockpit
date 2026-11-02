@@ -57,8 +57,11 @@ export type Campaign = Copy & {
 
 // timeZone is the city's IANA name (admin/cities: timeZone.name), used for when an offer's end has passed.
 export type City = { id: number; name: string; timeZone?: string | null };
-// A field as the photo picker and the Played at row need it. cover is the field's cover photo URL, or null.
-export type FieldOpt = { id: number; title: string; cityId: number | null; cover: string | null };
+// A field as the photo picker and the Played at row need it. cover is the field's Default cover photo URL, or null.
+// covers (GET /admin/offers/page, with field cover photos, 1.88): every photo the picker can offer for the field, the
+// Default first (id null) then its named extra covers; absent on a backend from before covers.
+export type FieldCover = { id: number | null; name: string; url: string };
+export type FieldOpt = { id: number; title: string; cityId: number | null; cover: string | null; covers?: FieldCover[] };
 // A match as the page needs it. Staff see it by name (matchTitle); players by weekday, time and field
 // (matchDay). startLocal is WALL CLOCK ("YYYY-MM-DD HH:mm:ss"). players is what the
 // source counts: playersIn from admin/offers/matches, _count.players from admin/matches/{id}. maxPlayers
@@ -68,17 +71,35 @@ export type MatchOpt = {
   cityId: number | null; price: number; players: number; maxPlayers: number | null; minPlayers: number; upcoming: boolean;
 };
 // GET /admin/offers/matches, one row (backend docs/offers/M3-ENDPOINTS.md).
+// coverUrl: the match's cover as the app shows it (its chosen cover, else the field's Default), from the backend's
+// own resolver; absent on a backend from before field covers, and then withCovers fills in the field's Default.
 export type ApiOfferMatch = {
   id: number; name: string; startsLocal: string; fieldId: number | null; fieldName: string | null; cityId: number | null;
-  price: number; playersIn: number; capacity: number | null; minimum: number;
+  price: number; playersIn: number; capacity: number | null; minimum: number; coverUrl?: string | null;
 };
 export const offerMatchOpt = (m: ApiOfferMatch): MatchOpt => ({
-  id: m.id, name: m.name, startLocal: m.startsLocal, fieldId: m.fieldId, fieldTitle: m.fieldName, fieldCover: null, cityId: m.cityId,
+  id: m.id, name: m.name, startLocal: m.startsLocal, fieldId: m.fieldId, fieldTitle: m.fieldName, fieldCover: m.coverUrl ?? null, cityId: m.cityId,
   price: m.price, players: m.playersIn, maxPlayers: m.capacity, minPlayers: m.minimum, upcoming: true,
 });
-// Fill in each match's cover from the field list, so the suggested photo is the same whichever read it came from.
+// Fill in each match's cover from the field list, so the suggested photo is the same whichever read it came from. A
+// match that brought its own resolved cover (coverUrl) keeps it: that is the photo the app shows for it.
 export const withCovers = (matches: MatchOpt[], fields: FieldOpt[]) =>
   matches.map((m) => (m.fieldCover || m.fieldId === null ? m : { ...m, fieldCover: fields.find((x) => x.id === m.fieldId)?.cover ?? null }));
+// THE PHOTO PICKER'S COVER TILES: for each field in the offer's cities (all fields when no city is picked), every
+// cover it has, the Default first. A backend without covers gives the Default alone, as before. Keys keep the old
+// `field-<id>` for a Default so a picked Default still reads as the same tile.
+export type CoverTile = { key: string; url: string; title: string; fieldId: number };
+export function coverTiles(fields: FieldOpt[], cityIds: number[]): CoverTile[] {
+  const inScope = fields.filter((x) => cityIds.length === 0 || (x.cityId !== null && cityIds.includes(x.cityId)));
+  return inScope.flatMap((x) => {
+    const covers = x.covers ?? (x.cover ? [{ id: null, name: "Default", url: x.cover }] : []);
+    return covers.filter((c) => !!c.url).map((c) => ({
+      key: c.id === null ? `field-${x.id}` : `field-${x.id}-cover-${c.id}`,
+      url: c.url, title: c.id === null ? x.title : `${x.title} · ${c.name}`, fieldId: x.id,
+    }));
+  });
+}
+
 // Later lists win on the same id.
 export function mergeMatches(...lists: MatchOpt[][]): MatchOpt[] {
   const byId = new Map<number, MatchOpt>();

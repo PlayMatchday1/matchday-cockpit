@@ -17,7 +17,7 @@ import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
 import { StageConfigError, apiGet, apiWrite, WriteFailedError, type WriteActor } from "@/lib/matchdayStageApi";
 import { OFFERS_NOT_FOUND } from "@/lib/offersAccess";
 import { readOffersConfig, type OffersConfig, type OffersConfigResult } from "@/lib/offersConfig";
-import { chicagoWallNow, offerMatchOpt, offersLogBody, photoUrlOk, pickerRange, wallFromMatch, type ApiOfferMatch, type Campaign, type City, type FieldOpt, type MatchOpt } from "@/lib/offersModel";
+import { chicagoWallNow, offerMatchOpt, offersLogBody, photoUrlOk, pickerRange, wallFromMatch, type ApiOfferMatch, type Campaign, type City, type FieldCover, type FieldOpt, type MatchOpt } from "@/lib/offersModel";
 import { OFFERS_READ_PACE_MS, READS_STOPPED, makePacer } from "@/lib/offersPacing";
 import { pushesVisible, type CampaignPush, type PushResults, type Reach } from "@/lib/offersPush";
 import { STAFF_NOT_ALLOWED_PLAIN, WHO_ARE_YOU, staffEmailOf, staffErrorKind } from "@/lib/staffIdentity";
@@ -107,7 +107,7 @@ export function offersGet<T>(path: string, query?: Record<string, string | numbe
 type ApiPage = {
   campaigns: Campaign[];
   cities: { id: number; name: string; timeZone?: string | null }[];
-  fields: { id: number; title: string; cityId: number | null; cover?: string | null }[];
+  fields: { id: number; title: string; cityId: number | null; cover?: string | null; covers?: FieldCover[] }[];
 };
 export async function readPage(): Promise<{ campaigns: Campaign[]; cities: City[]; fields: FieldOpt[] }> {
   const { env, baseUrl } = cfg();
@@ -115,7 +115,7 @@ export async function readPage(): Promise<{ campaigns: Campaign[]; cities: City[
   return {
     campaigns: r.campaigns,
     cities: r.cities.map((c) => ({ id: c.id, name: c.name, timeZone: c.timeZone ?? null })),
-    fields: r.fields.map((f) => ({ id: f.id, title: f.title, cityId: f.cityId ?? null, cover: f.cover ?? null })),
+    fields: r.fields.map((f) => ({ id: f.id, title: f.title, cityId: f.cityId ?? null, cover: f.cover ?? null, ...(Array.isArray(f.covers) ? { covers: f.covers } : {}) })),
   };
 }
 export async function readCampaign(id: number): Promise<Campaign | null> {
@@ -129,11 +129,11 @@ export async function readCampaign(id: number): Promise<Campaign | null> {
 type ApiMatch = {
   id: number; name: string; startDate: string; startDateUtc: string; isCancelled: boolean; fieldId: number | null;
   registrationPrice: number; maxPlayerCount: number; minPlayerCount: number;
-  field?: { title: string; cityId: number; cover?: string | null } | null; _count?: { players: number };
+  field?: { title: string; cityId: number; cover?: string | null } | null; coverUrl?: string | null; _count?: { players: number };
 };
 export function matchOpt(m: ApiMatch, now = Date.now()): MatchOpt {
   return {
-    id: m.id, name: m.name, startLocal: wallFromMatch(m.startDate), fieldId: m.fieldId, fieldTitle: m.field?.title ?? null, fieldCover: m.field?.cover ?? null,
+    id: m.id, name: m.name, startLocal: wallFromMatch(m.startDate), fieldId: m.fieldId, fieldTitle: m.field?.title ?? null, fieldCover: m.coverUrl ?? m.field?.cover ?? null,
     cityId: m.field?.cityId ?? null, price: m.registrationPrice, players: m._count?.players ?? 0,
     maxPlayers: m.maxPlayerCount, minPlayers: m.minPlayerCount, upcoming: !m.isCancelled && Date.parse(m.startDateUtc) > now,
   };
