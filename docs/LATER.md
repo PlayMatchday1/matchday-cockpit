@@ -5,11 +5,12 @@ Changes that are decided but not done. Each one ships on its own, by pushing to 
 
 ## Match Ops › Offers: Specific players holdout
 
-**Decided by Ryan, 2026-11-02. Not built.** Specific players: optional holdout (random % of pasted IDs withheld
-and recorded as control). Today a PLAYERS offer stores `holdoutPercent` 0 and nobody is held back, so its results
-compare nothing. City Filters offers are not a substitute: the lists come from Growth › Locations, which are
-radius-based, not by city. Needs the backend to pick and record the held-back ids for a PLAYERS campaign; the
-Clubhouse then shows the holdout control (today hidden for Specific players) and the comparison line.
+**Decided by Ryan, 2026-11-02. Clubhouse side built, backend not yet committed.** A Specific players list of 200 or
+more holds back 10% by default (editable, 0 allowed); a shorter one nobody. The Clubhouse mirrors the backend's
+`playersHoldout` (uncommitted in backend-offers `offer-campaigns.service.ts` on 2026-11-02): it sends the percent
+only for 200+, shows the holdout control and "N held back to measure" (the count's `heldBack`) for those lists, and
+compares results for them like any other offer. Until the backend ships it, a 200+ list sends its percent and an
+older backend stores 0, so a save should read back NOT APPLIED on `holdoutPercent` (not tried) and the line says 0 (seen on the local backend).
 
 ## Match Ops › Offers: what the Clubhouse needs at release
 

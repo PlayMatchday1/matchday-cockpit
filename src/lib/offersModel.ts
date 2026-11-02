@@ -17,7 +17,8 @@ export type Membership = "ANYONE" | "MEMBERS" | "NON_MEMBERS";
 export type ButtonTarget = "FIND_MATCH" | "MATCH" | "MEMBERSHIP";
 export type CampaignStatus = "DRAFT" | "LAUNCHED" | "PAUSED" | "ENDED";
 export type CampaignState = "DRAFT" | "SCHEDULED" | "LIVE" | "PAUSED" | "ENDED";
-// FILTERS: the audience is the filters. PLAYERS: exactly playerIds; the filters don't apply and nobody is held back.
+// FILTERS: the audience is the filters. PLAYERS: exactly playerIds; the filters don't apply, and only a list of
+// PLAYERS_HOLDOUT_MIN or more has anyone held back (holdoutFor).
 export type AudienceMode = "FILTERS" | "PLAYERS";
 
 export type BookedGroup = { players: number; booked: number; rate: number | null };
@@ -335,7 +336,9 @@ export function formOf(c: Campaign, matches: MatchOpt[], cities: City[], fields:
     cityIds: c.cityIds, lastPlayed: c.lastPlayed, lastPlayedDays: c.lastPlayedDays, membership: c.membership,
     audienceMode: c.audienceMode, playerIdsText: c.playerIds.join(", "), playerIds: c.playerIds, fieldIds: c.fieldIds,
     minMatches: c.minMatches, maxMatches: c.maxMatches,
-    startsLocal: c.startsLocal, endsLocal: c.endsLocal, holdoutPercent: c.holdoutPercent, maxRedemptions: c.maxRedemptions, showTicket: c.showTicket ?? true,
+    // A short Specific players list stores 0; the form keeps the default, which applies if the list grows to 200.
+    startsLocal: c.startsLocal, endsLocal: c.endsLocal, holdoutPercent: c.audienceMode === "PLAYERS" && c.playerIds.length < PLAYERS_HOLDOUT_MIN ? DEFAULT_HOLDOUT_PERCENT : c.holdoutPercent,
+    maxRedemptions: c.maxRedemptions, showTicket: c.showTicket ?? true,
     buttonTarget: c.buttonTarget, buttonMatchId: c.buttonMatchId, copy: {},
   };
   // Stored copy that differs from what the deal would write was typed by someone: keep it as typed.
@@ -573,11 +576,22 @@ export function copyAfterHide(copy: Form["copy"], url: string, saved: string | n
 
 // ── REQUEST BODIES ───────────────────────────────────────────────────────────────────────────────
 // Everything the campaign would hold, as the backend's field names.
+// THE HOLDOUT. The backend's playersHoldout (offer-campaigns.service.ts, 2026-11-02): a Specific players list of
+// PLAYERS_HOLDOUT_MIN or more holds back the percent asked (10 by default, 0 allowed); a shorter one nobody.
+// The list is the ids that will be sent: not-found ids are already out of playerIds.
+export const DEFAULT_HOLDOUT_PERCENT = 10;
+export const PLAYERS_HOLDOUT_MIN = 200;
+export const playersHoldoutOn = (f: Pick<Form, "audienceMode" | "playerIds">) => f.audienceMode === "PLAYERS" && f.playerIds.length >= PLAYERS_HOLDOUT_MIN;
+export const holdoutFor = (f: Pick<Form, "audienceMode" | "playerIds" | "holdoutPercent">) =>
+  f.audienceMode !== "PLAYERS" || playersHoldoutOn(f) ? f.holdoutPercent : 0;
+// "584 held back to measure", from the count (the backend picks who).
+export const heldBackLine = (heldBack: number) => `${heldBack.toLocaleString("en-US")} held back to measure`;
+
 export function fullBody(f: Form, matches: MatchOpt[], cities: City[], fields: FieldOpt[] = []): Record<string, unknown> {
   const m = pickedMatch(f, matches);
   const copy = copyOf(f, matches, cities, fields);
-  // Specific players: the filters are stored as their defaults and nobody is held back (the
-  // backend does this too); sending the defaults keeps the read-back equal to what was sent.
+  // Specific players: the filters are stored as their defaults, and the holdout is holdoutFor's (the
+  // backend does both too); sending what it stores keeps the read-back equal to what was sent.
   const players = f.audienceMode === "PLAYERS";
   return {
     name: f.name.trim(), dealType: f.dealType, dealAmount: f.dealType === "FREE_MATCH" ? 0 : f.dealAmount,
@@ -588,7 +602,7 @@ export function fullBody(f: Form, matches: MatchOpt[], cities: City[], fields: F
     lastPlayed: players ? "ANY" : f.lastPlayed, lastPlayedDays: !players && f.lastPlayed === "LAPSED" ? f.lastPlayedDays : null,
     minMatches: players ? 0 : f.minMatches, maxMatches: players ? null : f.maxMatches, membership: players ? "ANYONE" : f.membership,
     matchIds: m ? [m.id] : [], appliesFieldIds: f.scope === "FIELD" ? [...f.appliesFieldIds].sort((x, y) => x - y) : [],
-    startsLocal: f.startsLocal, endsLocal: f.endsLocal, holdoutPercent: players ? 0 : f.holdoutPercent, maxRedemptions: f.maxRedemptions,
+    startsLocal: f.startsLocal, endsLocal: f.endsLocal, holdoutPercent: holdoutFor(f), maxRedemptions: f.maxRedemptions,
     showTicket: f.showTicket,
     ...copy, buttonTarget: buttonOf(f, matches).target, buttonMatchId: buttonOf(f, matches).matchId,
   };
@@ -823,11 +837,11 @@ export function usedOfLimit(r: Results): string | null {
 // The line under the comparison: "About 6 extra bookings · $9 in discounts per extra booking".
 // N = players with the offer x (their booking rate - the held-back rate), to a whole number.
 // $X = discount given / N, to the dollar. Rounding comes first: an N that rounds to 0 is no extra
-// bookings, so X can never divide by zero. Null (no line) under MIN_HELD_BACK_TO_COMPARE held back,
-// and for Specific players, where nobody is held back and the rates compare nothing.
-export function extraBookingsLine(r: Results, mode: AudienceMode): string | null {
+// bookings, so X can never divide by zero. Null (no line) under MIN_HELD_BACK_TO_COMPARE held back, which
+// covers a Specific players list too short to hold anyone back.
+export function extraBookingsLine(r: Results): string | null {
   const w = r.booked.withOffer, h = r.booked.heldBack;
-  if (mode === "PLAYERS" || h.players < MIN_HELD_BACK_TO_COMPARE || w.rate === null || h.rate === null) return null;
+  if (h.players < MIN_HELD_BACK_TO_COMPARE || w.rate === null || h.rate === null) return null;
   const n = Math.round(w.players * (w.rate - h.rate));
   if (n <= 0) return "No extra bookings so far";
   const x = Math.round(r.discountGiven / 100 / n);
@@ -871,11 +885,10 @@ export async function lookupInBatches(
   return { ok: true, lookup: { players, notFound } };
 }
 
-/** "5,829 IDs pasted, 5,812 players found, 17 not found" (the not-found part only when there are any). */
+/** "5,829 pasted · 5,812 found · 17 not found" (the not-found part only when there are any). */
 export function pastedLine(pasted: number, l: Lookup): string {
   const n = (x: number) => x.toLocaleString("en-US");
-  return `${n(pasted)} ${pasted === 1 ? "ID" : "IDs"} pasted, ${n(l.players.length)} ${l.players.length === 1 ? "player" : "players"} found`
-    + (l.notFound.length > 0 ? `, ${n(l.notFound.length)} not found` : "");
+  return `${n(pasted)} pasted · ${n(l.players.length)} found` + (l.notFound.length > 0 ? ` · ${n(l.notFound.length)} not found` : "");
 }
 export const MAX_TEST_IDS = 20;
 // type: the account type. The lookup also returns ADMIN accounts, so staff can test on their own.

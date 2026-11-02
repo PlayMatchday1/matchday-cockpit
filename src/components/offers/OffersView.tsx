@@ -189,7 +189,7 @@ function Stat({ value, label, testId }: { value: string; label: string; testId: 
 function ResultsCard({ c, nowWall, pushes }: { c: Campaign; nowWall: string; pushes: boolean }) {
   const r = c.results;
   const up = usedPct(r);
-  const extra = extraBookingsLine(r, c.audienceMode);
+  const extra = extraBookingsLine(r);
   return (
     <div data-testid="offers-results" className="flex flex-col gap-3.5 rounded-[12px] border p-4" style={{ background: O.surface, borderColor: O.line }}>
       <div className="flex items-start justify-between gap-3">

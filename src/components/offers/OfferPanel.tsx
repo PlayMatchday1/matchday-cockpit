@@ -13,7 +13,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FIRST_NAME_TOKEN, isAdminAccount, MAX_TEST_IDS, SECTION_ADD, addSection, autoCopy, canReset, copyAfterType, isRemovable, staleLines, staleSections, writtenForOnLoad, removeSection, resetCopy, sectionCollapsed, canHidePhoto, copyAfterHide, hideUpload, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, MAX_USES_PER_PLAYER, notFoundLine, parsePlayerIds, playerLine, PREVIEW_FIRST_NAME, amountText, limitLine, stepLimit, stepUses, usesLine, audienceBody, buttonMatchNote, buttonOf, opensText, chicagoWallNow, copyOf, createBody, defaultRun, endsTicket, formOf, formProblem, fromInput, matchInfo,
-  newForm, on188Line, patchBody, playedAtSuggestions, mergeMatches, withCovers, endNote, pauseNote, ranUntil, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, countWanted, lockedSummary, endHasPassed, launchProblem, offerWallNow, offerZones, setPriceAnyWarning, setPriceProblem, pickedMatch, startLabel, STEPPER, summary, toInput, wallLabel,
+  newForm, on188Line, heldBackLine, playersHoldoutOn, PLAYERS_HOLDOUT_MIN, patchBody, playedAtSuggestions, mergeMatches, withCovers, endNote, pauseNote, ranUntil, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, countWanted, lockedSummary, endHasPassed, launchProblem, offerWallNow, offerZones, setPriceAnyWarning, setPriceProblem, pickedMatch, startLabel, STEPPER, summary, toInput, wallLabel,
   type Campaign, type City, type Count, type FieldOpt, type Lookup, type UploadedPhoto, type CopyKey, type ListChange, type DealType, type Form, type MatchOpt, type WrittenFor,
 } from "@/lib/offersModel";
 import MatchPicker from "./MatchPicker";
@@ -296,6 +296,8 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
   const strayScopeFields = f.appliesFieldIds.filter((id) => !fieldsInCities.some((x) => x.id === id));
   const fieldTitle = (id: number) => data.fields.find((x) => x.id === id)?.title ?? `Field ${id}`;
   const players = f.audienceMode === "PLAYERS";
+  // A Specific players list of 200 or more has a holdout (offersModel holdoutFor); a shorter one doesn't.
+  const holdoutOn = playersHoldoutOn(f);
 
   // ── specific players: look the ids up as they are typed (debounced) ──
   const parsed = useMemo(() => parsePlayerIds(f.playerIdsText), [f.playerIdsText]);
@@ -650,7 +652,12 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
                 )}
               </>
             )}
-            <div className="text-[12px] leading-[17px]" style={{ color: O.muted }}>Only these players get it. City and other filters don&apos;t apply, and nobody is held back.</div>
+            {holdoutOn ? (
+              <>
+                <div className="text-[12px] leading-[17px]" style={{ color: O.muted }}>Only these players get it. City and other filters don&apos;t apply. With {PLAYERS_HOLDOUT_MIN} or more, some are held back to measure (More options).</div>
+                {f.holdoutPercent > 0 && wantCount && countNow !== "error" && count && <div data-testid="offers-players-held-back" className="self-start text-[12px] font-medium" style={{ color: O.ink }}>{heldBackLine(count.heldBack)}</div>}
+              </>
+            ) : <div data-testid="offers-players-nobody-held" className="text-[12px] leading-[17px]" style={{ color: O.muted }}>Only these players get it. City and other filters don&apos;t apply, and nobody is held back.</div>}
           </>
         ) : (
           <>
@@ -826,11 +833,11 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
         {f.scope !== "MATCH" && !matchUnread && <div className="flex justify-end"><Chip testId="offers-no-end" on={f.endsLocal === null} disabled={dl} onClick={() => set({ endsLocal: f.endsLocal === null ? defaultRun(nowWall).endsLocal : null })}>No end date</Chip></div>}
         <div className="text-[11.5px]" style={{ color: O.muted }}>Times are each player&apos;s own city time.</div>
         {passed && !dl && <div data-testid="offers-end-passed" className="text-[12px] font-medium" style={{ color: O.critInk }}>That end time has already passed, so it can&apos;t launch.</div>}
-        {!players && <button type="button" data-testid="offers-more" onClick={() => setMore((v) => !v)} className="flex w-full items-center justify-between gap-2 rounded-[8px] px-3 py-[9px] text-left text-[12px]" style={{ background: O.subtle }}>
+        {(!players || holdoutOn) && <button type="button" data-testid="offers-more" onClick={() => setMore((v) => !v)} className="flex w-full items-center justify-between gap-2 rounded-[8px] px-3 py-[9px] text-left text-[12px]" style={{ background: O.subtle }}>
           <span className="font-medium" style={{ color: O.ink }}>More options</span>
           <span style={{ color: O.muted }}>{f.holdoutPercent > 0 ? `${f.holdoutPercent}% held back to measure` : "Nobody held back"} {more ? "‹" : "›"}</span>
         </button>}
-        {more && !players && (
+        {more && (!players || holdoutOn) && (
           <div data-testid="offers-more-fields" className="flex flex-col gap-3 rounded-[8px] border p-3" style={{ borderColor: O.line }}>
             <Labeled label="Held back to measure">
               <div className="flex items-center gap-2.5">

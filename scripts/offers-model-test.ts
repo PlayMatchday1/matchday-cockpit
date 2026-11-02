@@ -17,7 +17,7 @@ import { join, resolve } from "node:path";
 import {
   audienceBody, chicagoWallNow, comparisonLine, costCeiling, createBody, defaultRun, endsTicket, formOf, newForm, patchBody, priceWithDeal,
   summary, wallFromMatch, withPreviewName, buttonOf, opensText, formProblem, stepUses, usesLine, stepLimit, limitLine, copyOf,
-  addSection, autoCopy, canReset, copyAfterType, staleLines, staleSections, writtenForOnLoad, isRemovable, removeSection, resetCopy, sectionCollapsed, REMOVABLE_KEYS, canHidePhoto, copyAfterHide, hideUpload, extraBookingsLine, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, audienceText, parsePlayerIds, playerLine, notFoundLine, usedOfLimit, resultsLines, playedAtSuggestions, isAdminAccount, scopeFieldsLine, setPriceAnyWarning as anyPriceWarn, matchPicked, matchTitle, matchWhere, ranUntil, endNote, pauseNote, progressText, campaignsAfter, countWanted, lockedSummary, offerWallNow, offerZones, wallNowIn, mergeMatches, offerMatchOpt, pickerRange, withCovers, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, endHasPassed, launchProblem, namedMatchIds, offersLogBody, pickerDayLabel, pickerView, fillText, fillFraction, setPriceAnyWarning, setPriceProblem, on188Line, type Campaign, type City, type MatchOpt, type Results,
+  addSection, autoCopy, canReset, copyAfterType, staleLines, staleSections, writtenForOnLoad, isRemovable, removeSection, resetCopy, sectionCollapsed, REMOVABLE_KEYS, canHidePhoto, copyAfterHide, hideUpload, extraBookingsLine, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, audienceText, parsePlayerIds, playerLine, notFoundLine, usedOfLimit, resultsLines, playedAtSuggestions, isAdminAccount, scopeFieldsLine, setPriceAnyWarning as anyPriceWarn, matchPicked, matchTitle, matchWhere, ranUntil, endNote, pauseNote, progressText, campaignsAfter, countWanted, lockedSummary, offerWallNow, offerZones, wallNowIn, mergeMatches, offerMatchOpt, pickerRange, withCovers, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, endHasPassed, launchProblem, namedMatchIds, offersLogBody, pickerDayLabel, pickerView, fillText, fillFraction, setPriceAnyWarning, setPriceProblem, on188Line, fullBody, type Campaign, type City, type MatchOpt, type Results,
 } from "../src/lib/offersModel";
 import { _setOffersGateDepsForTest, errorText, MAX_MATCH_PAGES, mismatches, offersGate, offersWrite, photoLinkProblem, readFirstMatchPage, readMatchesForCities, sendPreview, type OffersAuth } from "../src/lib/offersServer";
 import { readOffersConfig } from "../src/lib/offersConfig";
@@ -159,7 +159,7 @@ eq("ids from commas, spaces and lines, first kept, junk set aside", parsePlayerI
 eq("over the cap is flagged", parsePlayerIds("1 2 3", 2), { ids: [1, 2], bad: [], tooMany: true });
 // 20,000 IDS (2026-11-02): the cap is the backend's MAX_OFFER_PLAYER_IDS, not 2,000.
 // (Imported here rather than in the block at the top; ES imports are hoisted either way.)
-import { LOOKUP_BATCH, lookupInBatches, MAX_OFFER_PLAYER_IDS, pastedLine } from "../src/lib/offersModel";
+import { LOOKUP_BATCH, lookupInBatches, MAX_OFFER_PLAYER_IDS, pastedLine, holdoutFor, playersHoldoutOn, heldBackLine, PLAYERS_HOLDOUT_MIN, DEFAULT_HOLDOUT_PERCENT } from "../src/lib/offersModel";
 {
   const big = Array.from({ length: 20_001 }, (_, i) => i + 1);
   const t0 = Date.now();
@@ -168,9 +168,25 @@ import { LOOKUP_BATCH, lookupInBatches, MAX_OFFER_PLAYER_IDS, pastedLine } from 
   eq("a 20,000-id paste parses fast (Set dedupe, not includes)", Date.now() - t0 < 500, true);
   eq("5,829 ids with repeats: deduped, nothing flagged", (() => { const q = parsePlayerIds([...big.slice(0, 5829), 1, 2, 3].join(",")); return [q.ids.length, q.tooMany]; })(), [5829, false]);
   eq("pasted line, with not found", pastedLine(5829, { players: Array.from({ length: 5812 }, (_, i) => ({ id: i, name: null, city: null, matchesPlayed: 0 })), notFound: Array.from({ length: 17 }, (_, i) => i) }),
-    "5,829 IDs pasted, 5,812 players found, 17 not found");
+    "5,829 pasted · 5,812 found · 17 not found");
   eq("pasted line, all found / one", [pastedLine(2, { players: [{ id: 1, name: null, city: null, matchesPlayed: 0 }, { id: 2, name: null, city: null, matchesPlayed: 0 }], notFound: [] }), pastedLine(1, { players: [], notFound: [9] })],
-    ["2 IDs pasted, 2 players found", "1 ID pasted, 0 players found, 1 not found"]);
+    ["2 pasted · 2 found", "1 pasted · 0 found · 1 not found"]);
+}
+// SPECIFIC PLAYERS HOLDOUT (backend playersHoldout, 2026-11-02): 200 or more ids hold back the percent asked, fewer nobody.
+{
+  const ids = (n: number) => Array.from({ length: n }, (_, i) => i + 1);
+  const pl = (n: number, pct: number) => ({ ...nowF, name: "x", audienceMode: "PLAYERS" as const, playerIdsText: ids(n).join(","), playerIds: ids(n), holdoutPercent: pct });
+  eq("199 ids: nobody held back, whatever the percent; 200: the percent, 0 allowed", [holdoutFor(pl(199, 10)), holdoutFor(pl(200, 10)), holdoutFor(pl(200, 0)), holdoutFor(pl(5000, 25)), PLAYERS_HOLDOUT_MIN], [0, 10, 0, 25, 200]);
+  eq("the control shows from 200 on, never for filters", [playersHoldoutOn(pl(199, 10)), playersHoldoutOn(pl(200, 10)), playersHoldoutOn({ audienceMode: "FILTERS", playerIds: ids(500) })], [false, true, false]);
+  eq("filters keep their own percent (the control)", holdoutFor({ ...nowF, holdoutPercent: 15 }), 15);
+  eq("what is sent: the holdout in the save and in the count", [fullBody(pl(250, 10), matches, cities).holdoutPercent, audienceBody(pl(250, 10), matches, cities).holdoutPercent, fullBody(pl(3, 10), matches, cities).holdoutPercent], [10, 10, 0]);
+  const short = draftFrom({ audienceMode: "PLAYERS", playerIds: [7, 8], cityIds: [], lastPlayed: "ANY", lastPlayedDays: null, holdoutPercent: 0 });
+  const long = draftFrom({ audienceMode: "PLAYERS", playerIds: ids(300), cityIds: [], lastPlayed: "ANY", lastPlayedDays: null, holdoutPercent: 0 });
+  const fs = formOf(short, matches, cities), fl = formOf(long, matches, cities);
+  eq("a saved short list loads with the default ready, and isn't a change", [fs.holdoutPercent, patchBody(short, fs, matches, cities).holdoutPercent], [DEFAULT_HOLDOUT_PERCENT, undefined]);
+  eq("...grown to 200 it sends the default", patchBody(short, { ...fs, playerIds: ids(200), playerIdsText: ids(200).join(",") }, matches, cities).holdoutPercent, 10);
+  eq("a saved long list set to 0 stays 0, and isn't a change", [fl.holdoutPercent, patchBody(long, fl, matches, cities).holdoutPercent], [0, undefined]);
+  eq("the line under the list", [heldBackLine(584), heldBackLine(0)], ["584 held back to measure", "0 held back to measure"]);
 }
 {
   const pf = { ...nowF, name: "x", audienceMode: "PLAYERS" as const, playerIdsText: "7, 8", playerIds: [7, 8], cityIds: [1], fieldIds: [2], lastPlayed: "LAPSED" as const, lastPlayedDays: 30, membership: "MEMBERS" as const, holdoutPercent: 10 };
@@ -427,18 +443,18 @@ console.log("extra bookings:");
   const at = (wP: number, wB: number, hP: number, hB: number, discount: number) => ({ ...results, discountGiven: discount,
     booked: { withOffer: { players: wP, booked: wB, rate: wP ? wB / wP : null }, heldBack: { players: hP, booked: hB, rate: hP ? hB / hP : null } } });
   // 37 x (10/37 - 4/40) = 10 - 3.7 = 6.3, so 6; $54 / 6 = $9.
-  eq("N and X", extraBookingsLine(at(37, 10, 40, 4, 5400), "FILTERS"), "About 6 extra bookings · $9 in discounts per extra booking");
+  eq("N and X", extraBookingsLine(at(37, 10, 40, 4, 5400)), "About 6 extra bookings · $9 in discounts per extra booking");
   // 100 x (0.2 - 0.1) = 10; $25 / 10 = $2.50, which rounds to the dollar.
-  eq("X rounds to the dollar", extraBookingsLine(at(100, 20, 30, 3, 2500), "FILTERS"), "About 10 extra bookings · $3 in discounts per extra booking");
-  eq("one extra booking is singular", extraBookingsLine(at(10, 2, 30, 3, 1000), "FILTERS"), "About 1 extra booking · $10 in discounts per extra booking");
-  eq("the same rate is no extra bookings, and no cost", extraBookingsLine(at(100, 10, 30, 3, 5000), "FILTERS"), "No extra bookings so far");
-  eq("a worse rate than held back is no extra bookings", extraBookingsLine(at(100, 5, 30, 3, 5000), "FILTERS"), "No extra bookings so far");
-  eq("an N that rounds to 0 is no extra bookings, not a divide by zero", extraBookingsLine(at(10, 1, 30, 2, 5000), "FILTERS"), "No extra bookings so far");
-  eq("exactly 30 held back shows it", extraBookingsLine(at(100, 20, 30, 3, 1000), "FILTERS") !== null, true);
-  eq("29 held back hides it", extraBookingsLine(at(100, 20, 29, 3, 1000), "FILTERS"), null);
-  eq("the fixture's 3 held back hides it", extraBookingsLine(at(37, 10, 3, 1, 5400), "FILTERS"), null);
-  eq("Specific players hides it, whatever the numbers", extraBookingsLine(at(100, 20, 40, 3, 1000), "PLAYERS"), null);
-  eq("no rate for the offer group hides it", extraBookingsLine(at(0, 0, 40, 3, 0), "FILTERS"), null);
+  eq("X rounds to the dollar", extraBookingsLine(at(100, 20, 30, 3, 2500)), "About 10 extra bookings · $3 in discounts per extra booking");
+  eq("one extra booking is singular", extraBookingsLine(at(10, 2, 30, 3, 1000)), "About 1 extra booking · $10 in discounts per extra booking");
+  eq("the same rate is no extra bookings, and no cost", extraBookingsLine(at(100, 10, 30, 3, 5000)), "No extra bookings so far");
+  eq("a worse rate than held back is no extra bookings", extraBookingsLine(at(100, 5, 30, 3, 5000)), "No extra bookings so far");
+  eq("an N that rounds to 0 is no extra bookings, not a divide by zero", extraBookingsLine(at(10, 1, 30, 2, 5000)), "No extra bookings so far");
+  eq("exactly 30 held back shows it", extraBookingsLine(at(100, 20, 30, 3, 1000)) !== null, true);
+  eq("29 held back hides it", extraBookingsLine(at(100, 20, 29, 3, 1000)), null);
+  eq("the fixture's 3 held back hides it", extraBookingsLine(at(37, 10, 3, 1, 5400)), null);
+  eq("Specific players with a holdout compares like any other (2026-11-02: lists of 200+ hold back)", extraBookingsLine(at(100, 20, 40, 3, 1000)) !== null, true);
+  eq("no rate for the offer group hides it", extraBookingsLine(at(0, 0, 40, 3, 0)), null);
 }
 
 console.log("access:");
