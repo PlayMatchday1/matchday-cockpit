@@ -460,6 +460,41 @@ for (const r of ["list", "detail/[id]", "fields", "matches", "check"]) {
     is("veo/inbound compares its shared secret in constant time", /timingSafeEqual|constantTime/.test(inbound), true); }
 }
 
+// ── /api/covers/* — FIELD COVER PHOTOS, pinned by name (merged into feature/offers 2026-11-02) ──
+// These routes never name authenticateMatchOpsRead themselves: every handler calls coversGate (or coversStatus),
+// which does, in src/lib/fieldCoversServer.ts. So the census above cannot see them, and this block is where they are
+// counted. Each route file's every exported handler must call the gate, and the gate itself is pinned below.
+{
+  const dir = "src/app/api/covers";
+  const files: string[] = [];
+  (function walk(d: string) { for (const e of readdirSync(d)) { const q = join(d, e); if (statSync(q).isDirectory()) walk(q); else if (e === "route.ts") files.push(q); } })(dir);
+  const handlers = (src: string) => (src.match(/export async function (GET|POST|PUT|PATCH|DELETE)\b/g) ?? []).length;
+  const map = Object.fromEntries(files.map((f) => {
+    const src = stripComments(readFileSync(f, "utf8"));
+    const gated = (src.match(/await coversGate\(req, (true|false)\)/g) ?? []).length;
+    const status = /return coversStatus\(req\)/.test(src) ? 1 : 0;
+    return [f.replace("src/app/api/", ""), handlers(src) > 0 && gated + status === handlers(src) ? `gated ${handlers(src)}/${handlers(src)}` : `UNGATED (${gated + status} of ${handlers(src)})`] as const;
+  }).sort((x, y) => x[0].localeCompare(y[0])));
+  is("every /api/covers route, and every handler in it, goes through the covers gate", map, {
+    "covers/covers/[coverId]/route.ts": "gated 4/4",
+    "covers/fields/[fieldId]/default/route.ts": "gated 1/1",
+    "covers/fields/[fieldId]/route.ts": "gated 2/2",
+    "covers/matches/[matchId]/route.ts": "gated 2/2",
+    "covers/matches/route.ts": "gated 1/1",
+    "covers/status/route.ts": "gated 1/1",
+  });
+  const lib = stripComments(readFileSync("src/lib/fieldCoversServer.ts", "utf8"));
+  const gate = lib.slice(lib.indexOf("export async function coversGate"), lib.indexOf("export async function coversStatus"));
+  const status = lib.slice(lib.indexOf("export async function coversStatus"), lib.indexOf("export const coversGet"));
+  const at = (x: string) => { const i = gate.indexOf(x); return i < 0 ? Infinity : i; };
+  is("coversGate's first act is the Match Ops read gate", at("await authenticateMatchOpsRead(req)") < Math.min(at("confinedCity"), at("coversTarget()"), at("canEditMatches")), true);
+  is("...it refuses a confined account", /auth\.confinedCity\) return \{ ok: false/.test(gate), true);
+  is("...it closes (503) without the Offers config", /coversTarget\(\)/.test(gate) && /status: 503/.test(gate), true);
+  is("...writes need EDIT MATCHES and the signed-in person's email", /if \(write\)/.test(gate) && /!auth\.canEditMatches/.test(gate) && /!ctx\.staff/.test(gate), true);
+  is("coversStatus also starts at the Match Ops read gate", /authenticateMatchOpsRead\(req\)/.test(status), true);
+  is("the covers writes name EDIT MATCHES at the apiWrite chokepoint", (lib.match(/ctx\.actor, "edit"/g) ?? []).length, 2);
+}
+
 // the third gate in the system (authenticateCrm) also denies a no-flags account — so the compositional
 // claim "no-flags is denied on every gated route" holds for the CRM surface too. Asserted at source.
 { const s = readFileSync("src/lib/crmAuth.ts", "utf8");

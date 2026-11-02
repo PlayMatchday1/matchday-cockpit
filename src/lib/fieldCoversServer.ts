@@ -4,8 +4,9 @@ import "server-only";
 // THE GATE, in order (every route calls coversGate first):
 //   1. Signed in with Match Ops read (authenticateMatchOpsRead: the E2E service account is refused there by email).
 //   2. Not confined to a city. Covers are a field-wide setting and these routes take bare field and match ids.
-//   3. LOCAL MODE ONLY, for now: the backend endpoints exist only on the local backend branch. Off, 503 and no
-//      request leaves. When the backend ships, this is the one place that picks the production target.
+//   3. The target: the same config every Offers route uses (src/lib/offersConfig.ts: OFFERS_ENV, OFFERS_API_BASE_URL
+//      and the credentials, all checked against the write client's own host allowlist). Covers ship with Offers in
+//      1.88 on the same backend, so they talk to the same place. Unset or wrong, 503 and no request leaves.
 //   4. Writes: EDIT MATCHES (can_edit_matches, read fresh by the auth helper), the same grant that edits a match
 //      today. apiWrite enforces it again as the unbypassable chokepoint.
 //   5. Writes: the signed-in person's email as X-Acting-Staff-Email (server session only, never the browser).
@@ -17,27 +18,30 @@ import { randomUUID } from "node:crypto";
 import { authenticateMatchOpsRead } from "@/lib/matchOpsAuth";
 import { apiGet, apiWrite, AmbiguousWriteError, WriteFailedError, type ClientEnv, type WriteActor } from "@/lib/matchdayStageApi";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
-import { localModeOn, LOCAL_MDAPI_HOST } from "@/lib/localMode";
+import { LOCAL_MDAPI_HOST } from "@/lib/localMode";
+import { readOffersConfig } from "@/lib/offersConfig";
 import { NO_EDIT_MATCHES } from "@/lib/matchEditAccess";
 import { staffEmailOf, WHO_ARE_YOU } from "@/lib/staffIdentity";
 import { S3_HOSTS } from "@/lib/fieldPhotos";
 import { COVERS_UNAVAILABLE, coverFileProblem, type CoverVerdict } from "@/lib/fieldCovers";
 
-export type CoversCtx = { env: ClientEnv; email: string; actor: WriteActor; staff: string | null; canEdit: boolean };
+export type CoversCtx = { env: ClientEnv; baseUrl: string; email: string; actor: WriteActor; staff: string | null; canEdit: boolean };
 
-/** The target, or null when cover photos are not available here (see 3 above). */
-export function coversEnv(): ClientEnv | null {
-  return localModeOn() ? "local" : null;
+/** The target, or null when cover photos are not available here (see 3 above). Read per request. */
+export function coversTarget(): { env: ClientEnv; baseUrl: string } | null {
+  const r = readOffersConfig();
+  if (!r.ok) { console.error(`[field-covers] closed: ${r.problem}`); return null; }
+  return { env: r.config.env, baseUrl: r.config.baseUrl };
 }
 
 export async function coversGate(req: Request, write: boolean): Promise<{ ok: true; ctx: CoversCtx } | { ok: false; res: Response }> {
   const auth = await authenticateMatchOpsRead(req);
   if (!auth.ok) return { ok: false, res: Response.json({ error: auth.error }, { status: auth.status }) };
   if (auth.confinedCity) return { ok: false, res: Response.json({ error: "Cover photos are managed by Match Ops, not per city." }, { status: 403 }) };
-  const env = coversEnv();
-  if (!env) return { ok: false, res: Response.json({ error: COVERS_UNAVAILABLE, unavailable: true }, { status: 503 }) };
+  const target = coversTarget();
+  if (!target) return { ok: false, res: Response.json({ error: COVERS_UNAVAILABLE, unavailable: true }, { status: 503 }) };
   const ctx: CoversCtx = {
-    env, email: auth.email, canEdit: auth.canEditMatches, staff: staffEmailOf(auth.email),
+    env: target.env, baseUrl: target.baseUrl, email: auth.email, canEdit: auth.canEditMatches, staff: staffEmailOf(auth.email),
     actor: { canEditMatches: auth.canEditMatches, email: auth.email, userId: auth.appUserId },
   };
   if (write) {
@@ -50,18 +54,18 @@ export async function coversGate(req: Request, write: boolean): Promise<{ ok: tr
   return { ok: true, ctx };
 }
 
-/** GET /api/covers/status: available (local mode, not city-confined) and canEdit (EDIT MATCHES). */
+/** GET /api/covers/status: available (configured, not city-confined) and canEdit (EDIT MATCHES). */
 export async function coversStatus(req: Request): Promise<Response> {
   const auth = await authenticateMatchOpsRead(req);
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
-  const env = coversEnv();
+  const env = coversTarget()?.env ?? null;
   return Response.json({
     available: env !== null && !auth.confinedCity, env, canEdit: auth.canEditMatches,
     reason: env === null ? COVERS_UNAVAILABLE : auth.confinedCity ? "Cover photos are managed by Match Ops, not per city." : null,
   });
 }
 
-export const coversGet = <T>(ctx: CoversCtx, path: string, query?: Record<string, string | number | boolean>) => apiGet<T>(ctx.env, path, query);
+export const coversGet = <T>(ctx: CoversCtx, path: string, query?: Record<string, string | number | boolean>) => apiGet<T>(ctx.env, path, query, ctx.baseUrl);
 
 /** The backend's own words from a refusal ({ message, errorCode }), else the client's message. */
 export function upstreamMessage(e: unknown): string {
@@ -98,7 +102,7 @@ export async function coverWrite<T>(ctx: CoversCtx, opts: {
     {
       // First call = before, second = after (recordWrite's contract). Only the after is kept.
       readResource: async () => { const r = await opts.readBack(); if (reads++ > 0) after = r; return r; },
-      write: async () => { result = await apiWrite<T>(ctx.env, opts.method, opts.path, opts.body, ctx.actor, "edit", undefined, ctx.staff ?? undefined); return result; },
+      write: async () => { result = await apiWrite<T>(ctx.env, opts.method, opts.path, opts.body, ctx.actor, "edit", undefined, ctx.staff ?? undefined, ctx.baseUrl); return result; },
       now: () => new Date().toISOString(),
     },
     supabaseLogStore(),
@@ -112,7 +116,8 @@ export class UploadHostError extends Error {
 }
 
 /* THE UPLOAD URL IS HOST-GUARDED ON THE PARSED HOST before a byte is sent (CLAUDE.md: every non-GET). Local mode:
- * exactly http://localhost:3010 (the dev upload route). Production (not reachable yet): the S3 bucket, https. */
+ * exactly http://LOCAL_MDAPI_HOST (the dev upload route). Staging and production: that environment's S3 bucket
+ * (fieldPhotos S3_HOSTS), https, the same table the field gallery's uploads are checked against. */
 export function assertCoverUploadHost(uploadUrl: string, env: ClientEnv): URL {
   let u: URL;
   try { u = new URL(uploadUrl); } catch { throw new UploadHostError("Refusing an un-parseable upload URL."); }
@@ -139,7 +144,7 @@ export async function fileFrom(req: Request): Promise<{ ok: true; file: File; fo
 export async function uploadCoverImage(ctx: CoversCtx, fieldId: number, kind: "extraCover" | "cover", file: File): Promise<{ ok: true; fileKey: string } | { ok: false; verdict: CoverVerdict; error: string }> {
   let link: { uploadURL?: string; fileKey?: string };
   try {
-    link = await apiWrite(ctx.env, "POST", "/files", { contentType: file.type, entity: "field", entityContent: kind, entityId: fieldId }, ctx.actor, "edit", undefined, ctx.staff ?? undefined);
+    link = await apiWrite(ctx.env, "POST", "/files", { contentType: file.type, entity: "field", entityContent: kind, entityId: fieldId }, ctx.actor, "edit", undefined, ctx.staff ?? undefined, ctx.baseUrl);
   } catch (e) {
     return { ok: false, verdict: "FAILED", error: `Couldn't get an upload link: ${upstreamMessage(e)}` };
   }

@@ -5,8 +5,8 @@
 // Default, and the Field Partners card) plus any number of extra covers, each with a free-text name. A match uses
 // the Default or ONE extra cover of its own field. Nothing else: covers are not tied to match category or type.
 //
-// WHERE IT RUNS TODAY. The backend half exists only on the local backend branch (feature/field-covers), so every
-// /api/covers route answers 503 unless local mode is on, and the two components render nothing on a 503.
+// WHERE IT RUNS. Wherever Offers runs: the /api/covers routes use the Offers config (OFFERS_ENV and its base URL,
+// src/lib/fieldCoversServer.ts coversTarget), and answer 503 when it is unset. The two components render nothing on a 503.
 
 export type CoverView = {
   id: number; fieldId: number; name: string; url: string | null; upcomingMatches: number;
@@ -34,7 +34,7 @@ export type CoverVerdict = "LANDED" | "NOT APPLIED" | "FAILED" | "UNKNOWN";
 export const COVER_NAME_MAX = 60;
 export const COVER_MAX_BYTES = 10 * 1024 * 1024;
 export const COVER_TYPES = ["image/jpeg", "image/png", "image/webp"] as const;
-export const COVERS_UNAVAILABLE = "Cover photos need the backend change that has not shipped. They work in local mode only for now.";
+export const COVERS_UNAVAILABLE = "Cover photos aren't set up on this server.";
 
 /** The backend's own rule (field-covers.service.ts cleanName), checked before anything is sent. Null = fine. */
 export function coverNameProblem(raw: string, taken: string[] = []): string | null {
