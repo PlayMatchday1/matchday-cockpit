@@ -65,8 +65,10 @@ export function toE164(raw: string | null): string | null {
   return null;
 }
 
+/* ID FIRST (2026-11-02): the MatchDay user id (mdapi_users.id) — the same id the Offers page's
+ * Specific players box takes. Prepended; every Klaviyo column after it is unchanged. */
 export const KLAVIYO_HEADER = [
-  "first_name", "last_name", "email", "phone_number", "zip", "city", "state",
+  "id", "first_name", "last_name", "email", "phone_number", "zip", "city", "state",
   "last_played", "activity_bucket", "matches_played", "favourite_field", "member",
 ] as const;
 
@@ -83,10 +85,16 @@ export function klaviyoRows(rows: AreaPlayer[], hereFieldId?: number | null): st
     ...rows.map((r) => {
       const h = here ? playsHere(r, hereFieldId) : null;
       return [
-        safe(r.firstName), safe(r.lastName), r.email ?? "", r.phoneE164 ?? "", r.zip ?? "", safe(r.city), r.state ?? "",
+        String(r.id), safe(r.firstName), safe(r.lastName), r.email ?? "", r.phoneE164 ?? "", r.zip ?? "", safe(r.city), r.state ?? "",
         r.lastPlayed ?? "", ACTIVITY_LABEL[r.activity], String(r.matches), safe(r.favouriteField), r.member ? "true" : "false",
         ...(h ? [String(h.matches), h.last ?? ""] : []),
       ];
     }),
   ];
 }
+
+/* PLAYER IDS FOR THE OFFERS PAGE. Its box (parsePlayerIds, feature/offers offersModel.ts) takes
+ * "commas, spaces or one per line"; comma-separated with no spaces is what the brief asked for when
+ * either works. In table order, duplicates dropped. That box uses only its first OFFERS_ID_CAP ids. */
+export const OFFERS_ID_CAP = 2000;
+export const idList = (rows: Pick<AreaPlayer, "id">[]): string => [...new Set(rows.map((r) => r.id))].join(",");

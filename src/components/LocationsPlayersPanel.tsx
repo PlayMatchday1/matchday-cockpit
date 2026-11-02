@@ -5,9 +5,10 @@
 // cities), a bubble = its players, a field = the players within the current reach of it. The tab
 // works out WHICH players; this filters, lists and exports them.
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { downloadCsv } from "@/components/growth/format";
-import { klaviyoRows, playsHere, type AreaPlayer } from "@/lib/areaPlayers";
+import { idList, klaviyoRows, OFFERS_ID_CAP, playsHere, type AreaPlayer } from "@/lib/areaPlayers";
+import { copyText } from "@/lib/copyText";
 import { ACTIVITIES, ACTIVITY_FILL, ACTIVITY_LABEL, ACTIVITY_SHORT, type Activity } from "@/lib/wherePlayed";
 
 // A match day is its LOCAL calendar day, formatted at UTC noon so no time zone can move it.
@@ -58,6 +59,28 @@ export default function LocationsPlayersPanel({ title, within, rows, loading, er
       || `${a.lastName ?? ""} ${a.firstName ?? ""}`.localeCompare(`${b.lastName ?? ""} ${b.firstName ?? ""}`)), [otherFiltered, playedOn, played, fieldId, distance]);
   const filtered = act !== "all" || member !== "all" || newOn || playedOn;
 
+  /* COPY IDS (2026-11-02) — every row in `shown`, i.e. after the map's selection and every filter
+   * here, not just what is scrolled into view. A flash says what happened; a failed copy says so. */
+  const [flash, setFlash] = useState<{ text: string; ok: boolean } | null>(null);
+  const [copiedId, setCopiedId] = useState<number | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+  const show = (text: string, ok: boolean, id: number | null = null) => {
+    if (timer.current) clearTimeout(timer.current);
+    setFlash({ text, ok }); setCopiedId(ok ? id : null);
+    timer.current = setTimeout(() => { setFlash(null); setCopiedId(null); }, 2500);
+  };
+  const copyAll = async () => {
+    const n = new Set(shown.map((r) => r.id)).size;
+    const ok = await copyText(idList(shown));
+    show(ok ? `Copied ${n.toLocaleString("en-US")} ${n === 1 ? "ID" : "IDs"}${n > OFFERS_ID_CAP ? ` · Offers uses the first ${OFFERS_ID_CAP.toLocaleString("en-US")}` : ""}`
+      : "Couldn't copy: clipboard unavailable", ok);
+  };
+  const copyOne = async (id: number) => {
+    const ok = await copyText(String(id));
+    show(ok ? `Copied ID ${id}` : "Couldn't copy: clipboard unavailable", ok, id);
+  };
+
   return (
     <div className="lp" data-testid="area-players">
       <style>{CSS}</style>
@@ -70,11 +93,19 @@ export default function LocationsPlayersPanel({ title, within, rows, loading, er
           </div>
           {filtered && !loading && <div className="lp-sub" data-testid="area-players-shown">{players(shown.length)} match the filters</div>}
         </div>
+        <div className="lp-actions">
+        {flash && <span className={"lp-flash" + (flash.ok ? "" : " lp-flash-bad")} role="status" data-testid="area-players-copied">{flash.text}</span>}
+        <button type="button" className="loc-btn lp-export" data-testid="area-players-copy-ids" disabled={loading || shown.length === 0}
+          title={shown.length === 0 ? "No players to copy" : `Every player ID in the table, comma-separated, for the Offers page's Specific players box${shown.length > OFFERS_ID_CAP ? ` (it uses the first ${OFFERS_ID_CAP.toLocaleString("en-US")})` : ""}`}
+          onClick={copyAll}>
+          Copy IDs ({shown.length.toLocaleString("en-US")})
+        </button>
         <button type="button" className="loc-btn lp-export" data-testid="area-players-export" disabled={loading || shown.length === 0}
-          title={shown.length === 0 ? "No players to export" : `CSV for a Klaviyo list import: first_name, last_name, email, phone_number (E.164), zip, city, state, last_played, activity_bucket, matches_played (all fields), favourite_field, member${here ? ", matches_here, last_here (this field)" : ""}`}
+          title={shown.length === 0 ? "No players to export" : `CSV for a Klaviyo list import: id (MatchDay player ID), first_name, last_name, email, phone_number (E.164), zip, city, state, last_played, activity_bucket, matches_played (all fields), favourite_field, member${here ? ", matches_here, last_here (this field)" : ""}`}
           onClick={() => downloadCsv(`players-${slug(title)}-${new Date().toISOString().slice(0, 10)}.csv`, klaviyoRows(shown, fieldId))}>
           Export CSV for Klaviyo ({shown.length.toLocaleString("en-US")})
         </button>
+        </div>
       </div>
 
       <div className="lp-filters">
@@ -120,7 +151,7 @@ export default function LocationsPlayersPanel({ title, within, rows, loading, er
           <table className="lp-table" data-testid="area-players-table">
             <thead>
               <tr>
-                <th>Name</th>{distance && <th className="loc-num">Distance</th>}<th>Email</th><th>Phone</th><th>Area</th><th>Zip</th><th>City</th>
+                <th>ID</th><th>Name</th>{distance && <th className="loc-num">Distance</th>}<th>Email</th><th>Phone</th><th>Area</th><th>Zip</th><th>City</th>
                 <th>Last played</th>{here && <th>Last here</th>}<th>Activity</th>
                 <th className="loc-num" title={here ? `Matches at ${title}. The CSV also has every match, as matches_played.` : undefined}>{here ? "Matches here" : "Matches"}</th>
                 <th>Favourite field</th><th>Member</th>
@@ -129,6 +160,8 @@ export default function LocationsPlayersPanel({ title, within, rows, loading, er
             <tbody>
               {shown.map((r) => { const h = here ? playsHere(r, fieldId) : null; return (
                 <tr key={r.id} data-testid="area-player-row">
+                  <td><button type="button" className={"lp-id" + (copiedId === r.id ? " lp-id-on" : "")} data-testid="area-player-id"
+                    title={`Copy player ID ${r.id}`} onClick={() => copyOne(r.id)}>{r.id}</button></td>
                   <td className="lp-name">{[r.firstName, r.lastName].filter(Boolean).join(" ") || "—"}</td>
                   {distance && <td className="loc-num">{distance.has(r.id) ? `${distance.get(r.id)!.toFixed(1)} mi` : ""}</td>}
                   <td>{r.email ?? "—"}</td>
@@ -159,6 +192,12 @@ const CSS = `
 .lp-title{font-size:15px;font-weight:900;color:var(--forest);margin-top:3px}
 .lp-sub{font-size:12px;color:var(--muted);margin-top:2px}
 .lp-export{white-space:nowrap}
+.lp-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+.lp-flash{font-size:12px;font-weight:800;color:#1f7a4a}
+.lp-flash-bad{color:#b4412b}
+.lp-id{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;color:var(--muted);background:none;border:0;padding:0;cursor:pointer}
+.lp-id:hover{color:var(--forest);text-decoration:underline}
+.lp-id-on{color:#1f7a4a;font-weight:800}
 .lp-filters{display:flex;gap:10px;flex-wrap:wrap;margin:12px 0 10px}
 .lp-empty{font-size:12.5px;color:var(--muted);padding:6px 0}
 .lp-scroll{overflow-x:auto;max-height:460px;overflow-y:auto;border:1px solid var(--line);border-radius:10px}
