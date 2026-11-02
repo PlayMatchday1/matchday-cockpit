@@ -364,7 +364,7 @@ export async function registerPhoto(auth: OffersAuth, fileKey: string): Promise<
 
 // ── PLAYER LOOKUP (POST admin/offers/players/lookup) ───────────────────────────────────────────
 // A READ the backend takes as a POST (see readAudienceCount): names, city and matches played for
-// up to 2000 ids, and the ids that are not players. Not a write, so not through recordWrite, and
+// up to 20,000 ids (the page sends 2,000 per request), and the ids that are not players. Not a write, so not through recordWrite, and
 // nothing about the players is logged.
 export type PlayerLookup = { players: { id: number; name: string | null; type?: string; city: string | null; matchesPlayed: number }[]; notFound: number[] };
 export const readPlayerLookup = (auth: OffersAuth, ids: number[]) => paced(() => {

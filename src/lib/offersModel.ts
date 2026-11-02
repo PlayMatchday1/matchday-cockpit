@@ -832,14 +832,46 @@ export function extraBookingsLine(r: Results, mode: AudienceMode): string | null
 
 // ── PLAYER IDS (Specific players and Send test) ──────────────────────────────────────────────────
 // Commas, spaces or one per line. Whole positive numbers only, first appearance kept, in order.
-export function parsePlayerIds(text: string, max = 2000): { ids: number[]; bad: string[]; tooMany: boolean } {
-  const ids: number[] = [], bad: string[] = [];
+// Deduped through a Set: a 20,000-id paste was 200M comparisons per keystroke with includes().
+/** The most one offer takes: the backend's MAX_OFFER_PLAYER_IDS (raised from 2,000, 2026-11-02). */
+export const MAX_OFFER_PLAYER_IDS = 20_000;
+/** Ids per lookup request. Each one goes through the 2 s read pacer, so 20,000 ids are 10 reads. */
+export const LOOKUP_BATCH = 2000;
+export function parsePlayerIds(text: string, max = MAX_OFFER_PLAYER_IDS): { ids: number[]; bad: string[]; tooMany: boolean } {
+  const ids: number[] = [], bad: string[] = [], seen = new Set<number>();
   for (const tok of text.split(/[\s,]+/).filter(Boolean)) {
     if (!/^\d+$/.test(tok) || Number(tok) <= 0) { bad.push(tok); continue; }
     const n = Number(tok);
-    if (!ids.includes(n)) ids.push(n);
+    if (!seen.has(n)) { seen.add(n); ids.push(n); }
   }
   return { ids: ids.slice(0, max), bad, tooMany: ids.length > max };
+}
+
+/** Looks the ids up LOOKUP_BATCH at a time, one after another, and merges the answers in the order
+ *  asked. `onBatch` reports progress (ids done so far). Stops at the first failed batch and returns
+ *  its error: a partial answer would show players as found or missing that were never checked. */
+export async function lookupInBatches(
+  ids: number[],
+  fetchBatch: (batch: number[]) => Promise<{ ok: true; lookup: Lookup } | { ok: false; error: string }>,
+  onBatch?: (done: number) => void,
+  isCancelled: () => boolean = () => false,
+): Promise<{ ok: true; lookup: Lookup } | { ok: false; error: string } | null> {
+  const players: Lookup["players"] = [], notFound: number[] = [];
+  for (let i = 0; i < ids.length; i += LOOKUP_BATCH) {
+    const r = await fetchBatch(ids.slice(i, i + LOOKUP_BATCH));
+    if (isCancelled()) return null;
+    if (!r.ok) return { ok: false, error: r.error };
+    players.push(...r.lookup.players); notFound.push(...r.lookup.notFound);
+    onBatch?.(Math.min(ids.length, i + LOOKUP_BATCH));
+  }
+  return { ok: true, lookup: { players, notFound } };
+}
+
+/** "5,829 IDs pasted, 5,812 players found, 17 not found" (the not-found part only when there are any). */
+export function pastedLine(pasted: number, l: Lookup): string {
+  const n = (x: number) => x.toLocaleString("en-US");
+  return `${n(pasted)} ${pasted === 1 ? "ID" : "IDs"} pasted, ${n(l.players.length)} ${l.players.length === 1 ? "player" : "players"} found`
+    + (l.notFound.length > 0 ? `, ${n(l.notFound.length)} not found` : "");
 }
 export const MAX_TEST_IDS = 20;
 // type: the account type. The lookup also returns ADMIN accounts, so staff can test on their own.

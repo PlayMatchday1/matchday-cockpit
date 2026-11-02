@@ -8182,3 +8182,22 @@ refused: "field 1, 2 is not in the campaign's cities". That a real join is refus
 
 `POST /admin/offers/players/lookup` returns `type` (`PLAYER`, `ADMIN`) and includes ADMIN accounts, probed on 3070: ids 1 and 83.
 
+### Specific players: 20,000 ids, not 2,000 (2026-11-02)
+
+**One constant caps the lookup AND the offer.** `MAX_OFFER_PLAYER_IDS` (backend
+`apps/api/src/core/offers/dto/offer-campaign.dto.ts:34`) is the `@ArrayMaxSize` on `playerIds` for create, edit and the
+audience count, and on the lookup's `ids`. It was 2000 with no recorded reason (commit 5f86e46); raised to 20000 in
+backend cc88847, **local only, not released**. Until that release, any backend Clubhouse talks to still refuses more than 2,000.
+
+**An edit REPLACES the list; there is no append** (`offer-campaigns.service.ts`, `update`: deleteMany then insert). So a list
+longer than the cap cannot be saved by sending it in pieces. The fix had to be the cap.
+
+Every query over the list is one array parameter, `= ANY($1)`: lookup, audience count, grant on app open, push audience
+(`offer-audience.ts:69`). The player list is inserted 1,000 rows per `createMany` in one transaction (30 s timeout).
+
+**The lookup's cost is the matches-played count, not the id list.** Measured on a synthetic local database (30k users,
+600k user_matches, the production `user_matches` index), 20,000 ids: a subquery per player 9.6–13 s; one grouped count
+2.4–3.6 s, same count on every row. Backend cc88847 uses the grouped form. **Synthetic, on a laptop: not a production
+timing.** The Clubhouse asks 2,000 ids per request (`LOOKUP_BATCH`, `src/lib/offersModel.ts`), each through the 2 s read
+pacer, so 20,000 ids take about 20 s to resolve.
+

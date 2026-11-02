@@ -20,6 +20,7 @@ import MatchPicker from "./MatchPicker";
 import { PushReach, PushSection } from "./OfferPush";
 import { defaultSendLocal, pushBodyOf, pushDirty, pushFormOf, pushLocked, pushProblem, pushSuggestion, pushText, type PushForm } from "@/lib/offersPush";
 import OfferPopupPreview from "./OfferPopupPreview";
+import { lookupInBatches, MAX_OFFER_PLAYER_IDS, pastedLine } from "@/lib/offersModel";
 import {
   Btn, Chip, ConfirmDialog, Labeled, O, PanelSection, VerdictLine, authed, inputCls, inputStyle, outcomeOf, settled, type WriteOutcome,
 } from "./offersUi";
@@ -300,22 +301,30 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
   const parsed = useMemo(() => parsePlayerIds(f.playerIdsText), [f.playerIdsText]);
   const [lookup, setLookup] = useState<Lookup | null>(null);
   const [lookupErr, setLookupErr] = useState<string | null>(null);
+  // While a long list is looked up in batches: ids checked so far (null when no lookup is running).
+  const [lookupDone, setLookupDone] = useState<number | null>(null);
   const idsKey = parsed.ids.join(",");
   useEffect(() => {
-    if (!players || parsed.ids.length === 0) { setLookup(null); setLookupErr(null); return; }
+    if (!players || parsed.ids.length === 0) { setLookup(null); setLookupErr(null); setLookupDone(null); return; }
     let cancelled = false;
     const t = setTimeout(async () => {
-      const r = await authed("/api/offers/players", { method: "POST", body: JSON.stringify({ ids: parsed.ids }) });
-      if (cancelled) return;
-      if (!r.ok) { setLookupErr(String(r.json.error)); setLookup(null); return; }
-      setLookupErr(null); setLookup(r.json as unknown as Lookup);
+      setLookup(null); setLookupErr(null); setLookupDone(0);
+      const r = await lookupInBatches(parsed.ids, async (batch) => {
+        const a = await authed("/api/offers/players", { method: "POST", body: JSON.stringify({ ids: batch }) });
+        return a.ok ? { ok: true, lookup: a.json as unknown as Lookup } : { ok: false, error: String(a.json.error) };
+      }, (done) => { if (!cancelled) setLookupDone(done); }, () => cancelled);
+      if (cancelled || r === null) return;
+      setLookupDone(null);
+      if (!r.ok) { setLookupErr(r.error); setLookup(null); return; }
+      setLookupErr(null); setLookup(r.lookup);
     }, 350);
     return () => { cancelled = true; clearTimeout(t); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [players, idsKey]);
   // The ids sent are the ones typed, less any the lookup says are not players (the backend refuses those).
   useEffect(() => {
-    const keep = parsed.ids.filter((id) => !(lookup?.notFound ?? []).includes(id));
+    const missing = new Set(lookup?.notFound ?? []);
+    const keep = parsed.ids.filter((id) => !missing.has(id));
     setF((x) => (x.playerIds.join(",") === keep.join(",") ? x : { ...x, playerIds: keep }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [idsKey, lookup]);
@@ -614,14 +623,25 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
                 value={f.playerIdsText} onChange={(e) => set({ playerIdsText: e.target.value })} placeholder="10482, 10511, 9877" />
             </div>
             {parsed.bad.length > 0 && <div data-testid="offers-ids-bad" className="self-start rounded-[8px] px-2.5 py-1.5 text-[12px] font-medium" style={{ background: O.warnBg, color: O.warnInk }}>Not an ID: {parsed.bad.slice(0, 5).join(", ")}{parsed.bad.length > 5 ? "…" : ""}. It will be skipped.</div>}
-            {parsed.tooMany && <div className="self-start rounded-[8px] px-2.5 py-1.5 text-[12px] font-medium" style={{ background: O.warnBg, color: O.warnInk }}>Only the first 2,000 IDs are used.</div>}
+            {/* Past the backend's own limit, not a 2,000 note: one offer takes MAX_OFFER_PLAYER_IDS, and more would be refused. */}
+            {parsed.tooMany && <div data-testid="offers-ids-too-many" className="self-start rounded-[8px] px-2.5 py-1.5 text-[12px] font-medium" style={{ background: O.warnBg, color: O.warnInk }}>One offer takes up to {MAX_OFFER_PLAYER_IDS.toLocaleString("en-US")} IDs. Only the first {MAX_OFFER_PLAYER_IDS.toLocaleString("en-US")} are used.</div>}
             {lookupErr && <div className="self-start rounded-[8px] px-2.5 py-1.5 text-[12px]" style={{ background: O.critBg, color: O.critInk }}>Couldn&apos;t look them up: {lookupErr}</div>}
+            {lookupDone !== null && parsed.ids.length > 0 && (
+              <div data-testid="offers-lookup-progress" className="self-start text-[12px]" style={{ color: O.muted }}>
+                Looking up {lookupDone.toLocaleString("en-US")} of {parsed.ids.length.toLocaleString("en-US")} IDs…
+              </div>
+            )}
             {lookup && (
               <>
                 <div data-testid="offers-found" className="flex gap-1.5 self-start rounded-[8px] px-2.5 py-1.5 text-[12px]" style={{ background: O.mint, color: O.ok }}>
-                  <b>{lookup.players.length.toLocaleString("en-US")} {lookup.players.length === 1 ? "player" : "players"}</b><span>found</span>
+                  <b>{pastedLine(parsed.ids.length, lookup)}</b>
                 </div>
-                {lookup.notFound.length > 0 && <div data-testid="offers-not-found" className="self-start rounded-[8px] px-2.5 py-1.5 text-[12px] font-medium" style={{ background: O.warnBg, color: O.warnInk }}>{notFoundLine(lookup.notFound)}</div>}
+                {lookup.notFound.length > 0 && (
+                  <details data-testid="offers-not-found" className="self-start rounded-[8px] px-2.5 py-1.5 text-[12px] font-medium" style={{ background: O.warnBg, color: O.warnInk }}>
+                    <summary className="cursor-pointer">{lookup.notFound.length.toLocaleString("en-US")} not found. {lookup.notFound.length === 1 ? "It" : "They"} will be skipped. Show {lookup.notFound.length === 1 ? "it" : "them"}</summary>
+                    <div data-testid="offers-not-found-ids" className="mt-1.5 max-h-[120px] overflow-y-auto break-all font-mono text-[11px] font-normal">{lookup.notFound.join(", ")}</div>
+                  </details>
+                )}
                 {lookup.players.length > 0 && (
                   <div data-testid="offers-found-list" className="flex flex-col gap-1 rounded-[8px] px-3 py-2.5 text-[12px]" style={{ background: O.subtle }}>
                     {lookup.players.slice(0, 3).map((p) => <PlayerRow key={p.id} p={p} />)}

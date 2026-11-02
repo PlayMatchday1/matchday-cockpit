@@ -157,6 +157,21 @@ eq("the list line names them", audienceText({ ...draftFrom(), fieldIds: [1, 2], 
 console.log("specific players:");
 eq("ids from commas, spaces and lines, first kept, junk set aside", parsePlayerIds("10482, 10511\n9877  10482,abc,0,-3"), { ids: [10482, 10511, 9877], bad: ["abc", "0", "-3"], tooMany: false });
 eq("over the cap is flagged", parsePlayerIds("1 2 3", 2), { ids: [1, 2], bad: [], tooMany: true });
+// 20,000 IDS (2026-11-02): the cap is the backend's MAX_OFFER_PLAYER_IDS, not 2,000.
+// (Imported here rather than in the block at the top; ES imports are hoisted either way.)
+import { LOOKUP_BATCH, lookupInBatches, MAX_OFFER_PLAYER_IDS, pastedLine } from "../src/lib/offersModel";
+{
+  const big = Array.from({ length: 20_001 }, (_, i) => i + 1);
+  const t0 = Date.now();
+  const p = parsePlayerIds(big.join(",") + ",5,5,7");
+  eq("the default cap is 20,000 (was 2,000), and 20,001 is flagged", [MAX_OFFER_PLAYER_IDS, p.ids.length, p.ids[19_999], p.tooMany], [20_000, 20_000, 20_000, true]);
+  eq("a 20,000-id paste parses fast (Set dedupe, not includes)", Date.now() - t0 < 500, true);
+  eq("5,829 ids with repeats: deduped, nothing flagged", (() => { const q = parsePlayerIds([...big.slice(0, 5829), 1, 2, 3].join(",")); return [q.ids.length, q.tooMany]; })(), [5829, false]);
+  eq("pasted line, with not found", pastedLine(5829, { players: Array.from({ length: 5812 }, (_, i) => ({ id: i, name: null, city: null, matchesPlayed: 0 })), notFound: Array.from({ length: 17 }, (_, i) => i) }),
+    "5,829 IDs pasted, 5,812 players found, 17 not found");
+  eq("pasted line, all found / one", [pastedLine(2, { players: [{ id: 1, name: null, city: null, matchesPlayed: 0 }, { id: 2, name: null, city: null, matchesPlayed: 0 }], notFound: [] }), pastedLine(1, { players: [], notFound: [9] })],
+    ["2 IDs pasted, 2 players found", "1 ID pasted, 0 players found, 1 not found"]);
+}
 {
   const pf = { ...nowF, name: "x", audienceMode: "PLAYERS" as const, playerIdsText: "7, 8", playerIds: [7, 8], cityIds: [1], fieldIds: [2], lastPlayed: "LAPSED" as const, lastPlayedDays: 30, membership: "MEMBERS" as const, holdoutPercent: 10 };
   const b = createBody(pf, matches, cities);
@@ -811,6 +826,29 @@ function routeFiles(dir: string): string[] {
   return readdirSync(dir).flatMap((n) => { const p = join(dir, n); return statSync(p).isDirectory() ? routeFiles(p) : n === "route.ts" ? [p] : []; });
 }
 (async () => {
+  // LOOKUP IN BATCHES: 5,829 ids are 3 requests of at most LOOKUP_BATCH, answers merged in order.
+  {
+    const ids = Array.from({ length: 5829 }, (_, i) => 1000 + i);
+    const missing = new Set([1003, 3500, 6828]);
+    const sizes: number[] = [], progress: number[] = [];
+    const r = await lookupInBatches(ids, async (batch) => {
+      sizes.push(batch.length);
+      return { ok: true, lookup: { players: batch.filter((id) => !missing.has(id)).map((id) => ({ id, name: null, city: null, matchesPlayed: 0 })), notFound: batch.filter((id) => missing.has(id)) } };
+    }, (done) => progress.push(done));
+    eq("batches of 2,000: sizes and progress", [LOOKUP_BATCH, sizes, progress], [2000, [2000, 2000, 1829], [2000, 4000, 5829]]);
+    eq("merged: every id once, in the order asked, not-found across batches",
+      r && r.ok ? [r.lookup.players.length, r.lookup.players[0].id, r.lookup.players.at(-1)!.id, r.lookup.notFound] : r,
+      [5826, 1000, 6827, [1003, 3500, 6828]]);
+    // A failed batch stops the rest and returns its error, never a partial "found".
+    let calls = 0;
+    const failed = await lookupInBatches(ids, async () => (++calls === 2 ? { ok: false, error: "backend 502" } : { ok: true, lookup: { players: [], notFound: [] } }));
+    eq("a failed batch stops there with its error", [calls, failed], [2, { ok: false, error: "backend 502" }]);
+    // Cancelled (the box changed) after the first batch: no answer, no more requests.
+    let c2 = 0, stop = false;
+    const cancelled = await lookupInBatches(ids, async () => { c2++; stop = true; return { ok: true, lookup: { players: [], notFound: [] } }; }, undefined, () => stop);
+    eq("cancelled: null and no further batches", [c2, cancelled], [1, null]);
+  }
+
   const req = (method = "GET") => new Request("http://localhost/api/offers", { method });
   const open = () => ({ ok: true as const, config: { env: "local" as const, baseUrl: "http://localhost:3070", uploadHost: "localhost:3070" } });
   const broken = () => ({ ok: false as const, problem: "OFFERS_ENV must be local, staging or production" });

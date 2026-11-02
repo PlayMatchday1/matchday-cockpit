@@ -3,6 +3,14 @@
 Changes that are decided but not done. Each one ships on its own, by pushing to main, never
 `vercel deploy --prod`. Delete an entry when it lands.
 
+## Match Ops › Offers: Specific players holdout
+
+**Decided by Ryan, 2026-11-02. Not built.** Specific players: optional holdout (random % of pasted IDs withheld
+and recorded as control). Today a PLAYERS offer stores `holdoutPercent` 0 and nobody is held back, so its results
+compare nothing. City Filters offers are not a substitute: the lists come from Growth › Locations, which are
+radius-based, not by city. Needs the backend to pick and record the held-back ids for a PLAYERS campaign; the
+Clubhouse then shows the holdout control (today hidden for Specific players) and the comparison line.
+
 ## Match Ops › Offers: what the Clubhouse needs at release
 
 **Decided by Ryan, 2026-10-30.** Ships by pushing feature/offers to main, never `vercel deploy --prod`.
