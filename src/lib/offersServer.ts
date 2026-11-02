@@ -168,7 +168,7 @@ export async function readMatchesForCities(cityIds: number[]): Promise<MatchList
 // POST, but it changes nothing, so it is not put through recordWrite and carries no staff header. It
 // lives here rather than in its route so write-routes-logged-test keeps meaning "every apiWrite in a
 // route is a logged write". Paced: it fires as someone changes the audience.
-export type AudienceCount = { count: number; heldBack: number; players: number; mostItCanCost: number | null };
+export type AudienceCount = { count: number; heldBack: number; players: number; mostItCanCost: number | null; on188?: number };
 export const readAudienceCount = (auth: OffersAuth, body: Record<string, unknown>) => paced(() => {
   const { env, baseUrl } = cfg();
   return apiWrite<AudienceCount>(env, "POST", `${CAMPAIGNS}/audience-count`, body, auth.actor, "offers", undefined, undefined, baseUrl);

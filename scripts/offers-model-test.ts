@@ -17,7 +17,7 @@ import { join, resolve } from "node:path";
 import {
   audienceBody, chicagoWallNow, comparisonLine, costCeiling, createBody, defaultRun, endsTicket, formOf, newForm, patchBody, priceWithDeal,
   summary, wallFromMatch, withPreviewName, buttonOf, opensText, formProblem, stepUses, usesLine, stepLimit, limitLine, copyOf,
-  addSection, autoCopy, canReset, copyAfterType, staleLines, staleSections, writtenForOnLoad, isRemovable, removeSection, resetCopy, sectionCollapsed, REMOVABLE_KEYS, canHidePhoto, copyAfterHide, hideUpload, extraBookingsLine, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, audienceText, parsePlayerIds, playerLine, notFoundLine, usedOfLimit, resultsLines, playedAtSuggestions, isAdminAccount, scopeFieldsLine, setPriceAnyWarning as anyPriceWarn, matchPicked, matchTitle, matchWhere, ranUntil, endNote, pauseNote, progressText, campaignsAfter, countWanted, lockedSummary, offerWallNow, offerZones, wallNowIn, mergeMatches, offerMatchOpt, pickerRange, withCovers, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, endHasPassed, launchProblem, namedMatchIds, offersLogBody, pickerDayLabel, pickerView, fillText, fillFraction, setPriceAnyWarning, setPriceProblem, type Campaign, type City, type MatchOpt, type Results,
+  addSection, autoCopy, canReset, copyAfterType, staleLines, staleSections, writtenForOnLoad, isRemovable, removeSection, resetCopy, sectionCollapsed, REMOVABLE_KEYS, canHidePhoto, copyAfterHide, hideUpload, extraBookingsLine, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, audienceText, parsePlayerIds, playerLine, notFoundLine, usedOfLimit, resultsLines, playedAtSuggestions, isAdminAccount, scopeFieldsLine, setPriceAnyWarning as anyPriceWarn, matchPicked, matchTitle, matchWhere, ranUntil, endNote, pauseNote, progressText, campaignsAfter, countWanted, lockedSummary, offerWallNow, offerZones, wallNowIn, mergeMatches, offerMatchOpt, pickerRange, withCovers, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, endHasPassed, launchProblem, namedMatchIds, offersLogBody, pickerDayLabel, pickerView, fillText, fillFraction, setPriceAnyWarning, setPriceProblem, on188Line, type Campaign, type City, type MatchOpt, type Results,
 } from "../src/lib/offersModel";
 import { _setOffersGateDepsForTest, errorText, MAX_MATCH_PAGES, mismatches, offersGate, offersWrite, photoLinkProblem, readFirstMatchPage, readMatchesForCities, sendPreview, type OffersAuth } from "../src/lib/offersServer";
 import { readOffersConfig } from "../src/lib/offersConfig";
@@ -25,7 +25,7 @@ import { assertAllowedHost, preflightWrite } from "../src/lib/matchdayStageApi";
 import { makePacer, OFFERS_READ_PACE_MS, READS_STOPPED } from "../src/lib/offersPacing";
 import {
   CUT_OFF_NOTE, PUSH_BODY_MAX, PUSH_BODY_SOFT, PUSH_TITLE_MAX, PUSH_TITLE_SOFT, capLine, defaultSendLocal, fillPush, matchForPush, pushAfterType, pushBodyOf, pushDirty, pushFormOf, pushLocked, pushProblem, pushSuggestion, pushText,
-  pushesVisible, reachAddsUp, sendTimeNote, skippedTotal, type CampaignPush,
+  pushesVisible, reachAddsUp, reachRows, sendTimeNote, skippedRows, skippedTotal, type CampaignPush,
 } from "../src/lib/offersPush";
 
 let pass = 0, fail = 0;
@@ -770,6 +770,9 @@ eq("an admin account is one; a player or a backend without the type isn't", [isA
   eq("queued, sent or not sent locks it; ended locks it; waiting doesn't", [pushLocked({ ...stored, status: "SCHEDULED" }, "LAUNCHED"), pushLocked({ ...stored, status: "SENT" }, "LAUNCHED"), pushLocked({ ...stored, status: "NOT_SENT" }, "PAUSED"), pushLocked(stored, "ENDED"), pushLocked(stored, "DRAFT"), pushLocked(null, "LAUNCHED")], [true, true, true, true, false, false]);
   eq("the reach adds up, or says it doesn't", [reachAddsUp({ audience: 1240, heldBack: 118, noConsent: 402, noDevice: 61, capped: 23, reachable: 636 }), reachAddsUp({ audience: 10, heldBack: 1, noConsent: 0, noDevice: 0, capped: 0, reachable: 10 })], [true, false]);
   eq("skipped is every reason", skippedTotal({ heldBack: 118, noConsent: 402, noDevice: 61, capped: 23, notAllowed: 5 }), 609);
+  const r0 = { audience: 1240, heldBack: 118, noConsent: 402, noDevice: 61, capped: 23, reachable: 636 };
+  eq("old app: a row and part of the sum when the backend sends it", [reachRows({ ...r0, oldApp: 40, reachable: 596 }).find(([k]) => k === "Old app"), reachAddsUp({ ...r0, oldApp: 40, reachable: 596 }), skippedRows({ heldBack: 1, noConsent: 0, noDevice: 0, oldApp: 7, capped: 0, notAllowed: 0 }).find(([k]) => k === "Old app"), skippedTotal({ heldBack: 1, noConsent: 0, noDevice: 0, oldApp: 7, capped: 0, notAllowed: 0 })], [["Old app", -40], true, ["Old app", 7], 8]);
+  eq("...and no row when it doesn't (an older backend)", [reachRows(r0).some(([k]) => k === "Old app"), skippedRows({ heldBack: 1, noConsent: 0, noDevice: 0, capped: 0, notAllowed: 0 }).some(([k]) => k === "Old app"), reachRows(r0).length], [false, false, 5]);
   eq("staging shows the controls to anyone with Offers; production to nobody until listed", [pushesVisible("staging", "a@b.c", {}), pushesVisible("local", null, {}), pushesVisible("production", "rmancuso@playmatchday.com", {}), pushesVisible("production", "RMancuso@PlayMatchday.com", { OFFERS_PUSH_ACCOUNTS: " rmancuso@playmatchday.com " }), pushesVisible("production", "x@y.z", { OFFERS_PUSH_ACCOUNTS: "rmancuso@playmatchday.com" })], [true, true, false, true, false]);
   eq("the limit's line says what it counts", [capLine(2).includes("at most 2 marketing pushes in any 7 days"), capLine(2).includes("never count"), capLine(0).startsWith("No marketing pushes")], [true, true, true]);
   eq("at a time starts at the next whole hour", [defaultSendLocal("2026-11-02 08:37:57"), defaultSendLocal("2026-11-02 23:10:00")], ["2026-11-02 09:00", "2026-11-03 00:00"]);
@@ -777,6 +780,8 @@ eq("an admin account is one; a player or a backend without the type isn't", [isA
 }
 
 // ── THE COUNT'S STATE ────────────────────────────────────────────────────────────────────────────
+eq("on188: said under the count, 0 included (before 1.88 ships)", [on188Line({ on188: 1240 }), on188Line({ on188: 0 })], ["1,240 of these have the latest app and can see it.", "0 of these have the latest app and can see it."]);
+eq("...and nothing from an older backend that doesn't send it", [on188Line({}), on188Line({ on188: undefined })], [null, null]);
 eq("the debounce is 800 ms", COUNT_DEBOUNCE_MS, 800);
 eq("no answer yet: loading", countState("a", null, false), "loading");
 eq("the form moved past the answer: loading, even with an answer in hand", countState("b", "a", false), "loading");

@@ -712,7 +712,11 @@ export function offersLogBody(body: Record<string, unknown>): Record<string, unk
 }
 
 // ── THE SUMMARY ──────────────────────────────────────────────────────────────────────────────────
-export type Count = { count: number; heldBack: number; players: number; mostItCanCost: number | null };
+// on188: how many of those players have the 1.88 app or later, so can see an offer. 0 until 1.88 ships; absent
+// on an older backend, and then nothing is said.
+export type Count = { count: number; heldBack: number; players: number; mostItCanCost: number | null; on188?: number };
+export const on188Line = (c: Pick<Count, "on188">): string | null =>
+  typeof c.on188 === "number" ? `${c.on188.toLocaleString("en-US")} of these have the latest app and can see it.` : null;
 
 // When the backend cannot know the discount per use (% off, set price or free on any match), the most
 // it can cost is worked out at the highest normal price now listed in those cities, and says so.

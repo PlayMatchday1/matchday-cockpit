@@ -13,7 +13,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FIRST_NAME_TOKEN, isAdminAccount, MAX_TEST_IDS, SECTION_ADD, addSection, autoCopy, canReset, copyAfterType, isRemovable, staleLines, staleSections, writtenForOnLoad, removeSection, resetCopy, sectionCollapsed, canHidePhoto, copyAfterHide, hideUpload, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, MAX_USES_PER_PLAYER, notFoundLine, parsePlayerIds, playerLine, PREVIEW_FIRST_NAME, amountText, limitLine, stepLimit, stepUses, usesLine, audienceBody, buttonMatchNote, buttonOf, opensText, chicagoWallNow, copyOf, createBody, defaultRun, endsTicket, formOf, formProblem, fromInput, matchInfo,
-  newForm, patchBody, playedAtSuggestions, mergeMatches, withCovers, endNote, pauseNote, ranUntil, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, countWanted, lockedSummary, endHasPassed, launchProblem, offerWallNow, offerZones, setPriceAnyWarning, setPriceProblem, pickedMatch, startLabel, STEPPER, summary, toInput, wallLabel,
+  newForm, on188Line, patchBody, playedAtSuggestions, mergeMatches, withCovers, endNote, pauseNote, ranUntil, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, countWanted, lockedSummary, endHasPassed, launchProblem, offerWallNow, offerZones, setPriceAnyWarning, setPriceProblem, pickedMatch, startLabel, STEPPER, summary, toInput, wallLabel,
   type Campaign, type City, type Count, type FieldOpt, type Lookup, type UploadedPhoto, type CopyKey, type ListChange, type DealType, type Form, type MatchOpt, type WrittenFor,
 } from "@/lib/offersModel";
 import MatchPicker from "./MatchPicker";
@@ -718,6 +718,7 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
             : count ? <><b>≈ {count.count.toLocaleString("en-US")} {count.count === 1 ? "player" : "players"}</b><span>match right now</span></>
             : <span>Counting…</span>}
         </div>}
+        {!players && !matchUnread && wantCount && countNow !== "error" && count && on188Line(count) && <div data-testid="offers-count-on188" className="self-start text-[12px]" style={{ color: O.muted }}>{on188Line(count)}</div>}
         {pushOn && pf.enabled && !players && !matchUnread && <PushReach campaignId={c?.id ?? null} refreshKey={String(c?.id ?? "")} />}
       </PanelSection>
 

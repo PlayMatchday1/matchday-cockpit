@@ -16,10 +16,12 @@ export type PushStatus = "OFF" | "WAITING" | "SCHEDULED" | "SENT" | "NOT_SENT";
 export type CampaignPush = { enabled: boolean; title: string | null; body: string | null; sendLocal: string | null; status: PushStatus; queuedAt: string | null };
 // absent title or body: following the suggestion. at false: send "now" (at launch, or at once if already live).
 export type PushForm = { enabled: boolean; title?: string; body?: string; at: boolean; sendLocal: string };
-export type Reach = { audience: number; heldBack: number; noConsent: number; noDevice: number; capped: number; reachable: number };
+// oldApp (the backend's skip reason OLD_APP): players whose app is older than 1.88. Absent on a backend that
+// doesn't send it, and then no row is drawn for it.
+export type Reach = { audience: number; heldBack: number; noConsent: number; noDevice: number; oldApp?: number; capped: number; reachable: number };
 export type PushResults = {
   status: PushStatus; sent: number; failed: number; opened: number; bookedWithin72h: number; devices: number;
-  skipped: { heldBack: number; noConsent: number; noDevice: number; capped: number; notAllowed: number };
+  skipped: { heldBack: number; noConsent: number; noDevice: number; oldApp?: number; capped: number; notAllowed: number };
 };
 
 export const PUSH_TITLE_MAX = 64;
@@ -150,13 +152,16 @@ export function sendTimeNote(pf: PushForm, startsLocal: string, endsLocal: strin
 }
 
 // "Who it reaches" broken down, in the order the backend takes them away.
+const hasOld = (x: { oldApp?: number }) => typeof x.oldApp === "number";
 export const reachRows = (r: Reach): [string, number][] => [
-  ["Audience", r.audience], ["Held back to measure", -r.heldBack], ["Pushes turned off", -r.noConsent], ["No phone to send to", -r.noDevice], ["At the weekly limit", -r.capped],
+  ["Audience", r.audience], ["Held back to measure", -r.heldBack], ["Pushes turned off", -r.noConsent], ["No phone to send to", -r.noDevice],
+  ...(hasOld(r) ? [["Old app", -r.oldApp!] as [string, number]] : []), ["At the weekly limit", -r.capped],
 ];
-export const reachAddsUp = (r: Reach) => r.audience - r.heldBack - r.noConsent - r.noDevice - r.capped === r.reachable;
-export const skippedTotal = (s: PushResults["skipped"]) => s.heldBack + s.noConsent + s.noDevice + s.capped + s.notAllowed;
+export const reachAddsUp = (r: Reach) => r.audience - r.heldBack - r.noConsent - r.noDevice - (r.oldApp ?? 0) - r.capped === r.reachable;
+export const skippedTotal = (s: PushResults["skipped"]) => s.heldBack + s.noConsent + s.noDevice + (s.oldApp ?? 0) + s.capped + s.notAllowed;
 export const skippedRows = (s: PushResults["skipped"]): [string, number][] => [
-  ["Held back to measure", s.heldBack], ["Pushes turned off", s.noConsent], ["No phone", s.noDevice], ["At the weekly limit", s.capped], ["Not allowed yet (safety switch)", s.notAllowed],
+  ["Held back to measure", s.heldBack], ["Pushes turned off", s.noConsent], ["No phone", s.noDevice],
+  ...(hasOld(s) ? [["Old app", s.oldApp!] as [string, number]] : []), ["At the weekly limit", s.capped], ["Not allowed yet (safety switch)", s.notAllowed],
 ];
 export const STATUS_TEXT: Record<PushStatus, string> = {
   OFF: "Off", WAITING: "Goes when the offer launches", SCHEDULED: "Queued, sending", SENT: "Sent", NOT_SENT: "Not sent: the offer was paused or ended first",
