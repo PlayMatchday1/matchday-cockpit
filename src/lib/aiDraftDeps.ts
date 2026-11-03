@@ -22,7 +22,8 @@ import { buildRecordedFields, CAMERA_LOOKAHEAD_DAYS, CAMERA_LOOKBACK_DAYS, type 
 import { linkThread, supabaseLinkIO } from "@/lib/crmThreadLink";
 import { AUTO_SEND_ACTOR } from "@/lib/aiDraftAction";
 import { AUTO_LINKED_NOTE } from "@/lib/aiDraftRun";
-import { membershipRefundPath, priorMembershipRefundFromLog, type CitySource, type CutShort, type RefundLogRow } from "@/lib/aiDraftPolicy";
+import { type CitySource, type CutShort } from "@/lib/aiDraftPolicy";
+import { membershipChargeFromMirror, priorMembershipRefundAny } from "@/lib/membershipRefund";
 
 const ENV = FULL_EDITOR_ENV;
 const ANTHROPIC_BASE_URL = `https://${ANTHROPIC_HOST}`;
@@ -83,11 +84,9 @@ export function draftDataDeps(args: DraftDataArgs): DataDeps {
       return (r.data ?? []) as { body: string | null; sent_at: string; is_auto_reply: boolean | null }[];
     },
 
-    async priorMembershipRefund(playerId) {
-      const r = await supabase.from("change_log").select("outcome, changes").eq("endpoint", membershipRefundPath(playerId)).eq("env", "production");
-      if (r.error) throw new Error(r.error.message);
-      return priorMembershipRefundFromLog((r.data ?? []) as RefundLogRow[]);
-    },
+    // OUR LOG OR STRIPE'S HISTORY: a refund Ryan made by hand in Stripe counts (membershipRefund.ts).
+    priorMembershipRefund: (playerId) => priorMembershipRefundAny(supabase, playerId),
+    membershipCharge: (playerId, monthStartIso) => membershipChargeFromMirror(supabase, playerId, monthStartIso),
 
     async findAccountsByPhone(digits10) {
       const r = await supabase.from("mdapi_users").select("id, first_name").in("phone_number", phoneShapes(digits10)).limit(10);
@@ -184,7 +183,7 @@ export function draftDataDeps(args: DraftDataArgs): DataDeps {
           ctxIn.city = p.player.city ?? ctxIn.city;
           ctxIn.strikes = { active: p.strikes.activeCount, limit: p.strikes.limit, suspended: p.strikes.isSuspended };
           if (p.membership) {
-            ctxIn.membership = { status: p.membership.status, since: p.membership.since, renews: p.membership.renews, canceledAt: p.membership.canceledAt, price: p.membership.price };
+            ctxIn.membership = { status: p.membership.status, since: p.membership.since, renews: p.membership.renews, canceledAt: p.membership.canceledAt, price: p.membership.price, id: p.membership.id ?? null };
           }
           // CUT SHORT, marked on Gameday Ops (migration 0251). A failed read marks nothing, which sends a
           // lights or weather complaint to a person rather than crediting on a guess.

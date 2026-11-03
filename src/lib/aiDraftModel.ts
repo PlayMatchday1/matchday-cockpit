@@ -175,7 +175,8 @@ export type DraftContextIn = {
   firstName: string | null;
   city: string | null;
   isMember: boolean | null;
-  membership: { status: string | null; since: string | null; renews: string | null; canceledAt: string | null; price: number | null } | null;
+  /** id: the MatchDay userSubscriptions row, for ending it with a refund. Never sent to the model. */
+  membership: { status: string | null; since: string | null; renews: string | null; canceledAt: string | null; price: number | null; id?: number | null } | null;
   creditsCents: number | null;
   matchesPlayed: number | null;
   strikes: { active: number; limit: number; suspended: boolean } | null;
@@ -1038,6 +1039,11 @@ export function autoSendAllowed(d: AutoSendCheck | null, config: AutoSendConfig 
 // ── auto-send: the kill switch ─────────────────────────────────────────────────────────────────
 
 export const KILL_REPLY_RX = /\b(?:wrong|no|that['’]?s not|refund\w*|human)\b/i;
+// AFTER A MEMBERSHIP AUTO-SEND, "refund" is the expected answer, not a sign the reply was wrong (Ryan,
+// 2026-11-02): refund denials go out on their own now, and the 1st of every month would trip the switch.
+// Every other word still counts there, and "refund" still counts after every other category.
+export const KILL_REPLY_MEMBERSHIP_RX = /\b(?:wrong|no|that['’]?s not|human)\b/i;
+export const killReplyRx = (category: string | null | undefined) => (category === "membership_billing" ? KILL_REPLY_MEMBERSHIP_RX : KILL_REPLY_RX);
 export const KILL_WINDOW_MS = 3600e3;
 export const KILL_REPLY_WITHIN_MS = 30 * 60e3;
 export const KILL_MAX_BAD = 3;
@@ -1045,7 +1051,7 @@ export const KILL_MAX_BAD = 3;
 // How many auto-sends in the last hour drew a complaint-shaped reply within 30 minutes. Each auto-send
 // counts once. More than 3 trips it. These are whole words, so "know" isn't "no", but "no worries" is.
 export function badAutoSendReplies(
-  sent: readonly { thread_id: string; sent_at: string }[],
+  sent: readonly { thread_id: string; sent_at: string; category?: string | null }[],
   inbound: readonly { thread_id: string; sent_at: string; body: string | null }[],
   now: number,
 ): number {
@@ -1054,7 +1060,7 @@ export function badAutoSendReplies(
     if (!(now - t <= KILL_WINDOW_MS)) return false;
     return inbound.some((m) => {
       const at = Date.parse(m.sent_at);
-      return m.thread_id === s.thread_id && at > t && at - t <= KILL_REPLY_WITHIN_MS && KILL_REPLY_RX.test(m.body ?? "");
+      return m.thread_id === s.thread_id && at > t && at - t <= KILL_REPLY_WITHIN_MS && killReplyRx(s.category).test(m.body ?? "");
     });
   }).length;
 }

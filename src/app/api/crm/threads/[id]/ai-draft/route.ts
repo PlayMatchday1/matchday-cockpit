@@ -63,7 +63,9 @@ export async function POST(req: Request, ctx: RouteCtx) {
     const u = await supabase.from("app_users").select("*").eq("id", auth.appUserId ?? "").maybeSingle();
     const row = (u.data as AppUserRow | null) ?? null;
     if (!row) action_refusal = "Not a cockpit user.";
-    else if (result.draft.action.kind === "credit") {
+    else if (result.draft.action.kind === "refund_membership") {
+      action_refusal = can(row, "editMemberships", auth.email ?? "") ? null : "Refunds need EDIT MEMBERSHIPS. Ask Ryan.";
+    } else if (result.draft.action.kind === "credit") {
       const g = creditsGate(row);
       action_refusal = g.ok ? null : g.error;
     } else if (!can(row, "managePromos", auth.email ?? "")) {

@@ -8069,3 +8069,45 @@ Klaviyo SMS.
 **Skip (0249).** `skipped_at` / `skipped_by` on `match_promotion_push`. Skipped is NOT sent:
 `pushed_at` stays null. `isPushOverdue` returns false for a skipped push, and the day queue files it
 with done. The route refuses a skip on a regular push or a sent one.
+
+## Stripe membership refunds: where they are, and how one joins to a player (2026-11-02)
+
+**Evidence: read-only PostgREST queries against production 2026-11-02 (`fin_txn`,
+`stripe_member_invoices`, `stripe_customers`); scratch scripts `smi.mjs`, `smi2.mjs`. No Stripe call:
+`STRIPE_SECRET_KEY` is not in `.env.local`, so nothing below was read from Stripe directly.**
+
+- **Every 2026 membership refund is in `fin_txn`** (`kind='refund'`, `type='Membership'`): 16 rows,
+  the newest four being Ryan's by hand on Nov 1 (−$71.99, −$71.99, −$72.42) and Nov 2 (−$60.00). Each
+  carries `charge_id` and `customer_id`; none carries `payment_intent_id`. The Nov 2 17:51Z refund was
+  in the mirror by 04:50Z Nov 3.
+- **They join to a MatchDay player through the customer, not the invoice.**
+  `fin_txn.customer_id` → `stripe_customers.md_user_id`: **16 of 16**. `fin_txn.charge_id` →
+  `stripe_member_invoices.charge_id`: **0 of 16** (the invoice row's `charge_id` is not filled). The
+  refund's charge row in `fin_txn` has a `payment_intent_id` (16 of 16) and no `subscription_id`.
+- **A membership renewal is in `stripe_member_invoices`** with `billing_reason='subscription_cycle'`:
+  309 rows created on or after 2026-11-01 when read. `amount_paid_cents` is the amount charged, tax
+  included (the column comment in 0236 says so). Its charge id comes from `fin_txn` on `payment_intent_id`.
+- **What a membership charge is in Stripe**: a charge with neither `metadata.matchId` nor
+  `metadata.userMatchId` (`src/lib/stripePayments.ts`, `toRow`). The refund check at the press uses
+  the same rule.
+- **Built on this (`src/lib/membershipRefund.ts`)**: "had this refund before" = a landed change_log
+  row under `Membership refund:` (endpoint `/clubhouse/membership-refund/{playerId}`) OR any
+  Membership refund in `fin_txn` on the player's Stripe customers. At the press, Stripe is read live
+  (`charges.retrieve` and `charges.list` per customer) before `refunds.create`, with an idempotency
+  key per draft. This is Clubhouse's first and only Stripe write.
+- **UNKNOWN**: whether the production `STRIPE_SECRET_KEY` is allowed to create refunds (a restricted
+  read-only key would make every press FAILED). Not tested: no refund has been pressed.
+
+## Player Chats threads carry a city (0250, 2026-11-02)
+
+**Evidence: 0250 applied by Ryan; read back over PostgREST 2026-11-02.**
+
+- Backfill from the linked player's `preferable_city_normalized`: **617 of 731** threads, all
+  `city_source='account'`: ATX 232, SATX 131, HOU 123, DFW 56, ATL 30, STL 25, OKC 16, WAW 4. **114**
+  have no city: 112 unlinked, 2 linked to a player with no city.
+- Before 0250 a confined account saw a thread only through its assignee. The 3 threads assigned to a
+  confined account were all linked to players in that account's city, so the switch to `city_code`
+  hid nothing that was visible.
+- Rule since then (`src/lib/crmScope.ts`): a confined account sees and acts on only `city_code` =
+  its city; a thread with no city is visible to every chat staff member who is not confined, and to
+  no confined account.

@@ -23,11 +23,11 @@ import {
   parseDraftOutput, priorCourtesyFromLog, staffRepliesConfirmAccount, selectExamples, discardReasonText, DISCARD_CHIPS,
   type DraftMsg, type DraftContextIn, type DraftRequest,
 } from "../src/lib/aiDraftModel";
-import { runDraft, CONFIRMED_BY_STAFF_NOTE, AUTO_LINKED_NOTE, type DraftDeps, type NewDraftRow, type StoredDraft } from "../src/lib/aiDraftRun";
+import { runDraft, CONFIRMED_BY_STAFF_NOTE, AUTO_LINKED_NOTE, REFUND_WITHOUT_ACTION, type MembershipCharge, type DraftDeps, type NewDraftRow, type StoredDraft } from "../src/lib/aiDraftRun";
 import {
   stallPhrase, isHoldingReply, waitingOnLookup, WAITING_ON_LOOKUP, membershipRefundEligibility, membershipChargeFor, matchesPlayedSince, policyExplainedBefore,
   priorMembershipRefundFromLog, MEMBERSHIP_REFUND_REASON_PREFIX, complainsCutShort, cutShortProblem, NOT_MARKED_CUT_SHORT, nextThreadCity, cityPushRecipients, ESCALATE_AFTER_MS,
-  type RefundFacts, type RefundEligibility,
+  liveRefundRefusal, type LiveCharge, type RefundFacts, type RefundEligibility,
 } from "../src/lib/aiDraftPolicy";
 import { applyDraftAction, creditReason, guestCodeBody, guestCodeFor, guestCodeRefusal, staffConfirmedMembership, writeStatusFrom, type ActionIO } from "../src/lib/aiDraftAction";
 import { buildRecordedFields, type CameraRow } from "../src/lib/aiDraftCamera";
@@ -947,6 +947,13 @@ console.log("\nAUTO-SEND DECISION:");
   eq("kill: an auto-send over an hour old doesn't count", badAutoSendReplies([{ thread_id: "t1", sent_at: new Date(T - 61 * 60e3).toISOString() }], [{ thread_id: "t1", body: "wrong", sent_at: new Date(T - 60 * 60e3).toISOString() }], T), 0);
   eq("kill: two complaints on one auto-send count once", badAutoSendReplies([sentAt(1)], [reply(1, "wrong"), reply(1, "no")], T), 1);
   eq("kill: the threshold is MORE than 3", KILL_MAX_BAD, 3);
+  // 2026-11-02: refund denials auto-send, so "refund" after a MEMBERSHIP auto-send isn't a bad reaction.
+  const memSent = (i: number) => ({ ...sentAt(i), category: "membership_billing" });
+  eq("kill: \"I want a refund\" after a membership_billing auto-send doesn't count", badAutoSendReplies([memSent(1)], [reply(1, "I want a refund")], T), 0);
+  eq("  \"refunded\" either", badAutoSendReplies([memSent(1)], [reply(1, "so I won't be refunded?")], T), 0);
+  eq("  but \"that's wrong\" after it still counts", badAutoSendReplies([memSent(1)], [reply(1, "that's wrong")], T), 1);
+  eq("\"I want a refund\" after a match_cancelled auto-send still counts", badAutoSendReplies([{ ...sentAt(1), category: "match_cancelled" }], [reply(1, "I want a refund")], T), 1);
+  eq("  and after an auto-send whose category couldn't be read", badAutoSendReplies([{ ...sentAt(1), category: null }], [reply(1, "I want a refund")], T), 1);
 
   // Real-thread regression: a late cancel filed under another category with no courtesy flag.
   const noCourtesy = buildDraftContext(lateCancel(0, false, true));
@@ -1184,6 +1191,85 @@ console.log("\nMEMBERSHIP REFUND RULE:");
   f.deps.loadMessages = async () => [{ id: "z1", direction: "inbound", body: "can I get a refund", sent_at: "2026-11-03T14:59:00Z" }];
   await runDraft(f.deps);
   ok("through runDraft: eligible on Nov 3 reaches the request", f.calls.model[0].messages[0].content.includes('"membership_refund": {\n    "eligible": true,\n    "amount": "$71.99"'));
+}
+
+console.log("\nTHE REFUND BUTTON:");
+{
+  // At the press, Stripe live decides.
+  const ch = (over: Partial<LiveCharge> = {}): LiveCharge => ({ id: "ch_nov", status: "succeeded", amount: 7199, amount_refunded: 0, refunded: false, disputed: false, created: Date.parse("2026-11-01T06:00:00Z") / 1000, metadata: {}, ...over });
+  eq("POSITIVE: paid, unrefunded, the amount on the draft, no earlier refund → go", liveRefundRefusal(ch(), 7199, [ch()]), null);
+  ok("the charge was refunded since the draft (by hand) → no", /already refunded/.test(liveRefundRefusal(ch({ amount_refunded: 7199, refunded: true }), 7199, []) ?? ""));
+  ok("AN EARLIER MEMBERSHIP REFUND IN STRIPE, made by hand, blocks it", /already had a membership refund in Stripe/.test(liveRefundRefusal(ch(), 7199, [ch(), ch({ id: "ch_sep", amount_refunded: 7199, refunded: true, created: Date.parse("2026-09-01T17:00:00Z") / 1000 })]) ?? ""));
+  eq("  a partial refund counts too", !!liveRefundRefusal(ch(), 7199, [ch({ id: "ch_old", amount_refunded: 500 })]), true);
+  eq("POSITIVE CONTROL: a refunded MATCH charge on the customer doesn't block it", liveRefundRefusal(ch(), 7199, [ch(), ch({ id: "ch_m", metadata: { matchId: "20806" }, amount_refunded: 1299, refunded: true })]), null);
+  ok("the amount moved since the draft → regenerate", /Regenerate/.test(liveRefundRefusal(ch({ amount: 7242 }), 7199, []) ?? ""));
+  ok("a match charge can't be refunded as a membership", /for a match/.test(liveRefundRefusal(ch({ metadata: { matchId: "1" } }), 7199, []) ?? ""));
+  ok("disputed → no", /disputed/.test(liveRefundRefusal(ch({ disputed: true }), 7199, []) ?? ""));
+  ok("not paid → no", !!liveRefundRefusal(ch({ status: "pending" }), 7199, []));
+  ok("not in Stripe → no", !!liveRefundRefusal(null, 7199, []));
+  // The press itself.
+  const refundAction = { kind: "refund_membership" as const, amount_cents: 7199, reason: "charge on Nov 1, asked by the 5th, nothing played since", is_courtesy: false, player_id: 42, balance_cents: null, charge_id: "ch_nov", membership_id: 9001 };
+  const mkR = (over: Partial<ActionIO> = {}) => {
+    const log = { order: [] as string[], claimed: false };
+    const io: ActionIO = {
+      threadId: "t1",
+      loadDraft: async () => ({ id: "d9", thread_id: "t1", outcome: "pending", draft_text: "We've refunded your $71.99 charge and ended your membership.", action_status: null, action: refundAction }),
+      threadPlayerId: async () => 42, rightsRefusal: async (k) => (log.order.push(`rights:${k}`), null),
+      guestPreflight: async () => ({ ok: false, error: "no" }),
+      refundPreflight: async () => (log.order.push("preflight"), null),
+      claim: async () => (log.order.push("claim"), !log.claimed && (log.claimed = true)),
+      writeCredit: async () => { log.order.push("credit"); return { status: "landed" }; },
+      writeGuestCode: async () => { log.order.push("code"); return { status: "landed" }; },
+      writeRefund: async () => { log.order.push("refund"); return { status: "landed", ended: "Membership ended." }; },
+      finish: async (st) => { log.order.push(`finish:${st}`); },
+      ...over,
+    };
+    return { io, log };
+  };
+  const r1 = mkR();
+  const res1 = await applyDraftAction(r1.io);
+  ok("LANDED: the refund, then the reply text for the composer", res1.ok && res1.text.startsWith("We've refunded") && /Refund of \$71\.99 landed in Stripe\. Membership ended\./.test(res1.ok ? res1.message : ""));
+  eq("  in order: rights (EDIT MEMBERSHIPS), the live Stripe check, the claim, the refund", r1.log.order, ["rights:refund_membership", "preflight", "claim", "refund", "finish:landed"]);
+  const r2 = mkR({ refundPreflight: async () => "This player already had a membership refund in Stripe (2026-09-01)." });
+  const res2 = await applyDraftAction(r2.io);
+  ok("Stripe says no at the press → refused, no claim, no refund", !res2.ok && !r2.log.order.includes("claim") && !r2.log.order.includes("refund"));
+  const r3 = mkR({ reasonPrefix: "Auto:" });
+  const res3 = await applyDraftAction(r3.io);
+  ok("A REFUND IS NEVER AUTOMATIC: an Auto: press is refused before anything is read", !res3.ok && r3.log.order.length === 0);
+  const r4 = mkR({ rightsRefusal: async () => "You do not hold EDIT MEMBERSHIPS." });
+  ok("without EDIT MEMBERSHIPS → refused, nothing moves", !(await applyDraftAction(r4.io)).ok);
+  const r5 = mkR({ writeRefund: async () => ({ status: "unknown", error: "No clear answer from Stripe." }) });
+  const res5 = await applyDraftAction(r5.io);
+  ok("no clear answer from Stripe → UNKNOWN, the composer is left empty", !res5.ok && res5.status === "unknown");
+  const r6 = mkR({ writeRefund: async () => ({ status: "landed", ended: "The membership did NOT end (no answer). End it in Player Lookup before sending." }) });
+  const res6 = await applyDraftAction(r6.io);
+  ok("refund landed but the end didn't → said plainly", res6.ok && /did NOT end/.test(res6.message));
+  const r7 = mkR({ loadDraft: async () => ({ id: "d9", thread_id: "t1", outcome: "pending", draft_text: "x", action_status: null, action: { ...refundAction, charge_id: null } }) });
+  ok("no charge id → refused, regenerate", !(await applyDraftAction(r7.io)).ok);
+  // The draft attaches it from the rule, never from the model.
+  const eligibleText = JSON.stringify({ reply: "We've refunded your $71.99 charge and ended your membership.", staff_notes: [], category: "membership_billing", flags: [], offers_courtesy_credit: false, match_ids: [], image_unreadable: false, reply_without_action: "", city_guess: "", action: { kind: "none", amount_cents: null, reason: "" } });
+  const mem = { ...lateCancel(0, true), matches: [], membership: { status: "ACTIVE", since: "2026-06-01T00:00:00Z", renews: "2026-12-01T00:00:00Z", canceledAt: null, price: 6650, id: 9001 } };
+  const mkF = (charge: MembershipCharge | null, prior = false) => {
+    const f = fake({
+      now: () => Date.parse("2026-11-03T15:00:00Z"), modelText: eligibleText,
+      loadThread: async () => ({ channel: "sms", player_id: 42, match_ambiguous: false, account_confirmed: true }),
+      loadContext: async () => ({ ctx: mem, keys: ["account", "matches"] }),
+      priorMembershipRefund: async () => prior, loadPlayerOutbound: async () => [], membershipCharge: async () => charge,
+    });
+    f.deps.loadMessages = async () => [{ id: "z1", direction: "inbound", body: "I forgot to cancel, can I get a refund?", sent_at: "2026-11-03T14:59:00Z" }];
+    return f;
+  };
+  const fe = mkF({ at: "2026-11-01T06:00:00Z", amountCents: 7199, chargeId: "ch_nov" });
+  const re = await runDraft(fe.deps);
+  eq("eligible: the draft carries the refund button with STRIPE's amount (tax included), the charge and the membership", re.status === "ok" ? [re.draft.action?.kind, re.draft.action?.amount_cents, re.draft.action?.charge_id, re.draft.action?.membership_id] : null, ["refund_membership", 7199, "ch_nov", 9001]);
+  ok("  and \"Use draft\" without pressing claims nothing", re.status === "ok" && re.draft.text_without_action === REFUND_WITHOUT_ACTION && !/refunded/.test(REFUND_WITHOUT_ACTION));
+  ok("  the membership id never reaches the model", !fe.calls.model[0].messages[0].content.includes("9001"));
+  const fp = mkF({ at: "2026-11-01T06:00:00Z", amountCents: 7199, chargeId: "ch_nov" }, true);
+  const rp = await runDraft(fp.deps);
+  ok("an earlier refund (our log or Stripe's history) → no button, and the model is told not eligible", rp.status === "ok" && rp.draft.action === null && fp.calls.model[0].messages[0].content.includes("Already had a membership refund."));
+  const fn = mkF(null);
+  const rn = await runDraft(fn.deps);
+  ok("no paid renewal in our Stripe copy → no button, said why", rn.status === "ok" && rn.draft.action === null && fn.calls.model[0].messages[0].content.includes("No paid renewal this month in our Stripe copy."));
 }
 
 console.log("\nMATCHES CUT SHORT:");

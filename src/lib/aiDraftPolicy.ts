@@ -186,3 +186,24 @@ export function cityPushRecipients(staff: readonly Staff[], t: { assigneeId: str
   if (cityStaff.length === 0) return stage === "first" ? unconfined.map((u) => u.id) : [];
   return stage === "first" ? cityStaff.map((u) => u.id) : live.filter((u) => u.is_admin === true && !confinedTo(u)).map((u) => u.id);
 }
+
+// ── 2b. the refund button, at the press ────────────────────────────────────────────────────────
+
+/** A Stripe charge as the refund check needs it, read LIVE when the button is pressed. */
+export type LiveCharge = { id: string; status: string; amount: number; amount_refunded: number; refunded: boolean; disputed: boolean; created: number; metadata: Record<string, string> | null };
+const isMembershipCharge = (c: LiveCharge) => !c.metadata?.matchId?.trim() && !c.metadata?.userMatchId?.trim();
+
+/** Why the stored refund can't go ahead now, or null. Stripe decides, not our copy of it: the charge
+ *  must still be paid and unrefunded, the amount must be what the draft showed, and no membership
+ *  charge on any of the player's Stripe customers may carry a refund (the ones done by hand count). */
+export function liveRefundRefusal(target: LiveCharge | null, expectedCents: number, customerCharges: readonly LiveCharge[]): string | null {
+  if (!target) return "That charge isn't in Stripe.";
+  if (!isMembershipCharge(target)) return "That charge is for a match, not the membership.";
+  if (target.status !== "succeeded") return `That charge is ${target.status} in Stripe, not paid.`;
+  if (target.disputed) return "That charge is disputed in Stripe. Nothing was refunded.";
+  if (target.refunded || target.amount_refunded > 0) return "That charge was already refunded in Stripe.";
+  if (target.amount !== expectedCents) return `Stripe shows $${(target.amount / 100).toFixed(2)}, not the $${(expectedCents / 100).toFixed(2)} on the draft. Regenerate it.`;
+  const prior = customerCharges.find((c) => c.id !== target.id && isMembershipCharge(c) && (c.refunded || c.amount_refunded > 0));
+  if (prior) return `This player already had a membership refund in Stripe (${new Date(prior.created * 1000).toISOString().slice(0, 10)}).`;
+  return null;
+}

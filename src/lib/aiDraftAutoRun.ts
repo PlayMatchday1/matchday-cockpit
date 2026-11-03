@@ -83,7 +83,8 @@ async function applyAutoAction(sb: SupabaseClient, d: HoldRow) {
       if (r.error) throw new Error(r.error.message);
       return (r.data?.player_id as number | null) ?? null;
     },
-    rightsRefusal: async () => null,
+    // Nobody is looking: a membership refund is never automatic, whatever else lets it through.
+    rightsRefusal: async (kind) => (kind === "refund_membership" ? "A membership refund is never automatic." : null),
     async guestPreflight(playerId) {
       const f = await loadGuestFacts({ supabase: sb, env: ENV, playerId, threadId: d.thread_id, confinedCity: null });
       if (!f.ok) return f;
@@ -179,10 +180,15 @@ async function sweepStuckSends(sb: SupabaseClient, now: number): Promise<void> {
 // More than 3 auto-sends in an hour drew a complaint-shaped reply: stop, cancel the rest, say why, tell Ryan.
 async function checkKillSwitch(sb: SupabaseClient, now: number): Promise<boolean> {
   const since = new Date(now - 3600e3).toISOString();
-  const sent = await sb.from("crm_messages").select("thread_id, sent_at").not("auto_sent_draft_id", "is", null).gte("sent_at", since);
+  const sent = await sb.from("crm_messages").select("thread_id, sent_at, auto_sent_draft_id").not("auto_sent_draft_id", "is", null).gte("sent_at", since);
   if (sent.error) throw new Error(sent.error.message);
-  const rows = (sent.data ?? []) as { thread_id: string; sent_at: string }[];
-  if (rows.length <= KILL_MAX_BAD) return false;
+  const sentRows = (sent.data ?? []) as { thread_id: string; sent_at: string; auto_sent_draft_id: string }[];
+  if (sentRows.length <= KILL_MAX_BAD) return false;
+  // Each auto-send's category decides whether "refund" counts (killReplyRx). A failed read counts every
+  // word, the stricter reading.
+  const cats = await sb.from("crm_ai_drafts").select("id, category").in("id", [...new Set(sentRows.map((r) => r.auto_sent_draft_id))]);
+  const catById = new Map((cats.error ? [] : cats.data ?? []).map((d) => [d.id as string, (d.category as string | null) ?? null]));
+  const rows = sentRows.map((r) => ({ thread_id: r.thread_id, sent_at: r.sent_at, category: catById.get(r.auto_sent_draft_id) ?? null }));
   const inbound = await sb.from("crm_messages").select("thread_id, sent_at, body").eq("direction", "inbound").in("thread_id", [...new Set(rows.map((r) => r.thread_id))]).gte("sent_at", since);
   if (inbound.error) throw new Error(inbound.error.message);
   const bad = badAutoSendReplies(rows, (inbound.data ?? []) as { thread_id: string; sent_at: string; body: string | null }[], now);
