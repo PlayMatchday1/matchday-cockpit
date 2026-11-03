@@ -1,7 +1,7 @@
 /* STAFF APP MATCH v2: which desktop path a team count takes, what the size stepper offers, how an
  * add's money is worded, and how a search term is read (src/lib/appMatchV2.ts). Ryan, 2026-10-30.
  * Pure rules, asserted offline; every refusal has a presence control beside it. */
-import { overflowFakes, reduceSizes, moneyLine, phoneLast4, pickerCapacityWrites, searchTerm, sizeBounds, sizeRefusal, sizeWrites, teamsPath } from "../src/lib/appMatchV2";
+import { detailsMatch, overflowFakes, reduceSizes, moneyLine, phoneLast4, pickerCapacityWrites, searchTerm, sizeBounds, sizeRefusal, sizeWrites, teamsPath } from "../src/lib/appMatchV2";
 
 let pass = 0, fail = 0;
 const ok = (m: string) => { pass++; console.log(`  ok  ${m}`); };
@@ -71,6 +71,18 @@ is("presence control: 24 real fit 2 x 12 exactly", reduceSizes(24).sizes, [12]);
 is("25 real: nothing fits, and it says why", reduceSizes(25).sizes, []);
 is("…with a reason", typeof reduceSizes(25).reason, "string");
 is("13 a side is never offered", reduceSizes(1).sizes.includes(13), false);
+
+console.log("\nAdjust payload: the match's people, for every account");
+{
+  const m = detailsMatch({ id: 1, cityName: "Austin", managerId: 5, manager: { id: 5, firstName: "Jordan", lastName: "Blake", lat: 30.1, lng: -97.7, currentLat: 30.2, currentLng: -97.8, zipCode: "78701", currentZipCode: "78701", coordinatesUpdatedAt: "2026-10-09", address: { street: "1 Main St", city: "Austin", country: "United States" }, creditAmount: 500 }, secondManager: { id: 7, firstName: "Ana", lastName: "Lopez", lat: 30.3 } });
+  is("the manager keeps only id and name", m.manager, { id: 5, firstName: "Jordan", lastName: "Blake" });
+  is("the second manager keeps only id and name", m.secondManager, { id: 7, firstName: "Ana", lastName: "Lopez" });
+  is("the match's own keys stay", [m.id, m.cityName, (m as Record<string, unknown>).managerId], [1, "Austin", 5]);
+  const flat = JSON.stringify(m);
+  is("no coordinates, zip, address or credit anywhere", ["lat", "lng", "Lat", "Lng", "ZipCode", "zipCode", "address", "creditAmount", "coordinates"].filter((k) => flat.includes(`${k}"`)), []);
+  is("no manager stays null", detailsMatch({ id: 2, manager: null, secondManager: undefined }).manager, null);
+  is("no second manager stays null", detailsMatch({ id: 2, manager: null }).secondManager, null);
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

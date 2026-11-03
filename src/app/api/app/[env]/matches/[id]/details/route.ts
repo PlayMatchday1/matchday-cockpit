@@ -14,6 +14,7 @@ import { randomUUID } from "node:crypto";
 import { authenticateApp, readRefusal } from "@/lib/appAuth";
 import { clearToday } from "@/lib/appTodayCache";
 import { cityAllowed } from "@/lib/appModel";
+import { detailsMatch } from "@/lib/appMatchV2";
 import { isEnv } from "@/lib/appLive";
 import { apiGet, StageConfigError, StageHostGuardError } from "@/lib/matchdayStageApi";
 import { CONFINED_CITY_ERROR } from "@/lib/cityConfinement";
@@ -56,7 +57,7 @@ async function getRoute(req: Request, ctx: { params: Promise<{ env: string; id: 
     const fields = ((j?.fields as Row[]) ?? []).map((f) => ({ id: Number(f.id), title: String(f.title), city: (f.city as string | null) ?? null }));
     // The match's own city first, the rest after, so the sheet opens on the fields that matter.
     fields.sort((a, b) => Number(b.city === m.cityName) - Number(a.city === m.cityName) || a.title.localeCompare(b.title));
-    const payload = { match: m, fields, managers: (j?.managers as unknown[]) ?? [], managersAllCities: (j?.managersAllCities as unknown[]) ?? [] };
+    const payload = { match: detailsMatch(m), fields, managers: (j?.managers as unknown[]) ?? [], managersAllCities: (j?.managersAllCities as unknown[]) ?? [] };
     return Response.json(isReviewToken(req.headers.get("authorization")) ? reviewMatchDetails(payload) : payload);
   } catch (e) { return fail(e); }
 }

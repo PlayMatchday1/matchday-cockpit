@@ -129,3 +129,14 @@ export const phoneLast4 = (phone: unknown): string | null => {
   const d = typeof phone === "string" ? phone.replace(/\D/g, "") : "";
   return d.length >= 4 ? d.slice(-4) : null;
 };
+
+/* THE ADJUST PAYLOAD'S PEOPLE. Ryan, 2026-11-03: "trim the Adjust payload's manager to id and display
+ * name for every account". The desktop editor's GET carries the manager and second manager as whole
+ * user records (home coordinates, zip, address, credit); the app reads only the id, so only id and
+ * name leave the server, for every caller. */
+export function detailsPerson(v: unknown): { id: unknown; firstName: unknown; lastName: unknown } | null {
+  if (!v || typeof v !== "object") return null;
+  const u = v as Record<string, unknown>;
+  return { id: u.id ?? null, firstName: u.firstName ?? null, lastName: u.lastName ?? null };
+}
+export const detailsMatch = (m: Record<string, unknown>) => ({ ...m, manager: detailsPerson(m.manager), secondManager: detailsPerson(m.secondManager) });

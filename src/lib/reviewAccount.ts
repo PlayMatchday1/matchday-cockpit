@@ -20,6 +20,7 @@
 
 import { timingSafeEqual } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { detailsMatch } from "./appMatchV2";
 
 export const REVIEW_EMAIL = "app-review@playmatchday.com";
 export const REVIEW_FAILS_PER_HOUR = 5;
@@ -151,17 +152,12 @@ export function maskForReview(value: unknown, parentKey = ""): unknown {
 
 /**
  * Pure: the match details payload (Adjust) as the review account receives it, before masking. The
- * manager arrives as the whole user record (home coordinates, address, credit); only id and name
- * stay. The account cannot edit, so the option lists keep its own city's fields and managers only.
+ * manager is already only id and name (detailsMatch, every account). The account cannot edit, so the
+ * option lists keep its own city's fields and managers only.
  */
 export function reviewMatchDetails(p: { match: Record<string, unknown>; fields: { city: string | null }[]; managers: unknown[]; managersAllCities: unknown[] }) {
-  const person = (v: unknown) => {
-    if (!v || typeof v !== "object") return v ?? null;
-    const u = v as Record<string, unknown>;
-    return { id: u.id ?? null, firstName: u.firstName ?? null, lastName: u.lastName ?? null };
-  };
   return {
-    match: { ...p.match, manager: person(p.match.manager), secondManager: person(p.match.secondManager) },
+    match: detailsMatch(p.match),
     fields: p.fields.filter((f) => f.city === p.match.cityName),
     managers: p.managers,
     managersAllCities: [],
