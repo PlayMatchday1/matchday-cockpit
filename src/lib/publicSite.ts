@@ -54,12 +54,14 @@ export type ApiFieldRow = { id: number; title?: string | null; address?: string 
 export type MatchRow = {
   api_id: number; field_id: number; city_identifier: string | null;
   start_date: string; start_date_utc: string;
+  /** LOCAL WALL CLOCK, like start_date; sliced, never parsed. Null when MatchDay has none. */
+  end_date?: string | null;
   registration_price: number | string | null; max_player_count: number | null;
   team_count: number | null;
 };
 export type CityTotals = { matchesAllTime: number; playersAllTime: number; everHadMatch: boolean };
 
-export type SiteMatch = { date: string; weekday: string; kickoff: string; kickoff_label: string; format: string | null; price_cents: number | null; spots_total: number | null };
+export type SiteMatch = { date: string; weekday: string; kickoff: string; kickoff_label: string; end_date: string | null; end: string | null; format: string | null; price_cents: number | null; spots_total: number | null };
 export type SiteField = {
   slug: string; name: string; neighborhood: string | null;
   address: { street: string | null; city: string; state: string | null; zip: string | null };
@@ -278,6 +280,7 @@ export function buildSitePayload(inp: BuildInput): SitePayload {
         next_14_days: future.filter((m) => wallYmd(m.start_date) <= schedHi).map((m) => ({
           date: wallYmd(m.start_date), weekday: weekdayOf(wallYmd(m.start_date)),
           kickoff: wallHm(m.start_date), kickoff_label: kickoffLabel(wallHm(m.start_date)),
+          end_date: m.end_date ? wallYmd(m.end_date) : null, end: m.end_date ? wallHm(m.end_date) : null,
           format: formatOf(m), price_cents: num(m.registration_price), spots_total: num(m.max_player_count),
         })),
         mdapi_field_ids: ids,
@@ -320,6 +323,7 @@ export function buildSitePayload(inp: BuildInput): SitePayload {
       matches_all_time: "Matches that have kicked off and were not cancelled, Warsaw excluded.",
       players_all_time: "Distinct people who have played at least one match (staff, test and fake accounts excluded; a re-registered person counted once), Warsaw excluded.",
       price_per_match_cents: "Lowest and highest per-match price, in cents, among counting matches on regular-play listings (not discounted, tournament or premier listings unless marked regular play), ignoring any match under $5. next_14_days carries every match at its real price.",
+      next_14_days: "Each match: local date, weekday, kickoff (HH:MM wall clock in the city time zone), end_date and end (the same wall clock; null when MatchDay has none), format, price in cents (every match at its real price), total spots.",
       matches_display: "matches_all_time rounded down to the hundred, with a plus: show this, do not round on the site.",
       players_display: "players_all_time rounded down to the hundred, with a plus.",
       site_url: "The venue's existing page on playmatchday.com, or null.",

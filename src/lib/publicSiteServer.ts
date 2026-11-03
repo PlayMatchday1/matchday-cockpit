@@ -33,7 +33,7 @@ export async function buildPublicSite(now = new Date()): Promise<SitePayload> {
   const lo = addDays(utcToday, -WINDOW_DAYS - 1), hi = addDays(utcToday, WINDOW_DAYS + 2);
   type Raw = Omit<MatchRow, "team_count"> & { teams: unknown };
   const raw = await selectAll<Raw>(() => sb.from("mdapi_matches")
-    .select("api_id,field_id,city_identifier,start_date,start_date_utc,registration_price,max_player_count,teams:raw->teams")
+    .select("api_id,field_id,city_identifier,start_date,start_date_utc,end_date,registration_price,max_player_count,teams:raw->teams")
     .is("deleted_at", null).eq("is_cancelled", false)
     .gte("start_date", `${lo}T00:00:00Z`).lt("start_date", `${hi}T00:00:00Z`)
     .order("api_id", { ascending: true }));
