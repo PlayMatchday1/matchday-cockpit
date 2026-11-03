@@ -102,6 +102,8 @@ const MESSAGE_KEYS = new Set(["body", "text", "message", "messageBody", "message
   "transcription", "quote", "quoted", "quotedText", "quoted_text"]);
 const COMMENT_KEYS = new Set(["comment", "comments", "reviewComment", "review_comment", "feedback"]);
 const NOTE_KEYS = new Set(["note", "notes", "internalNote", "internal_note", "managerNote", "manager_note"]);
+// A face, wherever it sits (managerAvatar on a match card); other images only on a person or a message.
+const FACE_RX = /avatar|profile_?(image|photo|picture)|headshot/i;
 const PHOTO_RX = /avatar|photo|picture|profileImage|profile_image|^imageUrl$|^image_url$|mediaUrl|media_url|attachment/i;
 const PERSON_HINT_KEYS = new Set(["playerId", "player_id", "userId", "user_id", "userMatchId", "phone", "phoneNumber", "phone_number",
   "email", "initials", "firstName", "first_name", "lastName", "last_name", "bib"]);
@@ -130,7 +132,7 @@ export function maskForReview(value: unknown, parentKey = ""): unknown {
         else if (COMMENT_KEYS.has(k)) out[k] = v.trim() ? HIDDEN_COMMENT : v;
         else if (MESSAGE_KEYS.has(k)) out[k] = !v.trim() ? v : inComments ? HIDDEN_COMMENT : HIDDEN_MESSAGE;
         else if (NOTE_KEYS.has(k)) out[k] = v.trim() ? HIDDEN_NOTE : v;
-        else if (PHOTO_RX.test(k) && (person || /message|chat|thread/i.test(parentKey))) out[k] = null;
+        else if (FACE_RX.test(k) || (PHOTO_RX.test(k) && (person || /message|chat|thread/i.test(parentKey)))) out[k] = null;
         else out[k] = scrub(v);
       } else {
         out[k] = maskForReview(v, k);

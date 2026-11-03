@@ -102,6 +102,7 @@ export default function PushPlanEditor({
           This match was cancelled. Remove pushes or mark them sent; new pushes can&apos;t be added.
         </div>
       )}
+      <MatchCheckFirst draft={draft} setDraft={setDraft} disabled={cancelled} />
       {/* ── THE MATCH TIME, AND WHOSE CLOCK EVERYTHING ELSE IS IN ──────────────────────────── */}
       <div className="mb-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5">
         <span className="text-[12.5px] font-bold text-deep-green/65" data-testid="kick">
@@ -322,6 +323,57 @@ export function CheckFirstToggle({ on, disabled = false, onChange }: {
       <span className="min-w-0">
         <b className={`block text-[12px] font-extrabold ${on ? "text-yellow-800" : "text-deep-green/70"}`}>Check first</b>
         <span className="block text-[11px] text-deep-green/50">Only send if the match is still low.</span>
+      </span>
+    </div>
+  );
+}
+
+/* ── CHECK FIRST FOR THE WHOLE MATCH (Teresa, 2026-11-02) ─────────────────────────────────────
+ * One switch above the channels that sets every push on the match. It holds NO STATE OF ITS OWN:
+ * it is read off the rows of the channels that are on, so it cannot disagree with the per-push
+ * toggles below it, which keep working. Mixed rows read as partly on, "1 of 2 pushes on". Pressing
+ * it when all are on turns all off; any other state turns all on. Nothing is written until Save,
+ * like every other control in this editor.
+ *
+ * NO PUSHES, NO SWITCH TO PRESS. It renders disabled with the reason rather than a control that
+ * looks live and changes nothing. */
+export function MatchCheckFirst({ draft, setDraft, disabled = false }: {
+  draft: PushDraft; setDraft: (d: PushDraft) => void; disabled?: boolean;
+}) {
+  const rows = CHANNELS.flatMap((c) => (draft[c.key].on ? draft[c.key].rows : []));
+  const onCount = rows.filter((r) => r.checkFirst).length;
+  const state: "off" | "on" | "partly" = rows.length > 0 && onCount === rows.length ? "on" : onCount > 0 ? "partly" : "off";
+  const none = rows.length === 0;
+  const flip = () => {
+    const v = state !== "on";
+    const next = { ...draft };
+    for (const c of CHANNELS) next[c.key] = { ...draft[c.key], rows: draft[c.key].rows.map((r) => ({ ...r, checkFirst: v })) };
+    setDraft(next);
+  };
+  const note = none
+    ? "Add a push first. This sets every push on the match."
+    : state === "partly"
+      ? `Sets every push below. ${onCount} of ${rows.length} pushes on.`
+      : state === "on"
+        ? `Sets every push below. All ${rows.length === 1 ? "1 push" : `${rows.length} pushes`} on.`
+        : "Sets every push below.";
+  return (
+    <div data-testid="match-check-first" data-state={state}
+      className={`mb-3 flex items-center gap-3 rounded-xl border px-3.5 py-3 ${
+        state === "off" ? "border-cream-line bg-white" : "border-yellow-400 bg-yellow-50"}`}>
+      <button type="button" role="switch" aria-checked={state === "partly" ? "mixed" : state === "on"}
+        aria-label="Check first for this match" disabled={disabled || none}
+        data-testid="match-check-first-toggle"
+        onClick={(e) => { e.stopPropagation(); flip(); }}
+        className={`relative h-[24px] w-[40px] flex-none rounded-full transition disabled:opacity-40 ${
+          state === "off" ? "bg-[#dfe6e2]" : "bg-yellow-500"}`}>
+        <span className={`absolute top-[4px] h-4 w-4 rounded-full bg-white shadow-sm transition-all ${
+          state === "on" ? "left-[20px]" : state === "partly" ? "left-[12px]" : "left-[4px]"}`} />
+      </button>
+      <span className="min-w-0">
+        <b className="block text-[13.5px] font-extrabold text-deep-green">Check first for this match</b>
+        <span data-testid="match-check-first-note"
+          className={`block text-[11.5px] ${state === "off" ? "text-deep-green/50" : "font-semibold text-yellow-800"}`}>{note}</span>
       </span>
     </div>
   );

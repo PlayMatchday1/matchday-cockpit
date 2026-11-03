@@ -1,7 +1,7 @@
 /* STAFF APP MATCH v2: which desktop path a team count takes, what the size stepper offers, how an
  * add's money is worded, and how a search term is read (src/lib/appMatchV2.ts). Ryan, 2026-10-30.
  * Pure rules, asserted offline; every refusal has a presence control beside it. */
-import { reduceSizes, moneyLine, phoneLast4, pickerCapacityWrites, searchTerm, sizeBounds, sizeRefusal, sizeWrites, teamsPath } from "../src/lib/appMatchV2";
+import { overflowFakes, reduceSizes, moneyLine, phoneLast4, pickerCapacityWrites, searchTerm, sizeBounds, sizeRefusal, sizeWrites, teamsPath } from "../src/lib/appMatchV2";
 
 let pass = 0, fail = 0;
 const ok = (m: string) => { pass++; console.log(`  ok  ${m}`); };
@@ -25,10 +25,25 @@ is("a higher saved 4-team rung is left alone", pickerCapacityWrites({ maxPlayerC
 is("a capacity that does not divide writes nothing beside the count", pickerCapacityWrites({ maxPlayerCount: 19 }, 2, 3), {});
 
 console.log("\nteam size");
-is("bounds start at the fullest team", sizeBounds(2, [8, 6]), { min: 8, max: 20 });
-is("below the fullest team is refused", typeof sizeRefusal(2, 7, [8, 6]), "string");
-is("presence control: the fullest team's own size is accepted", sizeRefusal(2, 8, [8, 6]), null);
+is("bounds start at the team with the most real players, up to 12", sizeBounds(2, [8, 6]), { min: 8, max: 12 });
+is("never below 6 a side", sizeBounds(2, [3, 2]), { min: 6, max: 12 });
+is("5 a side is refused", typeof sizeRefusal(2, 5, [1, 1]), "string");
+is("13 a side is refused", typeof sizeRefusal(2, 13, [1, 1]), "string");
+is("presence control: 12 a side is accepted", sizeRefusal(2, 12, [1, 1]), null);
+is("below a team's real players is refused", typeof sizeRefusal(2, 7, [8, 6]), "string");
+is("presence control: that team's own real count is accepted", sizeRefusal(2, 8, [8, 6]), null);
+is("all the real players must fit too", typeof sizeRefusal(2, 7, [7, 7], 15), "string");
+is("presence control: 14 real fit 2 x 7", sizeRefusal(2, 7, [7, 7], 14), null);
 is("a fraction is refused", typeof sizeRefusal(3, 7.5, [1]), "string");
+const P = (userMatchId: number, team: number, bib: number, fake: boolean) => ({ userMatchId, team, bib, fake });
+const nine = [...[1, 2, 3, 4, 5, 6, 7].map((b) => P(b, 1, b, false)), P(8, 1, 8, true), P(9, 1, 9, true), ...[1, 2, 3, 4, 5].map((b) => P(20 + b, 2, b, false))];
+is("9 to 8 a side takes one fake off the full team, highest bib first", overflowFakes(nine, 8), [9]);
+is("9 to 7 takes both of that team's fakes", overflowFakes(nine, 7), [9, 8]);
+is("presence control: a size that fits takes nothing", overflowFakes(nine, 9), []);
+is("real players alone overflowing is null, never a real removal", overflowFakes(nine, 6), null);
+const leftover = [P(1, 1, 1, false), P(2, 1, 10, true), P(3, 1, 12, true), P(4, 1, 2, true)];
+is("a fake on a bib above the new size comes off even when the team fits", overflowFakes(leftover, 9), [3, 2]);
+is("presence control: at 12 a side those bibs stay", overflowFakes(leftover, 12), []);
 is("3 teams writes the total only", sizeWrites({ maxPlayerCount: 27 }, 3, 8), { maxPlayerCount: 24 });
 is("2 teams writes the stored size, raising the rung", sizeWrites({ maxPlayerCount: 18, maxTeamSize2Team: 18 }, 2, 10), { maxPlayerCount: 20, maxTeamSize2Team: 20 });
 is("2 teams going down leaves a higher rung", sizeWrites({ maxPlayerCount: 20, maxTeamSize2Team: 20 }, 2, 9), { maxPlayerCount: 18 });
@@ -49,13 +64,13 @@ is("too short to search", searchTerm("ab"), null);
 is("phone last four only", phoneLast4("+15125550188"), "0188");
 
 console.log("\nreduce to 2: the sizes offered");
-is("5 real, currently 8 a side: 6, 7, 8 (6 is the desktop's floor)", reduceSizes(5, 8), { sizes: [6, 7, 8], reason: null });
-is("15 real, currently 9 a side: from 8 (fits 15) to 9", reduceSizes(15, 9), { sizes: [8, 9], reason: null });
-is("presence control: 16 real at 8 a side fits exactly", reduceSizes(16, 8).sizes, [8]);
-is("17 real at 8 a side: nothing fits, and it says why", reduceSizes(17, 8).sizes, []);
-is("…with a reason", typeof reduceSizes(17, 8).reason, "string");
-is("26 real: beyond 12 a side, refused", reduceSizes(26, 12).sizes, []);
-is("current size above 12 is capped at 12", reduceSizes(10, 14).sizes, [6, 7, 8, 9, 10, 11, 12]);
+is("5 real: 6 to 12 (6 is the desktop's floor)", reduceSizes(5), { sizes: [6, 7, 8, 9, 10, 11, 12], reason: null });
+is("15 real: from 8 (fits 15) up to 12", reduceSizes(15), { sizes: [8, 9, 10, 11, 12], reason: null });
+is("not capped at the current size: 9v9 to 12v12 are offered", reduceSizes(10).sizes.slice(-4), [9, 10, 11, 12]);
+is("presence control: 24 real fit 2 x 12 exactly", reduceSizes(24).sizes, [12]);
+is("25 real: nothing fits, and it says why", reduceSizes(25).sizes, []);
+is("…with a reason", typeof reduceSizes(25).reason, "string");
+is("13 a side is never offered", reduceSizes(1).sizes.includes(13), false);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

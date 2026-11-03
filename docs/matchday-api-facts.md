@@ -8229,3 +8229,25 @@ pacer, so 20,000 ids take about 20 s to resolve.
   all upcoming; with `fromDate=2020-01-01`, a field's past and upcoming matches both came back. A list read from it
   without `fromDate` is an upcoming-only list. One of the field-covers browser checks passed on an empty "past" set
   because of this before a positive control caught it.
+
+## Match Promotion: a check-first match went green from a FIELD push, not from its tags (2026-11-02)
+
+**Evidence: `fetchPromoWeek` run read-only against production 2026-11-02 (week 2026-11-02, 149
+matches, 20 general pushes), through the page's own `coverageOf` / `generalsCovering`.**
+
+Keswick Park (Chamblee), Atlanta, Mon Nov 2 8:00 PM (api_id 20919) carried one own push, id 557,
+`wa`, `check_first` true. It read `covered` (green, dotted rail) because general push **id 542**,
+`scope=field`, field 1717, `klaviyo_sms`, `check_first` false, 18:54Z the same day, covers it, and
+the 0238 rule let a regular general push beat own check-first pushes. Its field tags
+(`key_field`, `starting_11`) were never read by the colour rule.
+
+Rule now (Teresa, confirmed by Ryan): **own pushes decide.** A match with dated own pushes that are
+all check first is yellow whatever group push covers it; a group push only colours a match with no
+dated push of its own. Under the new rule 7 of 149 tiles that week went `covered` to `check`:
+20919, 20920 (Keswick), 20703 (Bob Jones), 20680 (Crossbar Rowlett), 20735 (Hattrick), 20878, 20879
+(Wheatley Heights). Every one was the same shape: own check-first WhatsApp plus a regular field-scoped
+Klaviyo SMS.
+
+**Skip (0249).** `skipped_at` / `skipped_by` on `match_promotion_push`. Skipped is NOT sent:
+`pushed_at` stays null. `isPushOverdue` returns false for a skipped push, and the day queue files it
+with done. The route refuses a skip on a regular push or a sent one.

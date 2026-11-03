@@ -54,6 +54,7 @@ import {
 } from "@/lib/rosterEditModel";
 import { TEMPLATE_LABELS, buildTemplateBody, smsSegments, unfilledTokens } from "@/lib/matchNotify";
 import { defaultLadder } from "@/lib/fakeLadder";
+import { overflowFakes, SIZE_MAX, SIZE_MIN } from "@/lib/appMatchV2";
 
 // Only these two `type` values are exposed. The known enum also has BRACKET and GROUP and the full
 // set is UNKNOWN (no spec in repo). A match whose current type is NOT one of these renders as
@@ -62,7 +63,9 @@ const EXPOSED_TYPES: Record<string, string> = { REGULAR: "Regular", EVENT: "Spec
 const MARKS = [36, 24, 12, 6, 3] as const;
 // EXACT, lowercase, trimmed. "Cancel" and " cancel " with inner spaces are refused — trimmed means
 // the surrounding whitespace only, not a fuzzy match.
-const SIZES = [4, 5, 6, 7, 8, 9, 10, 11, 12] as const;
+// 6 to 12 a side, the range every team size control offers (Ryan, 2026-11-02). A stored value off
+// this list still draws, through RungOption.
+const SIZES = [6, 7, 8, 9, 10, 11, 12] as const;
 
 /* THE SAME SEVEN THE FULL EDITOR OFFERS, in the same order and with the same labels. FEMINE is the
  * API's spelling, not a typo here — the stored value must match what the platform stores. */
@@ -221,6 +224,8 @@ export default function MatchPanel({ matchId, env = DRAWER_ENV, onDirtyChange, o
   const [opToast, setOpToast] = useState<{ text: string; bad?: boolean } | null>(null);
   const [immediateOps, setImmediateOps] = useState<string[]>([]); // adds that fired this session — drives Revert's warning
   const [pending, setPending] = useState<Pending>(emptyPending());
+  // The fake removals SPOTS PER TEAM staged for a smaller size, so a later size can take them back.
+  const [sizeRemoves, setSizeRemoves] = useState<number[]>([]);
   const [movePick, setMovePick] = useState<{ umId: number; team: number | null } | null>(null);
   /* WHO IS PICKED FOR A TEXT. umIds, because a row is what an operator clicks — the phone dedupe
    * and the user-id narrowing both happen downstream, and the count on screen is phones. */
@@ -945,9 +950,22 @@ export default function MatchPanel({ matchId, env = DRAWER_ENV, onDirtyChange, o
    * touched — and 44 is the whole point of a Premier match that starts at 32 and bumps to 44.
    * teamCountWrites now raises a rung that is below the new capacity and leaves a higher one
    * alone, so the clamp is upward only. */
-  const setPerTeam = (per: number) => {
+  /* 6 TO 12 A SIDE, NEVER BELOW THE TEAM WITH THE MOST REAL PLAYERS (Ryan, 2026-11-02), the rule
+   * the staff app's Adjust and Match screens follow. Fakes never block a size: a smaller one stages
+   * the fakes each team holds past it, highest bib first, as removals, and Save sends the roster
+   * writes before the capacity, so they come off first. A larger size takes those removals back. */
+  const realMax = Math.max(0, ...(roster?.teams ?? []).map((t) => (roster?.players ?? []).filter((p) => p.team === t.teamNumber && !p.fake).length));
+  const perLo = Math.max(SIZE_MIN, realMax), perHi = SIZE_MAX;
+  const setPerTeam = (wanted: number) => {
+    const per = Math.min(perHi, Math.max(perLo, wanted));
     const writes = teamCountWrites(teamCount, per, rungValue(teamCount));
     for (const [k, v] of Object.entries(writes)) setField(k, v);
+    const kept = pending.removes.filter((um) => !sizeRemoves.includes(um));
+    const rows = (roster?.players ?? []).filter((p) => !kept.includes(p.umId))
+      .map((p) => ({ userMatchId: p.umId, team: p.team, bib: p.playerNumber, fake: p.fake }));
+    const drop = overflowFakes(rows, per) ?? [];
+    setPending((p) => ({ ...p, removes: [...p.removes.filter((um) => !sizeRemoves.includes(um)), ...drop] }));
+    setSizeRemoves(drop);
   };
 
   // ── ONE roster write, then the RE-READ that decides its verdict ─────────────────────────────────
@@ -1115,8 +1133,26 @@ export default function MatchPanel({ matchId, env = DRAWER_ENV, onDirtyChange, o
        * mirror row to keep, and an edit touching only unmirrored fields has nothing to go stale. */
       const mirrorWarn = j.mirrored === false
         && j.mirrorReason !== "not production" && j.mirrorReason !== "no mirrored fields";
+      /* THE FAKES FOLLOW A RESIZE (Ryan, 2026-11-02), as the staff app's size write: the stored
+       * spots left is kept, so a smaller match holds fewer fakes and a bigger one more. The fakes
+       * route works out the count itself (followSpotsLeft), the one rule both paths share. Only
+       * after a size or format total that LANDED; a refusal or a failure is said, never retried. */
+      let fakesLine = "";
+      const SIZE_KEYS = ["maxPlayerCount", "maxTeamSize2Team", "maxTeamSize4Team"];
+      if (sentKeys.some((k) => SIZE_KEYS.includes(k)) && !notApplied.some((k) => SIZE_KEYS.includes(k))) {
+        try {
+          const fr = await fetch(`/api/matchday/${env}/matches/${matchId}/fakes`, {
+            method: "POST", headers, body: JSON.stringify({ followSpotsLeft: true, matchName: orig.name ?? null, source: "Match panel · team size" }),
+          });
+          const fj = await fr.json().catch(() => null);
+          fakesLine = !fr.ok || (fj?.outcome !== "landed")
+            ? ` \u00b7 FAKES NOT BROUGHT TO SPOTS LEFT: ${fj?.error ?? fj?.outcome ?? fr.status}.`
+            : fj.noop ? "" : ` \u00b7 Fakes ${fj.fakesBefore} to ${fj.fakesAfter} (spots left ${fj.spotsLeft}), re-read confirmed.`;
+          await loadRoster();
+        } catch (e) { fakesLine = ` \u00b7 FAKES UNKNOWN: ${e instanceof Error ? e.message : String(e)}. Reload before acting.`; }
+      }
       setToast(
-        `Outcome ${j.outcome ?? "?"}: ${landed}/${sentKeys.length} field(s) LANDED (re-read confirmed).` +
+        `Outcome ${j.outcome ?? "?"}: ${landed}/${sentKeys.length} field(s) LANDED (re-read confirmed).` + fakesLine +
         (notApplied.length ? ` NOT APPLIED: ${notApplied.map((k) => LABELS[k] ?? k).join(", ")}.` : "") +
         (mirrorWarn
           ? ` \u00b7 BUT THE CLUBHOUSE COPY WAS NOT UPDATED (${j.mirrorReason ?? "unknown"}). Other screens will show the old value until the nightly sync. Run the matches sync on /data.`
@@ -1466,10 +1502,10 @@ export default function MatchPanel({ matchId, env = DRAWER_ENV, onDirtyChange, o
               <div className="mp-f"><span className="mp-lb">SPOTS PER TEAM <em>{teamCount} teams</em></span>
                 {teamCount > 0 && capacity % teamCount === 0 ? (
                   <div className="mp-step">
-                    <button type="button" data-testid="mp-spt-minus" aria-label="Fewer per team" disabled={capacity <= teamCount}
+                    <button type="button" data-testid="mp-spt-minus" aria-label="Fewer per team" disabled={capacity / teamCount <= perLo}
                       onClick={() => setPerTeam(capacity / teamCount - 1)}>−</button>
                     <span className="mp-step-val" data-testid="mp-spt">{capacity / teamCount}</span>
-                    <button type="button" data-testid="mp-spt-plus" aria-label="More per team"
+                    <button type="button" data-testid="mp-spt-plus" aria-label="More per team" disabled={capacity / teamCount >= perHi}
                       onClick={() => setPerTeam(capacity / teamCount + 1)}>+</button>
                   </div>
                 ) : (
@@ -2627,7 +2663,8 @@ function shownVal(k: string, v: unknown, managers: Manager[]): string {
  * the rung selects for the same reason: a select whose value is not among its options silently
  * falls back to index 0 and REPORTS A NUMBER NOBODY CHOSE.
  *
- * SIZES stops at 12 a side; the SPOTS PER TEAM stepper has no ceiling. So stepping a 4-team match
+ * SIZES runs 6 to 12 a side, and so does SPOTS PER TEAM now; a match stored outside it (4 a side, 15)
+ * still has to draw. Before 2026-11-02 the SPOTS PER TEAM stepper had no ceiling. So stepping a 4-team match
  * to 15 a side raises the rung to 60, the select cannot draw 60, and it fell back — to "4 each"
  * (16) before, and to "not available as a 4-team match" once the 0 option was added. MEASURED on
  * 18760: the state and the help line read "4 x 15 = 60 spots" while the control read "not

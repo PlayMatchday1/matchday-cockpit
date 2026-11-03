@@ -9,7 +9,7 @@
  * tile that disagree is the one failure this page cannot afford, so the queue is a projection of
  * `week.matches` and never a second list. It creates nothing: the plans are made on the week below.
  */
-import { datedPushes, generalPushDayIdx, generalsCovering, isPushOverdue, isPushSent, realFillLabel,
+import { datedPushes, generalPushDayIdx, generalsCovering, isPushOverdue, isPushSent, isPushSkipped, realFillLabel,
   type GeneralPush, type PromoMatch, type PromoWeek, type PromoPush } from "./matchPromotion";
 
 /* ONE ROW SHAPE FOR BOTH. A general push sits in the same queue with the same Mark sent, and the
@@ -23,7 +23,7 @@ export type DayQueue = {
   late: QueueEntry[];
   /** Unsent and the moment has not arrived. */
   todo: QueueEntry[];
-  /** Already marked sent. Folded away, never removed. */
+  /** Already marked sent, or skipped (0249). Folded away, never removed. */
   done: QueueEntry[];
   /** Matches cancelled on this day, for the tab's pip. */
   cancelled: PromoMatch[];
@@ -42,6 +42,7 @@ export function weekQueueEntries(week: PromoWeek): QueueEntry[] {
       p: {
         id: g.id, matchApiId: 0, channel: g.channel, pushAt: g.pushAt, topic: g.topic,
         promoCode: g.promoCode, pushedAt: g.pushedAt, pushedBy: g.pushedBy, checkFirst: g.checkFirst,
+        skippedAt: g.skippedAt, skippedBy: g.skippedBy,
       } satisfies PromoPush,
     }));
   return [...own, ...general];
@@ -63,9 +64,12 @@ export function dayQueue(week: PromoWeek, dayIdx: number, now: number = Date.now
   const past = isPastWeek(week, now);
   const mine = weekQueueEntries(week)
     .filter((e) => (e.general ? generalPushDayIdx(e.general, week.days) === dayIdx : e.m?.dayIdx === dayIdx))
-    .sort((a, b) => a.at - b.at);
-  const done = mine.filter((e) => isPushSent(e.p));
-  const unsent = mine.filter((e) => !isPushSent(e.p));
+    .sort(byQueueOrder);
+  /* SKIPPED IS DONE (0249). A check-first push somebody decided not to send is finished work: it
+   * sits with the sent ones, greyed, and can never be past due. */
+  const isDone = (e: QueueEntry) => isPushSent(e.p) || isPushSkipped(e.p);
+  const done = mine.filter(isDone);
+  const unsent = mine.filter((e) => !isDone(e));
   /* PAST DUE AND TO-SEND ARE DIFFERENT STATES. A push whose moment has gone is late; one whose
    * moment has not arrived is not, however soon it is. isPushOverdue owns that call. */
   const late = past ? [] : unsent.filter((e) => isPushOverdue(e.p, now));
@@ -74,6 +78,30 @@ export function dayQueue(week: PromoWeek, dayIdx: number, now: number = Date.now
     dayIdx, late, todo, done,
     cancelled: week.matches.filter((m) => m.dayIdx === dayIdx && m.state === "cancelled"),
   };
+}
+
+/* PUSH TIME, THEN MATCH TIME (Teresa, 2026-11-02). Two pushes at 6:00 PM list the earlier kick-off
+ * first. A general push has no kick-off and goes after the match pushes at its minute. */
+export function byQueueOrder(a: QueueEntry, b: QueueEntry): number {
+  if (a.at !== b.at) return a.at - b.at;
+  const ka = a.m?.startDateUtc ? Date.parse(a.m.startDateUtc) : Number.POSITIVE_INFINITY;
+  const kb = b.m?.startDateUtc ? Date.parse(b.m.startDateUtc) : Number.POSITIVE_INFINITY;
+  if (ka !== kb) return ka < kb ? -1 : 1;
+  return a.p.id - b.p.id;
+}
+
+/** The day's pushes for one channel, or all of them. Groups and their order are kept. */
+export function filterQueue(q: DayQueue, channel: string | null): DayQueue {
+  if (!channel) return q;
+  const keep = (e: QueueEntry) => e.p.channel === channel;
+  return { ...q, late: q.late.filter(keep), todo: q.todo.filter(keep), done: q.done.filter(keep) };
+}
+
+/** Pushes per channel on one day, every group counted, for the filter chips. */
+export function channelCounts(q: DayQueue): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const e of [...q.late, ...q.todo, ...q.done]) out.set(e.p.channel, (out.get(e.p.channel) ?? 0) + 1);
+  return out;
 }
 
 /** All seven, in order. The tabs read this so choosing a day never means opening one. */
@@ -91,12 +119,13 @@ export function defaultDayIdx(week: PromoWeek, now: Date = new Date()): number {
 
 /** The count the tab carries, so the operator can choose a day without opening any.
  *  CHECK FIRST (0238) IS SPLIT OUT OF TO-SEND: "3 to send · 2 to check". `todo` is regular only. */
-export function tabCounts(q: DayQueue): { late: number; todo: number; check: number; done: number; cancelled: number } {
+export function tabCounts(q: DayQueue): { late: number; todo: number; check: number; done: number; skipped: number; cancelled: number } {
   return {
     late: q.late.length,
     todo: q.todo.filter((e) => !e.p.checkFirst).length,
     check: q.todo.filter((e) => e.p.checkFirst).length,
     done: q.done.length,
+    skipped: q.done.filter((e) => isPushSkipped(e.p)).length,
     cancelled: q.cancelled.length,
   };
 }

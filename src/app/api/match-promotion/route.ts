@@ -61,6 +61,10 @@ type SaveBody = {
    * siblings overdue. `pushed` is true to mark, false to un-mark. */
   pushId?: number;
   pushed?: boolean;
+  /* ── SKIP (0249) ──────────────────────────────────────────────────────────────────────────
+   * `{ pushId, skipped }`. A check-first push somebody checked and decided not to send. Its own
+   * stamp, never pushed_at: skipped did not go out. `skipped` false undoes it. */
+  skipped?: boolean;
   /* ── A GENERAL PUSH ───────────────────────────────────────────────────────────────────────
    * Scoped to a CITY or a FIELD, belonging to no match. Same table as the match pushes, so the
    * queue and the tiles stay one projection of one set; see 0191 for why not two tables. */
@@ -128,6 +132,9 @@ export async function POST(req: Request) {
 
   /* ── BRANCH ONE: MARK ONE PUSH SENT ───────────────────────────────────────────────────────── */
   if (typeof body.pushed === "boolean") return markSent(auth, body);
+
+  /* ── BRANCH 1a: SKIP ONE CHECK-FIRST PUSH (0249) ──────────────────────────────────────────── */
+  if (typeof body.skipped === "boolean") return markSkipped(auth, body);
 
   /* ── BRANCH 1b: A FIELD TAG ───────────────────────────────────────────────────────────────── */
   if (body.tag) return saveTag(auth, body.tag);
@@ -258,8 +265,12 @@ export async function POST(req: Request) {
         && (wasRow.promo_code ?? null) === p.promo_code && wasRow.channel === p.channel
         && (wasRow.check_first === true) === p.check_first;
       if (same) continue;
+      /* A SKIP ONLY MEANS SOMETHING ON A CHECK-FIRST PUSH (0249). Turned back to regular, the push
+       * is owed again, so the skip is cleared. Named only when the row already carries one, so a
+       * save before 0249 is applied never names a column that does not exist. */
+      const unskip = wasRow.skipped_at && !p.check_first ? { skipped_at: null, skipped_by: null } : {};
       const { data: after, error } = await sb.from("match_promotion_push")
-        .update({ channel: p.channel, push_at: p.push_at, topic: p.topic, promo_code: p.promo_code, check_first: p.check_first, ...stamp })
+        .update({ channel: p.channel, push_at: p.push_at, topic: p.topic, promo_code: p.promo_code, check_first: p.check_first, ...unskip, ...stamp })
         .eq("id", p.id).select("*").maybeSingle();
       if (error) {
         const named = missingTableError(error.message);
@@ -383,6 +394,68 @@ async function markSent(
     return Response.json({ outcome: "LANDED", push: after, audit }, { status: 200 });
   } catch (e) {
     console.error("[api/match-promotion] markSent failed", e);
+    return Response.json({ outcome: "FAILED", error: "Nothing was written." }, { status: 500 });
+  }
+}
+
+/* ── SKIP A CHECK-FIRST PUSH (0249) ──────────────────────────────────────────────────────────
+ * Teresa: check-first pushes on today's list went red "past due" with only Mark sent, so a push
+ * somebody checked and rightly did not send looked like a missed one. Skip records that decision.
+ *
+ * ONLY ON A CHECK-FIRST PUSH, ONLY WHEN NOT SENT. A regular push always goes out, so there is no
+ * decision to record; a sent push already went out, so skipping it would be false. The UI only
+ * offers it there; the route refuses it anyway, because a UI check is not a rule. Undo is always
+ * allowed. One write, no retry, read back before LANDED, logged to fin_change_log like Mark sent.
+ */
+async function markSkipped(
+  auth: { supabase: SupabaseClient; email?: string | null },
+  body: SaveBody,
+): Promise<Response> {
+  const pushId = Number(body.pushId);
+  if (!Number.isInteger(pushId) || pushId <= 0) {
+    return Response.json({ outcome: "FAILED", error: "pushId is required to skip a push." }, { status: 400 });
+  }
+  const sb = auth.supabase;
+  try {
+    const { data: before, error: readErr } = await sb
+      .from("match_promotion_push").select("*").eq("id", pushId).maybeSingle();
+    if (readErr) return Response.json({ outcome: "FAILED", error: readErr.message }, { status: 500 });
+    if (!before) {
+      return Response.json({ outcome: "NOT APPLIED", error: "That push no longer exists. Reload the week." }, { status: 409 });
+    }
+    /* select("*") returns every column, so a row with no skipped_at key means 0249 is not applied. */
+    if (!("skipped_at" in before)) {
+      return Response.json({ outcome: "FAILED", error: "Skip needs migration 0249. Apply it in the Supabase SQL Editor. Nothing was written." }, { status: 503 });
+    }
+    if (body.skipped === true) {
+      if (before.check_first !== true) {
+        return Response.json({ outcome: "FAILED", error: "Only a check-first push can be skipped. Nothing was written." }, { status: 400 });
+      }
+      if (before.pushed_at) {
+        return Response.json({ outcome: "FAILED", error: "This push is already marked sent, so it can't be skipped. Nothing was written." }, { status: 400 });
+      }
+    }
+    const nowIso = new Date().toISOString();
+    const { data: after, error } = await sb.from("match_promotion_push")
+      .update({
+        skipped_at: body.skipped ? nowIso : null,
+        skipped_by: body.skipped ? auth.email ?? null : null,
+        updated_by: auth.email ?? null,
+        updated_at: nowIso,
+      })
+      .eq("id", pushId).select("*").maybeSingle();
+    if (error) return Response.json({ outcome: "FAILED", error: error.message }, { status: 500 });
+    if (!after || (!!after.skipped_at) !== body.skipped) {
+      return Response.json({
+        outcome: "NOT APPLIED",
+        error: "The skip reported success but read back different. Nothing was retried.",
+      }, { status: 409 });
+    }
+    const audit = await recordPushes(sb, auth.email ?? null, [{ row_id: pushId, action: "update", before, after }],
+      body.skipped ? "check-first push skipped" : "skip undone");
+    return Response.json({ outcome: "LANDED", push: after, audit }, { status: 200 });
+  } catch (e) {
+    console.error("[api/match-promotion] markSkipped failed", e);
     return Response.json({ outcome: "FAILED", error: "Nothing was written." }, { status: 500 });
   }
 }
@@ -613,7 +686,10 @@ async function saveGeneral(
       before = data;
     }
     const res = editId != null
-      ? await sb.from("match_promotion_push").update(row).eq("id", editId).neq("scope", "match").select("*").maybeSingle()
+      ? await sb.from("match_promotion_push")
+        /* Same rule as a match push (0249): back to regular clears a skip. */
+        .update({ ...row, ...(before?.skipped_at && !row.check_first ? { skipped_at: null, skipped_by: null } : {}) })
+        .eq("id", editId).neq("scope", "match").select("*").maybeSingle()
       : await sb.from("match_promotion_push").insert(row).select("*").maybeSingle();
     if (res.error) {
       const named = missingTableError(res.error.message);

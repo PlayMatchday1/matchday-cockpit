@@ -62,7 +62,8 @@ const rungOf = (v: unknown): number | null => {
 /** The fallback size when the match's own 2-team total does not name one. 2 x 11 = 22. */
 export const REDUCE_PER_TEAM = 11;
 export const REDUCE_TARGET_TEAMS = 2;
-/** The picker's range. 12 a side is the most a 2-team match is ever set to. */
+/** The picker's range, the same 6 to 12 every team size control offers. 12 a side is the most a
+ *  2-team match is ever set to (Ryan, 2026-11-02: "12v12 is sometimes the right format"). */
 export const REDUCE_MIN_PER_TEAM = 6;
 export const REDUCE_MAX_PER_TEAM = 12;
 

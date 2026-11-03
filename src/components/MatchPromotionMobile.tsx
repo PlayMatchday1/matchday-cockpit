@@ -18,14 +18,14 @@
 // SAME DATA, SAME ROUTES, SAME WRITES. Every figure here is computed by the desktop's own helpers
 // and passed in; nothing is re-derived and no count is redefined.
 
-import { CHANNELS, NEW_FLAG_LABEL, channelsOn, coverLabel, pushReach, coverageCaption, coverageOf, coverageStateOf, coverageSummary, datedPushes, fmtPushIn, isPushOverdue, isPushSent, leadToKickoff, matchCodes, sentStamp, venueOffsetMs, type GeneralPush, type PromoMatch, type PromoPush, type PromoWeek, type PushDraft, type ZoneMode } from "@/lib/matchPromotion";
+import { CHANNELS, NEW_FLAG_LABEL, channelsOn, coverLabel, pushReach, coverageCaption, coverageOf, coverageStateOf, coverageSummary, datedPushes, fmtPushIn, isPushOverdue, isPushSent, isPushSkipped, leadToKickoff, matchCodes, sentStamp, skippedStamp, venueOffsetMs, type GeneralPush, type PromoMatch, type PromoPush, type PromoWeek, type PushDraft, type ZoneMode } from "@/lib/matchPromotion";
 import { TAG_META, splitTags, tagTitle, tagsAtScope, type TagDates, type TagKey } from "@/lib/promoTags";
 import Starting11Control from "@/components/Starting11Control";
 /* THE VIEW LIST AND ITS LABELS COME FROM THE DESKTOP. Not a second list to keep in step — a
  * phone tab the desktop does not have is how the two surfaces end up offering different views. */
 import { MOBILE_VIEWS, VIEW_LABEL, type MobileView } from "@/components/MatchPromotionView";
 import { checkFirstFill, type QueueEntry } from "@/lib/promoDayQueue";
-import MarkPushSent from "@/components/MarkPushSent";
+import MarkPushSent, { SkipPush } from "@/components/MarkPushSent";
 import PushPlanEditor from "@/components/PushPlanEditor";
 import PageComments from "@/components/PageComments";
 
@@ -140,7 +140,9 @@ function Due({ week, jobs, overdue, now, zone, onOpen, onReload, onError }: {
       {jobs.map((e) => {
         const { m, p, at, general } = e;
         /* SENT GOES QUIET, NOT AWAY — the row stays on the list so everyone can see it was done. */
-        const sent = isPushSent(p);
+        /* SKIPPED (0249) reads like sent: greyed, stamped, never overdue. */
+        const skipped = !isPushSent(p) && isPushSkipped(p);
+        const sent = isPushSent(p) || skipped;
         /* CHECK FIRST (0238), same label and same fill text as the desktop day list. */
         const check = p.checkFirst && !sent;
         const late = isPushOverdue(p, now);
@@ -154,7 +156,7 @@ function Due({ week, jobs, overdue, now, zone, onOpen, onReload, onError }: {
         const code = p.promoCode?.trim() || null;
         return (
           <div key={p.id} data-testid="m-due-card" data-push-id={p.id} data-channel={p.channel}
-            data-sent={sent ? "1" : "0"} data-late={late ? "1" : "0"} data-check-first={p.checkFirst ? "1" : "0"}
+            data-sent={sent ? "1" : "0"} data-skipped={skipped ? "1" : "0"} data-late={late ? "1" : "0"} data-check-first={p.checkFirst ? "1" : "0"}
             className={`mx-3 mb-2 rounded-[11px] border px-3 py-2.5 ${
               sent ? "border-cream-line bg-[#f4f7f5]"
                 : late ? "border-coral/45 bg-coral-soft/40" : check ? "border-yellow-400 bg-yellow-50"
@@ -182,9 +184,12 @@ function Due({ week, jobs, overdue, now, zone, onOpen, onReload, onError }: {
                 </i>
               )}
               {check && <span data-testid="m-due-fill" className="text-[12px] font-extrabold text-yellow-800">{checkFirstFill(e, week)}</span>}
-              {sent && <span data-testid="m-due-stamp" className="text-[11px] text-deep-green/45">{sentStamp(p)}</span>}
-              {/* THE SAME CONTROL THE DESKTOP STRIP USES, not a second implementation of one. */}
-              <MarkPushSent push={p} onDone={onReload} onError={onError} />
+              {sent && <span data-testid="m-due-stamp" className="text-[11px] text-deep-green/45">{skipped ? skippedStamp(p) : sentStamp(p)}</span>}
+              {/* THE SAME CONTROLS THE DESKTOP STRIP USES, not a second implementation of them. */}
+              <span className="ml-auto flex flex-none items-center gap-2">
+                <SkipPush push={p} onDone={onReload} onError={onError} />
+                {!skipped && <MarkPushSent push={p} onDone={onReload} onError={onError} />}
+              </span>
               {/* NO SEND › ON A GENERAL PUSH. There is no match panel to open, and a control that
                   opened nothing would be a fake affordance. Mark sent is the action it has. */}
               {m && (

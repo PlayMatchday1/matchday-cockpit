@@ -32,8 +32,9 @@ import {
   ProductionWriteBoltedError, StageHostGuardError, StageConfigError, NotAuthorizedError, type MatchdayEnv,
 } from "@/lib/matchdayStageApi";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
-import { rosterRowCounts, rosterRowIsFake } from "@/lib/gamedayModel";
-import { planFakeRoster, fakePlanNote, type PlanRow } from "@/lib/fakeRosterPlan";
+import { realOccupancyFromRoster, rosterRowCounts, rosterRowIsFake } from "@/lib/gamedayModel";
+import { fakesFollowingSpotsLeft } from "@/lib/fakeLadder";
+import { planFakeRoster, fakePlanNote, openFakeSlots, type PlanRow } from "@/lib/fakeRosterPlan";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -56,12 +57,14 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
   if (!isEnv(env)) return Response.json({ error: `unknown environment ${JSON.stringify(env)}` }, { status: 400 });
   if (!/^\d+$/.test(id)) return Response.json({ error: "matchId must be numeric" }, { status: 400 });
 
+  /* followSpotsLeft: after a team size write, the target is worked out HERE from the match as it
+   * now stands (fakesFollowingSpotsLeft), so the app and the desktop resize share one rule. */
   const b = (await req.json().catch(() => null)) as
-    { targetFakes?: number; saveId?: string; source?: string; matchName?: string } | null;
-  if (!b || !Number.isFinite(Number(b.targetFakes))) {
-    return Response.json({ error: "targetFakes (a number) is required" }, { status: 400 });
+    { targetFakes?: number; followSpotsLeft?: boolean; saveId?: string; source?: string; matchName?: string } | null;
+  if (!b || (b.followSpotsLeft !== true && !Number.isFinite(Number(b.targetFakes)))) {
+    return Response.json({ error: "targetFakes (a number) or followSpotsLeft is required" }, { status: 400 });
   }
-  const target = Math.trunc(Number(b.targetFakes));
+  let target = Math.trunc(Number(b.targetFakes));
   const actor = { canEditMatches: auth.canEditMatches, email: auth.email, userId: auth.appUserId };
   const saveId = b.saveId || randomUUID();
 
@@ -77,6 +80,12 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
     const matchName = b.matchName ?? (match.name as string) ?? null;
 
     const rows = await readRoster();
+    let spotsLeft: number | null = null;
+    if (b.followSpotsLeft === true) {
+      const real = realOccupancyFromRoster(Number((match._count as Record<string, unknown> | undefined)?.players ?? 0), rows);
+      const f = fakesFollowingSpotsLeft(match, real, Date.now());
+      target = f.target; spotsLeft = f.spotsLeft;
+    }
     const plan = planFakeRoster({ rows, capacity, targetFakes: target });
 
     if (plan.refusal) {
@@ -85,7 +94,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
     }
     if (plan.noop) {
       return Response.json({ ok: true, outcome: "landed", noop: true, fakesBefore: plan.liveFakes,
-        fakesAfter: plan.liveFakes, target, note: fakePlanNote(plan, target) });
+        fakesAfter: plan.liveFakes, target, spotsLeft, note: fakePlanNote(plan, target) });
     }
 
     /* THE SECOND GUARANTEE. Every id about to be deleted is checked against the fake set read a
@@ -101,11 +110,23 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
       }
     }
 
+    /* ADDS GO ONE AT A TIME INTO OPEN BIBS INSIDE THE SIZE (openFakeSlots), and every new row is
+     * read back and must carry the fake flag; the first that does not stops the run. MatchDay's
+     * fake lookup returns the first user in its table once the pool of fake accounts is used up, so
+     * a row that is not a fake is a person, or a deleted account, that nobody chose. */
+    const teamNumbers = ((match.teams as Record<string, unknown>[] | undefined) ?? []).map((t) => Number(t.teamNumber)).filter(Number.isFinite);
+    const slots = plan.add > 0 ? openFakeSlots(rows, teamNumbers, capacity, plan.add) : [];
+    if (plan.add > 0 && slots.length < plan.add) {
+      return Response.json({ ok: false, outcome: "refused", target, spotsLeft, plan,
+        error: `Only ${slots.length} open bib${slots.length === 1 ? "" : "s"} inside the team size for ${plan.add} fake${plan.add === 1 ? "" : "s"}. Nothing was added.` }, { status: 400 });
+    }
+    let stoppedAt: { team: number; playerNumber: number; userMatchId: number | null; userId: number | null } | null = null;
+
     const method = plan.add > 0 ? "POST" as const : "DELETE" as const;
     const path = plan.add > 0
-      ? `/admin/matches/${id}/batch/fake-players`
+      ? `/admin/matches/${id}/fake-players {${slots.length} slots}`
       : `/admin/matches/user-matches/{${plan.removes.length} rows}`;
-    const body = plan.add > 0 ? { totalFakes: plan.add } : { removes: plan.removes.map((r) => r.id) };
+    const body = plan.add > 0 ? { slots } : { removes: plan.removes.map((r) => r.id) };
 
     /* ONE change_log ROW FOR THE WHOLE OPERATION, because it is one operator action with one
      * outcome. The body records the user-match ids and the team each came from — never a name,
@@ -136,9 +157,22 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
            * callable from outside
            * the logged path; declaring them here keeps the guard's guarantee true rather than
            * merely green. */
-          const addFakes = () => apiWrite(env, "POST", `/admin/matches/${id}/batch/fake-players`, { totalFakes: plan.add }, actor);
+          const addOne = (team: number, playerNumber: number) => apiWrite(env, "POST", `/admin/matches/${id}/fake-players`, { team, playerNumber }, actor);
           const removeRow = (umId: number) => apiWrite(env, "DELETE", `/admin/matches/user-matches/${umId}`, undefined, actor);
-          if (plan.add > 0) return await addFakes();
+          if (plan.add > 0) {
+            const added: { team: number; playerNumber: number; userMatchId: number }[] = [];
+            for (const s of slots) {
+              await addOne(s.team, s.playerNumber);
+              const now = await readRoster();
+              const row = now.find((r) => rosterRowCounts(r) && Number(r.team) === s.team && Number(r.playerNumber) === s.playerNumber);
+              if (!row || !rosterRowIsFake(row)) {
+                stoppedAt = { ...s, userMatchId: row?.id == null ? null : Number(row.id), userId: (row as { userId?: unknown } | undefined)?.userId == null ? null : Number((row as { userId?: unknown }).userId) };
+                break;
+              }
+              added.push({ ...s, userMatchId: Number(row.id) });
+            }
+            return { added, stoppedAt };
+          }
           /* SEQUENTIAL, NOT Promise.all. These are writes with no idempotency key against an API
            * that validates against roster state; firing them together makes the failure ordering
            * unknowable and the partial state harder to describe than it already is. The first
@@ -156,10 +190,13 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
 
     const after = await readRoster();
     const fakesAfter = countFakes(after);
+    const stop = stoppedAt as { team: number; playerNumber: number; userMatchId: number | null; userId: number | null } | null;
+    if (stop) console.error(`[fakes] STOPPED on match ${id}: the row added at team ${stop.team} #${stop.playerNumber} is not a fake (user ${stop.userId}, user-match ${stop.userMatchId})`);
     return Response.json({
-      ok: true,
-      outcome: fakesAfter === target ? "landed" : "not_applied",
-      target, fakesBefore: plan.liveFakes, fakesAfter,
+      ok: !stop,
+      outcome: !stop && fakesAfter === target ? "landed" : "not_applied",
+      ...(stop ? { stoppedAt: stop, error: `Stopped: the row added at team ${stop.team} #${stop.playerNumber} is not a fake player (user ${stop.userId ?? "?"}, user-match ${stop.userMatchId ?? "?"}). Nothing more was added; it is still on the roster.` } : {}),
+      target, spotsLeft, fakesBefore: plan.liveFakes, fakesAfter,
       added: plan.add, removed: plan.removes.length,
       note: fakePlanNote(plan, target),
       logRecorded: logged, result,

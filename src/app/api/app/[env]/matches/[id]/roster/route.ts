@@ -13,7 +13,11 @@
 //            otherwise     POST roster { kind: "shape", fields: { teamNumbers } }, then
 //                          PUT  /api/matchday/{env}/matches/{id}  { changes: capacity }
 //                          (the desktop Save's own order: the shape first, the fields after)
-//   size     PUT  /api/matchday/{env}/matches/{id}            { changes: teamCountWrites(...) }
+//   size     POST /api/matchday/{env}/roster/{id}            { kind: "remove" }  each fake past the new size
+//            PUT  /api/matchday/{env}/matches/{id}            { changes: teamCountWrites(...) }
+//            POST /api/matchday/{env}/matches/{id}/fakes      { followSpotsLeft }  (Ryan, 2026-11-02:
+//                          spots left stays as stored, so the fake count follows the new capacity;
+//                          the desktop Save sends the same call after a size change)
 //
 // GET ?preview=teams&target=N describes a team count change for the confirm sheet and writes nothing.
 //
@@ -30,9 +34,10 @@ import { countedPlayers, fetchPlayersLive, isEnv } from "@/lib/appLive";
 import { apiGet, StageConfigError, StageHostGuardError, type MatchdayEnv } from "@/lib/matchdayStageApi";
 import { CONFINED_CITY_ERROR } from "@/lib/cityConfinement";
 import { rosterRowIsFake } from "@/lib/gamedayModel";
-import { moneyLine, pickerCapacityWrites, reduceSizes, sizeRefusal, sizeWrites, teamsPath } from "@/lib/appMatchV2";
+import { moneyLine, overflowFakes, pickerCapacityWrites, reduceSizes, sizeRefusal, sizeWrites, teamsPath } from "@/lib/appMatchV2";
 import { POST as desktopRosterPost } from "@/app/api/matchday/[env]/roster/[matchId]/route";
 import { PUT as desktopMatchPut } from "@/app/api/matchday/[env]/matches/[id]/route";
+import { POST as desktopFakesPost } from "@/app/api/matchday/[env]/matches/[id]/fakes/route";
 import { GET as convertGet, POST as convertPost } from "@/app/api/matchday/[env]/matches/[id]/convert-4/route";
 import { GET as reduceGet, POST as reducePost } from "@/app/api/matchday/[env]/matches/[id]/reduce-2/route";
 import { reviewMasked } from "@/lib/reviewAccount";
@@ -68,7 +73,7 @@ async function readLive(env: MatchdayEnv, id: string) {
   return { match, teams, players, capacity, teamCount: teams.length };
 }
 type Live = Awaited<ReturnType<typeof readLive>>;
-const fills = (l: Live) => l.teams.map((t) => l.players.filter((p) => p.team === t.teamNumber).length);
+const realFills = (l: Live) => l.teams.map((t) => l.players.filter((p) => p.team === t.teamNumber && !p.fake).length);
 const cityOf = (m: Row) => ((m.field as Row | undefined)?.city as Row | undefined)?.name;
 const view = (l: Live) => ({
   teams: l.teams, players: l.players.map(({ amount: _a, totalAmount: _t, creditAmount: _c, ...p }) => p),
@@ -114,8 +119,7 @@ async function getRoute(req: Request, ctx: { params: Promise<{ env: string; id: 
     let sizeReason: string | null = null;
     if (path === "reduce-2") {
       const real = before.players.filter((p) => !p.fake).length;
-      const current = before.teamCount > 0 && before.capacity % before.teamCount === 0 ? before.capacity / before.teamCount : null;
-      const offer = reduceSizes(real, current);
+      const offer = reduceSizes(real);
       sizeReason = offer.reason;
       sizes = [];
       for (const n of offer.sizes) {
@@ -234,8 +238,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
         let q = "";
         if (path === "reduce-2") {
           const real = before.players.filter((p) => !p.fake).length;
-          const current = before.teamCount > 0 && before.capacity % before.teamCount === 0 ? before.capacity / before.teamCount : null;
-          const offer = reduceSizes(real, current);
+          const offer = reduceSizes(real);
           const perTeam = Number(body?.perTeam);
           if (!offer.sizes.includes(perTeam)) {
             return Response.json({ error: offer.reason ?? `Choose a team size of ${offer.sizes.join(", ")}.` }, { status: 400 });
@@ -260,12 +263,34 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
       };
     } else if (op === "size") {
       const perTeam = Number(body?.perTeam);
-      const why = sizeRefusal(before.teamCount, perTeam, fills(before));
+      const why = sizeRefusal(before.teamCount, perTeam, realFills(before), before.players.filter((p) => !p.fake).length);
       if (why) return Response.json({ error: why }, { status: 400 });
       const w = sizeWrites(before.match, before.teamCount, perTeam);
       if (Object.keys(w).length === 0) return Response.json({ error: "Nothing to change." }, { status: 400 });
-      await matchPut("size", `Team size ${before.teamCount} x ${perTeam}`, w);
-      check = (after) => { if (after.capacity !== before.teamCount * perTeam) disagreements.push(`Spots read back as ${after.capacity}, not ${before.teamCount * perTeam}.`); };
+      const drop = overflowFakes(before.players, perTeam);
+      if (drop == null) return Response.json({ error: `A team's real players do not fit ${perTeam} a side.` }, { status: 400 });
+      // FAKES FIRST, then the size, then the fake count spots left implies at the new capacity.
+      let ok = true;
+      for (const um of drop) {
+        const p = before.players.find((x) => x.userMatchId === um);
+        ok = await roster("remove", `Remove a fake player from ${teamName(p?.team ?? 0)}`, { kind: "remove", userMatchId: um });
+        if (!ok) break;
+      }
+      const cap = before.teamCount * perTeam;
+      if (ok) ok = await matchPut("size", `Team size ${before.teamCount} x ${perTeam}`, w);
+      // THE FAKES FOLLOW THE NEW CAPACITY, through the same route and rule the desktop Save uses.
+      let targetFakes: number | null = null;
+      if (ok) {
+        const res = await desktopFakesPost(new Request(`${origin}/api/matchday/${env}/matches/${id}/fakes`, { method: "POST", headers, body: JSON.stringify({ followSpotsLeft: true, matchName: before.match.name ?? null, source: SOURCE, saveId }) }), params);
+        const j = (await res.json().catch(() => null)) as Row | null;
+        targetFakes = Number.isFinite(Number(j?.target)) ? Number(j?.target) : null;
+        if (!j?.noop) steps.push({ what: "fakes", label: `Fakes ${j?.fakesBefore ?? "?"} to ${j?.target ?? "?"} (spots left ${j?.spotsLeft ?? "?"})`, status: res.status, outcome: String(j?.outcome ?? (res.ok ? "unknown" : "failed")).toLowerCase(), error: (j?.error as string) ?? null });
+      }
+      check = (after) => {
+        if (after.capacity !== cap) disagreements.push(`Spots read back as ${after.capacity}, not ${cap}.`);
+        const fakes = after.players.filter((p) => p.fake).length;
+        if (targetFakes != null && steps.every((s) => s.outcome === "landed") && fakes !== targetFakes) disagreements.push(`The roster holds ${fakes} fake players, not ${targetFakes}.`);
+      };
     } else {
       return Response.json({ error: "op must be move, add, remove, teams or size" }, { status: 400 });
     }

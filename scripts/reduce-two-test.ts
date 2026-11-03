@@ -449,7 +449,7 @@ console.log("\nthe default size and the picker's range");
   is("0 means the 2-team format is not set, so 11", defaultPerTeam(0), 11);
   is("null is 11", defaultPerTeam(null), 11);
   is("an odd total has no whole side, so 11", defaultPerTeam(25), 11);
-  is("a total above the range is 11, not clamped to 12", defaultPerTeam(40), 11);
+  is("a total above the range is 11", defaultPerTeam(40), 11);
   is("a string the API might send still reads", defaultPerTeam("18"), 9);
   is("the range is 6 to 12", [REDUCE_MIN_PER_TEAM, REDUCE_MAX_PER_TEAM], [6, 12]);
   is("6 and 12 are allowed", [perTeamError(6), perTeamError(12)], [null, null]);

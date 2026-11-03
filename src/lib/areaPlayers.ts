@@ -95,6 +95,6 @@ export function klaviyoRows(rows: AreaPlayer[], hereFieldId?: number | null): st
 
 /* PLAYER IDS FOR THE OFFERS PAGE. Its box (parsePlayerIds, feature/offers offersModel.ts) takes
  * "commas, spaces or one per line"; comma-separated with no spaces is what the brief asked for when
- * either works. In table order, duplicates dropped. That box uses only its first OFFERS_ID_CAP ids. */
-export const OFFERS_ID_CAP = 2000;
+ * either works. In table order, duplicates dropped. No cap here: the Offers page takes up to 20,000
+ * (backend MAX_OFFER_PLAYER_IDS, raised from 2,000 on 2026-11-02). */
 export const idList = (rows: Pick<AreaPlayer, "id">[]): string => [...new Set(rows.map((r) => r.id))].join(",");
