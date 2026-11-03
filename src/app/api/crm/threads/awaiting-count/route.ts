@@ -15,7 +15,7 @@
 // than the page breaking. Auth: admin/chats via authenticateCrm.
 
 import { authenticateCrm } from "@/lib/crmAuth";
-import { crmScopedAssignees } from "@/lib/crmScope";
+import { crmScopeCity, scopeThreads } from "@/lib/crmScope";
 import { isAwaitingReply } from "@/lib/awaitingReply";
 import { loadAttention, strikeHoldingThreadIds } from "@/lib/crmAttentionLoad";
 import { reviewMasked } from "@/lib/reviewAccount";
@@ -32,8 +32,7 @@ async function getRoute(req: Request) {
   }
   const { supabase } = auth;
   // The red badge counts only the caller's scope: a number for threads it cannot open is a leak.
-  const scope = await crmScopedAssignees(auth);
-  if (!scope.ok) return Response.json({ count: 0 }, { status: 200 });
+  const scopeCity = crmScopeCity(auth);
 
   try {
     // Bounded scan of the awaiting CANDIDATES only (open + inbound-last — a
@@ -52,7 +51,7 @@ async function getRoute(req: Request) {
         .select("id, last_message_preview, last_message_at, no_reply_needed_at")
         .eq("status", "open")
         .eq("last_message_direction", "inbound");
-      if (scope.ids) q = q.in("assigned_to_user_id", scope.ids);
+      q = scopeThreads(q, scopeCity);
       const r = await q.range(from, from + PAGE - 1);
       if (r.error) {
         console.error("[crm:awaiting-count] scan error", r.error);
@@ -76,7 +75,7 @@ async function getRoute(req: Request) {
     try {
       const heldIds = await strikeHoldingThreadIds(supabase, Date.now());
       let held = heldIds.length ? supabase.from("crm_threads").select("id, last_message_at").in("id", heldIds).eq("status", "open").eq("last_message_direction", "outbound") : null;
-      if (held && scope.ids) held = held.in("assigned_to_user_id", scope.ids);
+      if (held && scopeCity) held = held.eq("city_code", scopeCity);
       const heldRows = held ? await held : null;
       if (heldRows?.error) throw new Error(heldRows.error.message);
       const attention = await loadAttention(supabase, [

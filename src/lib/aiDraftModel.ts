@@ -20,6 +20,7 @@
 import { whatsappWindowExpired } from "@/lib/crmWindow";
 import { STRIKE_DISPUTE_NOTE } from "@/lib/crmAttention";
 import { dayAndTime, lateReplyProblem, unscheduledTimes, FALLBACK_TZ, type DraftClock, type ScheduleEntry } from "@/lib/aiDraftClock";
+import { stallPhrase, waitingOnLookup, complainsCutShort, WAITING_ON_LOOKUP, NOT_MARKED_CUT_SHORT, type CutShort, type RefundEligibility } from "@/lib/aiDraftPolicy";
 
 export const AI_DRAFT_MODEL = "claude-opus-5-5";
 export const ANTHROPIC_HOST = "api.anthropic.com";
@@ -157,6 +158,10 @@ export type DraftMatchIn = {
   price: number | null; // cents
   charged: number | null; // cents
   playerCancelledAt: string | null;
+  /** The match id, for the cut-short mark. */
+  matchId?: number | null;
+  /** Marked cut short on Gameday Ops (match_cut_short). */
+  cutShort?: CutShort | null;
 };
 export type DraftContextIn = {
   linked: boolean;
@@ -170,7 +175,8 @@ export type DraftContextIn = {
   firstName: string | null;
   city: string | null;
   isMember: boolean | null;
-  membership: { status: string | null; since: string | null; renews: string | null; canceledAt: string | null; price: number | null } | null;
+  /** id: the MatchDay userSubscriptions row, for ending it with a refund. Never sent to the model. */
+  membership: { status: string | null; since: string | null; renews: string | null; canceledAt: string | null; price: number | null; id?: number | null } | null;
   creditsCents: number | null;
   matchesPlayed: number | null;
   strikes: { active: number; limit: number; suspended: boolean } | null;
@@ -181,6 +187,12 @@ export type DraftContextIn = {
   priorCourtesyCredit?: boolean | null;
   /** Camera coverage for the player's city, field by field (src/lib/aiDraftCamera). */
   recordedFields?: RecordedField[];
+  /** Ryan's membership refund rule, worked out by runDraft (aiDraftPolicy). Omitted = not worked out. */
+  membershipRefund?: RefundEligibility | null;
+  /** The thread has no city yet: the reply asks which city or field they play at. */
+  cityUnknown?: boolean;
+  /** The city codes a city_guess may name. */
+  knownCities?: readonly { code: string; name: string }[];
 };
 
 // One field in the player's city with a camera on at least one match. Read from the camera marker
@@ -248,6 +260,9 @@ export function buildDraftContext(c: DraftContextIn) {
       matches_played: null, courtesy_credit_eligible: false, strikes: null,
       recent_matches: [] as never[],
       recorded_fields: [] as RecordedField[],
+      membership_refund: null,
+      city_unknown: c.cityUnknown === true,
+      known_cities: c.knownCities ?? [],
     };
   }
   const member = c.isMember === true || (c.membership != null && /active|added_from_admin/i.test(c.membership.status ?? "") && !c.membership.canceledAt);
@@ -282,8 +297,14 @@ export function buildDraftContext(c: DraftContextIn) {
       match_price: usd(m.price),
       paid: usd(m.charged),
       cancelled_hours_before_kickoff: m.state === "player_cancelled" || m.state === "both_cancelled" ? hoursBefore(m.startDateUtc, m.playerCancelledAt) : null,
+      cut_short: m.cutShort ? { reason: m.cutShort.reason, minutes_played: m.cutShort.minutes_played } : null,
     })),
     recorded_fields: c.recordedFields ?? [],
+    membership_refund: c.membershipRefund
+      ? c.membershipRefund.eligible ? { eligible: true as const, amount: usd(c.membershipRefund.amountCents) } : { eligible: false as const, why_not: c.membershipRefund.reason }
+      : null,
+    city_unknown: c.cityUnknown === true,
+    known_cities: c.knownCities ?? [],
   };
 }
 
@@ -302,7 +323,8 @@ How to write the reply:
 - Never use an em dash or an en dash. Use a comma, a period, or "and" instead.
 - Use the player's first name when you have it, at most once.
 - Reply in the language the player wrote in.
-- Answer what they actually asked, using the facts in PLAYER CONTEXT. Never invent an amount, date, code, match or policy. If you need something you don't have, ask the player for it or say the team will check.
+- Answer what they actually asked, using the facts in PLAYER CONTEXT. Never invent an amount, date, code, match or policy. If you need something you don't have, ask the player for the one piece you need.
+- Never write a holding line: "give me a sec", "let me check", "let me look", "the team's checking", "still on it", "we'll get back to you". Nobody follows those up. Answer now, or ask the player the one question that lets you answer. Only when the answer needs a lookup that only staff can do, say once, plainly, what the team will check: that draft always goes to a person, never out on its own.
 - You can propose one action, which a staff member applies by pressing a button (see "action" below). Without a proposed action, never say a credit, refund, code, strike removal, move, hold or cancellation is done. Say "I'll" or "let me" only for an action staff will take, and name that action in staff_notes.
 - Only offer a courtesy credit when PLAYER CONTEXT says courtesy_credit_eligible is true, and set offers_courtesy_credit to true when you do.
 - A credit action's amount is the match_price of the match in question, never the paid amount. Never propose a credit for a member's match, a match already marked club_cancelled, or a cancel more than 24 hours before kickoff: those are either nothing to credit or credited automatically.
@@ -312,12 +334,15 @@ How to write the reply:
 - A player's images may be attached, for the last few images in what they just sent. Describe what the image shows in your first staff note and use it to answer: a Home tab screenshot confirms the member number for guest passes, a strike screen names the match, an error dialog says what failed. Never read a payment number, email or phone number out of an image into the reply or the notes. If you can't make out an attached image, set image_unreadable to true and say the team will check.
 - When a player disputes a strike, the only reply is a holding line: acknowledge it, say we'll check with the match manager, and promise nothing. Never say a strike is or will be removed, cleared, reset or taken off, and never state how many strikes they have.
 - EXAMPLES OF HOW THE TEAM WRITES, when present, show length and voice only. Copy how they sound. Never take a fact, amount, date, match or name from them.
-- Answer what you can before you ask. If PLAYER CONTEXT says account_confirmed is false, we don't know which account is writing: state no account facts at all (no credits, bookings, membership, strikes or matches, and nothing about what happened to their booking). The rules themselves are not account facts, so still explain the rule that applies to what they asked (for example, a cancel more than 24 hours before kickoff goes back to their account automatically as credit), then ask for the phone number on their MatchDay account (it's in their profile in the app; never ask for an email), and say what you'll do once you have it. Don't make them wait a round trip just to learn the policy. If the player has just sent a phone number (it shows as [phone]), thank them and say you're checking.
+- Answer what you can before you ask. If PLAYER CONTEXT says account_confirmed is false, we don't know which account is writing: state no account facts at all (no credits, bookings, membership, strikes or matches, and nothing about what happened to their booking). The rules themselves are not account facts, so still explain the rule that applies to what they asked (for example, a cancel more than 24 hours before kickoff goes back to their account automatically as credit), then ask for the phone number on their MatchDay account (it's in their profile in the app; never ask for an email), and say what you'll do once you have it. Don't make them wait a round trip just to learn the policy. When a player sends the phone number on their account and it matches exactly one account, the system links it before you write, so PLAYER CONTEXT already has their account: answer their real question in this reply. If account_confirmed is still false after they sent a number, say that number isn't on a single account and a teammate will link it.
 - Time matters. CLOCK says what time it is now and when the player wrote. Read "today", "tonight" and "tomorrow" from when the PLAYER wrote, not from now. If what they asked about has already happened, say so kindly and point to the next real option.
 - Never work out how long ago a match was, or say a video should be up by now, unless the context gives that match's date and time. If it doesn't, say the team will check.
 - SCHEDULE lists the real matches at the field they named (or in their city). Quote match times ONLY from SCHEDULE. Never state a match time that isn't there. If SCHEDULE is empty or missing what they need, say the team will check.
 - Apologize only when we actually caused a problem: a match we cancelled, a mistake on our side, or a wait over 24 hours (CLOCK says reply_is_very_late is true; then open with a short, natural sorry for the wait). Never open with an apology by default, and never apologize for a wait under 24 hours. (Separately, never apologize for how long a video takes.)
 - When a player asks for a refund, give the credit answer directly and positively: where the money goes (their MatchDay account, as credit) and how they use it (it applies automatically on their next booking). Don't escalate on the first ask. Escalate (flag "escalate" and "refund_pushback") only if they push back after hearing it.
+- A match in recent_matches with cut_short set was stopped early on our side (lights, weather, injury). Treat a question about it like a match we cancelled: category match_cancelled, propose a credit of its match_price. If the player says a match was stopped early (lights out, weather) and no match in recent_matches has cut_short, don't promise anything: say the team will confirm with the city manager.
+- MEMBERSHIP REFUNDS follow membership_refund in PLAYER CONTEXT and nothing else. eligible true: write the reply as done ("We've refunded your $71.99 charge and ended your membership."); staff refund it before sending. eligible false or null: no refund, and don't apologize for the policy. If they already cancelled, confirm there are no more charges and they can play through membership.cancel_policy.last_day_to_play. If they haven't, give the in-app cancel steps and say, from membership.cancel_policy, whether one more charge comes on charge_date. Firm and friendly. Never promise a membership refund when eligible isn't true.
+- CITY: if city_unknown is true and the player hasn't said where they play, end the reply with one short question asking which city or field they play at. Set city_guess to one code from known_cities only when the conversation makes their city clear, otherwise "".
 - If the conversation is not something a reply can handle (a safety problem, a legal threat, a refund demand after the credit answer), write a short kind holding reply and set the flag.
 
 Output fields:
@@ -329,7 +354,8 @@ Output fields:
 - category: one short label for the request type, like "membership_billing", "match_cancelled", "player_cancel", "needs_credit", "veo", "promo_code", "guest_pass", "strike", "booking", "logistics", "payment", "account", "age", "complaint", "other".
 - flags: any of "escalate", "urgent", "hold_requested", "strike_dispute", "guest_pass", "under_16", "refund_pushback", "needs_credit". Empty if none.
 - offers_courtesy_credit: true only if the reply offers a courtesy credit for a late cancel.
-- image_unreadable: true only if an image is attached and you couldn't read it.`;
+- image_unreadable: true only if an image is attached and you couldn't read it.
+- city_guess: a code from known_cities when the conversation shows where the player plays, otherwise "".`;
 
 export const DRAFT_OUTPUT_SCHEMA = {
   type: "object",
@@ -345,6 +371,7 @@ export const DRAFT_OUTPUT_SCHEMA = {
     match_ids: { type: "array", items: { type: "integer" } },
     image_unreadable: { type: "boolean" },
     reply_without_action: { type: "string" },
+    city_guess: { type: "string" },
     action: {
       type: "object",
       properties: {
@@ -356,7 +383,7 @@ export const DRAFT_OUTPUT_SCHEMA = {
       additionalProperties: false,
     },
   },
-  required: ["reply", "staff_notes", "category", "flags", "offers_courtesy_credit", "match_ids", "image_unreadable", "reply_without_action", "action"],
+  required: ["reply", "staff_notes", "category", "flags", "offers_courtesy_credit", "match_ids", "image_unreadable", "reply_without_action", "city_guess", "action"],
   additionalProperties: false,
 } as const;
 
@@ -466,6 +493,8 @@ export type DraftAction = { kind: "credit" | "issue_guest_code"; amount_cents: n
 export type DraftOutput = {
   reply: string; staff_notes: string[]; category: string; flags: string[]; offers_courtesy_credit: boolean; match_ids: number[];
   reply_without_action?: string; action?: DraftAction | null; image_unreadable?: boolean;
+  /** The model's read of the player's city, a known code or "". */
+  city_guess?: string;
 };
 
 export const MAX_NOTE_BULLETS = 3;
@@ -522,6 +551,7 @@ export function parseDraftOutput(text: string): DraftOutput | null {
     match_ids: Array.isArray(r.match_ids) ? r.match_ids.filter((x): x is number => Number.isInteger(x)) : [],
     reply_without_action: action && typeof r.reply_without_action === "string" ? r.reply_without_action : "",
     action, image_unreadable: r.image_unreadable === true,
+    city_guess: typeof r.city_guess === "string" ? r.city_guess.trim().toUpperCase().slice(0, 8) : "",
   };
 }
 
@@ -841,6 +871,8 @@ export type DecisionContext = {
   msgs?: readonly DraftMsg[];
   /** Only needed for a guest code. Absent means it couldn't be read, which is a no. */
   guest?: { active: boolean; over24Hours: boolean; hasActiveCode: boolean } | null;
+  /** The player typed a number and it matched several accounts or none, so nothing was linked. */
+  linkMiss?: LinkSuggestion | null;
 };
 
 export const AUTO_HUMAN_FLAGS = ["escalate", "refund_pushback", "strike_dispute", "under_16", "hold_requested", "urgent"];
@@ -850,11 +882,14 @@ export const wordCount = (s: string) => s.trim().split(/\s+/).filter(Boolean).le
 
 // WHEN A MEMBERSHIP REPLY CAN'T GO OUT ALONE (Ryan, 2026-10-31). Why it needs a person, or null. Only what
 // the player has sent since our last message counts as what they're saying now.
-const MEMBERSHIP_ESCALATE_RX = /\b(refund\w*|disputes?|disputing|chargebacks?|charge back|banks?|lawyers?|attorneys?|bbb|scam\w*|fraud\w*)\b/i;
+// "refund" is NOT here since 2026-11-02: a first ask gets the policy answer on its own (Ryan's rule,
+// aiDraftPolicy). Asking again after hearing it is "Refund pushback", below.
+const MEMBERSHIP_ESCALATE_RX = /\b(disputes?|disputing|chargebacks?|charge back|banks?|lawyers?|attorneys?|bbb|scam\w*|fraud\w*)\b/i;
 const POLICY_TOLD_RX = /\b25[- ]day|\bcancel[^.!?\n]{0,30}\b(?:by|before) the 5th|\bon or after the 5th|\b(?:be|been|get|got) charged\b|\bcharged (?:on|once)\b|\bnext charge\b|\b(?:the )?\w* ?charge (?:will|still|stands|went)\b/i;
 const STEPS_GIVEN_RX = /\bMembership Details\b|\bCancel Membership\b/i;
 const NOT_WORKING_RX = /\b(?:not|isn'?t|won'?t|doesn'?t|didn'?t|can'?t|cannot|couldn'?t|unable to)\s+(?:let(?:ting)?(?: me)?|work\w*|load\w*|go through|open\w*|click\w*|cancel\w*)\b/i;
 const CANT_FIND_RX = /\b(?:can'?t|cannot|couldn'?t|unable to|don'?t|didn'?t)\s+(?:find|see)\b|\b(?:no|not an?) (?:option|button)\b|\bnot there\b/i;
+export const REFUND_PUSHBACK = "Refund pushback";
 export function membershipHumanReason(msgs: readonly DraftMsg[]): string | null {
   const real = msgs.filter((m) => !(m.direction === "outbound" && m.is_auto_reply === true) && m.media_kind !== "reaction");
   let split = real.length;
@@ -865,7 +900,7 @@ export function membershipHumanReason(msgs: readonly DraftMsg[]): string | null 
   if (word) return `Mentions ${word[1].toLowerCase()}`;
   if (NOT_WORKING_RX.test(said)) return "In-app cancel isn't working";
   if (CANT_FIND_RX.test(said) && earlier.some((b) => STEPS_GIVEN_RX.test(b))) return "Can't find the in-app cancel after being given the steps";
-  if (said.trim() && earlier.some((b) => POLICY_TOLD_RX.test(b))) return "Already told the policy in this thread";
+  if (said.trim() && earlier.some((b) => POLICY_TOLD_RX.test(b))) return REFUND_PUSHBACK;
   return null;
 }
 
@@ -909,10 +944,20 @@ const ACCOUNT_FACT_RX = /\$\s?\d|\byour (?:credits?|balance|bookings?|membership
 export const statesAccountFact = (reply: string) => ACCOUNT_FACT_RX.test(reply);
 
 const human = (reason: string): DecisionResult => ({ decision: "human", reason });
+// What the player has sent since our last real message.
+function pendingText(msgs: readonly DraftMsg[]): string {
+  const real = msgs.filter((m) => !(m.direction === "outbound" && m.is_auto_reply === true) && m.media_kind !== "reaction");
+  const out: string[] = [];
+  for (let i = real.length - 1; i >= 0 && real[i].direction === "inbound"; i--) out.unshift(real[i].body ?? "");
+  return out.join("\n");
+}
 
 export function decideAutoSend(draft: DecisionDraft, ctx: DecisionContext, config: AutoSendConfig): DecisionResult {
   if (draft.guardError) return human(`The draft failed a check: ${draft.guardError}`);
   if (draft.image_unreadable) return human("Image unreadable");
+  // ONE HOLDING LINE PER BURST (2026-11-02). We held them last time and they wrote again: a person.
+  if (ctx.msgs && waitingOnLookup(ctx.msgs)) return human(WAITING_ON_LOOKUP);
+  if (ctx.linkMiss && ctx.linkMiss.kind !== "one") return human(linkSuggestionText(ctx.linkMiss));
   const disputing = draft.flags.includes("strike_dispute");
   // A disputed strike is only ever answered inside the strike category. Everywhere else the flag stops it.
   const flag = draft.flags.find((f) => AUTO_HUMAN_FLAGS.includes(f) && !(f === "strike_dispute" && draft.category === "strike"));
@@ -925,9 +970,19 @@ export function decideAutoSend(draft: DecisionDraft, ctx: DecisionContext, confi
   if (AUTO_HUMAN_CATEGORIES.includes(draft.category)) return human(`Category ${draft.category} always goes to a person.`);
   if (!draft.reply.trim()) return human("The draft has no reply.");
   if (wordCount(draft.reply) > REPLY_WORD_LIMIT) return human("Reply too long");
+  // NO STALLING. An auto-send never promises a step nobody will take. The strike holding line is the
+  // one exception: it is a person's to follow up, and the thread stays in Needs a human (crmAttention).
+  const stall = stallPhrase(draft.reply);
+  if (stall && !(draft.category === "strike" && disputing)) return human(`Holding reply nobody would follow up ("${stall}")`);
+  // A CUT-SHORT COMPLAINT about a match nobody marked: the city manager knows, the draft doesn't.
+  if (ctx.msgs && complainsCutShort(pendingText(ctx.msgs)) && !ctx.context.recent_matches.some((m) => m.cut_short)) return human(NOT_MARKED_CUT_SHORT);
   if (draft.category === "membership_billing") {
     if (!ctx.context.account_confirmed) return human("The account is unconfirmed.");
+    // A REFUND IS NEVER AUTO (Ryan's rule): an eligible one waits for a person with EDIT MEMBERSHIPS.
+    const refund = ctx.context.membership_refund;
+    if (refund?.eligible) return human(`Membership refund eligible: ${refund.amount}`);
     if (draft.action) return human("A membership reply can't carry an action.");
+    if (/\brefund(?:ed|ing)?\b/i.test(draft.reply) && !/\b(?:no|not|isn'?t|can'?t|won'?t|don'?t)\b[^.!?]{0,40}\brefund/i.test(draft.reply)) return human("The reply talks about a refund the rule doesn't give.");
     if (!ctx.msgs) return human("The conversation couldn't be read.");
     const why = membershipHumanReason(ctx.msgs);
     if (why) return human(why);
@@ -954,9 +1009,13 @@ export function decideAutoSend(draft: DecisionDraft, ctx: DecisionContext, confi
   if (amount == null || amount <= 0) return human("The credit has no amount.");
   const usd = (n: number) => `$${(n / 100).toFixed(2)}`;
   if (amount > config.credit_cap_cents) return human(`Credit of ${usd(amount)} is over the ${usd(config.credit_cap_cents)} cap.`);
-  const prices = ctx.context.recent_matches.map((m) => ({ cents: centsOf(m.match_price), status: m.status }));
+  const prices = ctx.context.recent_matches.map((m) => ({ cents: centsOf(m.match_price), status: m.status, cutShort: !!m.cut_short }));
   if (prices.some((p) => p.cents === amount && CLUB_CANCELLED.has(p.status))) return human("That match is already cancelled and credited.");
   if (!prices.some((p) => p.cents === amount)) return human(`Credit of ${usd(amount)} isn't a match price in context.`);
+  // A MATCH CUT SHORT is ours to credit, like a match we cancelled: no courtesy rule, still the cap.
+  if (draft.category === "match_cancelled" && prices.some((p) => p.cents === amount && p.cutShort && p.status === "played")) {
+    return { decision: "auto_send_with_action", reason: `Credit of ${usd(amount)} for a match marked cut short, within the ${usd(config.credit_cap_cents)} cap.` };
+  }
   if (!ctx.context.courtesy_credit_eligible) return human("This player has had a courtesy credit, is a member, or their history couldn't be read.");
   return { decision: "auto_send_with_action", reason: `Credit of ${usd(amount)} is a match price within the ${usd(config.credit_cap_cents)} cap, and no prior courtesy.` };
 }
@@ -980,6 +1039,11 @@ export function autoSendAllowed(d: AutoSendCheck | null, config: AutoSendConfig 
 // ── auto-send: the kill switch ─────────────────────────────────────────────────────────────────
 
 export const KILL_REPLY_RX = /\b(?:wrong|no|that['’]?s not|refund\w*|human)\b/i;
+// AFTER A MEMBERSHIP AUTO-SEND, "refund" is the expected answer, not a sign the reply was wrong (Ryan,
+// 2026-11-02): refund denials go out on their own now, and the 1st of every month would trip the switch.
+// Every other word still counts there, and "refund" still counts after every other category.
+export const KILL_REPLY_MEMBERSHIP_RX = /\b(?:wrong|no|that['’]?s not|human)\b/i;
+export const killReplyRx = (category: string | null | undefined) => (category === "membership_billing" ? KILL_REPLY_MEMBERSHIP_RX : KILL_REPLY_RX);
 export const KILL_WINDOW_MS = 3600e3;
 export const KILL_REPLY_WITHIN_MS = 30 * 60e3;
 export const KILL_MAX_BAD = 3;
@@ -987,7 +1051,7 @@ export const KILL_MAX_BAD = 3;
 // How many auto-sends in the last hour drew a complaint-shaped reply within 30 minutes. Each auto-send
 // counts once. More than 3 trips it. These are whole words, so "know" isn't "no", but "no worries" is.
 export function badAutoSendReplies(
-  sent: readonly { thread_id: string; sent_at: string }[],
+  sent: readonly { thread_id: string; sent_at: string; category?: string | null }[],
   inbound: readonly { thread_id: string; sent_at: string; body: string | null }[],
   now: number,
 ): number {
@@ -996,7 +1060,7 @@ export function badAutoSendReplies(
     if (!(now - t <= KILL_WINDOW_MS)) return false;
     return inbound.some((m) => {
       const at = Date.parse(m.sent_at);
-      return m.thread_id === s.thread_id && at > t && at - t <= KILL_REPLY_WITHIN_MS && KILL_REPLY_RX.test(m.body ?? "");
+      return m.thread_id === s.thread_id && at > t && at - t <= KILL_REPLY_WITHIN_MS && killReplyRx(s.category).test(m.body ?? "");
     });
   }).length;
 }

@@ -56,7 +56,7 @@ async function getRoute(req: Request, ctx: RouteCtx) {
   const threadRes = await supabase
     .from("crm_threads")
     .select(
-      "id, phone_number, player_id, match_ambiguous, last_message_at, last_message_preview, last_message_direction, created_at, assigned_to_user_id, assigned_at, channel, status, closed_at, closed_by_user_id, no_reply_needed_at",
+      "id, phone_number, player_id, match_ambiguous, last_message_at, last_message_preview, last_message_direction, created_at, assigned_to_user_id, assigned_at, channel, status, closed_at, closed_by_user_id, no_reply_needed_at, city_code, city_source",
     )
     .eq("id", threadId)
     .maybeSingle();
@@ -112,7 +112,7 @@ async function getRoute(req: Request, ctx: RouteCtx) {
   const messagesRes = await supabase
     .from("crm_messages")
     .select(
-      "id, thread_id, direction, body, sent_at, sent_by_user_id, telnyx_message_id, external_message_id, segment_count, channel, delivery_status, delivery_status_updated_at, media_url, media_mime_type, media_filename, media_size_bytes, media_kind, reaction_target_wamid, is_auto_reply, template_name",
+      "id, thread_id, direction, body, sent_at, sent_by_user_id, telnyx_message_id, external_message_id, segment_count, channel, delivery_status, delivery_status_updated_at, media_url, media_mime_type, media_filename, media_size_bytes, media_kind, reaction_target_wamid, is_auto_reply, template_name, auto_sent_draft_id",
     )
     .eq("thread_id", threadId)
     .order("sent_at", { ascending: true });

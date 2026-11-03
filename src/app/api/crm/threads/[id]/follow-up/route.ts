@@ -15,6 +15,7 @@
 // Auth: dual-mode bearer via src/lib/crmAuth. Cron has no viewer → 400.
 
 import { authenticateCrm } from "@/lib/crmAuth";
+import { assertThreadInScope } from "@/lib/crmScope";
 
 export const runtime = "nodejs";
 export const maxDuration = 10;
@@ -39,6 +40,10 @@ export async function POST(req: Request, ctx: RouteCtx) {
   const { id: threadId } = await ctx.params;
   if (!threadId || !UUID_RX.test(threadId)) {
     return Response.json({ error: "Invalid thread id" }, { status: 400 });
+  }
+  {
+    const scope = await assertThreadInScope(auth, threadId);
+    if (!scope.ok) return Response.json({ error: scope.error }, { status: scope.status });
   }
 
   const body = (await req.json().catch(() => null)) as

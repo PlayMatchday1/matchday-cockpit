@@ -36,6 +36,7 @@ import { downloadWhatsAppMedia, sendWhatsAppText } from "@/lib/whatsapp";
 import { uploadMessageMedia } from "@/lib/crmMedia";
 import { writeThreadStatusLog } from "@/lib/crmThreadStatus";
 import { recordWrite, supabaseLogStore, phoneLast4 } from "@/lib/changeLog";
+import { accountCityCode } from "@/lib/crmThreadCity";
 import {
   shouldAutoReply,
   OUT_OF_HOURS_AUTO_REPLY_TEXT,
@@ -779,6 +780,9 @@ async function processInbound(
   }
   const playerId = candidates[0]?.id ?? null;
   const ambiguous = candidates.length > 1;
+// THE THREAD'S CITY at the first link (0250): the one account's city. Several accounts on the number:
+// no city here, the draft or a person sets it. A failed read sets nothing and never fails the webhook.
+  const linkCity = playerId != null && !ambiguous ? await accountCityCode(sb, playerId) : null;
 
   // -------- get-or-create threadId (per-channel) --------
   // We need threadId BEFORE we can compute the Storage path for any
@@ -791,7 +795,7 @@ async function processInbound(
 
   const existing = await sb
     .from("crm_threads")
-    .select("id, player_id, match_ambiguous, status, auto_reply_sent_at")
+    .select("id, player_id, match_ambiguous, status, auto_reply_sent_at, city_code")
     .eq("phone_number", phone)
     .eq("channel", "whatsapp")
     .maybeSingle();
@@ -812,6 +816,7 @@ async function processInbound(
         channel: "whatsapp",
         player_id: playerId,
         match_ambiguous: ambiguous,
+        ...(linkCity ? { city_code: linkCity, city_source: "account" } : {}),
         last_message_at: nowIso,
         // Placeholder preview — finalized below after deriveMessageRow.
         last_message_preview: "",
@@ -844,6 +849,7 @@ async function processInbound(
   if (!isNewThread && existing.data) {
     if (existing.data.player_id == null && playerId != null) {
       patch.player_id = playerId;
+      if (linkCity && existing.data.city_code == null) { patch.city_code = linkCity; patch.city_source = "account"; }
     }
     if (ambiguous && !existing.data.match_ambiguous) {
       patch.match_ambiguous = true;

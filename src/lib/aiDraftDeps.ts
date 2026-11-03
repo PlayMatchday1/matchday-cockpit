@@ -19,6 +19,11 @@ import { assertAnthropicHost, phoneShapes, priorCourtesyFromLog, toApiRequest, A
 import { toNationalDigits } from "@/lib/phone";
 import type { DraftDeps, StoredDraft } from "@/lib/aiDraftRun";
 import { buildRecordedFields, CAMERA_LOOKAHEAD_DAYS, CAMERA_LOOKBACK_DAYS, type CameraRow } from "@/lib/aiDraftCamera";
+import { linkThread, supabaseLinkIO } from "@/lib/crmThreadLink";
+import { AUTO_SEND_ACTOR } from "@/lib/aiDraftAction";
+import { AUTO_LINKED_NOTE } from "@/lib/aiDraftRun";
+import { type CitySource, type CutShort } from "@/lib/aiDraftPolicy";
+import { membershipChargeFromMirror, priorMembershipRefundAny } from "@/lib/membershipRefund";
 
 const ENV = FULL_EDITOR_ENV;
 const ANTHROPIC_BASE_URL = `https://${ANTHROPIC_HOST}`;
@@ -31,14 +36,22 @@ export function draftDataDeps(args: DraftDataArgs): DataDeps {
   let threadPhone: string | null = null;
   return {
     async loadThread() {
-      // account_confirmed_at: migration 0228. Applied before this code shipped.
-      const r = await supabase.from("crm_threads").select("channel, phone_number, player_id, match_ambiguous, account_confirmed_at").eq("id", threadId).maybeSingle();
+      // account_confirmed_at: migration 0228. city_code / city_source: 0250. Both applied before this code shipped.
+      const r = await supabase.from("crm_threads").select("channel, phone_number, player_id, match_ambiguous, account_confirmed_at, city_code, city_source").eq("id", threadId).maybeSingle();
       if (r.error || !r.data) return null;
       threadPhone = (r.data.phone_number as string | null) ?? null;
       return {
         channel: (r.data.channel as string) ?? "sms", player_id: (r.data.player_id as number | null) ?? null,
         match_ambiguous: r.data.match_ambiguous === true, account_confirmed: r.data.account_confirmed_at != null,
+        city_code: (r.data.city_code as string | null) ?? null, city_source: (r.data.city_source as CitySource | null) ?? null,
       };
+    },
+
+    // THE THREAD'S CITY (0250). Never over a person's choice: the filter makes that true even if two
+    // writers race.
+    async setThreadCity(code, source) {
+      const r = await supabase.from("crm_threads").update({ city_code: code, city_source: source }).eq("id", threadId).or("city_source.is.null,city_source.neq.staff");
+      if (r.error) throw new Error(r.error.message);
     },
 
     async countAccounts() {
@@ -47,6 +60,33 @@ export function draftDataDeps(args: DraftDataArgs): DataDeps {
       const r = await supabase.from("mdapi_users").select("id", { count: "exact", head: true }).in("phone_number", [threadPhone, ...(national ? [national] : [])]);
       return r.error ? null : r.count ?? null;
     },
+
+    // THE AUTOMATIC LINK: the same linkThread the Link button uses, logged with its reason. A confined
+    // caller can only link inside its city, exactly as by hand.
+    async autoLink(playerId) {
+      const r = await linkThread(
+        { threadId, playerId, actor: { appUserId: null, email: AUTO_SEND_ACTOR }, confinedCity: args.confinedCity, reason: AUTO_LINKED_NOTE },
+        supabaseLinkIO(supabase, threadId, null),
+      );
+      return r.ok && r.outcome === "landed";
+    },
+
+    // Every outbound to this player in all their threads, newest 500. Only what "already explained"
+    // needs: the body and when, never sent to the model.
+    async loadPlayerOutbound(playerId) {
+      const t = await supabase.from("crm_threads").select("id").eq("player_id", playerId);
+      if (t.error) throw new Error(t.error.message);
+      const ids = (t.data ?? []).map((x) => x.id as string);
+      if (!ids.length) return [];
+      const r = await supabase.from("crm_messages").select("body, sent_at, is_auto_reply").eq("direction", "outbound").in("thread_id", ids)
+        .order("sent_at", { ascending: false }).limit(500);
+      if (r.error) throw new Error(r.error.message);
+      return (r.data ?? []) as { body: string | null; sent_at: string; is_auto_reply: boolean | null }[];
+    },
+
+    // OUR LOG OR STRIPE'S HISTORY: a refund Ryan made by hand in Stripe counts (membershipRefund.ts).
+    priorMembershipRefund: (playerId) => priorMembershipRefundAny(supabase, playerId),
+    membershipCharge: (playerId, monthStartIso) => membershipChargeFromMirror(supabase, playerId, monthStartIso),
 
     async findAccountsByPhone(digits10) {
       const r = await supabase.from("mdapi_users").select("id, first_name").in("phone_number", phoneShapes(digits10)).limit(10);
@@ -143,11 +183,20 @@ export function draftDataDeps(args: DraftDataArgs): DataDeps {
           ctxIn.city = p.player.city ?? ctxIn.city;
           ctxIn.strikes = { active: p.strikes.activeCount, limit: p.strikes.limit, suspended: p.strikes.isSuspended };
           if (p.membership) {
-            ctxIn.membership = { status: p.membership.status, since: p.membership.since, renews: p.membership.renews, canceledAt: p.membership.canceledAt, price: p.membership.price };
+            ctxIn.membership = { status: p.membership.status, since: p.membership.since, renews: p.membership.renews, canceledAt: p.membership.canceledAt, price: p.membership.price, id: p.membership.id ?? null };
+          }
+          // CUT SHORT, marked on Gameday Ops (migration 0251). A failed read marks nothing, which sends a
+          // lights or weather complaint to a person rather than crediting on a guess.
+          const ids = p.matches.map((m) => m.matchId).filter((x): x is number => x != null).slice(0, 40);
+          const cut = new Map<number, CutShort>();
+          if (ids.length) {
+            const cs = await supabase.from("match_cut_short").select("match_id, reason, minutes_played").eq("env", "production").in("match_id", ids);
+            if (!cs.error) for (const r of cs.data ?? []) cut.set(Number(r.match_id), { reason: r.reason as CutShort["reason"], minutes_played: Number(r.minutes_played) });
           }
           ctxIn.matches = p.matches.map((m) => ({
             name: m.name, startDate: m.startDate, startDateUtc: m.startDateUtc, state: m.state,
             price: m.price, charged: m.charged, playerCancelledAt: m.playerCancelledAt,
+            matchId: m.matchId ?? null, cutShort: m.matchId != null ? cut.get(m.matchId) ?? null : null,
           }));
           keys.push("credits", "matches_played", "strikes", "membership", "matches");
         } catch (e) {

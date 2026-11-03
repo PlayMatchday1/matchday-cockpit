@@ -136,6 +136,8 @@ export type HistoryRow = {
    * backwards in the conversation this screen exists for. */
   price: number | null;
   charged: number | null;
+  /** Cents of the player's credit this booking used at checkout (creditAmount); absent on a mirror-only row. */
+  credit?: number | null;
   userStatus: string | null;
   /** THE PLAYER PULLED OUT. Carried, not collapsed into `state`. */
   playerCancelled: boolean;

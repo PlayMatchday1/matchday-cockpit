@@ -19,7 +19,7 @@
 // Auth: dual-mode bearer via authenticateCrm (admin OR can_access_chats).
 
 import { authenticateCrm } from "@/lib/crmAuth";
-import { crmScopedAssignees } from "@/lib/crmScope";
+import { crmScopeCity, scopeThreads } from "@/lib/crmScope";
 import {
   computePeriodMetrics,
   computeAwaitingNow,
@@ -99,9 +99,7 @@ async function getRoute(req: Request) {
   // A confined caller's tiles count only its scope (crmScope); messages and closes follow the
   // scoped thread set below. The all-time cache holds the UNSCOPED answer, so it is neither served
   // to nor filled by a confined caller.
-  const scope = await crmScopedAssignees(auth);
-  if (!scope.ok) return Response.json({ error: scope.error }, { status: scope.status });
-  const scoped = scope.ids;
+  const scoped = crmScopeCity(auth);
 
   if (!scoped && period === "all" && allTimeCache && Date.now() - allTimeCache.at < ALL_TIME_TTL_MS) {
     return Response.json(allTimeCache.body, {
@@ -120,7 +118,7 @@ async function getRoute(req: Request) {
       .select(
         "id, player_id, created_at, closed_at, status, last_message_at, last_message_direction, last_message_preview, no_reply_needed_at",
       );
-    if (scoped) q = q.in("assigned_to_user_id", scoped);
+    q = scopeThreads(q, scoped);
     const { data, error } = await q
       .order("created_at", { ascending: true })
       .range(from, to);

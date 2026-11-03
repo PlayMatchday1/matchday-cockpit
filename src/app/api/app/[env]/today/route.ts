@@ -13,8 +13,10 @@ import { authenticateApp, readRefusal } from "@/lib/appAuth";
 import { cityAllowed, CHECKIN_OPENS_MINUTES, LATE_AFTER_MINUTES } from "@/lib/appModel";
 import { fetchDayLive, isEnv, summariesLive, todayRow } from "@/lib/appLive";
 import { fetchVenueMaxPlayers, trimMatch, withVenueMaxPlayers } from "@/lib/gamedayApiShape";
-import { StageConfigError, StageHostGuardError } from "@/lib/matchdayStageApi";
+import { StageConfigError, StageHostGuardError, type MatchdayEnv } from "@/lib/matchdayStageApi";
 import { reviewMasked } from "@/lib/reviewAccount";
+import { revalidateTag, unstable_cache } from "next/cache";
+import { TODAY_MAX_AGE_MS, TODAY_TTL_S, todayScopeTag, todayTag } from "@/lib/appTodayCache";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -30,8 +32,30 @@ async function getRoute(req: Request, ctx: { params: Promise<{ env: string }> })
   const date = new URL(req.url).searchParams.get("date");
   if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return Response.json({ error: "date=YYYY-MM-DD required" }, { status: 400 });
 
+  /* CACHED 15 SECONDS PER CITY SCOPE AND DAY (Ryan, 2026-11-02; src/lib/appTodayCache.ts). The key is
+   * exactly what cityAllowed reads, so an answer never crosses scopes; reviewMasked still masks per
+   * request. A staff app write to a match expires every day's copy, and an answer older than 20 s is
+   * read again before it is served (the cache alone would serve a stale copy however old). */
+  const scope = auth.confined ? `c:${auth.scopeCity ?? ""}` : "all";
+  const authed = auth, envName = env;
   try {
-    const raw = await fetchDayLive(env, date);
+    const read = () => unstable_cache(() => liveDay(), ["app-today-v1", env, date, scope], { revalidate: TODAY_TTL_S, tags: [todayTag(env), todayScopeTag(env, date, scope)] })();
+    let body = await read();
+    if (Date.now() - Date.parse(body.fetchedAt) > TODAY_MAX_AGE_MS) {
+      revalidateTag(todayScopeTag(env, date, scope), { expire: 0 });
+      body = await read();
+    }
+    return Response.json(body);
+  } catch (e) {
+    if (e instanceof StageHostGuardError || e instanceof StageConfigError) return Response.json({ error: e.message }, { status: 500 });
+    return Response.json({ error: e instanceof Error ? e.message : String(e) }, { status: 502 });
+  }
+
+  async function liveDay() {
+    // The checks above hold here; TypeScript does not carry them into this function.
+    const auth = authed as Extract<typeof authed, { ok: true }>;
+    const env = envName as MatchdayEnv;
+    const raw = await fetchDayLive(env, date!);
     const scoped = raw.map(trimMatch).filter((m) => cityAllowed(auth, auth.scopeCityName, m.field.city.name));
     const decorated = withVenueMaxPlayers(scoped, await fetchVenueMaxPlayers(auth.supabase));
     const now = Date.now();
@@ -43,16 +67,13 @@ async function getRoute(req: Request, ctx: { params: Promise<{ env: string }> })
       .slice()
       .sort((a, b) => Date.parse(a.startDateUtc) - Date.parse(b.startDateUtc))
       .map((m) => todayRow(m, rawById.get(m.id), summaries.get(m.id) ?? null, now));
-    return Response.json({
+    return {
       date, env, fetchedAt: new Date(now).toISOString(),
       scope: { confined: auth.confined, city: auth.scopeCity, cityName: auth.scopeCityName },
       checkinOpensMinutes: CHECKIN_OPENS_MINUTES, lateAfterMinutes: LATE_AFTER_MINUTES,
       checkinAvailable: env === "production",
       matches,
-    });
-  } catch (e) {
-    if (e instanceof StageHostGuardError || e instanceof StageConfigError) return Response.json({ error: e.message }, { status: 500 });
-    return Response.json({ error: e instanceof Error ? e.message : String(e) }, { status: 502 });
+    };
   }
 }
 

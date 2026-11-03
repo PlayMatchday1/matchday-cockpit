@@ -35,6 +35,10 @@ export type ActionIO = {
   claim: () => Promise<boolean>;
   writeCredit: (args: { playerId: number; deltaCents: number; expectedBeforeCents: number; reason: string }) => Promise<WriteResult>;
   writeGuestCode: (code: string) => Promise<WriteResult>;
+  /** refund_membership: re-read Stripe live and say why not, or null. Asked before the claim. */
+  refundPreflight?: (action: StoredAction) => Promise<string | null>;
+  /** refund_membership: refund the charge once, then end the membership. `ended` says how the end went. */
+  writeRefund?: (action: StoredAction) => Promise<WriteResult & { ended?: string }>;
   finish: (status: ActionStatus, draftText: string | null) => Promise<void>;
 };
 
@@ -55,12 +59,19 @@ export async function applyDraftAction(io: ActionIO): Promise<ActionResult> {
   if (d.outcome !== "pending" || !d.action) return refused(409, "This draft has no action left to apply.");
   if (d.action_status) return refused(409, "This action was already pressed. Nothing was sent again.");
   const action = d.action;
+  // A REFUND IS NEVER AUTOMATIC (Ryan's rule): only a person with EDIT MEMBERSHIPS presses it.
+  if (action.kind === "refund_membership" && io.reasonPrefix === "Auto:") return refused(403, "A membership refund is never automatic.");
   if ((await io.threadPlayerId()) !== action.player_id) return refused(409, "This thread is linked to a different account now. Regenerate the draft.");
   const no = await io.rightsRefusal(action.kind);
   if (no) return refused(403, no);
 
   let code: string | null = null;
-  if (action.kind === "credit") {
+  if (action.kind === "refund_membership") {
+    if (!action.charge_id || action.membership_id == null || !(action.amount_cents && action.amount_cents > 0)) return refused(409, "This refund has no charge, membership or amount. Regenerate the draft.");
+    if (!io.refundPreflight || !io.writeRefund) return refused(409, "Refunds can't be applied from here.");
+    const no = await io.refundPreflight(action);
+    if (no) return refused(409, no);
+  } else if (action.kind === "credit") {
     if (action.amount_cents == null || action.amount_cents <= 0 || action.balance_cents == null) return refused(409, "This credit has no amount or starting balance. Regenerate the draft.");
   } else {
     const pre = await io.guestPreflight(action.player_id);
@@ -70,7 +81,9 @@ export async function applyDraftAction(io: ActionIO): Promise<ActionResult> {
 
   if (!(await io.claim())) return refused(409, "This action was already pressed. Nothing was sent again.");
 
-  const w = action.kind === "credit"
+  const w: WriteResult & { ended?: string } = action.kind === "refund_membership"
+    ? await io.writeRefund!(action)
+    : action.kind === "credit"
     ? await io.writeCredit({ playerId: action.player_id, deltaCents: action.amount_cents!, expectedBeforeCents: action.balance_cents!, reason: `${io.reasonPrefix ? `${io.reasonPrefix} ` : ""}${creditReason(action)}` })
     : await io.writeGuestCode(code!);
   const text = code ? (d.draft_text ?? "").replace("{code}", code) : d.draft_text ?? "";
@@ -78,7 +91,8 @@ export async function applyDraftAction(io: ActionIO): Promise<ActionResult> {
     console.error("[ai-draft] action status not recorded", e instanceof Error ? e.message : e);
   });
   if (w.status === "landed") {
-    const what = action.kind === "credit" ? `Credit of ${fmtUsd(action.amount_cents!)} applied.` : `Guest code ${code} created.`;
+    const what = action.kind === "refund_membership" ? `Refund of ${fmtUsd(action.amount_cents!)} landed in Stripe. ${w.ended ?? ""}`.trim()
+      : action.kind === "credit" ? `Credit of ${fmtUsd(action.amount_cents!)} applied.` : `Guest code ${code} created.`;
     return { ok: true, status: "landed", text, message: `${what} Nothing sent yet, press Send.` };
   }
   const prefix = w.status === "unknown" ? "This may have landed, so check Player Lookup before doing it again." : "This didn't apply.";

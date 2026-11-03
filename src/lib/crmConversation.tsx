@@ -62,6 +62,11 @@ export type ThreadListRow = {
   is_follow_up: boolean;
   waiting_since: string | null;
   auto_send?: AutoSendRowState | null;
+  /** Our newest outbound was an auto-send (the list route). The row reads "Agent:". */
+  last_outbound_auto?: boolean;
+  /** crm_threads.city_code / city_source (migration 0250). */
+  city_code?: string | null;
+  city_source?: string | null;
   awaiting?: boolean;
   attention?: RowAttention | null;
   player: {
@@ -90,6 +95,7 @@ export type Message = {
   delivery_status_updated_at: string | null;
   template_name?: string | null;
   is_auto_reply?: boolean;
+  auto_sent_draft_id?: string | null;
   sender?: { email: string; full_name: string | null } | null;
   media_kind:
     | "image"

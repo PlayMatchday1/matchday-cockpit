@@ -17,6 +17,7 @@
 import { authenticateApp } from "@/lib/appAuth";
 import { callDesktop, passThrough } from "@/lib/appCall";
 import { apiGet } from "@/lib/matchdayStageApi";
+import { unstable_cache } from "next/cache";
 import { GOAL_MONTHS, growthView, type GoalMonth, type Payload } from "@/lib/appGrowth";
 import type { CompareFrom, GoalSort } from "@/lib/fieldGoals";
 import { GET as fieldGoalsGet } from "@/app/api/growth/field-goals/route";
@@ -59,7 +60,8 @@ async function getRoute(req: Request) {
       }
     }
     const fieldOf = (x: { venueId: number | null; fieldId: number | null }) => (x.venueId != null ? firstField.get(x.venueId) ?? null : x.fieldId);
-    const live = await apiGet<{ id: number; cover?: string | null }[]>("production", "/admin/fields").catch(() => null);
+    // The field list for covers, cached an hour (covers change rarely; it was read live on every open).
+    const live = await unstable_cache(() => apiGet<{ id: number; cover?: string | null }[]>("production", "/admin/fields"), ["app-growth-field-covers-v1"], { revalidate: 3600 })().catch(() => null);
     const coverById = new Map((live ?? []).map((f) => [Number(f.id), typeof f.cover === "string" && f.cover.trim() ? f.cover : null]));
     const fields = city.fields.map((f) => {
       const id = fieldOf(f);

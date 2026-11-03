@@ -59,6 +59,71 @@ async function authFetch(path: string): Promise<Response> {
   return fetch(path, { headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) }, cache: "no-store" });
 }
 
+/* ── MATCHES CUT SHORT (2026-11-02) ─────────────────────────────────────────────────────────────
+ * The city manager marks a match that started and stopped early: lights, weather, an injury. The
+ * mark lives in Clubhouse (match_cut_short, /api/matchday/{env}/cut-short), logged in change_log, and
+ * Player Chats drafts credit a player who asks about a marked match like a match we cancelled. */
+type CutMark = { match_id: number; reason: "lights" | "weather" | "injury" | "other"; minutes_played: number; note?: string | null };
+const CUT_LABEL: Record<CutMark["reason"], string> = { lights: "Lights", weather: "Weather", injury: "Injury", other: "Other" };
+async function authJson(path: string, method: "POST" | "DELETE", body?: unknown): Promise<{ ok: boolean; j: Record<string, unknown> }> {
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  const res = await fetch(path, { method, headers: { "content-type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: body ? JSON.stringify(body) : undefined }).catch(() => null);
+  const j = res ? ((await res.json().catch(() => ({}))) as Record<string, unknown>) : { error: "No answer" };
+  return { ok: !!res?.ok, j };
+}
+
+function CutShortControl({ m, mark, onSaved }: { m: ApiMatch; mark: CutMark | null; onSaved: (id: number, mark: CutMark | null) => void }) {
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState<CutMark["reason"]>(mark?.reason ?? "lights");
+  const [mins, setMins] = useState(String(mark?.minutes_played ?? ""));
+  const [note, setNote] = useState(mark?.note ?? "");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const save = async () => {
+    setBusy(true); setErr(null);
+    const minutes = Number(mins);
+    const r = await authJson(`/api/matchday/${ENV}/cut-short`, "POST", { match_id: m.id, reason, minutes_played: minutes, note: note.trim() || null });
+    setBusy(false);
+    if (!r.ok) { setErr(String(r.j.error ?? "Didn't save.")); return; }
+    if (r.j.outcome !== "landed") { setErr(`Saved as ${String(r.j.outcome)}: reload to check it.`); return; }
+    onSaved(m.id, { match_id: m.id, reason, minutes_played: minutes, note: note.trim() || null });
+    setOpen(false);
+  };
+  const remove = async () => {
+    setBusy(true); setErr(null);
+    const r = await authJson(`/api/matchday/${ENV}/cut-short?match_id=${m.id}`, "DELETE");
+    setBusy(false);
+    if (!r.ok) { setErr(String(r.j.error ?? "Didn't remove.")); return; }
+    onSaved(m.id, null);
+  };
+  if (!open) {
+    return (
+      <div className="gcut" data-testid="gday-cut" data-id={m.id}>
+        {mark ? <>
+          <span data-testid="gday-cut-state">Cut short: {CUT_LABEL[mark.reason]}, {mark.minutes_played} min played</span>
+          <button type="button" className="gbtn" disabled={busy} onClick={() => setOpen(true)}>Edit</button>
+          <button type="button" className="gbtn" disabled={busy} data-testid="gday-cut-remove" onClick={() => void remove()}>Remove</button>
+        </> : <button type="button" className="gbtn" data-testid="gday-cut-open" onClick={() => setOpen(true)}>Mark cut short</button>}
+        {err && <span className="gverdict failed">{err}</span>}
+      </div>
+    );
+  }
+  return (
+    <div className="gcut" data-testid="gday-cut-form" data-id={m.id}>
+      <span className="glab">Cut short</span>
+      <select value={reason} onChange={(e) => setReason(e.target.value as CutMark["reason"])} data-testid="gday-cut-reason">
+        {(Object.keys(CUT_LABEL) as CutMark["reason"][]).map((r) => <option key={r} value={r}>{CUT_LABEL[r]}</option>)}
+      </select>
+      <label className="gcutmin">Minutes played <input type="number" min={0} max={240} inputMode="numeric" value={mins} onChange={(e) => setMins(e.target.value)} data-testid="gday-cut-mins" /></label>
+      {reason === "other" && <input type="text" placeholder="What happened" value={note} onChange={(e) => setNote(e.target.value)} data-testid="gday-cut-note" />}
+      <button type="button" className="gpri" disabled={busy || mins.trim() === ""} data-testid="gday-cut-save" onClick={() => void save()}>{busy ? "Saving…" : "Save"}</button>
+      <button type="button" className="gbtn" disabled={busy} onClick={() => { setOpen(false); setErr(null); }}>Cancel</button>
+      {err && <span className="gverdict failed" data-testid="gday-cut-error">{err}</span>}
+    </div>
+  );
+}
+
 const PANEL_W = 600; // the in-place match panel (replaces the old side drawer + "Open full editor")
 /* CAPPED AT 760, the same width the Fields drawer uses (FieldsView: min(760px,96vw)).
  *
@@ -144,6 +209,8 @@ export default function GamedayBoard({
    * wiring them to a no-op. Clicking the active tile again clears, which is why this is a single
    * nullable key and not a set. */
   const [strip, setStrip] = useState<StripKey | null>(null);
+  // Cut-short marks for the day's started matches. A failed read shows no marks; it never blocks the board.
+  const [cutMarks, setCutMarks] = useState<Record<number, CutMark>>({});
   // The spot tiles' lookups failing is said on the tiles, not swallowed (gamedaySpots.withSpots).
   const [spotsErr, setSpotsErr] = useState<string | null>(null);
   /* WHICH SECTIONS ARE OPEN. Finished starts CLOSED — it is the largest section by the end of a
@@ -181,6 +248,19 @@ export default function GamedayBoard({
   // guarded — see useCrmConversationOptional.
   const crm = useCrmConversationOptional();
   const [wide, setWide] = useState(false);
+  // The day's marks, for the matches that have started. Keyed on the id list so a quiet refresh that
+  // returns the same matches doesn't refetch.
+  const startedIds = matches.filter((x) => { const b = dayBucket(x, Date.now()); return b === "live" || b === "done"; }).map((x) => x.id).join(",");
+  useEffect(() => {
+    if (!startedIds) { setCutMarks({}); return; }
+    let live = true;
+    void authFetch(`/api/matchday/${ENV}/cut-short?ids=${startedIds}`).then(async (r) => {
+      if (!r.ok || !live) return;
+      const j = (await r.json().catch(() => ({}))) as { marks?: CutMark[] };
+      if (live) setCutMarks(Object.fromEntries((j.marks ?? []).map((x) => [x.match_id, x])));
+    }).catch(() => {});
+    return () => { live = false; };
+  }, [startedIds]);
   const [dockNotice, setDockNotice] = useState(false);
   const dockNoticeShown = useRef(false);
   useEffect(() => {
@@ -889,6 +969,8 @@ export default function GamedayBoard({
                             onOpen={openDrawer} money={money} atRiskRow={atRisk(m, now)}
                             expanded={adjusting[m.id] === true} onAdjust={toggleAdjust}
                             hasPending={pendingMin[m.id] != null || pendingSpots[m.id] != null}
+                            cut={cutMarks[m.id] ?? null}
+                            onCutSaved={(id, mark) => setCutMarks((p) => { const n = { ...p }; if (mark) n[id] = mark; else delete n[id]; return n; })}
                             ctl={{
                               pending: pendingMin[m.id] ?? null,
                               pendingSpots: pendingSpots[m.id] ?? null,
@@ -1150,6 +1232,11 @@ const CSS = `
 .gdo .sheet .vsmin.short{background:#FDEEEB;color:#A83120;border-color:#F0A9A4}
 .gdo .sheet .vsmin.none{border-color:transparent;background:transparent;color:#536258;padding:0}
 .gdo .sheet .vsmin.cxbadge{border-color:#A83120;background:#A83120;color:#fff;padding:0 9px;font-weight:800;letter-spacing:.05em;align-items:center}
+/* CUT SHORT: one quiet line under the controls of a started match. */
+.gdo .gcut{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:8px;font-size:12px;color:#3f544a}
+.gdo .gcut select,.gdo .gcut input{height:28px;border:1px solid #d3dcd8;border-radius:7px;padding:0 6px;font-size:12px;background:#fff}
+.gdo .gcut .gcutmin{display:inline-flex;align-items:center;gap:5px}
+.gdo .gcut .gcutmin input{width:58px}
 /* ── CANCEL TIME (cancel-time-v1) ───────────────────────────────────────────
    A DURATION, then what it is a countdown to. 15px against kickoff's inherited
    16px: strictly smaller, so the two stop reading as the same kind of fact. The
@@ -1962,8 +2049,9 @@ function MinLabel({ pct, n }: { pct: number; n: number }) {
  * THE LABEL SITS DIRECTLY BENEATH IT with no connector stub — proximity does that work, and a stub
  * at this size is three more pixels of ink saying what adjacency already says.
  */
-function GRow({ m, now, selected, onOpen, money, atRiskRow, expanded, onAdjust, hasPending, ctl }: {
+function GRow({ m, now, selected, onOpen, money, atRiskRow, expanded, onAdjust, hasPending, ctl, cut, onCutSaved }: {
   m: ApiMatch; now: number; selected: boolean; onOpen: (id: number) => void;
+  cut: CutMark | null; onCutSaved: (id: number, mark: CutMark | null) => void;
   money: (c: number | null | undefined) => string; atRiskRow: boolean;
   /* ── THE ROW'S OWN COPY OF THE CONTROLS ──────────────────────────────────────────────────────
    * `expanded` is per row and several may be open at once — see the board's `adjusting`.
@@ -2032,6 +2120,7 @@ function GRow({ m, now, selected, onOpen, money, atRiskRow, expanded, onAdjust, 
             moment the thing becomes true is the wrong way round, and it would also break the
             chip/banner agreement, since the banner does not stop at zero either. */}
         {ac != null && <span className="gtag hot" data-testid="gday-cancels">{ac > 0 ? `cancels in ${fmtDur(ac)}` : "cancels now"}</span>}
+        {cut && <span className="gtag" data-testid="gday-cutshort">Cut short · {CUT_LABEL[cut.reason]}, {cut.minutes_played} min</span>}
         <div className="sub">{m.field?.title ?? "—"} · {m.field?.city?.name ?? "—"}</div>
       </div>
 
@@ -2114,6 +2203,7 @@ function GRow({ m, now, selected, onOpen, money, atRiskRow, expanded, onAdjust, 
         <div className="gexp" data-testid="gday-row-controls" data-id={m.id}
           onClick={(e) => e.stopPropagation()}>
           <GdayControls m={m} now={now} {...ctl} />
+          {(b === "live" || b === "done") && <CutShortControl m={m} mark={cut} onSaved={onCutSaved} />}
         </div>
       )}
     </div>

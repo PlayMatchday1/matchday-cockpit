@@ -38,6 +38,8 @@ export async function GET(req: Request) {
     canSendMessages: can(row, "sendMessages", auth.email),
     // Player Lookup's membership and strike controls; every write route re-checks.
     canEditMemberships: can(row, "editMemberships", auth.email),
+    // EDIT CREDITS: granted on its own, never by Match Ops or admin; the credits route re-checks it.
+    canEditCredits: can(row, "editCredits", auth.email) && row.is_service_account !== true,
     canManagePlayers: can(row, "managePlayers", auth.email),
     // Manager Schedule pay changes: the app refuses them to a city-confined account.
     canChangeManagerPay: !auth.confined,

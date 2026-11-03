@@ -30,6 +30,7 @@
 import { TelnyxWebhook, TelnyxWebhookVerificationError } from "telnyx";
 import { createClient } from "@supabase/supabase-js";
 import { normalizePhone, toNationalDigits } from "@/lib/phone";
+import { accountCityCode } from "@/lib/crmThreadCity";
 import { notifyInboundChatMessage } from "@/lib/crmPushNotify";
 import { writeThreadStatusLog } from "@/lib/crmThreadStatus";
 
@@ -171,6 +172,9 @@ export async function POST(req: Request) {
 
   const playerId = candidates[0]?.id ?? null;
   const ambiguous = candidates.length > 1;
+// THE THREAD'S CITY at the first link (0250): the one account's city. Several accounts on the number:
+// no city here, the draft or a person sets it. A failed read sets nothing and never fails the webhook.
+  const linkCity = playerId != null && !ambiguous ? await accountCityCode(sb, playerId) : null;
 
   // ---------------- upsert thread ----------------
   const preview = body.slice(0, PREVIEW_LIMIT);
@@ -182,7 +186,7 @@ export async function POST(req: Request) {
   // (e.g. a temporary mdapi_users sync gap).
   const existing = await sb
     .from("crm_threads")
-    .select("id, player_id, match_ambiguous, status")
+    .select("id, player_id, match_ambiguous, status, city_code")
     .eq("phone_number", phone)
     .eq("channel", "sms")
     .maybeSingle();
@@ -207,6 +211,7 @@ export async function POST(req: Request) {
     // we now have a candidate. Never overwrite a known player.
     if (existing.data.player_id == null && playerId != null) {
       patch.player_id = playerId;
+      if (linkCity && existing.data.city_code == null) { patch.city_code = linkCity; patch.city_source = "account"; }
     }
     // Sticky once true: once ambiguous, stays ambiguous until corp
     // resolves it (no UI for that in MVP — column carries the flag).
@@ -241,6 +246,7 @@ export async function POST(req: Request) {
         phone_number: phone,
         player_id: playerId,
         match_ambiguous: ambiguous,
+        ...(linkCity ? { city_code: linkCity, city_source: "account" } : {}),
         last_message_at: nowIso,
         last_message_preview: preview,
         // First message on a brand-new thread is inbound → awaiting.

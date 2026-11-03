@@ -11,7 +11,7 @@
 // non-OK as "no badge", so an error here never reaches the page.
 
 import { authenticateCrm } from "@/lib/crmAuth";
-import { crmScopedAssignees } from "@/lib/crmScope";
+import { crmScopeCity } from "@/lib/crmScope";
 import { reviewMasked } from "@/lib/reviewAccount";
 
 export const runtime = "nodejs";
@@ -35,16 +35,16 @@ async function getRoute(req: Request) {
    * reduces to: the viewer's own threads among those 50, unread by the viewer. Unconfined viewers
    * keep the RPC unchanged. */
   if (auth.confinedCity) {
-    const scope = await crmScopedAssignees(auth);
-    if (!scope.ok) return Response.json({ error: scope.error }, { status: scope.status });
-    if (!scope.ids!.includes(appUserId)) return Response.json({ count: 0 }, { status: 200 });
+    /* A CONFINED VIEWER: the same rule as the RPC, inside the city. Of the 50 most recent threads in
+     * the city, inbound-last ones that are unassigned or assigned to the viewer, unread by the viewer. */
     const recent = await supabase
       .from("crm_threads")
       .select("id, last_message_at, last_message_preview, last_message_direction, assigned_to_user_id")
+      .eq("city_code", crmScopeCity(auth)!)
       .order("last_message_at", { ascending: false })
       .limit(50);
     if (recent.error) return Response.json({ error: recent.error.message }, { status: 500 });
-    const mine = (recent.data ?? []).filter((t) => t.assigned_to_user_id === appUserId && t.last_message_preview != null && t.last_message_direction === "inbound");
+    const mine = (recent.data ?? []).filter((t) => (t.assigned_to_user_id == null || t.assigned_to_user_id === appUserId) && t.last_message_preview != null && t.last_message_direction === "inbound");
     if (mine.length === 0) return Response.json({ count: 0 }, { status: 200 });
     const reads = await supabase.from("crm_thread_reads").select("thread_id, last_read_at").eq("user_id", appUserId).in("thread_id", mine.map((t) => t.id));
     if (reads.error) return Response.json({ error: reads.error.message }, { status: 500 });

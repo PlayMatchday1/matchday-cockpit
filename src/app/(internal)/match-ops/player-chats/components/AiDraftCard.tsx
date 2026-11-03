@@ -31,7 +31,7 @@ import type { ConversationMessage } from "./MessageBubble";
 type Draft = {
   id: string; text: string; staff_notes: string[]; category: string | null; flags: string[];
   text_without_action: string | null;
-  action: { kind: "credit" | "issue_guest_code"; amount_cents: number | null } | null;
+  action: { kind: "credit" | "issue_guest_code" | "refund_membership"; amount_cents: number | null } | null;
   action_status: string | null;
   decision?: string | null;
   decision_reason?: string | null;
@@ -62,7 +62,9 @@ const FLAG_LABEL: Record<string, string> = {
 
 const ACTION_DONE = new Set(["applying", "landed", "unknown"]);
 const actionLabel = (a: NonNullable<Draft["action"]>) =>
-  a.kind === "credit" ? `Credit ${fmtUsd(a.amount_cents ?? 0)} + use draft` : "Issue guest code + use draft";
+  a.kind === "credit" ? `Credit ${fmtUsd(a.amount_cents ?? 0)} + use draft`
+  : a.kind === "refund_membership" ? `Refund ${fmtUsd(a.amount_cents ?? 0)} + use draft`
+  : "Issue guest code + use draft";
 // The server fills the real code in after creating it. Until then the card says so.
 const shown = (text: string) => text.replace("{code}", "[code, filled in when issued]");
 
@@ -220,7 +222,7 @@ export default function AiDraftCard({
   return (
     <div data-testid="ai-draft-card" className="mb-2 rounded-lg border border-deep-green/15 bg-cream-soft px-3 py-2 text-sm text-deep-green">
       {view.kind === "draft" && view.draft.decision === "human" && (
-        <div data-testid="ai-draft-needs-you" className="mb-1 text-[13px] font-[750]" style={{ color: "#a82a18" }}>
+        <div data-testid="ai-draft-needs-you" className="mb-1 text-[13px] font-[750]" style={{ color: "var(--color-attn)" }}>
           Needs you: {view.draft.decision_reason ?? "this one needs a person"}
         </div>
       )}

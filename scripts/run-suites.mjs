@@ -316,6 +316,7 @@ const NODE_SUITES = [
   "scripts/crm-thread-scope-test.ts",
   "scripts/app-push-test.ts",
   "scripts/app-match-v2-test.ts",
+  "scripts/app-credits-test.ts",
   /* AN ASSERTION OVER AN EMPTY COLLECTION PASSES WITHOUT TESTING ANYTHING. 27 sites across 10
    * browser suites were in that shape, and one had been green for a round while testing nothing.
    * This keeps the count at zero. */
@@ -489,9 +490,25 @@ function run(suite) {
     let out = "";
     const grab = (b) => { out += b.toString(); };
     child.stdout.on("data", grab); child.stderr.on("data", grab);
-    const timer = setTimeout(() => { child.kill("SIGKILL"); resolve({ suite, ok: false, why: `TIMED OUT after ${TIMEOUT_MS() / 1000}s`, out }); }, TIMEOUT_MS());
+    /* THE CAP COUNTS AWAKE TIME ONLY (2026-11-02). Ten back-to-back runs on a laptop that slept
+     * overnight failed suites that take a second ("TIMED OUT after 180s" at 675 to 1,056 s): the
+     * wall clock ran on while nothing did. A one-second heartbeat finds those gaps (any gap over 30 s
+     * means this runner itself was not running) and leaves them out; a suite that truly hangs is
+     * still killed after 180 s awake. */
+    const started = Date.now();
+    let lastTick = started, asleep = 0;
+    const timer = setInterval(() => {
+      const now = Date.now();
+      if (now - lastTick > 30_000) asleep += now - lastTick - 1000;
+      lastTick = now;
+      if (now - started - asleep > TIMEOUT_MS()) {
+        clearInterval(timer);
+        child.kill("SIGKILL");
+        resolve({ suite, ok: false, why: `TIMED OUT after ${TIMEOUT_MS() / 1000}s awake${asleep ? ` (${Math.round(asleep / 1000)}s asleep not counted)` : ""}`, out });
+      }
+    }, 1000);
     child.on("close", (code) => {
-      clearTimeout(timer);
+      clearInterval(timer);
       // last "(N) passed, (M) failed" anywhere in the output (also matches "Assertions: N passed, M failed")
       const matches = [...out.matchAll(/(\d+)\s+passed,\s+(\d+)\s+failed/g)];
       const last = matches[matches.length - 1];

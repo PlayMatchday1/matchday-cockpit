@@ -10,6 +10,7 @@
 
 import { randomUUID } from "node:crypto";
 import { authenticateApp, readRefusal } from "@/lib/appAuth";
+import { clearToday } from "@/lib/appTodayCache";
 import { isEnv } from "@/lib/appLive";
 import { callDesktop, passThrough } from "@/lib/appCall";
 import { GET as cancelGet, POST as cancelPost } from "@/app/api/matchday/[env]/matches/[id]/cancel/route";
@@ -42,9 +43,11 @@ export async function POST(req: Request, ctx: Ctx) {
   const g = await gate(req, ctx);
   if ("res" in g) return g.res;
   const body = (await req.json().catch(() => null)) as { confirmName?: string; reason?: string; note?: string } | null;
-  return passThrough(await callDesktop(req, cancelPost, `/api/matchday/${g.env}/matches/${g.id}/cancel`, {
+  const c = await callDesktop(req, cancelPost, `/api/matchday/${g.env}/matches/${g.id}/cancel`, {
     method: "POST", body: { confirmName: body?.confirmName, reason: body?.reason, note: body?.note, source: "Staff app · cancel", saveId: randomUUID() },
-  }, { env: g.env, id: g.id }));
+  }, { env: g.env, id: g.id });
+  clearToday(g.env);
+  return passThrough(c);
 }
 
 export const GET = reviewMasked(getRoute);

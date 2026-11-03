@@ -25,12 +25,15 @@ import { isAwaitingReply } from "./awaitingReply";
 import { loadAttention, strikeHoldingThreadIds } from "./crmAttentionLoad";
 import { HUMAN_PUSH_WITHIN_MS, NO_DRAFT_YET } from "./crmAttention";
 import { finalRecipients, logPushSkip, sendAppPush, PUSH_TEST_ONLY_EMAILS, type StaffRow } from "./appPush";
-import { humanPushText, humanRecipients, settledHuman, waitStartOf, type WaitMsg } from "./appPushHumanRules";
+import { escalationPath, escalationRecipients, humanPushText, humanRecipients, settledHuman, waitStartOf, type WaitMsg } from "./appPushHumanRules";
+import { ESCALATE_AFTER_MS } from "./aiDraftPolicy";
+import { recordWrite, supabaseLogStore } from "./changeLog";
+import { randomUUID } from "node:crypto";
 
 export * from "./appPushHumanRules";
 
-type ThreadRow = { id: string; status: "open" | "closed"; assigned_to_user_id: string | null; player_id: number | null; phone_number: string; last_message_at: string; last_message_preview: string | null; last_message_direction: "inbound" | "outbound" | null; no_reply_needed_at: string | null };
-const COLS = "id, status, assigned_to_user_id, player_id, phone_number, last_message_at, last_message_preview, last_message_direction, no_reply_needed_at";
+type ThreadRow = { id: string; status: "open" | "closed"; assigned_to_user_id: string | null; player_id: number | null; phone_number: string; last_message_at: string; last_message_preview: string | null; last_message_direction: "inbound" | "outbound" | null; no_reply_needed_at: string | null; city_code: string | null };
+const COLS = "id, status, assigned_to_user_id, player_id, phone_number, last_message_at, last_message_preview, last_message_direction, no_reply_needed_at, city_code";
 
 export type HumanPushOpts = {
   /** Compute and report only: no claim, no send, no log. */
@@ -78,6 +81,39 @@ export async function notifyAppNeedsHuman(sb: SupabaseClient, now: number, opts:
     const reason = a.reason ?? "Needs a person";
     if (!settledHuman(a, now, opts.hasModelKey)) { out.push({ thread_id: t.id, wait_started_at: waitStart, action: "pending", reason: `${NO_DRAFT_YET}: waiting for the draft.` }); continue; }
 
+    if (!staff) {
+      const s = await sb.from("app_users").select("id, email, is_admin, can_access_chats, can_access_matchops, is_city_manager, is_service_account, city_identifier");
+      if (s.error) throw new Error(s.error.message);
+      staff = (s.data ?? []) as StaffRow[];
+    }
+    // THE SECOND PUSH (2026-11-02): a thread that went to its city's staff first goes to the admins
+    // once it has waited ESCALATE_AFTER_MS with no staff reply (a staff reply starts a new wait). Once
+    // per inbound: the change_log marker is written before the push.
+    const escalateTo = escalationRecipients(staff, t.assigned_to_user_id, t.city_code);
+    if (escalateTo.length && a.inbound_id && now - Date.parse(waitStart) >= ESCALATE_AFTER_MS && !opts.dryRun) {
+      const path = escalationPath(a.inbound_id);
+      const seen = await sb.from("change_log").select("id").eq("endpoint", path).limit(1);
+      if (seen.error) throw new Error(seen.error.message);
+      if (!(seen.data ?? []).length) {
+        const at = new Date(now).toISOString();
+        const logged = await recordWrite(
+          {
+            env: "production", source: "crm-human-push", actorName: "auto-send", actorEmail: null, saveId: randomUUID(), matchId: null, matchName: null,
+            method: "POST", path, body: { thread_id: t.id, to: "admins", city: t.city_code }, keys: [], label: (k) => k, applied: () => true,
+            changes: [{ key: "push", field: "Needs a human, escalated", before: "", after: a.reason ?? "" }],
+          },
+          { readResource: async () => ({}), write: async () => ({}), now: () => at },
+          supabaseLogStore(),
+        );
+        if (logged.logged) {
+          const ids = finalRecipients(escalateTo, staff, null, opts.onlyEmails === undefined ? PUSH_TEST_ONLY_EMAILS : opts.onlyEmails);
+          const text = humanPushText(null, t.phone_number, `No reply in 20 minutes · ${t.city_code ?? ""} · ${a.reason ?? "Needs a person"}`);
+          await sendAppPush(sb, { event: "player_chat", subject: `${t.id}:escalate`, recipientIds: ids, ...text, reason: `Needs a human, escalated: ${a.reason ?? ""}`, data: { kind: "player_chat", threadId: t.id } })
+            .catch((e: unknown) => console.error("[app-push] escalation failed", e instanceof Error ? e.message : e));
+        }
+      }
+    }
+
     if (!opts.dryRun) {
       const claim = await sb.from("app_push_chat_waits").insert({ thread_id: t.id, wait_started_at: waitStart, inbound_id: a.inbound_id });
       if (claim.error) {
@@ -87,12 +123,7 @@ export async function notifyAppNeedsHuman(sb: SupabaseClient, now: number, opts:
       }
     }
 
-    if (!staff) {
-      const s = await sb.from("app_users").select("id, email, is_admin, can_access_chats, can_access_matchops, is_city_manager, is_service_account, city_identifier");
-      if (s.error) throw new Error(s.error.message);
-      staff = (s.data ?? []) as StaffRow[];
-    }
-    const recipientIds = finalRecipients(humanRecipients(staff, t.assigned_to_user_id), staff, null, opts.onlyEmails === undefined ? PUSH_TEST_ONLY_EMAILS : opts.onlyEmails);
+    const recipientIds = finalRecipients(humanRecipients(staff, t.assigned_to_user_id, t.city_code), staff, null, opts.onlyEmails === undefined ? PUSH_TEST_ONLY_EMAILS : opts.onlyEmails);
 
     let player: { first_name: string | null; last_name: string | null; preferable_city_normalized: string | null } | null = null;
     if (t.player_id != null) {

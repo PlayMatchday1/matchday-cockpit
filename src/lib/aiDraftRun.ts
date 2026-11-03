@@ -25,6 +25,13 @@ import {
 import {
   buildClock, matchKey, scheduleWindow, selectSchedule, staleDraftReason, tzForCity, FALLBACK_TZ, type ScheduleRow,
 } from "@/lib/aiDraftClock";
+import {
+  membershipChargeFor, matchesPlayedSince, membershipRefundEligibility, nextThreadCity, policyExplainedBefore,
+  type CitySource, type RefundEligibility,
+} from "@/lib/aiDraftPolicy";
+import { CITY_SCOPES } from "@/lib/cityScope";
+
+export type MembershipCharge = { at: string; amountCents: number; chargeId: string | null };
 
 export type StoredDraft = {
   id: string;
@@ -44,10 +51,23 @@ export type StoredDraft = {
 
 // What the button will do, fixed when the draft is made. balance_cents is the balance the draft saw:
 // the credit route aborts if it has moved, which also stops a second press.
-export type StoredAction = { kind: "credit" | "issue_guest_code"; amount_cents: number | null; reason: string; is_courtesy: boolean; player_id: number; balance_cents: number | null };
+export type StoredAction = {
+  kind: "credit" | "issue_guest_code" | "refund_membership"; amount_cents: number | null; reason: string; is_courtesy: boolean; player_id: number; balance_cents: number | null;
+  /** refund_membership only: the Stripe charge to refund and the MatchDay membership row to end. */
+  charge_id?: string | null; membership_id?: number | null;
+};
 
 export const ACTION_LOCKED = new Set(["applying", "landed", "unknown"]);
 export const CONFIRMED_BY_STAFF_NOTE = "Account confirmed from earlier staff replies in this thread";
+export const AUTO_LINKED_NOTE = "Auto-linked from typed number";
+// What "Use draft" fills when nobody presses the refund button: no claim that it happened.
+export const REFUND_WITHOUT_ACTION = "Thanks for asking before the 5th. A teammate will refund that charge and end your membership today.";
+
+export type DraftThread = {
+  channel: string; player_id: number | null; match_ambiguous: boolean; account_confirmed: boolean;
+  /** crm_threads.city_code / city_source (migration 0250). Absent before it. */
+  city_code?: string | null; city_source?: CitySource | null;
+};
 
 export type NewDraftRow = {
   thread_id: string;
@@ -80,7 +100,19 @@ export type DraftDeps = {
   regenerate: boolean;
   now: () => number;
   hasKey: boolean;
-  loadThread: () => Promise<{ channel: string; player_id: number | null; match_ambiguous: boolean; account_confirmed: boolean } | null>;
+  loadThread: () => Promise<DraftThread | null>;
+  /** Link the thread to the one account the player's typed number matched (change_log reason
+   *  AUTO_LINKED_NOTE). True only when the link LANDED. Absent = suggest only, as before. */
+  autoLink?: (playerId: number) => Promise<boolean>;
+  /** Every outbound message to this player, in all their threads. For "already explained". */
+  loadPlayerOutbound?: (playerId: number) => Promise<{ body: string | null; sent_at: string; is_auto_reply: boolean | null }[]>;
+  /** A landed membership refund on this account: change_log, or a Stripe membership refund on any of
+   *  the player's Stripe customers (fin_txn). Throws when it can't be read. */
+  priorMembershipRefund?: (playerId: number) => Promise<boolean>;
+  /** This month's paid membership renewal in Stripe (stripe_member_invoices), or null. Throws on a read error. */
+  membershipCharge?: (playerId: number, monthStartIso: string) => Promise<MembershipCharge | null>;
+  /** Store the thread's city (migration 0250). Absent = threads carry no city yet. */
+  setThreadCity?: (code: string, source: CitySource) => Promise<void>;
   loadMessages: () => Promise<DraftMsg[]>;
   latestDraftFor: (basedOnMessageId: string) => Promise<StoredDraft | null>;
   supersedePending: () => Promise<void>;
@@ -106,7 +138,7 @@ export type DraftDeps = {
   callModel: (req: DraftRequest) => Promise<ModelReply>;
   insertDraft: (row: NewDraftRow) => Promise<{ id: string; created_at: string }>;
   /** Called with what the decision needs, after a guarded draft is stored. The auto-send tick uses it. */
-  afterDraft?: (d: { draftId: string; output: DraftOutput; context: DraftContext; msgs: DraftMsg[] }) => Promise<void>;
+  afterDraft?: (d: { draftId: string; output: DraftOutput; context: DraftContext; msgs: DraftMsg[]; linkMiss: LinkSuggestion | null }) => Promise<void>;
 };
 
 export type DraftView = {
@@ -142,7 +174,7 @@ const viewOf = (d: StoredDraft): DraftView => ({
 });
 
 export async function runDraft(deps: DraftDeps): Promise<DraftResult> {
-  const thread = await deps.loadThread();
+  let thread = await deps.loadThread();
   if (!thread) return { status: "not_found", message: "Thread not found." };
 
   const msgs = await deps.loadMessages();
@@ -151,13 +183,28 @@ export async function runDraft(deps: DraftDeps): Promise<DraftResult> {
 
   // UNCONFIRMED ACCOUNT. No account data is loaded, and if the player has just typed a phone
   // number, look it up (digits only) and SUGGEST the match. Nothing here links anything.
-  const flags = { linked: thread.player_id != null, ambiguous: thread.match_ambiguous, confirmed: thread.account_confirmed };
-  const confirmed = accountConfirmed(flags);
+  let flags = { linked: thread.player_id != null, ambiguous: thread.match_ambiguous, confirmed: thread.account_confirmed };
+  let confirmed = accountConfirmed(flags);
   let link_suggestion: LinkSuggestion | null = null;
+  let autoLinked = false;
   if (!confirmed) {
     const typed = elig.pending.flatMap((m) => extractPhoneNumbers(m.body ?? ""));
     if (typed.length > 0) link_suggestion = decideLinkSuggestion(typed[typed.length - 1], await deps.findAccountsByPhone(typed[typed.length - 1]));
+    // ONE ACCOUNT ON THE NUMBER THEY TYPED: link it now and answer with the account in hand, in this
+    // same reply. No "give me a sec to find your account" (2026-11-02). Several or none: a person.
+    if (link_suggestion?.kind === "one" && deps.autoLink) {
+      const landed = await deps.autoLink(link_suggestion.player_id).catch(() => false);
+      const reread = landed ? await deps.loadThread() : null;
+      if (reread && reread.player_id === link_suggestion.player_id) {
+        thread = reread;
+        flags = { linked: true, ambiguous: thread.match_ambiguous, confirmed: thread.account_confirmed };
+        confirmed = accountConfirmed(flags);
+        autoLinked = confirmed;
+        if (autoLinked) link_suggestion = null;
+      }
+    }
   }
+  const linkMiss = link_suggestion && link_suggestion.kind !== "one" ? link_suggestion : null;
   const withLink = <T extends DraftResult>(x: T): T => (link_suggestion ? { ...x, link_suggestion } : x);
 
   // A draft already exists for this exact player message: show it, don't pay for another. A
@@ -209,14 +256,20 @@ export async function runDraft(deps: DraftDeps): Promise<DraftResult> {
     if ("forbidden" in loaded) return { status: "forbidden", message: "This player is outside your city." };
     ctxIn = { ...loaded.ctx, confirmed: thread.account_confirmed, nowMs: deps.now() };
     keys = loaded.keys;
+    if (autoLinked) reason = AUTO_LINKED_NOTE;
   } else {
     const accountCount = flags.linked ? await deps.countAccounts() : 0;
     ctxIn = { ...flags, accountCount, firstName: null, city: null, isMember: null, membership: null, creditsCents: null, matchesPlayed: null, strikes: null, matches: [] };
     keys = ["account"];
     reason = unconfirmedReason(ctxIn);
   }
-  const context = buildDraftContext(ctxIn);
-  const playbook = deps.playbook();
+  // RYAN'S MEMBERSHIP REFUND RULE, worked out here so the model only reads the answer. Unknown is a no.
+  let refund: { eligibility: RefundEligibility; chargeId: string | null } | null = null;
+  if (accountConfirmed({ ...flags, confirmed: ctxIn.confirmed }) && ctxIn.membership && thread.player_id != null) {
+    refund = await refundFor(deps, thread.player_id, ctxIn, keys, elig.pending[0]?.sent_at ?? elig.basedOn.sent_at, elig.basedOn.sent_at);
+    ctxIn.membershipRefund = refund.eligibility;
+    keys = [...keys, "membership_refund"];
+  }
 
   // THE CLOCK AND THE SCHEDULE. The player's city sets the zone (Central when unknown). The
   // schedule window starts on the day the player wrote; a field named in what they wrote picks the
@@ -226,6 +279,18 @@ export async function runDraft(deps: DraftDeps): Promise<DraftResult> {
   const texts = msgs.filter((m) => m.direction === "inbound").slice(-6).map((m) => m.body ?? "");
   const rows = await deps.loadScheduleRows(scheduleWindow(elig.basedOn.sent_at, playerTz ?? FALLBACK_TZ)).catch(() => [] as ScheduleRow[]);
   const schedule = selectSchedule({ rows, texts, cityCode: ctxIn.cityCode ?? null, now });
+
+  // THE THREAD'S CITY: the linked account, else a field they named, else the model's read of the text.
+  const known = (c: string) => CITY_SCOPES.some((x) => x.identifier === c);
+  const accountCity = accountConfirmed({ ...flags, confirmed: ctxIn.confirmed }) ? ctxIn.cityCode ?? null : null;
+  if (deps.setThreadCity) {
+    ctxIn.cityUnknown = !thread.city_code && !accountCity && !schedule.fieldCity;
+    ctxIn.knownCities = CITY_SCOPES.map((c) => ({ code: c.identifier, name: c.name }));
+  }
+
+  const context = buildDraftContext(ctxIn);
+  const playbook = deps.playbook();
+
   const tz = playerTz ?? tzForCity(schedule.fieldCity) ?? FALLBACK_TZ;
   const clock = buildClock({ now, tz, latestPlayerMsgIso: elig.basedOn.sent_at });
   // One model call per request, so the examples can't wait for this draft's own category: they use
@@ -287,23 +352,67 @@ export async function runDraft(deps: DraftDeps): Promise<DraftResult> {
   // Flags ride at the front of staff_notes so the table needs no extra column for them.
   const notes = [out.flags.length ? `[flags: ${out.flags.join(", ")}]` : "", ...staffNotes.map((n) => `- ${n}`)].filter(Boolean).join("\n");
   // Which schedule matches the reply mentions, with their start: the draft goes stale at kickoff.
+  // THE REFUND BUTTON comes from the rule, never from the model: an eligible refund on a membership
+  // reply that says so, with Stripe's charge id and the membership row to end. Never automatic
+  // (decideAutoSend sends it to a person, applyDraftAction refuses it with no person pressing).
+  const refundAction: StoredAction | null = refund?.eligibility.eligible && refund.chargeId && thread.player_id != null && !out.action
+    && out.category === "membership_billing" && /\brefund/i.test(out.reply) && ctxIn.membership?.id != null ? {
+      kind: "refund_membership", amount_cents: refund.eligibility.amountCents,
+      reason: `charge on ${new Date(Date.parse(elig.basedOn.sent_at)).toLocaleDateString("en-US", { timeZone: "America/Chicago", month: "short" })} 1, asked by the 5th, nothing played since`,
+      is_courtesy: false, player_id: thread.player_id, balance_cents: null, charge_id: refund.chargeId, membership_id: ctxIn.membership.id,
+    } : null;
   const action: StoredAction | null = out.action && thread.player_id != null ? {
     kind: out.action.kind, amount_cents: out.action.amount_cents, reason: out.action.reason,
     is_courtesy: out.offers_courtesy_credit, player_id: thread.player_id, balance_cents: ctxIn.creditsCents,
-  } : null;
+  } : refundAction;
   const mentioned = out.match_ids.filter((id) => schedule.startsById.get(id)).map((id) => matchKey(id, schedule.startsById.get(id)!));
   const row = await deps.insertDraft({
     ...base, context_keys: [...base.context_keys, ...mentioned], category: out.category, draft_text: out.reply, staff_notes: notes || null,
-    reply_without_action: action ? out.reply_without_action ?? null : null, action,
+    reply_without_action: refundAction && action === refundAction ? REFUND_WITHOUT_ACTION : action ? out.reply_without_action ?? null : null, action,
     input_tokens: reply.usage.input_tokens ?? null, output_tokens: reply.usage.output_tokens ?? null,
     cost_usd: draftCostUsd(reply.usage), error: null, outcome: "pending",
   });
-  await deps.afterDraft?.({ draftId: row.id, output: out, context, msgs });
+  if (deps.setThreadCity) {
+    const next = nextThreadCity({ code: thread.city_code ?? null, source: thread.city_source ?? null }, { account: accountCity, field: schedule.fieldCity, inferred: out.city_guess || null }, known);
+    if (next) await deps.setThreadCity(next.code, next.source).catch((e: unknown) => console.error("[ai-draft] city not saved", e instanceof Error ? e.message.slice(0, 160) : e));
+  }
+  await deps.afterDraft?.({ draftId: row.id, output: out, context, msgs, linkMiss });
   return withLink({
     status: "ok", reused: false,
     draft: {
       id: row.id, text: out.reply, staff_notes: staffNotes, category: out.category, flags: out.flags, created_at: row.created_at,
-      text_without_action: action ? out.reply_without_action ?? null : null, action, action_status: null, decision: null, decision_reason: null,
+      text_without_action: refundAction && action === refundAction ? REFUND_WITHOUT_ACTION : action ? out.reply_without_action ?? null : null, action, action_status: null, decision: null, decision_reason: null,
     },
   });
+}
+
+// The facts behind membershipRefundEligibility, read for this player. Anything that can't be read
+// makes the answer no, with the reason saying what was missing. The charge is Stripe's own (the
+// mirrored renewal invoice, tax included, as charged) when the dep is wired; tests fall back to the
+// membership's price.
+async function refundFor(deps: DraftDeps, playerId: number, c: DraftContextIn, keys: readonly string[], burstStartIso: string, askedAt: string): Promise<{ eligibility: RefundEligibility; chargeId: string | null }> {
+  const no = (reason: string) => ({ eligibility: { eligible: false as const, reason }, chargeId: null });
+  let charge: MembershipCharge | null;
+  if (deps.membershipCharge) {
+    const [y, m] = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago" }).format(Date.parse(askedAt)).split("-").map(Number);
+    try { charge = await deps.membershipCharge(playerId, new Date(Date.UTC(y, m - 1, 1)).toISOString()); }
+    catch { return no("The Stripe charge couldn't be read."); }
+    if (!charge) return no("No paid renewal this month in our Stripe copy.");
+  } else {
+    const f = membershipChargeFor(c.membership, askedAt);
+    charge = f ? { ...f, chargeId: null } : null;
+    if (!charge) return no("No membership charge this month.");
+  }
+  if (!deps.priorMembershipRefund || !deps.loadPlayerOutbound) return no("Refund history couldn't be read.");
+  let priorRefund: boolean | null = null;
+  try { priorRefund = await deps.priorMembershipRefund(playerId); } catch { priorRefund = null; }
+  let explained: boolean;
+  try { explained = policyExplainedBefore(await deps.loadPlayerOutbound(playerId), burstStartIso); } catch { return no("Earlier conversations couldn't be read."); }
+  return {
+    eligibility: membershipRefundEligibility({
+      askedAt, charge: { at: charge.at, amountCents: charge.amountCents }, priorRefund, policyExplained: explained,
+      matchesSinceCharge: keys.includes("matches") ? matchesPlayedSince(c.matches, charge.at) : null,
+    }),
+    chargeId: charge.chargeId,
+  };
 }

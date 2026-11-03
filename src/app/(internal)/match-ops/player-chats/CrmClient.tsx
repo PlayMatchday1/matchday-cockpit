@@ -38,6 +38,7 @@ import {
   useState,
 } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { CITY_IDENTIFIERS } from "@/lib/cityScope";
 import { CopyPhoneInline } from "@/components/CopyPhone";
 import {
   ChevronLeft,
@@ -45,6 +46,7 @@ import {
   Info,
   Pin,
   RotateCcw,
+  Sparkles,
   Star,
 } from "lucide-react";
 import EnablePushNotificationsButton from "@/components/EnablePushNotificationsButton";
@@ -59,7 +61,6 @@ import {
 } from "@/lib/crmConversation";
 import { useAuth } from "@/lib/useAuth";
 import { UNKNOWN_CITY } from "@/lib/cityColors";
-import CityChip from "@/components/CityChip";
 import AssigneeChip, { type Assignee } from "@/components/AssigneeChip";
 import ChannelChip, {
   channelDisplay,
@@ -71,6 +72,7 @@ import { type StatusFilter } from "./components/FilterBar";
 import { isAwaitingReply, awaitingAgeLabel } from "@/lib/awaitingReply";
 import AssignDropdown from "./components/AssignDropdown";
 import MessageBubble, {
+  AGENT_GREEN,
   type ConversationMessage,
 } from "./components/MessageBubble";
 import Composer from "./components/Composer";
@@ -96,9 +98,41 @@ function fullNameOf(t: ThreadListRow): string {
   return t.phone_number;
 }
 
+// The thread's own city first (crm_threads.city_code, 0250: set from the account, a field they named,
+// the draft's read, or a person), then the linked player's.
 function cityCodeForThread(t: ThreadListRow): string {
-  const c = t.player?.preferable_city_normalized;
+  const c = t.city_code || t.player?.preferable_city_normalized;
   return c && c.length > 0 ? c : UNKNOWN_CITY;
+}
+
+// The cities the city route accepts (CITY_SCOPES), nothing else: a code it refuses would be a dead option.
+const PICKABLE_CITIES = CITY_IDENTIFIERS;
+
+// THE THREAD'S CITY, set by a person. It decides who sees the thread and who is pushed; a person's
+// choice is never overwritten by a draft or a link. Saved through PATCH /api/crm/threads/{id}/city.
+function ThreadCityPicker({ threadId, code, source }: { threadId: string; code: string | null; source: string | null }) {
+  const [value, setValue] = useState(code ?? "");
+  const [state, setState] = useState<"idle" | "saving" | "error">("idle");
+  useEffect(() => { setValue(code ?? ""); setState("idle"); }, [threadId, code]);
+  const save = async (next: string) => {
+    const prev = value;
+    setValue(next); setState("saving");
+    const headers = await bearerHeaders();
+    if (!headers) { setValue(prev); setState("error"); return; }
+    const res = await fetch(`/api/crm/threads/${threadId}/city`, { method: "PATCH", headers, body: JSON.stringify({ city_code: next }) }).catch(() => null);
+    if (!res?.ok) { setValue(prev); setState("error"); return; }
+    setState("idle");
+  };
+  return (
+    <label className="inline-flex items-center gap-1" title={source ? `City from ${source === "staff" ? "a person" : source === "account" ? "the linked account" : source === "field" ? "a field they named" : "the draft's read of the conversation"}` : "No city yet: only unconfined staff see this thread"}>
+      <select data-testid="crm-thread-city" value={value} disabled={state === "saving"} onChange={(e) => void save(e.target.value)}
+        className="rounded border border-cream-line bg-white px-1 py-px text-[10px] font-semibold text-deep-green/70">
+        {!value && <option value="">No city</option>}
+        {PICKABLE_CITIES.map((c) => <option key={c} value={c}>{c}</option>)}
+      </select>
+      {state === "error" && <span className="text-[10px] font-semibold text-[#a82a18]">Didn&apos;t save</span>}
+    </label>
+  );
 }
 
 // Delegates to the shared, tested rule in src/lib/crmWindow (Phase 19 Step 0). A null detail
@@ -1283,7 +1317,12 @@ function MistInboxRow({
   const ago = awaitingAgeLabel(thread.last_message_at, nowMs);
   const inbound = thread.last_message_direction === "inbound";
   const preview = thread.last_message_preview ?? "";
-  const speaker = inbound ? name.split(/\s+/)[0] || "Player" : "MatchDay";
+  // THREE KINDS OF ROW (2026-11-02). Human: Needs a human, an orange dot by the time. Agent: our last
+  // message was an auto-send, or one is holding; a sparkle and "Agent:". Staff: as before. No colored
+  // left edge on any of them, and red only for an error.
+  // The mark sits on OUR preview: a player's message after an auto-send is theirs, not the agent's.
+  const agent = !needsHuman && (autoSending || (!inbound && thread.last_outbound_auto === true));
+  const speaker = inbound ? name.split(/\s+/)[0] || "Player" : agent ? "Agent" : "MatchDay";
 
   return (
     <button
@@ -1298,17 +1337,11 @@ function MistInboxRow({
         touchAction: "manipulation",
         ...(active
           ? { background: "#ffffff", borderColor: "#e2eae5", boxShadow: "0 1px 2px rgba(7,42,32,.05), 0 14px 30px -22px rgba(7,42,32,.5)" }
-          : needsHuman
-            ? { background: "rgba(253,228,224,.55)", borderColor: "transparent" }
-          : autoSending
-            ? { background: "#f4f6f5", borderColor: "transparent" }
-            : { borderColor: "transparent" }),
+          : { borderColor: "transparent" }),
       }}
+      data-kind={needsHuman ? "human" : agent ? "agent" : "staff"}
       className={`relative mt-px flex w-full items-start gap-2.5 rounded-[13px] border p-[10px_11px] text-left transition ${active ? "" : "hover:bg-white/80"}`}
     >
-      {(active || waiting || needsHuman) && (
-        <span aria-hidden data-testid={needsHuman ? "crm-human-edge" : undefined} className="absolute left-0 top-[11px] bottom-[11px] w-[3px] rounded-r-[3px]" style={{ background: needsHuman ? "#c8341f" : autoSending ? "#a9b4ae" : active ? "#35c77f" : "#e3c369" }} />
-      )}
       <span className="relative mt-px flex h-[34px] w-[34px] flex-none items-center justify-center rounded-[11px] text-[9.5px] font-extrabold" style={{ background: `${col}22`, color: col }}>
         {initials || "?"}
         {thread.is_unread && (
@@ -1317,7 +1350,6 @@ function MistInboxRow({
       </span>
       <span className="min-w-0 flex-1">
         <span className="flex items-baseline gap-1.5">
-          {needsHuman && <span data-testid="crm-human-pill" className="flex-none rounded-full px-[7px] py-px text-[10px] font-[800]" style={{ background: "#c8341f", color: "#ffffff" }}>Human</span>}
           <span data-testid="crm-thread-name" className={`min-w-0 flex-1 truncate text-[13.5px] tracking-[-0.008em] ${thread.is_unread ? "font-[760]" : "font-[660]"}`} style={{ color: "#12241d" }}>{name}</span>
           <button
             type="button"
@@ -1328,6 +1360,7 @@ function MistInboxRow({
           >
             <Star aria-hidden size={12} fill={thread.is_follow_up ? "currentColor" : "none"} />
           </button>
+          {needsHuman && <span data-testid="crm-human-dot" aria-label="Needs a human" className="inline-block h-[7px] w-[7px] flex-none -translate-y-px self-center rounded-full" style={{ background: "var(--color-attn)" }} />}
           <span className="flex-none text-[11px] font-[650]" style={{ color: waiting ? "#8a6300" : "#9aa8a1" }}>{ago}</span>
         </span>
         <span className="mt-0.5 flex items-center gap-1.5 text-[11.5px] font-[550]" style={{ color: "#6d7b74" }}>
@@ -1342,10 +1375,11 @@ function MistInboxRow({
           )}
         </span>
         {needsHuman && attention?.reason ? (
-          <span data-testid="crm-human-reason" className="mt-[5px] block overflow-hidden text-[12.5px] font-[650] leading-[1.42]" style={{ color: "#a82a18" }}>{attention.reason}</span>
+          <span data-testid="crm-human-reason" data-error={attention.error ? 1 : 0} className="mt-[5px] block overflow-hidden text-[12.5px] font-[600] leading-[1.42]" style={{ color: attention.error ? "#a82a18" : "#4a5f55" }}>{attention.reason}</span>
         ) : (
         <span data-testid="crm-thread-preview" className="mt-[5px] block overflow-hidden text-[12.5px] leading-[1.42]" style={{ color: "#63736b", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>
-          <span className={inbound ? "font-[700]" : "font-[700] italic"} style={{ color: inbound ? "#4a5f55" : "#8a978f" }}>{speaker}: </span>
+          {agent && <Sparkles data-testid="crm-agent-mark" aria-hidden className="mr-[3px] inline h-[11px] w-[11px] -translate-y-px" strokeWidth={2.2} style={{ color: AGENT_GREEN }} />}
+          <span className={inbound ? "font-[700]" : "font-[700] italic"} style={{ color: inbound ? "#4a5f55" : agent ? AGENT_GREEN : "#8a978f" }}>{speaker}: </span>
           {preview || <span className="italic" style={{ color: "#8d9c94" }}>(no preview)</span>}
         </span>
         )}
@@ -1742,7 +1776,6 @@ function ConversationHeader({
     );
   }
   const name = fullNameOf(detail.thread);
-  const cityCode = cityCodeForThread(detail.thread);
   const channel = detail.thread.channel ?? "sms";
   const email = detail.thread.player?.email?.trim() || null;
   return (
@@ -1787,7 +1820,7 @@ function ConversationHeader({
           </div>
         )}
         <div className="mt-0.5 hidden items-center gap-1.5 text-[10px] text-deep-green/55 lg:flex">
-            <CityChip code={cityCode} />
+            <ThreadCityPicker threadId={detail.thread.id} code={detail.thread.city_code ?? null} source={detail.thread.city_source ?? null} />
             <span aria-hidden>·</span>
             <span className="inline-flex items-center gap-0.5">
               <ChannelChip channel={channel} />

@@ -11,6 +11,7 @@
 // (EDIT CREDITS or MANAGE PROMOS). Decisions live in src/lib/aiDraftAction.ts.
 
 import { authenticateCrm } from "@/lib/crmAuth";
+import { assertThreadInScope } from "@/lib/crmScope";
 import { FULL_EDITOR_ENV } from "@/lib/matchEnv";
 import { creditsGate } from "@/lib/creditsAuth";
 import { can, denial } from "@/lib/capabilities";
@@ -22,6 +23,8 @@ import {
 } from "@/lib/aiDraftAction";
 import { POST as creditPOST } from "@/app/api/matchday/[env]/players/[playerId]/credits/route";
 import { POST as promoPOST } from "@/app/api/promos/create/route";
+import { POST as endMembershipPOST } from "@/app/api/matchday/[env]/memberships/[subscriptionId]/end/route";
+import { liveRefundPreflight, refundMembershipCharge } from "@/lib/membershipRefund";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -38,6 +41,10 @@ export async function POST(req: Request, ctx: RouteCtx) {
   const body = (await req.json().catch(() => ({}))) as { draft_id?: unknown };
   const draftId = typeof body.draft_id === "string" ? body.draft_id : "";
   if (!threadId || !draftId) return Response.json({ error: "thread id and draft_id required" }, { status: 400 });
+  {
+    const scope = await assertThreadInScope(auth, threadId);
+    if (!scope.ok) return Response.json({ error: scope.error }, { status: scope.status });
+  }
   const authorization = req.headers.get("authorization") ?? "";
 
   const postTo = async (handler: (r: Request) => Promise<Response>, path: string, payload: unknown): Promise<WriteResult> => {
@@ -69,6 +76,10 @@ export async function POST(req: Request, ctx: RouteCtx) {
         const g = creditsGate(row);
         return g.ok ? null : g.error;
       }
+      // The refund lands before the end route's own confinement check runs, so a confined account
+      // can't press it at all. None holds EDIT MEMBERSHIPS today (2026-11-02); this keeps it so.
+      if (kind === "refund_membership" && auth.confinedCity) return "Membership refunds are done by unconfined staff.";
+      if (kind === "refund_membership") return can(row, "editMemberships", auth.email ?? "") ? null : denial(row, "editMemberships", auth.email ?? "") ?? "You do not hold EDIT MEMBERSHIPS.";
       return can(row, "managePromos", auth.email ?? "") ? null : denial(row, "managePromos", auth.email ?? "") ?? "You do not hold MANAGE PROMOS.";
     },
     async guestPreflight(playerId) {
@@ -91,6 +102,23 @@ export async function POST(req: Request, ctx: RouteCtx) {
         { deltaCents, expectedBeforeCents, reason, source: DRAFT_ACTION_SOURCE },
       ),
     writeGuestCode: (code) => postTo(promoPOST, "/api/promos/create", guestCodeBody(code, Date.now())),
+    refundPreflight: (action) => liveRefundPreflight(supabase, action),
+    // REFUND FIRST, THEN END. A refund that lands with the end failing leaves the player refunded and
+    // still a member, which is said plainly; the reverse would end a membership with no money back.
+    // The end goes through the Player Lookup end route itself: EDIT MEMBERSHIPS, confinement, its
+    // own change_log row and its Stripe read-back.
+    async writeRefund(action) {
+      const r = await refundMembershipCharge({ action, draftId, actorEmail: auth.email ?? auth.appUserId ?? "unknown", source: DRAFT_ACTION_SOURCE });
+      if (r.status !== "landed") return r;
+      const res = await endMembershipPOST(new Request(new URL(`/api/matchday/${ENV}/memberships/${action.membership_id}/end`, req.url), {
+        method: "POST", headers: { authorization, "content-type": "application/json" },
+        body: JSON.stringify({ playerId: action.player_id, reason: "Membership refund, asked by the 5th (Player Chats)", source: DRAFT_ACTION_SOURCE }),
+      }), { params: Promise.resolve({ env: ENV, subscriptionId: String(action.membership_id) }) }).catch(() => null);
+      const j = res ? ((await res.json().catch(() => ({}))) as Record<string, unknown>) : {};
+      const ended = res?.ok && j.landed === true ? "Membership ended."
+        : `The membership did NOT end (${String(j.error ?? j.status ?? "no answer")}). End it in Player Lookup before sending.`;
+      return { status: "landed", ended };
+    },
     async finish(status, draftText) {
       const r = await supabase.from("crm_ai_drafts").update({ action_status: status, ...(draftText ? { draft_text: draftText } : {}) }).eq("id", draftId);
       if (r.error) throw new Error(r.error.message);

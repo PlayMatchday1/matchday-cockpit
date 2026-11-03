@@ -9,6 +9,8 @@
 //   strike-remove     DELETE /api/matchday/{env}/strikes/{logId}          { playerId, userMatchId, reason }
 //   suspend           POST  /api/lookup/{env}/ban   { action: "suspend", playerId, reason, until }   MANAGE PLAYERS
 //   lift              POST  /api/lookup/{env}/ban   { action: "lift", playerId, reason }   a manual suspension only
+//   credits           POST  /api/matchday/{env}/players/{id}/credits  { deltaCents, expectedBeforeCents, reason }
+//                     EDIT CREDITS; adds only; the desktop route's race check, $200 limit and boundary
 //
 // EXPEL IS NOT HERE, and neither is lifting an expulsion (Ryan, 2026-10-31: Expel stays off the
 // phone). A suspension from strikes is MatchDay's own and the desktop has no lift for it either.
@@ -25,6 +27,8 @@ import { PATCH as pricePatch } from "@/app/api/matchday/[env]/memberships/[subsc
 import { POST as endPost } from "@/app/api/matchday/[env]/memberships/[subscriptionId]/end/route";
 import { DELETE as strikeDelete } from "@/app/api/matchday/[env]/strikes/[strikeLogId]/route";
 import { POST as banPost } from "@/app/api/lookup/[env]/ban/route";
+import { POST as creditsPost } from "@/app/api/matchday/[env]/players/[playerId]/credits/route";
+import { APP_CREDITS_SOURCE } from "@/lib/appCredits";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -81,8 +85,14 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string }>
       const until = typeof body?.until === "string" ? body.until : "";
       if (op === "suspend" && !/^\d{4}-\d{2}-\d{2}$/.test(until)) return Response.json({ error: "Suspend needs an until date (YYYY-MM-DD)." }, { status: 400 });
       call = await callDesktop(req, banPost, `/api/lookup/${env}/ban`, { method: "POST", body: { action: op, playerId, reason, until: op === "suspend" ? until : undefined, playerName, source: SOURCE } }, { env });
+    } else if (op === "credits") {
+      const deltaCents = int(body?.deltaCents), expectedBeforeCents = int(body?.expectedBeforeCents);
+      if (deltaCents == null || deltaCents <= 0) return Response.json({ error: "The app adds credit only: deltaCents must be a positive whole number of cents." }, { status: 400 });
+      if (expectedBeforeCents == null) return Response.json({ error: "expectedBeforeCents required" }, { status: 400 });
+      if (!reason) return Response.json({ error: "A reason is required." }, { status: 400 });
+      call = await callDesktop(req, creditsPost, `/api/matchday/${env}/players/${playerId}/credits`, { method: "POST", body: { deltaCents, expectedBeforeCents, reason, source: APP_CREDITS_SOURCE } }, { env, playerId: String(playerId) });
     } else {
-      return Response.json({ error: "op must be membership-add, membership-price, membership-end, strike-remove, suspend or lift" }, { status: 400 });
+      return Response.json({ error: "op must be membership-add, membership-price, membership-end, strike-remove, suspend, lift or credits" }, { status: 400 });
     }
 
     // A refusal before anything was written: the desktop's own status and sentence.
@@ -104,9 +114,11 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string }>
     if (op === "suspend" && pl?.status !== "suspended") disagreements.push(`The player reads back as ${String(pl?.status ?? "unknown")}, not suspended.`);
     if (op === "suspend" && pl?.status === "suspended" && String(pl.banExpiredAt ?? "").slice(0, 10) !== String(body?.until)) disagreements.push(`The suspension reads back until ${String(pl.banExpiredAt ?? "no date").slice(0, 10)}, not ${String(body?.until)}.`);
     if (op === "lift" && pl?.status !== "ok") disagreements.push(`The player reads back as ${String(pl?.status ?? "unknown")}, not active.`);
+    const expectCredits = int(body?.expectedBeforeCents) != null && int(body?.deltaCents) != null ? int(body?.expectedBeforeCents)! + int(body?.deltaCents)! : null;
+    if (op === "credits" && Number(pl?.credits) !== expectCredits) disagreements.push(`The balance reads back as ${Number(pl?.credits)} cents, not ${expectCredits}.`);
     return Response.json({
       op, status: call.status, desktop: call.json, landed: call.ok && disagreements.length === 0,
-      readBack: { membership: m, strikes, player: pl && { status: pl.status, banReason: pl.banReason, bannedAt: pl.bannedAt, banExpiredAt: pl.banExpiredAt }, readAt: new Date().toISOString() }, disagreements,
+      readBack: { membership: m, strikes, player: pl && { status: pl.status, banReason: pl.banReason, bannedAt: pl.bannedAt, banExpiredAt: pl.banExpiredAt, credits: pl.credits }, readAt: new Date().toISOString() }, disagreements,
     });
   } catch (e) {
     return Response.json({ error: e instanceof Error ? e.message : String(e) }, { status: 502 });

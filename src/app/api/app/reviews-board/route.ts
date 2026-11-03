@@ -13,12 +13,20 @@ import { authenticateApp, readRefusal } from "@/lib/appAuth";
 import { todayBusinessDate } from "@/lib/goalPace";
 import { addDays, addMonths, mondayOf, monthStart } from "@/lib/healthModel";
 import { canonCity } from "@/lib/reviewsDerive";
+import { cityIdentifierForLabel } from "@/lib/cityScope";
 import { loadReviewRows, matchIds, reviewsView } from "@/lib/appReviews";
 import { reviewMasked } from "@/lib/reviewAccount";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
+
+/* A SHORT SERVER CACHE (Ryan, 2026-11-02): reviews arrive with the mirror sync, not by the second.
+ * KEYED BY THE CALLER, never shared between accounts: the scope comes from the session (confinement
+ * and the city-manager tier), so two people may see different cities for the same request. The
+ * cached body is the unmasked view; reviewMasked still masks it per request. */
+const TTL_MS = 2 * 60_000;
+const cache = new Map<string, { at: number; body: unknown }>();
 
 async function getRoute(req: Request) {
   const auth = await authenticateApp(req);
@@ -37,22 +45,26 @@ async function getRoute(req: Request) {
   const to = kind === "week" ? addDays(from, 6) : addDays(addMonths(from, 1), -1);
   const nextFrom = kind === "week" ? addDays(from, 7) : addMonths(from, 1);
 
+  const cityQ = q.get("city");
+  const key = `${auth.appUserId}|${kind}|${from}|${cityQ == null ? "" : canonCity(cityQ)}`;
+  const hit = cache.get(key);
+  if (hit && Date.now() - hit.at < TTL_MS) return Response.json(hit.body, { headers: { "Cache-Control": "no-store", "X-Reviews-Cache": "hit" } });
   try {
-    const s = await loadReviewRows(req, auth.supabase);
+    const [s, ids] = await Promise.all([loadReviewRows(req, auth.supabase, from, to), matchIds(auth.supabase, from, to)]);
     if ("error" in s) return Response.json({ error: s.error }, { status: s.status });
-    const ids = await matchIds(auth.supabase, from, to);
-    const cityQ = q.get("city");
     const view = reviewsView(s, from, to, cityQ, ids);
-    if (cityQ != null && !view.cities.some((c) => canonCity(c.name) === canonCity(cityQ))) {
-      // A city outside the scope never reaches the rows (SQL); one with no reviews this period is empty, not foreign.
-      const known = s.rows.some((r) => canonCity(r.city) === canonCity(cityQ));
-      if (!known) return Response.json({ error: "That city is not in your view." }, { status: 404 });
+    // A city outside a scoped caller's own is refused; any city with no reviews this period is empty.
+    if (cityQ != null && s.scope && cityIdentifierForLabel(canonCity(cityQ) ?? cityQ) !== s.scope) {
+      return Response.json({ error: "That city is not in your view." }, { status: 404 });
     }
-    return Response.json({
+    const body = {
       kind, today, scope: s.scope,
       period: { from, to, current: today >= from && today <= to, canForward: nextFrom <= today },
       ...view,
-    }, { headers: { "Cache-Control": "no-store" } });
+    };
+    cache.set(key, { at: Date.now(), body });
+    if (cache.size > 500) for (const [k, v] of cache) if (Date.now() - v.at >= TTL_MS) cache.delete(k);
+    return Response.json(body, { headers: { "Cache-Control": "no-store", "X-Reviews-Cache": "miss" } });
   } catch (e) {
     return Response.json({ error: e instanceof Error ? e.message : String(e) }, { status: 502 });
   }

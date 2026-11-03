@@ -1,10 +1,11 @@
 // Staff app PLAYER LOOKUP, reads (Ryan, 2026-10-31). Every read is the desktop Player Lookup's own
 // route, called in process with the caller's token, so its Match Ops gate and city boundary apply:
 //
-//   ?q=<term>              GET /api/lookup/{env}?q=        search (phone, email, id live; names from
-//                          mdapi_users, then each hit reloaded live by id), then MEMBER checked live
+//   ?q=<term>              GET /api/lookup/{env}?q=        search (phone, email, id live, then MEMBER
+//                          checked live; a name from mdapi_users only, list and membership, 2026-11-02)
 //   ?ids=1,2,3             recent lookups: GET /api/lookup/{env}?id= per id (at most 8), live
-//   ?id=<n>                GET /api/lookup/{env}?id=       the whole profile
+//   ?id=<n>                GET /api/lookup/{env}?id=       the whole profile, and its credit history
+//                          from change_log (appCredits), read only once that profile answered
 //   ?payments=<n>&email=   GET /api/lookup/{env}/payments  the 10 most recent Stripe charges, read only
 //   ?candidates=<n>        the player's city's matches for the next 7 days with an open spot, live
 //                          from /admin/matches; a match they are already in is marked, not hidden
@@ -23,6 +24,8 @@ import { callDesktop, passThrough } from "@/lib/appCall";
 import { GET as lookupGet } from "@/app/api/lookup/[env]/route";
 import { GET as paymentsGet } from "@/app/api/lookup/[env]/payments/route";
 import { reviewMasked } from "@/lib/reviewAccount";
+import { creditLog } from "@/lib/appCredits";
+import { makeServerClient } from "@/lib/supabaseServer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -56,7 +59,11 @@ async function getRoute(req: Request, ctx: { params: Promise<{ env: string }> })
       const c = await callDesktop(req, lookupGet, `/api/lookup/${env}?q=${encodeURIComponent(q)}&page=1`, {}, P);
       if (!c.ok) return passThrough(c);
       const results = ((c.json?.results as Row[]) ?? []).slice(0, 25);
-      const members = await mapLimit(results, 6, (r) => memberLive(env, Number(r.id)));
+      /* A NAME SEARCH IS THE MIRROR'S LIST (2026-11-02): its membership is mdapi_users.is_member, and
+       * nothing is read live per row; the profile reads the player live when opened. Email, phone
+       * and id searches still check membership live here, as before. */
+      const fromMirror = c.json?.via === "mirror";
+      const members = fromMirror ? results.map(() => null) : await mapLimit(results, 6, (r) => memberLive(env, Number(r.id)));
       return Response.json({
         ...c.json,
         results: results.map((r, i) => ({ id: r.id, name: r.name, city: r.city, status: r.status, member: members[i] ?? r.hasMembership === true, memberChecked: members[i] != null })),
@@ -78,7 +85,9 @@ async function getRoute(req: Request, ctx: { params: Promise<{ env: string }> })
     const id = url.searchParams.get("id");
     if (id != null) {
       const c = await callDesktop(req, lookupGet, `/api/lookup/${env}?id=${encodeURIComponent(id)}`, {}, P);
-      return c.ok ? Response.json({ ...c.json, readAt: new Date().toISOString() }) : passThrough(c);
+      if (!c.ok) return passThrough(c);
+      const credits = /^\d+$/.test(id) ? await creditLog(makeServerClient(), env, Number(id)).catch(() => []) : [];
+      return Response.json({ ...c.json, creditLog: credits, readAt: new Date().toISOString() });
     }
 
     const pay = url.searchParams.get("payments");

@@ -8,6 +8,7 @@
  * a static read: it proves the guard is called before the route's first write, not what it decides.
  */
 import { readFileSync } from "node:fs";
+import { assertThreadInScope, threadInScope, scopeThreads } from "../src/lib/crmScope";
 
 let pass = 0, fail = 0;
 const ok = (m: string) => { pass++; console.log(`  ok  ${m}`); };
@@ -25,6 +26,15 @@ const THREAD_ROUTES = [
   "src/app/api/crm/send/route.ts",
   "src/app/api/crm/send-media/route.ts",
   "src/app/api/crm/send-template/route.ts",
+  // Added 2026-11-02: the draft, its actions and the thread controls asked nothing before.
+  "src/app/api/crm/threads/[id]/ai-draft/route.ts",
+  "src/app/api/crm/threads/[id]/ai-draft/discard/route.ts",
+  "src/app/api/crm/threads/[id]/ai-draft/action/route.ts",
+  "src/app/api/crm/threads/[id]/assign/route.ts",
+  "src/app/api/crm/threads/[id]/follow-up/route.ts",
+  "src/app/api/crm/threads/[id]/no-reply/route.ts",
+  "src/app/api/crm/threads/[id]/link/route.ts",
+  "src/app/api/crm/threads/[id]/city/route.ts",
 ];
 for (const p of THREAD_ROUTES) {
   const s = src(p);
@@ -54,16 +64,35 @@ for (const p of [
   "src/app/api/crm/threads/awaiting-count/route.ts",
   "src/app/api/crm/threads/unread-count/route.ts",
   "src/app/api/crm/metrics/route.ts",
-]) yes(`${p} resolves crmScopedAssignees`, src(p).includes("crmScopedAssignees(auth)"));
+]) yes(`${p} resolves the caller's city (crmScopeCity)`, src(p).includes("crmScopeCity(auth)") && !src(p).includes("assigned_to_user_id\", scope"));
+yes("bulk status checks every id it was handed", /for \(const id of ids\) \{\s*const scope = await assertThreadInScope\(auth, id\)/.test(src("src/app/api/crm/threads/bulk-status/route.ts")));
 const metrics = src("src/app/api/crm/metrics/route.ts");
 yes("metrics: the unscoped all-time cache is never served to a confined caller", /if \(!scoped && period === "all" && allTimeCache/.test(metrics));
 yes("metrics: …and never filled by one", /if \(period === "all" && !scoped\)/.test(metrics));
 
-console.log("\nPRESENCE CONTROL: the guard itself refuses by default");
-const lib = src("src/lib/crmScope.ts");
-yes("an unassigned or out-of-scope thread is a 403", /if \(!who \|\| !scope\.ids!\.includes\(who\)\) return \{ ok: false, status: 403/.test(lib));
-yes("a malformed id is a 403 for a confined caller", /if \(!UUID_RX\.test\(threadId\)\) return \{ ok: false, status: 403/.test(lib));
-yes("unconfined callers pass with no query", /if \(!auth\.confinedCity\) return \{ ok: true \};/.test(lib));
-
-console.log(`\n${pass} passed, ${fail} failed`);
-if (fail) process.exit(1);
+console.log("\nTHE GUARD, RUN: a thread's own city decides (crm_threads.city_code, 0250)");
+async function main() {
+  const T_ATX = "11111111-1111-4111-8111-111111111111", T_WAW = "22222222-2222-4222-8222-222222222222", T_NONE = "33333333-3333-4333-8333-333333333333";
+  const cities: Record<string, string | null> = { [T_ATX]: "ATX", [T_WAW]: "WAW", [T_NONE]: null };
+  let reads = 0;
+  const supabase = { from: () => ({ select: () => ({ eq: (_c: string, id: string) => ({ maybeSingle: async () => { reads++; return { data: id in cities ? { city_code: cities[id] } : null, error: null }; } }) }) }) } as never;
+  const waw = { confinedCity: "WAW", supabase };
+  const r1 = await assertThreadInScope(waw, T_ATX);
+  yes("A WARSAW ACCOUNT IS REFUSED AN AUSTIN THREAD AT THE API (403)", !r1.ok && r1.status === 403);
+  yes("POSITIVE CONTROL: the same account opens a Warsaw thread", (await assertThreadInScope(waw, T_WAW)).ok);
+  const r3 = await assertThreadInScope(waw, T_NONE);
+  yes("a thread with no city yet is refused to a confined account", !r3.ok && r3.status === 403);
+  const r4 = await assertThreadInScope(waw, "44444444-4444-4444-8444-444444444444");
+  yes("a thread that doesn't exist: the same 403, so ids can't be probed", !r4.ok && r4.status === 403);
+  yes("a malformed id is a 403", !(await assertThreadInScope(waw, "not-a-uuid")).ok);
+  const before = reads;
+  yes("an unconfined caller passes, with no query", (await assertThreadInScope({ confinedCity: null, supabase }, T_ATX)).ok && reads === before);
+  yes("threadInScope: same city only", threadInScope("WAW", "WAW") && !threadInScope("WAW", "ATX") && !threadInScope("WAW", null) && threadInScope(null, null));
+  const calls: string[] = [];
+  const q = { eq(col: string, val: string) { calls.push(`${col}=${val}`); return q; } };
+  scopeThreads(q, "WAW"); scopeThreads(q, null);
+  yes("lists and counts filter on city_code for a confined caller, and not at all otherwise", JSON.stringify(calls) === JSON.stringify(["city_code=WAW"]));
+  console.log(`\n${pass} passed, ${fail} failed`);
+  process.exit(fail || pass === 0 ? 1 : 0);
+}
+main().catch((e) => { console.error(e); process.exit(1); });

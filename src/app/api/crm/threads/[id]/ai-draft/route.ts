@@ -16,6 +16,7 @@
 // Key: ANTHROPIC_API_KEY, server-side only. Model: claude-opus-5-5 at medium effort.
 
 import { authenticateCrm } from "@/lib/crmAuth";
+import { assertThreadInScope } from "@/lib/crmScope";
 import { runDraft } from "@/lib/aiDraftRun";
 import { draftDataDeps } from "@/lib/aiDraftDeps";
 import { creditsGate } from "@/lib/creditsAuth";
@@ -33,6 +34,10 @@ export async function POST(req: Request, ctx: RouteCtx) {
   const { supabase } = auth;
   const { id: threadId } = await ctx.params;
   if (!threadId) return Response.json({ error: "id required" }, { status: 400 });
+  {
+    const scope = await assertThreadInScope(auth, threadId);
+    if (!scope.ok) return Response.json({ error: scope.error }, { status: scope.status });
+  }
   const body = (await req.json().catch(() => ({}))) as { regenerate?: unknown };
   const apiKey = process.env.ANTHROPIC_API_KEY?.trim();
 
@@ -58,7 +63,9 @@ export async function POST(req: Request, ctx: RouteCtx) {
     const u = await supabase.from("app_users").select("*").eq("id", auth.appUserId ?? "").maybeSingle();
     const row = (u.data as AppUserRow | null) ?? null;
     if (!row) action_refusal = "Not a cockpit user.";
-    else if (result.draft.action.kind === "credit") {
+    else if (result.draft.action.kind === "refund_membership") {
+      action_refusal = can(row, "editMemberships", auth.email ?? "") ? null : "Refunds need EDIT MEMBERSHIPS. Ask Ryan.";
+    } else if (result.draft.action.kind === "credit") {
       const g = creditsGate(row);
       action_refusal = g.ok ? null : g.error;
     } else if (!can(row, "managePromos", auth.email ?? "")) {

@@ -12,6 +12,7 @@
 
 import { randomUUID } from "node:crypto";
 import { authenticateApp, readRefusal } from "@/lib/appAuth";
+import { clearToday } from "@/lib/appTodayCache";
 import { cityAllowed } from "@/lib/appModel";
 import { isEnv } from "@/lib/appLive";
 import { apiGet, StageConfigError, StageHostGuardError } from "@/lib/matchdayStageApi";
@@ -89,6 +90,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
     // A refusal is not a save: the desktop's own status and sentence, as-is.
     if (!res.ok) return Response.json({ error: j?.error ?? `HTTP ${res.status}` }, { status: res.status });
 
+    clearToday(env);
     const after = await apiGet<Row>(env, `/admin/matches/${id}`);
     const disagreements = Object.entries(changes)
       .filter(([k]) => k !== "teamNumbers")

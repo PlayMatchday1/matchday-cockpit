@@ -181,6 +181,10 @@ is("authenticateMatchOpsRead is imported by EXACTLY the 22 intended routes", imp
   // round 2 — dual-gate: GET on the read gate, the write still authenticateAdmin + EDIT MATCHES
   "matchday/[env]/matches/[id]/route.ts", "matchday/[env]/roster/[matchId]/route.ts",
   "matchday/[env]/matches/[id]/cancel/route.ts",
+  // MATCHES CUT SHORT (2026-11-02). Clubhouse-only data (match_cut_short), no MatchDay call. Read on
+  // the gate; the writes need admin or EDIT MATCHES, and assertMatchInScope bounds a confined account.
+  // It also takes the city-manager tier (the census below), scoped to the manager's city.
+  "matchday/[env]/cut-short/route.ts",
   // A blank match on a field, for the editor (2026-10-28). READ-ONLY: the write is matches/create,
   // which stays on EDIT MATCHES. Confinement is applied to the fieldId inside the route.
   "matchday/[env]/matches/template/route.ts",
@@ -538,7 +542,12 @@ is("naming no city applies the caller's own scope", assertCityScope("DFW", null)
 // another city; both are asserted below.
 { const importsCity = routeFiles.filter((f) => readFileSync(f, "utf8").includes("authenticateCityManager"));
   is("authenticateCityManager is imported by EXACTLY the intended routes (a new one must edit this test)",
-    importsCity.map(rel).sort(), ["city/gameday/route.ts", "manager-pay/city-week/route.ts"]); }
+    importsCity.map(rel).sort(), ["city/gameday/route.ts", "manager-pay/city-week/route.ts", "matchday/[env]/cut-short/route.ts"]); }
+// cut-short: the city tier's FIRST WRITE, scoped from the SESSION. The manager's own city is the
+// scope, and every write passes assertMatchInScope with it before touching the table.
+{ const cs = readFileSync("src/app/api/matchday/[env]/cut-short/route.ts", "utf8");
+  is("cut-short takes the city manager's scope from the session, never a param", /scopeCity: cm\.cityIdentifier/.test(cs) && !/searchParams\.get\("city"\)/.test(cs), true);
+  is("cut-short checks the match's city before every write (POST and DELETE)", (cs.match(/assertMatchInScope\(a\.w\.supabase, a\.w\.scopeCity, matchId, env\)/g) ?? []).length, 2); }
 
 // ── THE CONFINEMENT (Phase 29b): the tier is RESTRICTIVE, not additive ──
 // The leak: a city manager also held can_access_matchops, and matchOpsReadGate requires exactly

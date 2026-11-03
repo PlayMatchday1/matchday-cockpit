@@ -87,6 +87,7 @@ export async function buildProfile(args: {
       team: num(um.team), num: num(um.playerNumber),
       price: num(um.amount) ?? num(m.registrationPrice) ?? 0,   // base spot price
       charged: num(um.totalAmount),                              // what Stripe actually took (base + card fee − credit); may differ from price
+      credit: num(um.creditAmount),                              // the player's credit used on this booking (staff app credit history)
       userStatus: str(um.userStatus),                            // attendance/reason enum (NO_SHOW etc.)
       /* BOTH FACTS SURVIVE, and the state comes from the SHARED derivation. This used to give the
        * player precedence while mirrorHistory gave the club precedence — same player, same match,

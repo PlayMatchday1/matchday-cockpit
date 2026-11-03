@@ -24,6 +24,8 @@ import { marketLabel } from "./acquisitionModel";
 import { addDays, addMonths, monthStart, mondayOf } from "./healthModel";
 import { readGrowthFromViews } from "./growthFromViews";
 import { acquisitionResponse } from "./acquisitionCompute";
+import { ttlFor } from "./healthLoad";
+import { todayBusinessDate } from "./goalPace";
 
 export type Kind = "month" | "week" | "day";
 export type Period = { kind: Kind; from: string; to: string };
@@ -44,8 +46,11 @@ export function periodOf(kind: Kind, start: string): Period {
 export const stepOf = (p: Period, by: number): Period =>
   periodOf(p.kind, p.kind === "day" ? addDays(p.from, by) : p.kind === "week" ? addDays(p.from, 7 * by) : addMonths(p.from, by));
 
-const cached = <T,>(key: string[], current: boolean, fn: () => Promise<T>) =>
-  unstable_cache(fn, ["app-players-v2", ...key], { revalidate: current ? 300 : 6 * 3600, tags: ["app-players"] })();
+/* CACHE LIFE (2026-11-02), as Health: current 5 minutes (stale-while-revalidate, kept warm by
+ * /api/app/cron/warm), ended in the last 2 days 1 hour, older 7 days. `to` is the last day covered. */
+const cached = <T,>(key: string[], current: boolean, fn: () => Promise<T>, to?: string) =>
+  unstable_cache(fn, ["app-players-v2", ...key], { revalidate: to ? ttlFor(to, current, todayBusinessDate(new Date())) : current ? 300 : 6 * 3600, tags: ["app-players"] })();
+const monthEnd = (ym: string) => addDays(addMonths(`${ym}-01`, 1), -1);
 
 /* ── PLAYER ACTIVITY ──────────────────────────────────────────────────────────────────────────── */
 export type Activity = { registrations: number | null; newPlayers: number | null; totalPlayers: number | null; spots: number | null; returning: number | null; returningPct: number | null };
@@ -75,7 +80,7 @@ async function weekly(sb: SupabaseClient, grain: "weekly" | "daily", start: stri
     const j = (await res.json()) as Row;
     if (!res.ok) throw new Error(`behavior-weekly: ${res.status} ${String(j.error ?? "")}`);
     return { overall: j.overall, byCity: j.byCity, byField: j.byField };
-  });
+  }, monthEnd(end));
 }
 
 export async function activityPeriods(sb: SupabaseClient, periods: Period[], today: string): Promise<ActivityPeriod[]> {
@@ -140,7 +145,7 @@ export async function acquisitionPeriod(sb: SupabaseClient, p: Period, current: 
       iphoneThrough: ((j.freshness as Row)?.apple as string | null) ?? null,
       metaThrough: ((j.freshness as Row)?.meta as string | null) ?? null,
     };
-  });
+  });   // no `to`: it carries the sources' last synced day, which a long cache would freeze
 }
 
 /** Android first installs (Play Console, app_downloads) over the period, and its last stored day. */
