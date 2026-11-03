@@ -226,6 +226,8 @@ type PlayerDbRow = {
   updated_at: string | null;
   raw: unknown;
   synced_at: string;
+  // Always null on write: the API returned this row, so it is alive (see mapPlayerToRow).
+  deleted_at: null;
 };
 
 // ===== Public API =====
@@ -539,6 +541,9 @@ export async function syncMdapiMatches(
   const perMatchErrors: Record<string, string> = {};
   let playersFetched = 0;
   let rostersRead = 0;
+  // The matches whose roster THIS run read and got an array back for. The player tombstone may only
+  // judge these: a roster nobody asked for is not an empty roster.
+  const readRosterIds = new Set<number>();
   let stopped: Error | null = null;
 
   for (let i = 0; opts.matchesOnly ? false : i < matches.length; i++) {
@@ -565,6 +570,7 @@ export async function syncMdapiMatches(
     }
     rostersRead++;
     if (!Array.isArray(players)) continue;
+    readRosterIds.add(match.id);
     playersFetched += players.length;
     const mrow = rowById.get(match.id);
     if (mrow) for (const p of players) { const rv = reviewFromRoster(p, mrow, syncedAt); if (rv) reviewRows.push(rv); }
@@ -650,12 +656,18 @@ export async function syncMdapiMatches(
     // fetch errored this run are excluded so a transient upstream failure
     // can't tombstone a live roster. ONLY when every roster in the window was read: an hourly run
     // reads a few, and an unread roster is not an empty one.
-    if (rosters === "all") rowsSoftDeleted += await tombstonePlayersMissing(supabase, {
+    /* AND NEVER ON A RUN THAT READ NO ROSTERS. matchesOnly (the Veo live counts and resync) skips the
+     * roster loop but still carries a date window, and rosters defaults to "all", so until 2026-11-02
+     * this pass ran over every match in that window and soft-deleted every player row the run never
+     * looked at: 305 rows on 75 matches at 09:47:25 UTC, Nov 2 to Nov 30, the Master Schedule's
+     * live-count window. Restricting to readRosterIds makes that impossible by construction. */
+    if (rosters === "all" && !opts.matchesOnly && readRosterIds.size > 0) rowsSoftDeleted += await tombstonePlayersMissing(supabase, {
       fromDate: opts.fromDate,
       toDate: opts.toDate,
       thisRunStartIso: new Date(startedAt).toISOString(),
       thisRunRowCount: matchesUpserted + playersUpserted,
       erroredMatchIds: new Set(Object.keys(perMatchErrors).map(Number)),
+      readRosterIds,
       mode: opts.mode,
     });
   }
@@ -806,6 +818,7 @@ async function tombstonePlayersMissing(
     thisRunStartIso: string;
     thisRunRowCount: number;
     erroredMatchIds: Set<number>;
+    readRosterIds: ReadonlySet<number>;
     mode?: string;
   },
 ): Promise<number> {
@@ -855,26 +868,14 @@ async function tombstonePlayersMissing(
   // Match ids inside the covered window, minus any whose roster we failed
   // to fetch this run.
   const matchIds: number[] = [];
-  for (let from = 0; ; from += 1000) {
-    const { data, error } = await supabase
-      .from("mdapi_matches")
-      .select("api_id")
-      .gte("start_date", `${fromDate}T00:00:00Z`)
-      .lte("start_date", `${toDate}T23:59:59Z`)
-      .order("api_id", { ascending: true })
-      .range(from, from + 999);
-    if (error) {
-      console.warn(
-        `[mdapi-players] tombstone skipped: window match lookup failed: ${error.message}`,
-      );
-      return 0;
-    }
-    const rows = (data ?? []) as { api_id: number }[];
-    for (const r of rows) {
-      if (!erroredMatchIds.has(r.api_id)) matchIds.push(r.api_id);
-    }
-    if (rows.length < 1000) break;
+  /* ONLY ROSTERS THIS RUN READ, not every match the mirror holds in the window. The window lookup
+   * this replaces judged matches the run never asked about, which is how a matchesOnly run (zero
+   * rosters read) deleted every player in its window on 2026-11-02. A row of a read roster that the
+   * response did not carry is the one case this pass exists for. */
+  for (const id of args.readRosterIds) {
+    if (!erroredMatchIds.has(id)) matchIds.push(id);
   }
+  matchIds.sort((a, b) => a - b);
   if (matchIds.length === 0) return 0;
 
   // Chunk the IN() list to keep URLs under PostgREST's practical limit.
@@ -996,6 +997,11 @@ function mapPlayerToRow(
     updated_at: p.updatedAt ?? null,
     raw: p,
     synced_at: syncedAt,
+    /* THE API RETURNED THIS ROW, SO IT IS ALIVE. mapMatchToRow has always cleared deleted_at; this
+     * mapper never did, so a roster row tombstoned once stayed tombstoned through every later sync
+     * that re-read it. On 2026-11-02 that hid 245 live rows across 75 matches from every reader that
+     * filters deleted_at, the Notify players SMS among them (match 20806: 16 texted of 34). */
+    deleted_at: null,
   };
 }
 

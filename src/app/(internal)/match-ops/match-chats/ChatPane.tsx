@@ -493,16 +493,14 @@ function ChatPaneInner({
             <circle cx="12" cy="16.6" r=".9" fill="currentColor" stroke="none" />
             <path d="M10.3 3.9 2.5 17.4A2 2 0 0 0 4.2 20.5h15.6a2 2 0 0 0 1.7-3.1L13.7 3.9a2 2 0 0 0-3.4 0z" />
           </svg>
-          <span>
-            Sending as <b className="font-extrabold">MatchDay</b> to the WhatsApp group
-            {realN != null ? (
-              <>
-                {" — "}
-                <b className="font-extrabold">{realN} real player{realN === 1 ? "" : "s"}</b> will get this on their phones.
-              </>
-            ) : (
-              "."
-            )}
+          {/* WHAT THE REPLY ROUTE ACTUALLY DOES: one Firestore write into the app's match chat. It
+              sends no WhatsApp, no SMS and no push of its own, and whether the app notifies anyone
+              about the post is the MatchDay backend's business, unlogged here. The old copy said
+              "to the WhatsApp group ... N real players will get this on their phones", and on
+              2026-11-02 that promise was read as a delivery count. Texting is Notify players. */}
+          <span data-testid="chat-send-banner">
+            Sending as <b className="font-extrabold">MatchDay</b> to the in-app match chat only. It does not
+            text or WhatsApp anyone; use <b className="font-extrabold">Notify players</b> to text the roster.
           </span>
         </div>
 

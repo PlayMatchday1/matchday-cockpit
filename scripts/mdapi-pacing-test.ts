@@ -51,13 +51,13 @@ function clock() {
 
 /* A fake Supabase: every chain method returns the chain; awaiting it answers from `reply`. Writes are
  * recorded per table, so a suite can say "no player was written". */
-type Op = { table: string; op: string; payload?: unknown; filters: string[] };
+type Op = { table: string; op: string; payload?: unknown; filters: string[]; args: unknown[][] };
 function fakeDb(reply: (o: Op) => { data: unknown; error: null | { message: string } }) {
   const writes: Op[] = [];
   const db = {
     writes,
     from(table: string) {
-      const o: Op = { table, op: "select", filters: [] };
+      const o: Op = { table, op: "select", filters: [], args: [] };
       const chain: Record<string, unknown> = {};
       const self = new Proxy(chain, {
         get(_t, k: string) {
@@ -70,6 +70,7 @@ function fakeDb(reply: (o: Op) => { data: unknown; error: null | { message: stri
           return (...args: unknown[]) => {
             if (["insert", "upsert", "update", "delete"].includes(k)) { o.op = k; o.payload = args[0]; }
             else if (k !== "select") o.filters.push(`${k}:${JSON.stringify(args[0])}`);
+            if (k !== "select") o.args.push([k, ...args]);
             return self;
           };
         },
@@ -173,6 +174,46 @@ async function main() {
     yes("…and the run fails, carrying its request count for the log", thrown instanceof Error && (thrown as { logPatch?: { api_calls?: number } }).logPatch?.api_calls === 2, String(thrown));
     is("no tombstone was written (an unread roster is not an empty one)", db.writes.filter((w) => w.op === "update").length, 0);
     is("CONTROL: the match rows it did read were written", db.writes.filter((w) => w.table === "mdapi_matches" && w.op === "upsert").length, 1);
+  }
+
+  console.log("\n— the player tombstone judges only rosters this run read (2026-11-02) —");
+  {
+    /* THE INCIDENT. A matchesOnly run (Veo live counts) carried a window, read no roster, and the
+     * player tombstone soft-deleted every player row in that window. The DB below answers a prior
+     * clean run, so the pass is NOT stopped by its cooldown guards: absence here is the fix. */
+    const prior = { data: [{ started_at: "2026-10-20T00:00:00Z", rows_imported: 1 }], error: null };
+    const reply = (o: Op) => {
+      if (o.table === "fin_sync_log" && o.op === "select") return prior;
+      if (o.table === "mdapi_matches" && o.op === "select") return { data: [{ api_id: 501 }, { api_id: 502 }, { api_id: 503 }], error: null };
+      if (o.op === "update") return { data: [{ api_id: 1 }], error: null };
+      return { data: [], error: null };
+    };
+    const list = { totalItems: 2, data: [
+      { id: 501, fieldId: 9, startDate: "2026-11-02T19:00:00.000Z", field: { title: "F", city: { abbr: "AUS", name: "Austin" } } },
+      { id: 502, fieldId: 9, startDate: "2026-11-03T19:00:00.000Z", field: { title: "F", city: { abbr: "AUS", name: "Austin" } } },
+    ] };
+    const playerUpdates = (db: { writes: Op[] }) => db.writes.filter((w) => w.table === "mdapi_match_players" && w.op === "update");
+    const tombIds = (db: { writes: Op[] }) => playerUpdates(db).flatMap((w) => w.args.filter((a) => a[0] === "in" && a[1] === "match_api_id").flatMap((a) => a[2] as number[])).sort();
+
+    const dbOnly = fakeDb(reply);
+    const baseOnly = fakeBase((c) => (c.path === "/admin/matches" ? list : err503()));
+    await syncMdapiMatches(dbOnly, { fromDate: "2026-11-02", toDate: "2026-11-30", matchesOnly: true, client: getPacedClient({ base: baseOnly, sleep: async () => {} }) });
+    is("matchesOnly: no roster was requested", baseOnly.calls.filter((c) => c.path.endsWith("/players")).length, 0);
+    is("matchesOnly: NO player row is tombstoned", playerUpdates(dbOnly).length, 0);
+    is("CONTROL: matchesOnly still wrote its match rows", dbOnly.writes.filter((w) => w.table === "mdapi_matches" && w.op === "upsert").length, 1);
+
+    /* THE POSITIVE CONTROL: the same DB and the same prior run, rosters read. The pass DOES run, so
+     * the zero above is the gate and not a fake that cannot tombstone. 503 is in the mirror's window
+     * but the API did not list it, so its roster was never read and it must not be judged. */
+    const dbAll = fakeDb(reply);
+    const roster = (id: number) => [{ id: id * 10, userId: id, paidStatus: "PAID", user: { firstName: "A", lastName: "B", email: "a@x.com" } }];
+    const baseAll = fakeBase((c) => (c.path === "/admin/matches" ? list : c.path === "/admin/matches/501/players" ? roster(501) : roster(502)));
+    await syncMdapiMatches(dbAll, { fromDate: "2026-11-02", toDate: "2026-11-30", rosters: "all", client: getPacedClient({ base: baseAll, sleep: async () => {} }) });
+    is("CONTROL: rosters read, the tombstone runs", playerUpdates(dbAll).length > 0, true);
+    is("…over exactly the rosters it read (503, unread, is not judged)", tombIds(dbAll), [501, 502]);
+    const up = dbAll.writes.find((w) => w.table === "mdapi_match_players" && w.op === "upsert");
+    const rows = (up?.payload ?? []) as { api_id: number; deleted_at?: unknown }[];
+    is("every player row the API returned is written with deleted_at null (resurrection)", rows.map((r) => [r.api_id, Object.prototype.hasOwnProperty.call(r, "deleted_at") ? r.deleted_at : "MISSING"]), [[5010, null], [5020, null]]);
   }
 
   console.log("\n— which rosters the hourly run re-reads —");
