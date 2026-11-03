@@ -1129,8 +1129,26 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange,
        * mirror row to keep, and an edit touching only unmirrored fields has nothing to go stale. */
       const mirrorWarn = j.mirrored === false
         && j.mirrorReason !== "not production" && j.mirrorReason !== "no mirrored fields";
+      /* THE FAKES FOLLOW A RESIZE (Ryan, 2026-11-02), as the staff app's size write: the stored
+       * spots left is kept, so a smaller match holds fewer fakes and a bigger one more. The fakes
+       * route works out the count itself (followSpotsLeft), the one rule both paths share. Only
+       * after a size or format total that LANDED; a refusal or a failure is said, never retried. */
+      let fakesLine = "";
+      const SIZE_KEYS = ["maxPlayerCount", "maxTeamSize2Team", "maxTeamSize4Team"];
+      if (sentKeys.some((k) => SIZE_KEYS.includes(k)) && !notApplied.some((k) => SIZE_KEYS.includes(k))) {
+        try {
+          const fr = await fetch(`/api/matchday/${env}/matches/${matchId}/fakes`, {
+            method: "POST", headers, body: JSON.stringify({ followSpotsLeft: true, matchName: orig.name ?? null, source: "Match panel · team size" }),
+          });
+          const fj = await fr.json().catch(() => null);
+          fakesLine = !fr.ok || (fj?.outcome !== "landed")
+            ? ` \u00b7 FAKES NOT BROUGHT TO SPOTS LEFT: ${fj?.error ?? fj?.outcome ?? fr.status}.`
+            : fj.noop ? "" : ` \u00b7 Fakes ${fj.fakesBefore} to ${fj.fakesAfter} (spots left ${fj.spotsLeft}), re-read confirmed.`;
+          await loadRoster();
+        } catch (e) { fakesLine = ` \u00b7 FAKES UNKNOWN: ${e instanceof Error ? e.message : String(e)}. Reload before acting.`; }
+      }
       setToast(
-        `Outcome ${j.outcome ?? "?"}: ${landed}/${sentKeys.length} field(s) LANDED (re-read confirmed).` +
+        `Outcome ${j.outcome ?? "?"}: ${landed}/${sentKeys.length} field(s) LANDED (re-read confirmed).` + fakesLine +
         (notApplied.length ? ` NOT APPLIED: ${notApplied.map((k) => LABELS[k] ?? k).join(", ")}.` : "") +
         (mirrorWarn
           ? ` \u00b7 BUT THE CLUBHOUSE COPY WAS NOT UPDATED (${j.mirrorReason ?? "unknown"}). Other screens will show the old value until the nightly sync. Run the matches sync on /data.`
