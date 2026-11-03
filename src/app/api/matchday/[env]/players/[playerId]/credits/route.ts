@@ -31,6 +31,7 @@ import { cityNameFor } from "@/lib/cityScope";
 import { makeServerClient } from "@/lib/supabaseServer";
 import { MAX_ADJUSTMENT_CENTS, fmtUsd } from "@/lib/creditsModel";
 import { DRAFT_ACTION_SOURCE } from "@/lib/aiDraftAction";
+import { APP_CREDITS_SOURCE } from "@/lib/appCredits";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -102,7 +103,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; p
   // The write itself, with its race check and recordWrite, lives in src/lib/creditWrite.ts.
   const r = await applyCreditAdjustment({
     env, playerId, deltaCents: delta, expectedBeforeCents: expected, reason,
-    source: body.source === DRAFT_ACTION_SOURCE ? DRAFT_ACTION_SOURCE : "Player Lookup · credits",
+    source: body.source === DRAFT_ACTION_SOURCE ? DRAFT_ACTION_SOURCE : body.source === APP_CREDITS_SOURCE ? APP_CREDITS_SOURCE : "Player Lookup · credits",
     actor: { email: auth.email, userId: auth.appUserId }, boundary,
   });
   return Response.json(r.json, { status: r.status });

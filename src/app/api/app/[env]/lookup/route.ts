@@ -4,7 +4,8 @@
 //   ?q=<term>              GET /api/lookup/{env}?q=        search (phone, email, id live; names from
 //                          mdapi_users, then each hit reloaded live by id), then MEMBER checked live
 //   ?ids=1,2,3             recent lookups: GET /api/lookup/{env}?id= per id (at most 8), live
-//   ?id=<n>                GET /api/lookup/{env}?id=       the whole profile
+//   ?id=<n>                GET /api/lookup/{env}?id=       the whole profile, and its credit history
+//                          from change_log (appCredits), read only once that profile answered
 //   ?payments=<n>&email=   GET /api/lookup/{env}/payments  the 10 most recent Stripe charges, read only
 //   ?candidates=<n>        the player's city's matches for the next 7 days with an open spot, live
 //                          from /admin/matches; a match they are already in is marked, not hidden
@@ -23,6 +24,8 @@ import { callDesktop, passThrough } from "@/lib/appCall";
 import { GET as lookupGet } from "@/app/api/lookup/[env]/route";
 import { GET as paymentsGet } from "@/app/api/lookup/[env]/payments/route";
 import { reviewMasked } from "@/lib/reviewAccount";
+import { creditLog } from "@/lib/appCredits";
+import { makeServerClient } from "@/lib/supabaseServer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -78,7 +81,9 @@ async function getRoute(req: Request, ctx: { params: Promise<{ env: string }> })
     const id = url.searchParams.get("id");
     if (id != null) {
       const c = await callDesktop(req, lookupGet, `/api/lookup/${env}?id=${encodeURIComponent(id)}`, {}, P);
-      return c.ok ? Response.json({ ...c.json, readAt: new Date().toISOString() }) : passThrough(c);
+      if (!c.ok) return passThrough(c);
+      const credits = /^\d+$/.test(id) ? await creditLog(makeServerClient(), env, Number(id)).catch(() => []) : [];
+      return Response.json({ ...c.json, creditLog: credits, readAt: new Date().toISOString() });
     }
 
     const pay = url.searchParams.get("payments");

@@ -307,6 +307,7 @@ const NODE_SUITES = [
   "scripts/crm-thread-scope-test.ts",
   "scripts/app-push-test.ts",
   "scripts/app-match-v2-test.ts",
+  "scripts/app-credits-test.ts",
   /* AN ASSERTION OVER AN EMPTY COLLECTION PASSES WITHOUT TESTING ANYTHING. 27 sites across 10
    * browser suites were in that shape, and one had been green for a round while testing nothing.
    * This keeps the count at zero. */
