@@ -90,6 +90,16 @@ const urlRows: string[] = []; let urlBad = 0;
 for (const f of urls) { const r = await fetch(f.site_url, { redirect: "manual" }); await r.body?.cancel(); if (r.status !== 200) urlBad++; urlRows.push(`${r.status} ${f.name} -> ${f.site_url}`); }
 check("site_url set on the 10 mapped venues, each returning 200", urls.length === 10 && urlBad === 0, "\n        " + urlRows.join("\n        "));
 
+// ── display_name / full_name, spots_open (2026-11-03) ─────────────────────────────────────────
+const dal = p.cities.find((c: any) => c.slug === "dallas");
+check("Dallas display_name 'Dallas', full_name 'Dallas / Fort Worth'; every city has both", dal?.display_name === "Dallas" && dal?.full_name === "Dallas / Fort Worth" && p.cities.every((c: any) => c.display_name && c.full_name),
+  p.cities.map((c: any) => `${c.slug}: ${c.display_name} | ${c.full_name}`));
+const allM = p.cities.flatMap((c: any) => c.fields.flatMap((f: any) => f.next_14_days.map((m: any) => ({ v: f.name, ...m }))));
+const badSpots = allM.filter((m: any) => !(Number.isInteger(m.spots_open) && m.spots_open >= 0 && (m.spots_total == null || m.spots_open <= m.spots_total)));
+const someTaken = allM.filter((m: any) => m.spots_open != null && m.spots_total != null && m.spots_open < m.spots_total);
+check("spots_open is an integer 0..spots_total on every listed match (control: some matches have spots taken)", allM.length > 0 && badSpots.length === 0 && someTaken.length > 0,
+  { matches: allM.length, invalid: badSpots.slice(0, 5).map((m: any) => `${m.v} ${m.date} ${m.spots_open}/${m.spots_total}`), withSpotsTaken: someTaken.length, full: allM.filter((m: any) => m.spots_open === 0).length, sample: someTaken.slice(0, 4).map((m: any) => `${m.v} ${m.date} ${m.kickoff}: ${m.spots_open} of ${m.spots_total} open`) });
+
 // CORS
 for (const o of ["https://playmatchday.com", "https://www.playmatchday.com", "https://playmatchday.com.evil.com"]) {
   const r = await fetch(`${BASE}/api/public/site.json`, { headers: { Origin: o } }); await r.body?.cancel();

@@ -57,11 +57,13 @@ export type MatchRow = {
   /** LOCAL WALL CLOCK, like start_date; sliced, never parsed. Null when MatchDay has none. */
   end_date?: string | null;
   registration_price: number | string | null; max_player_count: number | null;
+  /** _count.players from the LIST endpoint: every occupied spot, real and fake, i.e. what a player sees as taken. */
+  player_count?: number | null;
   team_count: number | null;
 };
 export type CityTotals = { matchesAllTime: number; playersAllTime: number; everHadMatch: boolean };
 
-export type SiteMatch = { date: string; weekday: string; kickoff: string; kickoff_label: string; end_date: string | null; end: string | null; format: string | null; price_cents: number | null; spots_total: number | null };
+export type SiteMatch = { date: string; weekday: string; kickoff: string; kickoff_label: string; end_date: string | null; end: string | null; format: string | null; price_cents: number | null; spots_total: number | null; spots_open: number | null };
 export type SiteField = {
   slug: string; name: string; neighborhood: string | null;
   address: { street: string | null; city: string; state: string | null; zip: string | null };
@@ -77,7 +79,8 @@ export type SiteField = {
   mdapi_field_ids: number[];
 };
 export type SiteCity = {
-  slug: string; name: string; state: string | null; state_name: string | null;
+  /** name is full_name, kept for older readers; the site shows display_name. */
+  slug: string; name: string; display_name: string; full_name: string; state: string | null; state_name: string | null;
   status: "live" | "launching" | "coming_soon"; time_zone: string | null;
   first_match_date: string | null;
   price_per_match_cents: { min: number; max: number } | null;
@@ -177,6 +180,20 @@ export function isRegularPlayListing(title: string, countsAsRegularPlay: boolean
 export function priceRange(ms: readonly Pick<MatchRow, "registration_price">[]): { min: number; max: number } | null {
   const ps = ms.map((m) => num(m.registration_price)).filter((p): p is number => p != null && p >= MIN_RANGE_PRICE_CENTS);
   return ps.length ? { min: Math.min(...ps), max: Math.max(...ps) } : null;
+}
+
+/* ── PUBLIC CITY NAMES (Ryan, 2026-11-03) ───────────────────────────────────────────────────────
+ * display_name is what the website prints; full_name is MatchDay's own city name. They differ only where MatchDay's
+ * name is longer than the market's public name. Keyed by city_identifier. */
+export const CITY_DISPLAY_NAMES: Readonly<Record<string, string>> = { DFW: "Dallas" };
+
+/* ── OPEN SPOTS ──────────────────────────────────────────────────────────────────────────────────
+ * capacity (maxPlayerCount, a TOTAL) minus _count.players. On the list endpoint the mirror syncs from, _count.players
+ * is every occupied spot, real AND fake (facts: "real + fake + open === capacity"; the 17325 fix), which is the
+ * number a player sees as taken. Never negative: a roster can exceed today's capacity. Null when either is missing. */
+export function spotsOpen(m: Pick<MatchRow, "max_player_count" | "player_count">): number | null {
+  const cap = num(m.max_player_count), taken = num(m.player_count ?? null);
+  return cap == null || taken == null ? null : Math.max(0, cap - taken);
 }
 
 /** "16,700+": rounded DOWN to the hundred, so the site never rounds on its own (and never up). */
@@ -282,6 +299,7 @@ export function buildSitePayload(inp: BuildInput): SitePayload {
           kickoff: wallHm(m.start_date), kickoff_label: kickoffLabel(wallHm(m.start_date)),
           end_date: m.end_date ? wallYmd(m.end_date) : null, end: m.end_date ? wallHm(m.end_date) : null,
           format: formatOf(m), price_cents: num(m.registration_price), spots_total: num(m.max_player_count),
+          spots_open: spotsOpen(m),
         })),
         mdapi_field_ids: ids,
       };
@@ -296,7 +314,7 @@ export function buildSitePayload(inp: BuildInput): SitePayload {
 
     const upcomingDates = siteFields.filter((f) => f.first_match_date).map((f) => f.first_match_date!).sort();
     cities.push({
-      slug: CITY_SLUGS[abbr] ?? slugify(c.name), name: c.name,
+      slug: CITY_SLUGS[abbr] ?? slugify(c.name), name: c.name, display_name: CITY_DISPLAY_NAMES[abbr] ?? c.name, full_name: c.name,
       state: c.state?.abbr ?? null, state_name: c.state?.name ?? null,
       status, time_zone: tz,
       first_match_date: status === "launching" ? upcomingDates[0] ?? null : null,
@@ -324,6 +342,8 @@ export function buildSitePayload(inp: BuildInput): SitePayload {
       players_all_time: "Distinct people who have played at least one match (staff, test and fake accounts excluded; a re-registered person counted once), Warsaw excluded.",
       price_per_match_cents: "Lowest and highest per-match price, in cents, among counting matches on regular-play listings (not discounted, tournament or premier listings unless marked regular play), ignoring any match under $5. next_14_days carries every match at its real price.",
       next_14_days: "Each match: local date, weekday, kickoff (HH:MM wall clock in the city time zone), end_date and end (the same wall clock; null when MatchDay has none), format, price in cents (every match at its real price), total spots.",
+      display_name: "The city's public name, what the website prints (\"Dallas\"). full_name is MatchDay's own name (\"Dallas / Fort Worth\"); name equals full_name.",
+      spots_open: "Per match: capacity minus every occupied spot (real and placeholder), the number the app shows as open. Synced from MatchDay roughly hourly, so it can lag the app.",
       matches_display: "matches_all_time rounded down to the hundred, with a plus: show this, do not round on the site.",
       players_display: "players_all_time rounded down to the hundred, with a plus.",
       site_url: "The venue's existing page on playmatchday.com, or null.",

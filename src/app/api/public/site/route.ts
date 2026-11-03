@@ -19,7 +19,7 @@ const dateLabel = (ymd: string) => {
 function fieldRow(f: SiteField): string {
   const addr = [f.address.street, f.address.city, f.address.state, f.address.zip].filter(Boolean).join(", ");
   const sched = f.next_14_days.length
-    ? f.next_14_days.map((m) => `${esc(dateLabel(m.date))} ${esc(m.kickoff_label)} · ${esc(m.format ?? "?")} · ${m.price_cents != null ? usd(m.price_cents) : "?"} · ${m.spots_total ?? "?"} spots`).join("<br>")
+    ? f.next_14_days.map((m) => `${esc(dateLabel(m.date))} ${esc(m.kickoff_label)} · ${esc(m.format ?? "?")} · ${m.price_cents != null ? usd(m.price_cents) : "?"} · ${m.spots_open ?? "?"} of ${m.spots_total ?? "?"} open`).join("<br>")
     : `<span class="dim">none</span>`;
   return `<tr>
     <td class="img">${f.cover_photo_url ? `<img src="${esc(f.cover_photo_url)}" alt="" loading="lazy">` : MISSING}</td>
@@ -36,7 +36,7 @@ function fieldRow(f: SiteField): string {
 function citySection(c: SiteCity): string {
   const price = c.price_per_match_cents ? (c.price_per_match_cents.min === c.price_per_match_cents.max ? usd(c.price_per_match_cents.min) : `${usd(c.price_per_match_cents.min)}–${usd(c.price_per_match_cents.max)}`) : "—";
   return `<section>
-  <h2>${esc(c.name)}${c.state ? `, ${esc(c.state)}` : ""} <span class="pill ${c.status}">${c.status.replace("_", " ")}</span></h2>
+  <h2>${esc(c.display_name)}${c.display_name !== c.full_name ? ` <span class="dim">(${esc(c.full_name)})</span>` : ""}${c.state ? `, ${esc(c.state)}` : ""} <span class="pill ${c.status}">${c.status.replace("_", " ")}</span></h2>
   <p class="meta">/${esc(c.slug)} · ${esc(c.time_zone ?? "no time zone")}${c.first_match_date ? ` · first match ${esc(dateLabel(c.first_match_date))}` : ""} · per match ${price} · membership ${c.membership_monthly_cents != null ? usd(c.membership_monthly_cents) + "/mo" : "—"}
    · ${n(c.counts.matches_last_30_days)} matches last 30 days · ${n(c.counts.matches_all_time)} all time · ${n(c.counts.players_all_time)} players all time</p>
   ${c.fields.length ? `<div class="scroll"><table><thead><tr><th>Photo</th><th>Field</th><th>Status</th><th>Address</th><th>Formats</th><th>Days</th><th>Last 30</th><th>Next 14 days</th></tr></thead><tbody>${c.fields.map(fieldRow).join("")}</tbody></table></div>` : `<p class="dim">No fields yet.</p>`}
