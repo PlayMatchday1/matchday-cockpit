@@ -192,6 +192,9 @@ html.app-shell-locked body {
   --color-coral-hover: #e8533f;
   --color-coral-soft: #ffe0da;
 
+  /* Needs a person (Player Chats). Orange, not red: red is kept for errors. */
+  --color-attn: #e8892b;
+
   --color-blue-info: #2e79ff;
   --color-blue-info-hover: #1d5fd4;
   --color-blue-soft: #d8e5ff;

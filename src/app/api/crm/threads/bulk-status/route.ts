@@ -23,6 +23,7 @@
 // (webhook path is unchanged).
 
 import { authenticateCrm } from "@/lib/crmAuth";
+import { assertThreadInScope } from "@/lib/crmScope";
 
 export const runtime = "nodejs";
 export const maxDuration = 15;
@@ -84,6 +85,14 @@ export async function POST(req: Request) {
       { error: `Too many threads (max ${MAX_IDS})` },
       { status: 400 },
     );
+  }
+  // THE CITY BOUNDARY, per thread. One outside the caller's city refuses the whole request, so a
+  // confined account can't close another city's thread by putting its id in a batch.
+  if (auth.confinedCity) {
+    for (const id of ids) {
+      const scope = await assertThreadInScope(auth, id);
+      if (!scope.ok) return Response.json({ error: scope.error }, { status: scope.status });
+    }
   }
 
   if (action === "close") {

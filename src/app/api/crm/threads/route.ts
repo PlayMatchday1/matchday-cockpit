@@ -493,9 +493,34 @@ async function getRoute(req: Request) {
     console.error("[crm:threads.list] attention lookup error", e);
     return new Map<string, LoadedAttention>();
   });
+  // WAS OUR LAST MESSAGE AN AUTO-SEND? The row reads "Agent:" with a sparkle when it was. Only threads
+  // with an auto-send in the last 30 days are looked at, then their newest outbound decides. Isolated:
+  // a failure leaves every row a staff row.
+  const agentLast = new Set<string>();
+  if (threadIds.length > 0) {
+    const auto = await supabase.from("crm_messages").select("thread_id").in("thread_id", threadIds).not("auto_sent_draft_id", "is", null)
+      .gte("sent_at", new Date(Date.now() - 30 * 86400e3).toISOString());
+    const withAutoIds = [...new Set((auto.data ?? []).map((m) => m.thread_id as string))];
+    if (auto.error) console.error("[crm:threads.list] agent lookup error", auto.error);
+    else if (withAutoIds.length) {
+      const ob = await supabase.from("crm_messages").select("thread_id, auto_sent_draft_id").in("thread_id", withAutoIds).eq("direction", "outbound")
+        .or("is_auto_reply.is.null,is_auto_reply.eq.false").order("sent_at", { ascending: false }).limit(2000);
+      if (ob.error) console.error("[crm:threads.list] agent lookup error", ob.error);
+      const seen = new Set<string>();
+      for (const m of ob.data ?? []) {
+        const id = m.thread_id as string;
+        if (seen.has(id)) continue;
+        seen.add(id);
+        if (m.auto_sent_draft_id) agentLast.add(id);
+      }
+    }
+  }
   const withAuto = out.map((t) => {
     const a = attention.get(t.id);
-    return { ...t, auto_send: autoByThread.get(t.id) ?? null, attention: a ? { section: a.section, reason: a.reason, hold_until: a.hold_until, as_of: t.last_message_at } : null };
+    return {
+      ...t, auto_send: autoByThread.get(t.id) ?? null, last_outbound_auto: agentLast.has(t.id),
+      attention: a ? { section: a.section, reason: a.reason, hold_until: a.hold_until, ...(a.error ? { error: true } : {}), as_of: t.last_message_at } : null,
+    };
   });
   return Response.json({ threads: withAuto, counts }, { status: 200 });
 }

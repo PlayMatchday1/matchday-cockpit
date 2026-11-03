@@ -11,6 +11,7 @@
 // (EDIT CREDITS or MANAGE PROMOS). Decisions live in src/lib/aiDraftAction.ts.
 
 import { authenticateCrm } from "@/lib/crmAuth";
+import { assertThreadInScope } from "@/lib/crmScope";
 import { FULL_EDITOR_ENV } from "@/lib/matchEnv";
 import { creditsGate } from "@/lib/creditsAuth";
 import { can, denial } from "@/lib/capabilities";
@@ -38,6 +39,10 @@ export async function POST(req: Request, ctx: RouteCtx) {
   const body = (await req.json().catch(() => ({}))) as { draft_id?: unknown };
   const draftId = typeof body.draft_id === "string" ? body.draft_id : "";
   if (!threadId || !draftId) return Response.json({ error: "thread id and draft_id required" }, { status: 400 });
+  {
+    const scope = await assertThreadInScope(auth, threadId);
+    if (!scope.ok) return Response.json({ error: scope.error }, { status: scope.status });
+  }
   const authorization = req.headers.get("authorization") ?? "";
 
   const postTo = async (handler: (r: Request) => Promise<Response>, path: string, payload: unknown): Promise<WriteResult> => {

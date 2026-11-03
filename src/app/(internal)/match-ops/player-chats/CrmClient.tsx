@@ -45,6 +45,7 @@ import {
   Info,
   Pin,
   RotateCcw,
+  Sparkles,
   Star,
 } from "lucide-react";
 import EnablePushNotificationsButton from "@/components/EnablePushNotificationsButton";
@@ -71,6 +72,7 @@ import { type StatusFilter } from "./components/FilterBar";
 import { isAwaitingReply, awaitingAgeLabel } from "@/lib/awaitingReply";
 import AssignDropdown from "./components/AssignDropdown";
 import MessageBubble, {
+  AGENT_GREEN,
   type ConversationMessage,
 } from "./components/MessageBubble";
 import Composer from "./components/Composer";
@@ -1283,7 +1285,11 @@ function MistInboxRow({
   const ago = awaitingAgeLabel(thread.last_message_at, nowMs);
   const inbound = thread.last_message_direction === "inbound";
   const preview = thread.last_message_preview ?? "";
-  const speaker = inbound ? name.split(/\s+/)[0] || "Player" : "MatchDay";
+  // THREE KINDS OF ROW (2026-11-02). Human: Needs a human, an orange dot by the time. Agent: our last
+  // message was an auto-send, or one is holding; a sparkle and "Agent:". Staff: as before. No colored
+  // left edge on any of them, and red only for an error.
+  const agent = !needsHuman && (autoSending || thread.last_outbound_auto === true);
+  const speaker = inbound ? name.split(/\s+/)[0] || "Player" : agent ? "Agent" : "MatchDay";
 
   return (
     <button
@@ -1298,17 +1304,11 @@ function MistInboxRow({
         touchAction: "manipulation",
         ...(active
           ? { background: "#ffffff", borderColor: "#e2eae5", boxShadow: "0 1px 2px rgba(7,42,32,.05), 0 14px 30px -22px rgba(7,42,32,.5)" }
-          : needsHuman
-            ? { background: "rgba(253,228,224,.55)", borderColor: "transparent" }
-          : autoSending
-            ? { background: "#f4f6f5", borderColor: "transparent" }
-            : { borderColor: "transparent" }),
+          : { borderColor: "transparent" }),
       }}
+      data-kind={needsHuman ? "human" : agent ? "agent" : "staff"}
       className={`relative mt-px flex w-full items-start gap-2.5 rounded-[13px] border p-[10px_11px] text-left transition ${active ? "" : "hover:bg-white/80"}`}
     >
-      {(active || waiting || needsHuman) && (
-        <span aria-hidden data-testid={needsHuman ? "crm-human-edge" : undefined} className="absolute left-0 top-[11px] bottom-[11px] w-[3px] rounded-r-[3px]" style={{ background: needsHuman ? "#c8341f" : autoSending ? "#a9b4ae" : active ? "#35c77f" : "#e3c369" }} />
-      )}
       <span className="relative mt-px flex h-[34px] w-[34px] flex-none items-center justify-center rounded-[11px] text-[9.5px] font-extrabold" style={{ background: `${col}22`, color: col }}>
         {initials || "?"}
         {thread.is_unread && (
@@ -1317,7 +1317,6 @@ function MistInboxRow({
       </span>
       <span className="min-w-0 flex-1">
         <span className="flex items-baseline gap-1.5">
-          {needsHuman && <span data-testid="crm-human-pill" className="flex-none rounded-full px-[7px] py-px text-[10px] font-[800]" style={{ background: "#c8341f", color: "#ffffff" }}>Human</span>}
           <span data-testid="crm-thread-name" className={`min-w-0 flex-1 truncate text-[13.5px] tracking-[-0.008em] ${thread.is_unread ? "font-[760]" : "font-[660]"}`} style={{ color: "#12241d" }}>{name}</span>
           <button
             type="button"
@@ -1328,6 +1327,7 @@ function MistInboxRow({
           >
             <Star aria-hidden size={12} fill={thread.is_follow_up ? "currentColor" : "none"} />
           </button>
+          {needsHuman && <span data-testid="crm-human-dot" aria-label="Needs a human" className="inline-block h-[7px] w-[7px] flex-none -translate-y-px self-center rounded-full" style={{ background: "var(--color-attn)" }} />}
           <span className="flex-none text-[11px] font-[650]" style={{ color: waiting ? "#8a6300" : "#9aa8a1" }}>{ago}</span>
         </span>
         <span className="mt-0.5 flex items-center gap-1.5 text-[11.5px] font-[550]" style={{ color: "#6d7b74" }}>
@@ -1342,10 +1342,11 @@ function MistInboxRow({
           )}
         </span>
         {needsHuman && attention?.reason ? (
-          <span data-testid="crm-human-reason" className="mt-[5px] block overflow-hidden text-[12.5px] font-[650] leading-[1.42]" style={{ color: "#a82a18" }}>{attention.reason}</span>
+          <span data-testid="crm-human-reason" data-error={attention.error ? 1 : 0} className="mt-[5px] block overflow-hidden text-[12.5px] font-[600] leading-[1.42]" style={{ color: attention.error ? "#a82a18" : "#4a5f55" }}>{attention.reason}</span>
         ) : (
         <span data-testid="crm-thread-preview" className="mt-[5px] block overflow-hidden text-[12.5px] leading-[1.42]" style={{ color: "#63736b", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>
-          <span className={inbound ? "font-[700]" : "font-[700] italic"} style={{ color: inbound ? "#4a5f55" : "#8a978f" }}>{speaker}: </span>
+          {agent && <Sparkles data-testid="crm-agent-mark" aria-hidden className="mr-[3px] inline h-[11px] w-[11px] -translate-y-px" strokeWidth={2.2} style={{ color: AGENT_GREEN }} />}
+          <span className={inbound ? "font-[700]" : "font-[700] italic"} style={{ color: inbound ? "#4a5f55" : agent ? AGENT_GREEN : "#8a978f" }}>{speaker}: </span>
           {preview || <span className="italic" style={{ color: "#8d9c94" }}>(no preview)</span>}
         </span>
         )}

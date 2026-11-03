@@ -220,7 +220,7 @@ export default function AiDraftCard({
   return (
     <div data-testid="ai-draft-card" className="mb-2 rounded-lg border border-deep-green/15 bg-cream-soft px-3 py-2 text-sm text-deep-green">
       {view.kind === "draft" && view.draft.decision === "human" && (
-        <div data-testid="ai-draft-needs-you" className="mb-1 text-[13px] font-[750]" style={{ color: "#a82a18" }}>
+        <div data-testid="ai-draft-needs-you" className="mb-1 text-[13px] font-[750]" style={{ color: "var(--color-attn)" }}>
           Needs you: {view.draft.decision_reason ?? "this one needs a person"}
         </div>
       )}

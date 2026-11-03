@@ -15,6 +15,7 @@ import "server-only"; // no-op under --conditions=react-server
 // (src/app/api/whatsapp/webhook/route.ts and src/app/api/webhooks/telnyx/route.ts).
 
 import { randomUUID } from "node:crypto";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { recordWrite, supabaseLogStore, type LogStore } from "@/lib/changeLog";
 import { resolveCityScope } from "@/lib/cityScope";
 
@@ -33,6 +34,8 @@ export type LinkArgs = {
   playerId: number;
   actor: { appUserId: string | null; email: string | null };
   confinedCity: string | null;
+  /** Why, when nobody pressed Link: "Auto-linked from typed number". Logged as its own change row. */
+  reason?: string;
 };
 
 export type LinkResult =
@@ -62,7 +65,10 @@ export async function linkThread(args: LinkArgs, io: LinkIO, store: LogStore = s
       body: { thread_id: args.threadId, action, from_player_id: before.player_id, to_player_id: args.playerId },
       keys: [], label: (k) => k,
       applied: (_b, after) => after.player_id === args.playerId && after.account_confirmed_at != null,
-      changes: [{ key: "player_id", field: "Linked account", before: before.player_id == null ? "none" : `player ${before.player_id}`, after: `player ${args.playerId}` }],
+      changes: [
+        { key: "player_id", field: "Linked account", before: before.player_id == null ? "none" : `player ${before.player_id}`, after: `player ${args.playerId}` },
+        ...(args.reason ? [{ key: "reason", field: "Reason", before: "", after: args.reason }] : []),
+      ],
     },
     {
       readResource: async () => ((await io.readThread()) ?? {}) as Record<string, unknown>,
@@ -76,4 +82,30 @@ export async function linkThread(args: LinkArgs, io: LinkIO, store: LogStore = s
   // card drafts again from the one just linked.
   await io.supersedePendingDrafts().catch(() => {});
   return { ok: true, outcome: res.outcome, logged: res.logged, action, from_player_id: before.player_id, to_player_id: args.playerId, first_name: target.first_name };
+}
+
+// The Supabase side of linkThread, shared by the Link button's route and the automatic link a draft
+// makes when the number a player typed is on exactly one account.
+export function supabaseLinkIO(supabase: SupabaseClient, threadId: string, supersededBy: string | null): LinkIO {
+  return {
+    async readThread() {
+      const r = await supabase.from("crm_threads").select("player_id, account_confirmed_at, account_confirmed_by_user_id").eq("id", threadId).maybeSingle();
+      if (r.error) throw new Error(r.error.message);
+      return (r.data as ThreadLinkState | null) ?? null;
+    },
+    async readTarget(id) {
+      const r = await supabase.from("mdapi_users").select("id, first_name, preferable_city_normalized").eq("id", id).maybeSingle();
+      if (r.error) throw new Error(r.error.message);
+      return (r.data as { id: number; first_name: string | null; preferable_city_normalized: string | null } | null) ?? null;
+    },
+    async writeThread(patch) {
+      const r = await supabase.from("crm_threads").update(patch).eq("id", threadId);
+      if (r.error) throw new Error(r.error.message);
+    },
+    async supersedePendingDrafts() {
+      await supabase.from("crm_ai_drafts").update({ outcome: "superseded", outcome_at: new Date().toISOString(), outcome_by_user_id: supersededBy })
+        .eq("thread_id", threadId).eq("outcome", "pending");
+    },
+    now: () => new Date().toISOString(),
+  };
 }

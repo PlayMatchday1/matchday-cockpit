@@ -19,6 +19,7 @@
 // Response: { thread: <updated row>, assignee: <app_users row | null> }
 
 import { authenticateCrm } from "@/lib/crmAuth";
+import { assertThreadInScope } from "@/lib/crmScope";
 
 export const runtime = "nodejs";
 export const maxDuration = 10;
@@ -40,6 +41,10 @@ export async function PATCH(req: Request, ctx: RouteCtx) {
   const { id: threadId } = await ctx.params;
   if (!threadId || !UUID_RX.test(threadId)) {
     return Response.json({ error: "Invalid thread id" }, { status: 400 });
+  }
+  {
+    const scope = await assertThreadInScope(auth, threadId);
+    if (!scope.ok) return Response.json({ error: scope.error }, { status: scope.status });
   }
 
   let parsed: AssignBody;

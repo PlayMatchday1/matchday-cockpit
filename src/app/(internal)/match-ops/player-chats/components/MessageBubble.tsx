@@ -21,7 +21,7 @@
 // don't carry captions per Meta spec.
 
 import { useState } from "react";
-import { Download, FileText } from "lucide-react";
+import { Download, FileText, Sparkles } from "lucide-react";
 import Linkify from "linkify-react";
 import DeliveryStatusLabel, {
   type DeliveryStatus,
@@ -69,7 +69,12 @@ export type ConversationMessage = {
   // "the player is waiting" from "we already answered".
   is_auto_reply?: boolean;
   template_name?: string | null;
+  /** Set on an auto-send: no person typed it. The footer reads "Agent". */
+  auto_sent_draft_id?: string | null;
 };
+
+// A muted tone of the MatchDay green token, shared with the inbox row's "Agent:" prefix.
+export const AGENT_GREEN = "color-mix(in srgb, var(--color-mint) 58%, #5d6f66)";
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -97,7 +102,9 @@ export default function MessageBubble({
   className?: string;
 }) {
   const isInbound = msg.direction === "inbound";
+  const isAgent = !isInbound && !!msg.auto_sent_draft_id;
   const senderLabel =
+    isAgent ? "Agent" :
     msg.sender?.full_name?.trim() ||
     msg.sender?.email ||
     (msg.sent_by_user_id ? "operator" : null);
@@ -130,7 +137,10 @@ export default function MessageBubble({
   const footer = (
     <div className="mt-1 px-1 text-[10px] text-deep-green/50">
       {!isInbound && senderLabel && (
-        <span className="mr-1 font-medium">{senderLabel} ·</span>
+        <span className="mr-1 font-medium" data-testid={isAgent ? "crm-agent-sender" : undefined} style={isAgent ? { color: AGENT_GREEN } : undefined}>
+          {isAgent && <Sparkles aria-hidden className="mr-0.5 inline h-2.5 w-2.5 -translate-y-px" strokeWidth={2.2} />}
+          {senderLabel} ·
+        </span>
       )}
       <span>{formatTime(msg.sent_at)}</span>
       {!isInbound && msg.channel === "sms" && msg.segment_count > 1 && (

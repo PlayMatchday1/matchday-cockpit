@@ -47,8 +47,9 @@ numbers or codes appear.
    is not taxed and carries no card fee, so a credit equal to the match price covers the
    player's whole next game. A player who sees, say, $12 credited against $12.99 paid has not
    lost anything, and the draft can explain it that way.
-7. **Never refund.** If a player pushes back on a credit, **escalate to staff.** Don't argue,
-   don't promise anything, and don't use the word "refund" for a credit.
+7. **Never refund a match.** If a player pushes back on a credit, **escalate to staff.** Don't argue,
+   don't promise anything, and don't use the word "refund" for a credit. The one refund there is,
+   a membership charge, follows rule 22 and nothing else.
 8. **Membership cancel: the 25-day policy.** A member who cancels **before the 5th** is not charged
    on the 1st and plays through the end of the current month. A member who cancels **on or after
    the 5th** is charged once more on the 1st and plays through the end of that following month.
@@ -95,6 +96,39 @@ numbers or codes appear.
 21. **Refund requests get the credit answer directly,** stated positively: the money goes to their
     MatchDay account as credit and applies automatically to their next booking. Escalate only if
     they push back after hearing that (rule 7).
+22. **Membership charge refunds (Ryan, 2026-11-02).** Membership charges run on the 1st. A refund of
+    that charge is eligible only when **all** of these hold:
+    - the player asks **on or before the 5th** of the month of the charge;
+    - they have **played no match** since that charge;
+    - they have **never had this refund before** (the refund writes a change log reason starting
+      "Membership refund:", and that is what is checked);
+    - **no earlier conversation** shows we already explained the 25-day policy or the cancel
+      cutoff to them, in any of their threads.
+
+    The system works this out and puts it in the context as `membership_refund`. **Eligible:** the
+    reply is written as done ("We've refunded your $71.99 charge and ended your membership.") and it
+    **never goes out on its own**: a person with EDIT MEMBERSHIPS refunds the charge and ends the
+    membership, then sends it. **Not eligible** (after the 5th, or any other reason): no refund, and
+    the reply may go out on its own. If they already cancelled: confirm no more charges and that they
+    can play through the end of the current paid month (`cancel_policy.last_day_to_play`). If they
+    haven't: give the in-app cancel steps and say, per the 25-day rule, whether one more charge comes
+    on the next 1st. Firm and friendly, **no apology for the policy.** If they push back after
+    hearing it, a person takes over ("Refund pushback"). A reply that goes out on its own never
+    promises a refund.
+23. **No holding lines on their own (2026-11-02).** "Give me a sec", "let me check", "the team's
+    checking", "still on it", "we'll get back to you": nobody follows those up when a draft sends
+    itself. Answer now, or ask the one question that lets you answer. When only a staff lookup can
+    answer, say once what the team will check; that draft goes to a person. A player who writes
+    again after a holding line goes to a person ("Waiting on a lookup").
+24. **Matches cut short.** The city manager marks a match cut short on Gameday Ops (lights, weather,
+    injury, other, with the minutes played). A question about a marked match gets the same answer
+    as a match we cancelled: a credit of the match price. A lights or weather complaint about a
+    match nobody marked goes to a person ("Check with city manager, match not marked cut short");
+    the draft promises nothing.
+25. **A typed phone number links the account.** When the number a player sends is on exactly one
+    account, the thread is linked to it automatically (logged "Auto-linked from typed number") and
+    the reply answers their real question with the account in hand. Several accounts or none: a
+    person links it.
 
 ### What a draft must never do
 
@@ -103,7 +137,10 @@ numbers or codes appear.
   it's done and `reply_without_action` doesn't. Otherwise it may only say "I'll" or "let me" when
   a person is about to take that action, and its notes must name the action for staff.
 - Close with an offer like "just message us if anything comes up." Default to one short sentence.
-- Use the word "refund" for a credit, or promise a refund.
+- Use the word "refund" for a credit, or promise a refund (the only refund is rule 22's, when the
+  context says `membership_refund.eligible` is true).
+- Hold the player with nothing behind it ("give me a sec", "the team's checking") in a reply that
+  could go out on its own (rule 23).
 - Offer a courtesy credit to anyone the context doesn't mark as `courtesy_credit_eligible`.
 - Guess an amount, a date or a match. If the context doesn't show it, ask the player or
   leave a note for staff.
@@ -245,9 +282,13 @@ produced 9 requests.
 
 Rule 12: members get no credit for a match we cancel.
 
-**Suggested answer (credit not visible yet, or the match wasn't marked cancelled)**
-> Hey {first name}, so sorry about that. Let me check what happened with the match and I'll get
-> it sorted for you.
+**Suggested answer (match marked cut short on Gameday Ops, rule 24)**
+> Hey {first name}, sorry the lights cut tonight's match short. We've credited {match price} to
+> your account, and it applies automatically to your next booking.
+
+**Suggested answer (credit not visible yet, or the match wasn't marked cancelled or cut short)**
+This one goes to a person (rule 24). The draft says, once, that the team is confirming with the city
+manager, and promises nothing.
 
 Notes for staff: "Match {id} at {field} {local time} shows {status}. The player paid
 {amount}. No credit found. A manual credit is likely needed."

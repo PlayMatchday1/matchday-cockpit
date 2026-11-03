@@ -284,7 +284,7 @@ async function draftOneThread(sb: SupabaseClient, threadId: string, channel: str
   let decided = false;
   const result = await runDraft({
     ...deps, threadId, requestedBy: null, regenerate: false, now: () => now, hasKey: true,
-    async afterDraft({ draftId, output, context, msgs: all }) {
+    async afterDraft({ draftId, output, context, msgs: all, linkMiss }) {
       decided = true;
       let guest = null;
       if (output.action?.kind === "issue_guest_code" && output.action) {
@@ -301,7 +301,7 @@ async function draftOneThread(sb: SupabaseClient, threadId: string, channel: str
       }
       const lastInbound = [...all].reverse().find((m) => m.direction === "inbound");
       const d = decideAutoSend(output, {
-        context, guest, msgs: all,
+        context, guest, msgs: all, linkMiss,
         windowClosed: whatsappWindowExpired(channel, lastInbound?.sent_at ?? null, now),
         humanRepliedRecently: all.some((m) => isStaffReply(m) && now - Date.parse(m.sent_at) < HUMAN_OWNS_THREAD_MS),
       }, effective);

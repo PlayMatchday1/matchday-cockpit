@@ -11,7 +11,8 @@ export type AttentionDraft = {
   staff_notes: string | null; action: { kind: string; amount_cents: number | null } | null;
 };
 
-export type Attention = { section: "human" | "auto_sending"; reason: string | null; hold_until: string | null };
+/** error: the reason is a failure (a draft, a send or an action failed). Red is kept for these. */
+export type Attention = { section: "human" | "auto_sending"; reason: string | null; hold_until: string | null; error?: boolean };
 export const NO_DRAFT_YET = "No draft yet";
 const usd = (c: number | null) => `$${((c ?? 0) / 100).toFixed(2)}`;
 const FAILED_ACTION = new Set(["failed", "not_applied", "unknown"]);
@@ -23,14 +24,15 @@ export const isStrikeHolding = (d: AttentionDraft | null) =>
 
 export function attentionFor(a: { awaiting: boolean; draft: AttentionDraft | null; humanRepliedSinceDraft: boolean }): Attention | null {
   const d = a.draft;
-  const human = (reason: string): Attention => ({ section: "human", reason, hold_until: null });
+  const human = (reason: string, error = false): Attention => ({ section: "human", reason, hold_until: null, ...(error ? { error: true } : {}) });
   if (isStrikeHolding(d) && !a.humanRepliedSinceDraft) return human(STRIKE_DISPUTE_NOTE);
   if (!a.awaiting) return null;
   if (!d) return human(NO_DRAFT_YET);
   if (d.hold_status === "holding" || d.hold_status === "sending") return { section: "auto_sending", reason: null, hold_until: d.hold_until };
-  if (d.outcome === "failed") return human(d.error ?? "The draft failed.");
-  if (FAILED_ACTION.has(d.action_status ?? "")) return human(d.hold_note ?? "The action failed.");
-  if (d.hold_status === "cancelled" || d.hold_status === "failed") return human(d.hold_note ?? "The auto-send was cancelled.");
+  if (d.outcome === "failed") return human(d.error ?? "The draft failed.", true);
+  if (FAILED_ACTION.has(d.action_status ?? "")) return human(d.hold_note ?? "The action failed.", true);
+  if (d.hold_status === "failed") return human(d.hold_note ?? "The auto-send failed.", true);
+  if (d.hold_status === "cancelled") return human(d.hold_note ?? "The auto-send was cancelled.");
   if (d.outcome === "discarded") return human("Draft discarded");
   if (d.decision === "human") return human(d.decision_reason ?? "Needs a person");
   if (d.decision && d.decision_shadow) {

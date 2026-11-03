@@ -23,7 +23,12 @@ import {
   parseDraftOutput, priorCourtesyFromLog, staffRepliesConfirmAccount, selectExamples, discardReasonText, DISCARD_CHIPS,
   type DraftMsg, type DraftContextIn, type DraftRequest,
 } from "../src/lib/aiDraftModel";
-import { runDraft, CONFIRMED_BY_STAFF_NOTE, type DraftDeps, type NewDraftRow, type StoredDraft } from "../src/lib/aiDraftRun";
+import { runDraft, CONFIRMED_BY_STAFF_NOTE, AUTO_LINKED_NOTE, type DraftDeps, type NewDraftRow, type StoredDraft } from "../src/lib/aiDraftRun";
+import {
+  stallPhrase, isHoldingReply, waitingOnLookup, WAITING_ON_LOOKUP, membershipRefundEligibility, membershipChargeFor, matchesPlayedSince, policyExplainedBefore,
+  priorMembershipRefundFromLog, MEMBERSHIP_REFUND_REASON_PREFIX, complainsCutShort, cutShortProblem, NOT_MARKED_CUT_SHORT, nextThreadCity, cityPushRecipients, ESCALATE_AFTER_MS,
+  type RefundFacts, type RefundEligibility,
+} from "../src/lib/aiDraftPolicy";
 import { applyDraftAction, creditReason, guestCodeBody, guestCodeFor, guestCodeRefusal, staffConfirmedMembership, writeStatusFrom, type ActionIO } from "../src/lib/aiDraftAction";
 import { buildRecordedFields, type CameraRow } from "../src/lib/aiDraftCamera";
 import { attentionFor, rowAttention, humanPushDue, humanPushPath, STRIKE_DISPUTE_NOTE, type AttentionDraft } from "../src/lib/crmAttention";
@@ -33,7 +38,7 @@ import { draftOutcomePatch, discardPatch } from "../src/lib/aiDraftOutcome";
 import { playbookForModel } from "../src/lib/aiDraftPlaybook";
 import { crmSendLogBody, logCrmSend } from "../src/lib/crmSendLog";
 import { linkThread, type LinkIO } from "../src/lib/crmThreadLink";
-import { phoneDigits10, extractPhoneNumbers, decideLinkSuggestion, linkSuggestionText, phoneShapes, renderTranscript, toNoteBullets, finalStaffNotes } from "../src/lib/aiDraftModel";
+import { phoneDigits10, extractPhoneNumbers, decideLinkSuggestion, linkSuggestionText, phoneShapes, renderTranscript, toNoteBullets, finalStaffNotes, type LinkSuggestion } from "../src/lib/aiDraftModel";
 import { sinceText, buildClock, scheduleWindow, fieldTokens, mentionedFields, selectSchedule, timesIn, unscheduledTimes, lateReplyProblem, staleDraftReason, matchKey, type ScheduleRow } from "../src/lib/aiDraftClock";
 import type { LogStore } from "../src/lib/changeLog";
 
@@ -1014,18 +1019,21 @@ console.log("\nMEMBERSHIP AUTO-REPLIES:");
   eq("the category can be turned on to send", AUTO_CATEGORIES.includes("membership_billing"), true);
   eq("it can never be turned on to act", AUTO_ACTION_CATEGORIES.includes("membership_billing"), false);
   eq("not turned on → human", decide([inb("How do I cancel?")], {}, context, { ...on, auto_categories: [] }).decision, "human");
-  for (const w of ["refund", "refunded", "dispute", "chargeback", "bank", "lawyer", "BBB", "scam", "fraud"]) {
+  for (const w of ["dispute", "chargeback", "bank", "lawyer", "BBB", "scam", "fraud"]) {
     const r = decide([inb(`this is about my ${w} and my membership`)]);
     ok(`HUMAN: mentions ${w}`, r.decision === "human" && r.reason === `Mentions ${w.toLowerCase()}`);
   }
   ok("POSITIVE CONTROL: \"banking\" alone isn't \"bank\"", decide([inb("I was banking on playing more, how do I cancel?")]).decision === "auto_send");
+  // CHANGED 2026-11-02 (Ryan's refund rule): a FIRST refund ask gets the policy answer on its own; it
+  // used to go to a person as "Mentions refund". Asking again after hearing it is "Refund pushback".
+  eq("a first refund ask, not eligible, auto-sends the policy answer", decide([inb("can I get a refund for this month?")]).decision, "auto_send");
   ok("only what they've said now counts: an old mention, already answered, doesn't", decide([inb("is this a scam?", 9 * H), out("Nope, we're real!"), inb("ok how do I cancel")]).decision === "auto_send");
   const toldTexts = ["We have a 25-day policy for cancels.", "You'll be charged on Nov 1 and can play through Nov 30.", "Your Nov 1 charge will still go through."];
   for (const t of toldTexts) {
     const r = decide([out(t), inb("but I just cancelled, why?")]);
-    ok(`HUMAN: already told "${t}" and they wrote back`, r.decision === "human" && r.reason === "Already told the policy in this thread");
+    ok(`HUMAN: already told "${t}" and they wrote back → Refund pushback`, r.decision === "human" && r.reason === "Refund pushback");
   }
-  ok("HUMAN: an auto-send told them, and they wrote back", decide([out(toldTexts[0], { auto_sent_draft_id: "d0" }), inb("that makes no sense")]).reason === "Already told the policy in this thread");
+  ok("HUMAN: an auto-send told them, and they wrote back", decide([out(toldTexts[0], { auto_sent_draft_id: "d0" }), inb("that makes no sense")]).reason === "Refund pushback");
   ok("POSITIVE CONTROL: unrelated earlier reply, then a question", decide([out("Your match is at 7."), inb("how do I cancel?")]).decision === "auto_send");
   ok("an out-of-hours auto-reply isn't telling them the policy", decide([out("You'll be charged on Nov 1", { is_auto_reply: true }), inb("how do I cancel?")]).decision === "auto_send");
   const steps = "To cancel your membership: Profile tab, Membership Details, scroll to the bottom, Cancel Membership.";
@@ -1040,6 +1048,190 @@ console.log("\nMEMBERSHIP AUTO-REPLIES:");
   eq("HUMAN: flag refund_pushback", decide([inb("how do I cancel")], { flags: ["refund_pushback"] }).reason, "Refund pushback");
   ok("HUMAN: a membership reply with an action", /can't carry an action/.test(decide([inb("how do I cancel")], { action: { kind: "credit", amount_cents: 1200, reason: "x" } }).reason));
   ok("HUMAN: no conversation to check, fails closed", decideAutoSend({ reply, category: "membership_billing", flags: [], action: null }, { context, windowClosed: false, humanRepliedRecently: false, guest: null }, on).decision === "human");
+}
+
+// ── 2026-11-02: no stalling, auto-link, the refund rule, cut short, the thread's city ─────────
+console.log("\nNO STALLING:");
+{
+  const on: AutoSendConfig = { auto_categories: ["veo", "booking", "match_cancelled", "logistics", "strike"], action_categories: ["match_cancelled"], credit_cap_cents: 1500, hold_minutes: 3, enabled: true, shadow: false };
+  const c = buildDraftContext(lateCancel(0));
+  const dc = (msgs?: DraftMsg[], over: Partial<DecisionContext> = {}): DecisionContext => ({ context: c, windowClosed: false, humanRepliedRecently: false, guest: null, msgs, ...over });
+  const plain = { reply: "Videos go up within 24 to 48 hours.", category: "veo", flags: [] as string[], action: null };
+  eq("POSITIVE CONTROL: a plain answer still auto-sends", decideAutoSend(plain, dc([msg("inbound", "where's my video", 1 * H)]), on).decision, "auto_send");
+  // Every one of these went out on its own between Oct 31 and Nov 2.
+  for (const r of [
+    "Thanks! Give me a sec to find your account, then I'll check on that video.",
+    "Still here, Karam! The team's looking up the account on that number and checking the charge now.",
+    "Still on it, Lion! The team's checking whether those two codes were ever applied, and we'll get back to you shortly.",
+    "Hey Mohammed, so sorry about the lights last night! Let me check what happened with the match and I'll get it sorted for you.",
+    "Hey Jose, the team's still checking on last night's Ann Richards match, and we'll update you as soon as we know.",
+    "Hey Po, I'm not seeing tonight's match on your account yet. Which field was it at? The team will check and get back to you.",
+    "Thanks Joel, we're still looking into Friday's two matches and will get back to you.",
+    "Hang tight, one sec.",
+  ]) {
+    const d = decideAutoSend({ ...plain, reply: r }, dc(), on);
+    ok(`HUMAN, stall: "${r.slice(0, 48)}…"`, d.decision === "human" && /^Holding reply nobody would follow up/.test(d.reason), d.reason);
+  }
+  for (const r of ["Your match is at 7:00 PM at Ann Richards.", "You can check your credit on the Profile tab.", "We play in the rain, and only cancel for lightning.", "What's the phone number on your MatchDay account?"]) {
+    eq(`not a stall: "${r}"`, stallPhrase(r), null);
+  }
+  ok("the strike holding line is the one exception", decideAutoSend({ reply: "Thanks for letting us know, we'll check with the match manager.", category: "strike", flags: ["strike_dispute"], action: null }, dc(), on).decision !== "human" || !/^Holding reply/.test(decideAutoSend({ reply: "Thanks for letting us know, we'll check with the match manager.", category: "strike", flags: ["strike_dispute"], action: null }, dc(), on).reason));
+  const g = guardDraft({ reply: "Let me check with the host and I'll get back to you.", staff_notes: [], category: "logistics", flags: [], offers_courtesy_credit: false, match_ids: [] }, { courtesy_credit_eligible: false });
+  ok("a stall is fine in a draft a person sends: the guard lets it through to the card", g.ok);
+
+  // ONE HOLDING LINE PER BURST.
+  const held = [msg("inbound", "where's my credit", 3 * H), msg("outbound", "Give me a sec to find your account.", 2.9 * H, { auto_sent_draft_id: "d0" }), msg("inbound", "hello?", 1 * H)];
+  eq("we held them and they wrote again → Waiting on a lookup", decideAutoSend(plain, dc(held), on), { decision: "human", reason: WAITING_ON_LOOKUP });
+  ok("  also when a person's holding line was the last thing we sent", waitingOnLookup([msg("inbound", "x", 3 * H), msg("outbound", "Let me look into it.", 2 * H, { sent_by_user_id: "u" } as Partial<DraftMsg>), msg("inbound", "does it take this long?", 1 * H)]));
+  ok("POSITIVE CONTROL: an answer was the last thing we sent → not waiting", !waitingOnLookup([msg("inbound", "x", 3 * H), msg("outbound", "Your match is at 7.", 2 * H), msg("inbound", "thanks, and Sunday?", 1 * H)]));
+  ok("  an out-of-hours auto-reply isn't our last message", !waitingOnLookup([msg("inbound", "x", 3 * H), msg("outbound", "We're back at 9am, we'll get back to you then.", 2 * H, { is_auto_reply: true }), msg("inbound", "ok", 1 * H)]));
+  ok("  nothing from the player since → not waiting", !waitingOnLookup([msg("inbound", "x", 3 * H), msg("outbound", "Let me check.", 2 * H)]));
+  ok("isHoldingReply reads our messages only", isHoldingReply(msg("outbound", "Let me check.", H)) && !isHoldingReply(msg("inbound", "let me check my calendar", H)));
+  ok("the instructions forbid holding lines", /Never write a holding line/.test(DRAFT_INSTRUCTIONS) && !/thank them and say you're checking/.test(DRAFT_INSTRUCTIONS));
+}
+
+console.log("\nAUTO-LINK FROM A TYPED NUMBER:");
+{
+  const on: AutoSendConfig = { auto_categories: ["veo", "player_cancel"], action_categories: [], credit_cap_cents: 1500, hold_minutes: 3, enabled: true, shadow: false };
+  const unlinked = async () => ({ channel: "whatsapp", player_id: null, match_ambiguous: false, account_confirmed: false });
+  const answer = JSON.stringify({ reply: "Hey Sam, your video from Saturday is up on the Veo app.", staff_notes: [], category: "veo", flags: [], offers_courtesy_credit: false, match_ids: [], image_unreadable: false, reply_without_action: "", city_guess: "", action: { kind: "none", amount_cents: null, reason: "" } });
+  // ONE account: linked, then answered with the account in hand, in the same run.
+  let linked = false; const linkCalls: number[] = []; let after: { linkMiss: unknown } | null = null;
+  const one = fake({
+    modelText: answer, msgs: [msg("outbound", "What's the phone number on your account?", 2 * H), msg("inbound", "512-555-0100", 1 * H)],
+    loadThread: async () => (linked ? { channel: "whatsapp", player_id: 7, match_ambiguous: false, account_confirmed: true } : { channel: "whatsapp", player_id: null, match_ambiguous: false, account_confirmed: false }),
+    findAccountsByPhone: async () => [{ id: 7, first_name: "Sam" }],
+    autoLink: async (id) => { linkCalls.push(id); linked = true; return true; },
+    loadContext: async () => ({ ctx: { ...lateCancel(0), firstName: "Sam" }, keys: ["account", "first_name"] }),
+    afterDraft: async (d) => { after = d; },
+  });
+  const r1 = await runDraft(one.deps);
+  eq("one account → linked to it (player 7)", linkCalls, [7]);
+  ok("  and the same run drafts WITH the account: the request carries it", one.calls.model.length === 1 && one.calls.model[0].messages[0].content.includes('"first_name": "Sam"') && one.calls.model[0].messages[0].content.includes('"account_confirmed": true'));
+  ok("  the staff notes say it was auto-linked, first", r1.status === "ok" && r1.draft.staff_notes[0] === AUTO_LINKED_NOTE);
+  ok("  no link suggestion left on the card", !("link_suggestion" in r1) || r1.link_suggestion == null);
+  ok("  and the decision isn't held back by a link miss", (after as { linkMiss: unknown } | null)?.linkMiss === null);
+  // Several accounts, or none: nothing linked, a person.
+  for (const [label, accounts, kind] of [["several accounts", [{ id: 7, first_name: "Sam" }, { id: 9, first_name: "Ana" }], "many"], ["no account", [], "none"]] as const) {
+    const calls: number[] = []; let miss: unknown = null;
+    const f = fake({ loadThread: unlinked, modelText: answer, msgs: [msg("inbound", "512 555 0100", 1 * H)], findAccountsByPhone: async () => [...accounts], autoLink: async (id) => { calls.push(id); return true; }, afterDraft: async (d) => { miss = d.linkMiss; } });
+    await runDraft(f.deps);
+    eq(`${label} → nothing linked`, calls, []);
+    eq(`  the decision gets the miss (${kind})`, (miss as { kind?: string } | null)?.kind, kind);
+    const d = decideAutoSend({ reply: "Thanks!", category: "veo", flags: [], action: null }, { context: buildDraftContext({ ...lateCancel(0), linked: false }), windowClosed: false, humanRepliedRecently: false, guest: null, linkMiss: miss as LinkSuggestion }, on);
+    ok(`  → human, saying why`, d.decision === "human" && (kind === "many" ? /on 2 accounts/ : /No account found/).test(d.reason), d.reason);
+  }
+  // A link that didn't land: drafted as unconfirmed, nothing claimed.
+  const failed = fake({ loadThread: unlinked, modelText: answer, msgs: [msg("inbound", "512 555 0100", 1 * H)], findAccountsByPhone: async () => [{ id: 7, first_name: "Sam" }], autoLink: async () => false });
+  const rf = await runDraft(failed.deps);
+  ok("a link that didn't land drafts as unconfirmed and still suggests Sam", failed.calls.model[0].messages[0].content.includes('"account_confirmed": false') && "link_suggestion" in rf && rf.link_suggestion?.kind === "one");
+  // The change log says why.
+  const rows: Record<string, unknown>[] = [];
+  const store: LogStore = { insert: async (r) => { rows.push(r as unknown as Record<string, unknown>); }, list: async () => [], resolve: async () => {} };
+  const state = { player_id: null as number | null, account_confirmed_at: null as string | null, account_confirmed_by_user_id: null as string | null };
+  const io: LinkIO = { readThread: async () => ({ ...state }), readTarget: async (id) => ({ id, first_name: "Sam", preferable_city_normalized: "ATX" }), writeThread: async (p) => { Object.assign(state, p); }, supersedePendingDrafts: async () => {}, now: () => "2026-11-02T15:00:00.000Z" };
+  const lr = await linkThread({ threadId: "t9", playerId: 7, actor: { appUserId: null, email: "auto-send@clubhouse.system" }, confinedCity: null, reason: AUTO_LINKED_NOTE }, io, store);
+  ok("the automatic link lands and logs the reason \"Auto-linked from typed number\"", lr.ok && lr.outcome === "landed" && JSON.stringify(rows[0].changes).includes("Auto-linked from typed number"));
+}
+
+console.log("\nMEMBERSHIP REFUND RULE:");
+{
+  const charge = { at: "2026-11-01T00:00:00.000Z", amountCents: 7199 };
+  const base: RefundFacts = { askedAt: "2026-11-05T22:00:00.000Z", charge, matchesSinceCharge: 0, priorRefund: false, policyExplained: false };
+  eq("ELIGIBLE: asked on the 5th (Central), nothing played, never refunded, never told", membershipRefundEligibility(base), { eligible: true, amountCents: 7199 });
+  eq("NOT on the 6th", membershipRefundEligibility({ ...base, askedAt: "2026-11-06T15:00:00.000Z" }), { eligible: false, reason: "Asked after the 5th." });
+  eq("  the day is Central: 04:30 UTC on the 6th is still the 5th", membershipRefundEligibility({ ...base, askedAt: "2026-11-06T04:30:00.000Z" }).eligible, true);
+  eq("blocked by a prior refund", membershipRefundEligibility({ ...base, priorRefund: true }), { eligible: false, reason: "Already had a membership refund." });
+  eq("blocked when the refund history can't be read", membershipRefundEligibility({ ...base, priorRefund: null }).eligible, false);
+  eq("blocked by a prior explanation", membershipRefundEligibility({ ...base, policyExplained: true }), { eligible: false, reason: "We already explained the 25-day policy to them." });
+  eq("blocked by a match played since the charge", membershipRefundEligibility({ ...base, matchesSinceCharge: 1 }).eligible, false);
+  eq("blocked when matches can't be read", membershipRefundEligibility({ ...base, matchesSinceCharge: null }).eligible, false);
+  eq("blocked with no charge", membershipRefundEligibility({ ...base, charge: null }).eligible, false);
+  eq("blocked when asked in another month", membershipRefundEligibility({ ...base, askedAt: "2026-12-02T15:00:00.000Z" }).eligible, false);
+  // The charge: the 1st of the month asked, for a membership live before it.
+  eq("the charge is Nov 1 at the membership price", membershipChargeFor({ since: "2026-06-01T00:00:00Z", price: 7199, status: "ACTIVE" }, "2026-11-03T15:00:00Z"), charge);
+  eq("a membership that began this month paid an intro, not a renewal", membershipChargeFor({ since: "2026-11-02T00:00:00Z", price: 7199, status: "ACTIVE" }, "2026-11-03T15:00:00Z"), null);
+  eq("matches played since the charge", matchesPlayedSince([{ state: "played", startDateUtc: "2026-11-02T01:00:00Z" }, { state: "played", startDateUtc: "2026-10-30T01:00:00Z" }, { state: "player_cancelled", startDateUtc: "2026-11-03T01:00:00Z" }], charge.at), 1);
+  // "Already explained": any earlier outbound, any thread, stating the policy or the cutoff.
+  const ob = (body: string, at: string, extra: Record<string, unknown> = {}) => ({ body, sent_at: at, is_auto_reply: false, ...extra });
+  ok("explained: \"25-day policy\" last month", policyExplainedBefore([ob("We have a 25-day policy for cancels.", "2026-10-02T15:00:00Z")], base.askedAt));
+  ok("explained: \"cancel before the 5th\"", policyExplainedBefore([ob("If you cancel before the 5th you won't be charged.", "2026-10-02T15:00:00Z")], base.askedAt));
+  ok("explained: \"on or after the 5th, you're charged\"", policyExplainedBefore([ob("On or after the 5th you're charged once more.", "2026-10-02T15:00:00Z")], base.askedAt));
+  ok("NOT explained: our reply to THIS message doesn't count against them", !policyExplainedBefore([ob("We have a 25-day policy.", "2026-11-05T23:00:00Z")], base.askedAt));
+  ok("NOT explained: an out-of-hours auto-reply", !policyExplainedBefore([ob("25-day policy", "2026-10-02T15:00:00Z", { is_auto_reply: true })], base.askedAt));
+  ok("POSITIVE CONTROL: an unrelated earlier reply isn't an explanation", !policyExplainedBefore([ob("Your match is at 7 on the 5th.", "2026-10-02T15:00:00Z")], base.askedAt));
+  eq("the refund's change-log reason prefix", MEMBERSHIP_REFUND_REASON_PREFIX, "Membership refund:");
+  ok("a landed refund under that prefix counts", priorMembershipRefundFromLog([{ outcome: "landed", changes: [{ key: "reason", before: "", after: "Membership refund: Nov 1 charge" }] }]));
+  ok("  one that didn't land doesn't", !priorMembershipRefundFromLog([{ outcome: "not_applied", changes: [{ key: "reason", before: "", after: "Membership refund: x" }] }]));
+  // The decision.
+  const on: AutoSendConfig = { auto_categories: ["membership_billing"], action_categories: [], credit_cap_cents: 1500, hold_minutes: 3, enabled: true, shadow: false };
+  const mctx = (refund: RefundEligibility | null) => buildDraftContext({ ...lateCancel(0, true), membership: { status: "ACTIVE", since: "2026-06-01T00:00:00Z", renews: "2026-12-01T00:00:00Z", canceledAt: null, price: 7199 }, membershipRefund: refund });
+  const ask = [msg("inbound", "I forgot to cancel, can I get a refund for Nov 1?", 1 * H)];
+  const dm = (reply: string, refund: RefundEligibility | null) => decideAutoSend({ reply, category: "membership_billing", flags: [], action: null }, { context: mctx(refund), windowClosed: false, humanRepliedRecently: false, guest: null, msgs: ask }, on);
+  eq("eligible → never auto: a person with EDIT MEMBERSHIPS", dm("We've refunded your $71.99 charge and ended your membership.", { eligible: true, amountCents: 7199 }), { decision: "human", reason: "Membership refund eligible: $71.99" });
+  eq("not eligible → the policy answer auto-sends", dm("The Nov 1 charge stands under our 25-day policy. Cancel in the app: Profile tab, Membership Details, Cancel Membership.", { eligible: false, reason: "Asked after the 5th." }).decision, "auto_send");
+  ok("not eligible and the reply promises a refund anyway → human", dm("We'll refund that for you.", { eligible: false, reason: "Asked after the 5th." }).decision === "human");
+  ok("the model sees the answer, not the facts behind it", JSON.stringify(mctx({ eligible: true, amountCents: 7199 }).membership_refund) === JSON.stringify({ eligible: true, amount: "$71.99" }));
+  const pb = playbookForModel(readFileSync("docs/support/PLAYBOOK.md", "utf8"));
+  ok("PLAYBOOK carries the rule as a house rule", /22\. \*\*Membership charge refunds/.test(pb) && /on or before the 5th/.test(pb) && /never had this refund before/.test(pb));
+  // Through runDraft: the facts are read and the answer reaches the request.
+  const f = fake({
+    now: () => Date.parse("2026-11-03T15:00:00Z"), msgs: [msg("inbound", "can I get a refund", 0)],
+    loadThread: async () => ({ channel: "sms", player_id: 42, match_ambiguous: false, account_confirmed: true }),
+    loadContext: async () => ({ ctx: { ...lateCancel(0, true), matches: [], membership: { status: "ACTIVE", since: "2026-06-01T00:00:00Z", renews: "2026-12-01T00:00:00Z", canceledAt: null, price: 7199 } }, keys: ["account", "matches"] }),
+    priorMembershipRefund: async () => false, loadPlayerOutbound: async () => [],
+  });
+  f.deps.loadMessages = async () => [{ id: "z1", direction: "inbound", body: "can I get a refund", sent_at: "2026-11-03T14:59:00Z" }];
+  await runDraft(f.deps);
+  ok("through runDraft: eligible on Nov 3 reaches the request", f.calls.model[0].messages[0].content.includes('"membership_refund": {\n    "eligible": true,\n    "amount": "$71.99"'));
+}
+
+console.log("\nMATCHES CUT SHORT:");
+{
+  const on: AutoSendConfig = { auto_categories: ["match_cancelled"], action_categories: ["match_cancelled"], credit_cap_cents: 1500, hold_minutes: 3, enabled: true, shadow: false };
+  const played = { ...lateCancel(0).matches[0], state: "played", playerCancelledAt: null, matchId: 501 };
+  const ctxCut = buildDraftContext({ ...lateCancel(0, false, true), matches: [{ ...played, cutShort: { reason: "lights", minutes_played: 25 } }] });
+  const ctxPlain = buildDraftContext({ ...lateCancel(0, false, true), matches: [played] });
+  const complaint = [msg("inbound", "the lights went out halfway through tonight, can I get a credit?", 1 * H)];
+  const credit = { reply: "Sorry the lights cut it short, we've credited $12.00.", category: "match_cancelled", flags: [] as string[], action: { kind: "credit" as const, amount_cents: 1200, reason: "cut short, lights" } };
+  const dd = (c: DraftContext, draft = credit) => decideAutoSend(draft, { context: c, windowClosed: false, humanRepliedRecently: false, guest: null, msgs: complaint }, on);
+  eq("MARKED cut short → credit the match price on its own, no courtesy rule (this player had one)", dd(ctxCut).decision, "auto_send_with_action");
+  eq("UNMARKED + a lights complaint → human, check with the city manager", dd(ctxPlain), { decision: "human", reason: NOT_MARKED_CUT_SHORT });
+  eq("  a plain reply too", dd(ctxPlain, { ...credit, action: null as never, reply: "Sorry about the lights." }).reason, NOT_MARKED_CUT_SHORT);
+  ok("marked, but over the cap → human", decideAutoSend(credit, { context: ctxCut, windowClosed: false, humanRepliedRecently: false, guest: null, msgs: complaint }, { ...on, credit_cap_cents: 1000 }).decision === "human");
+  eq("the model sees the mark", ctxCut.recent_matches[0].cut_short, { reason: "lights", minutes_played: 25 });
+  for (const t of ["the lights went out", "lights were off at 9", "no lights tonight", "game got called for lightning, ended early", "rain stopped the match", "we only played 20 minutes", "the match was cut short"]) ok(`complaint: "${t}"`, complainsCutShort(t));
+  for (const t of ["is tonight still on with the rain?", "what time does it start", "lights look great"]) ok(`not a complaint: "${t}"`, !complainsCutShort(t));
+  eq("cut-short input: a valid mark", cutShortProblem("weather", 30, null), null);
+  ok("cut-short input: other needs a note", !!cutShortProblem("other", 30, "  "));
+  ok("cut-short input: minutes must be whole", !!cutShortProblem("lights", 12.5, null) && !!cutShortProblem("lights", -1, null));
+}
+
+console.log("\nTHE THREAD'S CITY:");
+{
+  const known = (c: string) => ["ATX", "HOU", "WAW", "SATX"].includes(c);
+  eq("account first", nextThreadCity({ code: null, source: null }, { account: "ATX", field: "HOU", inferred: "WAW" }, known), { code: "ATX", source: "account" });
+  eq("then a field they named", nextThreadCity({ code: null, source: null }, { field: "HOU", inferred: "WAW" }, known), { code: "HOU", source: "field" });
+  eq("then the model's read", nextThreadCity({ code: null, source: null }, { inferred: "WAW" }, known), { code: "WAW", source: "inferred" });
+  eq("an unknown code is ignored", nextThreadCity({ code: null, source: null }, { inferred: "NYC" }, known), null);
+  eq("a staff choice is never overwritten", nextThreadCity({ code: "SATX", source: "staff" }, { account: "ATX" }, known), null);
+  eq("a lower source doesn't replace a higher one", nextThreadCity({ code: "ATX", source: "account" }, { field: "HOU" }, known), null);
+  eq("a link replaces an inferred city", nextThreadCity({ code: "HOU", source: "inferred" }, { account: "ATX" }, known), { code: "ATX", source: "account" });
+  eq("no change, no write", nextThreadCity({ code: "ATX", source: "account" }, { account: "ATX" }, known), null);
+  const staff = [
+    { id: "ryan", is_admin: true, can_access_chats: true, city_identifier: null },
+    { id: "ops", is_admin: false, can_access_chats: true, city_identifier: null },
+    { id: "waw1", is_admin: false, can_access_chats: true, city_identifier: "WAW" },
+    { id: "satx", is_admin: false, can_access_chats: false, city_identifier: "SATX" },
+    { id: "bot", is_admin: true, can_access_chats: true, city_identifier: null, is_service_account: true },
+  ];
+  eq("a Warsaw thread pushes the Warsaw staff first", cityPushRecipients(staff, { assigneeId: null, cityCode: "WAW" }, "first"), ["waw1"]);
+  eq("  then admins after 20 minutes", cityPushRecipients(staff, { assigneeId: null, cityCode: "WAW" }, "escalate"), ["ryan"]);
+  eq("a city with no chat staff: today's rule, everyone unconfined", cityPushRecipients(staff, { assigneeId: null, cityCode: "SATX" }, "first"), ["ryan", "ops"]);
+  eq("  and no second push", cityPushRecipients(staff, { assigneeId: null, cityCode: "SATX" }, "escalate"), []);
+  eq("no city yet: unconfined staff only", cityPushRecipients(staff, { assigneeId: null, cityCode: null }, "first"), ["ryan", "ops"]);
+  eq("assigned: the assignee, once", [cityPushRecipients(staff, { assigneeId: "ops", cityCode: "WAW" }, "first"), cityPushRecipients(staff, { assigneeId: "ops", cityCode: "WAW" }, "escalate")], [["ops"], []]);
+  eq("escalation waits 20 minutes", ESCALATE_AFTER_MS, 20 * 60e3);
 }
 
 // ── needs a human, strike holding replies, images ────────────────────────────────────────────
@@ -1187,8 +1379,15 @@ console.log("\nSOURCE PAIRINGS:");
   }
   const draftRoute = strip(readFileSync("src/app/api/crm/threads/[id]/ai-draft/route.ts", "utf8")) + strip(readFileSync("src/lib/aiDraftDeps.ts", "utf8")) + strip(readFileSync("src/lib/aiDraftAutoRun.ts", "utf8")).replace(/import \{ POST as sendPOST \}[^\n]*\n/, "").replace(/\/\/ The one path to a player[\s\S]*?\n\}\n/, "");
   const runSrc = strip(readFileSync("src/lib/aiDraftRun.ts", "utf8"));
-  ok("POSITIVE CONTROL: the link route writes player_id", /from\("crm_threads"\)\.update\(patch\)/.test(strip(readFileSync("src/app/api/crm/threads/[id]/link/route.ts", "utf8"))));
-  ok("drafting NEVER links on its own: no crm_threads update and no link call in the draft path", !/from\("crm_threads"\)\.update|\/link\b|linkThread/.test(draftRoute + runSrc));
+  // CHANGED 2026-11-02 (Ryan): a typed number on exactly one account links the thread automatically.
+  // What stays pinned: the draft path links ONLY through linkThread (read-back, change_log), only with
+  // the auto-link reason, and never writes player_id itself.
+  ok("POSITIVE CONTROL: the shared link IO writes the thread", /from\("crm_threads"\)\.update\(patch\)/.test(strip(readFileSync("src/lib/crmThreadLink.ts", "utf8"))));
+  ok("the draft path links through linkThread, with the auto-link reason", /linkThread\([\s\S]{0,200}reason: AUTO_LINKED_NOTE/.test(draftRoute));
+  eq("  and in exactly one place", (draftRoute.match(/linkThread\(/g) ?? []).length, 1);
+  const writesPlayer = /\.update\(\{[^}]*\bplayer_id\b|\.player_id\s*=(?!=)/;
+  ok("POSITIVE CONTROL: the pattern finds the webhook's player_id write", writesPlayer.test(strip(readFileSync("src/app/api/whatsapp/webhook/route.ts", "utf8"))));
+  ok("the draft path never writes player_id itself", !writesPlayer.test(draftRoute + runSrc));
   const card2 = strip(readFileSync("src/app/(internal)/match-ops/player-chats/components/AiDraftCard.tsx", "utf8"));
   ok("the card links only from the Link button's click (one call site, inside onClick)", (card2.match(/confirmLink\(/g) ?? []).length === 1 && /onClick=\{\(\) => void confirmLink\(/.test(card2) && (card2.match(/linkThreadToPlayer\(/g) ?? []).length === 1);
   const actionRoute = strip(readFileSync("src/app/api/crm/threads/[id]/ai-draft/action/route.ts", "utf8"));
