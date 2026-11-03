@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   CAP_MAX, CAP_MIN, CUT_OFF_NOTE, FIRST_NAME, MATCH_TOKEN, PUSH_BODY_MAX, PUSH_BODY_SOFT, PUSH_TITLE_MAX, PUSH_TITLE_SOFT, capLine, fillPush, mayCutOff, pushAfterType, pushLocked,
-  pushStatusText, pushText, reachAddsUp, reachRows, sendTimeNote, sendsToLine, skippedRows, skippedTotal,
+  pushStatusText, pushText, reachHeadline, reachModeNote, reachRows, reachWarns, sendTimeNote, sendsToText, skippedRows, skippedTotal,
   type CampaignPush, type PushForm, type PushResults, type Reach,
 } from "@/lib/offersPush";
 import { wallLabel, type MatchOpt } from "@/lib/offersModel";
@@ -159,13 +159,14 @@ export function PushReach({ campaignId, refreshKey }: { campaignId: number | nul
   return (
     <div className="flex flex-col gap-1 self-start">
       <button type="button" data-testid="offers-push-reach" onClick={() => setOpen((v) => !v)} className="flex gap-1.5 self-start rounded-[8px] px-2.5 py-1.5 text-left text-[12px]" style={{ background: O.subtle, color: O.ink }}>
-        <b>≈ {n(reach.reachable)}</b><span>reachable by push</span><span style={{ color: O.muted }}>{open ? "‹" : "›"}</span>
+        <b>{reachHeadline(reach)[0]}</b>{reachHeadline(reach)[1] && <span>{reachHeadline(reach)[1]}</span>}<span style={{ color: O.muted }}>{open ? "‹" : "›"}</span>
       </button>
       {open && (
         <div data-testid="offers-push-reach-rows" className="flex flex-col gap-0.5 rounded-[8px] px-3 py-2 text-[12px]" style={{ background: O.subtle }}>
           {reachRows(reach).map(([k, v]) => <div key={k} className="flex justify-between gap-4"><span style={{ color: O.muted }}>{k}</span><span style={{ color: O.ink }}>{v < 0 ? `− ${n(-v)}` : n(v)}</span></div>)}
           <div className="flex justify-between gap-4 border-t pt-0.5 font-semibold" style={{ borderColor: O.line, color: O.ink }}><span>Reachable</span><span>{n(reach.reachable)}</span></div>
-          {!reachAddsUp(reach) && <div style={{ color: O.warnInk }}>These don&apos;t add up to the backend&apos;s total.</div>}
+          {reachWarns(reach) && <div style={{ color: O.warnInk }}>These don&apos;t add up to the backend&apos;s total.</div>}
+          {reachModeNote(reach) && <div data-testid="offers-push-reach-mode" style={{ color: O.muted }}>{reachModeNote(reach)}</div>}
           <div style={{ color: O.muted }}>For the saved audience, if it went now.</div>
         </div>
       )}
@@ -184,7 +185,7 @@ export function SendsTo({ campaignId }: { campaignId: number | null }) {
       const r = await authed(`/api/offers/${campaignId}/push/reachable`);
       if (cancelled) return;
       const reach = r.json as unknown as Reach;
-      setLine(r.ok && typeof reach.reachable === "number" ? { text: sendsToLine(reach.reachable), bad: false } : { text: `Couldn't count who the push reaches: ${String(r.json.error ?? "no count came back")}`, bad: true });
+      setLine(r.ok && typeof reach.reachable === "number" ? { text: sendsToText(reach), bad: false } : { text: `Couldn't count who the push reaches: ${String(r.json.error ?? "no count came back")}`, bad: true });
     })();
     return () => { cancelled = true; };
   }, [campaignId]);

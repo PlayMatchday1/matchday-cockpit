@@ -26,7 +26,7 @@ import { assertAllowedHost, preflightWrite } from "../src/lib/matchdayStageApi";
 import { makePacer, OFFERS_READ_PACE_MS, READS_STOPPED } from "../src/lib/offersPacing";
 import {
   CUT_OFF_NOTE, PUSH_BODY_MAX, PUSH_BODY_SOFT, PUSH_TITLE_MAX, PUSH_TITLE_SOFT, capLine, defaultSendLocal, fillPush, mayCutOff, matchForPush, sendsToLine, pushAfterType, pushBodyOf, pushDirty, pushFormOf, pushLocked, pushProblem, pushSuggestion, pushText,
-  pushesVisible, pushStatusText, reachAddsUp, reachRows, sendTimeNote, skippedRows, skippedTotal, type CampaignPush,
+  pushesVisible, pushStatusText, reachAddsUp, reachHeadline, reachModeNote, reachRows, reachWarns, sendsToText, sendTimeNote, skippedRows, skippedTotal, type Reach, type CampaignPush,
 } from "../src/lib/offersPush";
 
 let pass = 0, fail = 0;
@@ -835,6 +835,24 @@ eq("an admin account is one; a player or a backend without the type isn't", [isA
   const r0 = { audience: 1240, heldBack: 118, noConsent: 402, noDevice: 61, capped: 23, reachable: 636 };
   eq("old app: a row and part of the sum when the backend sends it", [reachRows({ ...r0, oldApp: 40, reachable: 596 }).find(([k]) => k === "Old app"), reachAddsUp({ ...r0, oldApp: 40, reachable: 596 }), skippedRows({ heldBack: 1, noConsent: 0, noDevice: 0, oldApp: 7, capped: 0, notAllowed: 0 }).find(([k]) => k === "Old app"), skippedTotal({ heldBack: 1, noConsent: 0, noDevice: 0, oldApp: 7, capped: 0, notAllowed: 0 })], [["Old app", -40], true, ["Old app", 7], 8]);
   eq("...and no row when it doesn't (an older backend)", [reachRows(r0).some(([k]) => k === "Old app"), skippedRows({ heldBack: 1, noConsent: 0, noDevice: 0, capped: 0, notAllowed: 0 }).some(([k]) => k === "Old app"), reachRows(r0).length], [false, false, 5]);
+  // OFFER_PUSH_MODE in the reach (backend 44a0715): the backend's own int-spec numbers for off, allowlist and live.
+  {
+    const off: Reach = { mode: "off", reason: "Pushes are off", audience: 4, notAllowed: 4, heldBack: 0, noConsent: 0, noDevice: 0, oldApp: 0, capped: 0, reachable: 0 };
+    const allow: Reach = { mode: "allowlist", reason: null, audience: 4, notAllowed: 3, heldBack: 0, noConsent: 0, noDevice: 0, oldApp: 0, capped: 0, reachable: 1 };
+    const live: Reach = { mode: "live", reason: null, audience: 4, notAllowed: 0, heldBack: 0, noConsent: 1, noDevice: 0, oldApp: 0, capped: 1, reachable: 2 };
+    const view = (r: Reach) => ({ head: reachHeadline(r), note: reachModeNote(r), addsUp: reachAddsUp(r), warns: reachWarns(r), sends: sendsToText(r), notAllowedRow: reachRows(r)[1] });
+    eq("off: Pushes are off · sends to 0, everyone not allowed, adds up, no warning", view(off),
+      { head: ["Pushes are off · sends to 0", ""], note: null, addsUp: true, warns: false, sends: "Pushes are off · sends to 0.", notAllowedRow: ["Not allowed yet", -4] });
+    eq("off never says the numbers don't add up, even when they don't", [reachAddsUp({ ...off, notAllowed: 3 }), reachWarns({ ...off, notAllowed: 3 })], [false, false]);
+    eq("allowlist: the not-allowed row, the test-mode note, and it adds up with notAllowed in", view(allow),
+      { head: ["≈ 1", "reachable by push"], note: "Test mode: only allowlisted staff get pushes", addsUp: true, warns: false, sends: "Sends to 1 player.", notAllowedRow: ["Not allowed yet", -3] });
+    eq("allowlist with nobody listed: 0 reachable, still not the off line (the mode isn't off)", reachHeadline({ ...allow, notAllowed: 4, reachable: 1 - 1 }), ["≈ 0", "reachable by push"]);
+    eq("live: no note, adds up, and a sum that's off still warns (the control)", [view(live), reachWarns({ ...live, reachable: 3 })],
+      [{ head: ["≈ 2", "reachable by push"], note: null, addsUp: true, warns: false, sends: "Sends to 2 players.", notAllowedRow: ["Not allowed yet", 0] }, true]);
+    eq("without notAllowed counted, allowlist would not add up (notAllowed is part of the sum)", reachAddsUp({ ...allow, notAllowed: undefined }), false);
+    eq("a zero row is 0, never -0 (printed as \"-0\")", reachRows(live).filter(([, v]) => v === 0).every(([, v]) => Object.is(v, 0)) && reachRows(live).some(([, v]) => v === 0), true);
+    eq("an older backend (no mode, no notAllowed): no row, no note, the old headline", [reachRows(r0).some(([k]) => k === "Not allowed yet"), reachModeNote(r0), reachHeadline(r0)], [false, null, ["≈ 636", "reachable by push"]]);
+  }
   eq("staging shows the controls to anyone with Offers; production to nobody until listed", [pushesVisible("staging", "a@b.c", {}), pushesVisible("local", null, {}), pushesVisible("production", "rmancuso@playmatchday.com", {}), pushesVisible("production", "RMancuso@PlayMatchday.com", { OFFERS_PUSH_ACCOUNTS: " rmancuso@playmatchday.com " }), pushesVisible("production", "x@y.z", { OFFERS_PUSH_ACCOUNTS: "rmancuso@playmatchday.com" })], [true, true, false, true, false]);
   eq("the limit's line says what it counts", [capLine(2).includes("at most 2 marketing pushes in any 7 days"), capLine(2).includes("never count"), capLine(0).startsWith("No marketing pushes")], [true, true, true]);
   eq("at a time starts at the next whole hour", [defaultSendLocal("2026-11-02 08:37:57"), defaultSendLocal("2026-11-02 23:10:00")], ["2026-11-02 09:00", "2026-11-03 00:00"]);
