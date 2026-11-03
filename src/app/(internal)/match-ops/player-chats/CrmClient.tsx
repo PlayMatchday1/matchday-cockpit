@@ -38,6 +38,7 @@ import {
   useState,
 } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { CITY_IDENTIFIERS } from "@/lib/cityScope";
 import { CopyPhoneInline } from "@/components/CopyPhone";
 import {
   ChevronLeft,
@@ -104,7 +105,8 @@ function cityCodeForThread(t: ThreadListRow): string {
   return c && c.length > 0 ? c : UNKNOWN_CITY;
 }
 
-const PICKABLE_CITIES = KNOWN_CITY_CODES.filter((c) => !HIDDEN_CITY_CODES.has(c));
+// The cities the city route accepts (CITY_SCOPES), nothing else: a code it refuses would be a dead option.
+const PICKABLE_CITIES = CITY_IDENTIFIERS;
 
 // THE THREAD'S CITY, set by a person. It decides who sees the thread and who is pushed; a person's
 // choice is never overwritten by a draft or a link. Saved through PATCH /api/crm/threads/{id}/city.
