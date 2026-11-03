@@ -105,6 +105,15 @@ export async function GET(req: Request) {
   let q = sess.supabase.from("mdapi_reviews").select(SELECT)
     .order("start_date", { ascending: true })
     .order("api_id", { ascending: true });
+  /* ?from=YYYY-MM-DD&to=YYYY-MM-DD: only those days (the staff app's week or month, 2026-11-02). It
+   * read every review ever, 29,633 rows in 30 pages, about 5.5 s, to show one week. The desktop page
+   * sends neither and reads everything as before. start_date is a wall clock, so the caller widens
+   * the range by a day and filters exactly. */
+  const sp = new URL(req.url).searchParams;
+  const dayRx = /^\d{4}-\d{2}-\d{2}$/;
+  const fromQ = sp.get("from"), toQ = sp.get("to");
+  if (fromQ && dayRx.test(fromQ)) q = q.gte("start_date", `${fromQ}T00:00:00`);
+  if (toQ && dayRx.test(toQ)) q = q.lte("start_date", `${toQ}T23:59:59`);
   if (scopeIdentifier) {
     const names = rawCityNamesFor(scopeIdentifier);
     // A scope that maps to no city_name must return NOTHING, never everything. `.in` with an empty

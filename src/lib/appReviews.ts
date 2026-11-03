@@ -1,8 +1,9 @@
 import "server-only"; // no-op under --conditions=react-server
 // STAFF APP OPS · REVIEWS (Ryan, 2026-11-02). VIEW ONLY. The desktop Reviews page's own data and rules:
 //
-//   ROWS      GET /api/reviews, called in process with the caller's token, so its city scope (SQL,
-//             from the session) applies unchanged; then the desktop's own row shaping and fake filter
+//   ROWS      GET /api/reviews?from&to, called in process with the caller's token, so its city scope
+//             (SQL, from the session) applies unchanged; only the period's days (a day either side,
+//             then filtered exactly), never every review ever; then the desktop's own row shaping and fake filter
 //             (reviewsData: parseLocal, canonCity, isRealReview on mdapi_users.is_fake_player or a
 //             fake email).
 //   FIGURES   reviewsDerive.derivePeriod over the period's rows: average, reviews, matches, the
@@ -45,8 +46,9 @@ const playerName = (r: ReviewRow) => {
 export type ScopedRows = { rows: ReviewRow[]; raw: Map<number, string>; scope: string | null; replied: Set<number> };
 
 /** Every review the caller may see, shaped and cleaned as the desktop does, plus the reply marks. */
-export async function loadReviewRows(req: Request, sb: SupabaseClient): Promise<ScopedRows | { error: string; status: number }> {
-  const c = await callDesktop(req, reviewsGet, "/api/reviews");
+export async function loadReviewRows(req: Request, sb: SupabaseClient, from: string, to: string): Promise<ScopedRows | { error: string; status: number }> {
+  const day = (s: string, by: number) => { const d = new Date(`${s}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + by); return d.toISOString().slice(0, 10); };
+  const c = await callDesktop(req, reviewsGet, `/api/reviews?from=${day(from, -1)}&to=${day(to, 1)}`);
   if (!c.ok || !c.json) return { error: String(c.json?.error ?? `HTTP ${c.status}`), status: c.status };
   const fakes = new Set<string>();
   for (let from = 0; ; from += 1000) {
