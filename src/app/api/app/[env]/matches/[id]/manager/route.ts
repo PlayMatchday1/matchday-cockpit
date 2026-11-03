@@ -11,6 +11,7 @@
 // same thing the desktop panel says.
 
 import { authenticateApp, readRefusal } from "@/lib/appAuth";
+import { clearToday } from "@/lib/appTodayCache";
 import { isEnv } from "@/lib/appLive";
 import { apiGet } from "@/lib/matchdayStageApi";
 import { callDesktop, passThrough } from "@/lib/appCall";
@@ -85,6 +86,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
   try {
     const c = await callDesktop(req, matchPut, `/api/matchday/${g.env}/matches/${g.id}`, { method: "PUT", body: { changes, source: "Staff app · Manager Schedule" } }, { env: g.env, id: g.id });
     if (!c.ok) return passThrough(c);
+    clearToday(g.env);
     // THE READ-BACK: the match from MatchDay, now.
     const live = await apiGet<Row>(g.env, `/admin/matches/${g.id}`);
     const readBack = {

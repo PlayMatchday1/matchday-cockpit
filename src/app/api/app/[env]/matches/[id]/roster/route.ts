@@ -28,6 +28,7 @@
 // AFTER EVERY WRITE, A LIVE READ-BACK of the match and roster, compared with what was asked for.
 
 import { randomUUID } from "node:crypto";
+import { clearToday } from "@/lib/appTodayCache";
 import { authenticateApp, readRefusal } from "@/lib/appAuth";
 import { cityAllowed } from "@/lib/appModel";
 import { countedPlayers, fetchPlayersLive, isEnv } from "@/lib/appLive";
@@ -301,6 +302,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
       return Response.json({ error: first.error ?? "Refused.", steps }, { status: first.status });
     }
 
+    if (steps.length) clearToday(env);
     const after = await readLive(env, id);
     check(after);
     return Response.json({

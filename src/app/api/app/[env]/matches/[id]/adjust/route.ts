@@ -18,6 +18,7 @@
 // says plainly where the read-back disagrees with what was asked for.
 
 import { randomUUID } from "node:crypto";
+import { clearToday } from "@/lib/appTodayCache";
 import { authenticateApp, readRefusal } from "@/lib/appAuth";
 import { cityAllowed } from "@/lib/appModel";
 import { fetchPlayersLive, isEnv } from "@/lib/appLive";
@@ -122,6 +123,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
       return Response.json({ error: first.error ?? "Refused.", steps }, { status: first.status });
     }
 
+    if (steps.length) clearToday(env);
     // THE READ-BACK. Live, after every write, and compared field by field with what was asked.
     const after = await readLive(env, id);
     const expectFakes = wantSpots != null ? fakesFor(after.capacity, wantSpots, after.real) : null;
