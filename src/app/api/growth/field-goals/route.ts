@@ -24,7 +24,8 @@
  */
 
 import { authenticateCapability } from "@/lib/capabilityAuth";
-import { selectAll } from "@/lib/supabasePagination";
+import { selectAllParallel } from "@/lib/supabasePagination";
+import { unstable_cache } from "next/cache";
 import {
   GOAL_YEAR, MONTH_LABELS, businessMonthIndex, businessYesterday, countsTowardGoals, dailyAverage,
   daysElapsed, matchMonthIndex, monthKey, playedByYesterday, rowBelongsToGoalYear, rowCountsTowardTotals, rowKeyForField,
@@ -53,14 +54,22 @@ export async function GET(req: Request) {
     const yesterday = businessYesterday(now);
 
     // ── every match the year counts, through the one filter ────────────────────────────────────
-    const raw = await selectAll<GoalMatch & { field_title: string | null; city_identifier: string | null }>(() =>
-      auth.supabase
-        .from("mdapi_matches")
-        .select("field_id, field_title, city_identifier, start_date, player_count, is_cancelled")
-        .gte("start_date", `${year}-01-01T00:00:00`)
-        .lt("start_date", `${year + 1}-01-01T00:00:00`)
-        .is("deleted_at", null)
-        .order("api_id"));
+    /* CACHED TEN MINUTES PER BUSINESS DAY, READ IN PARALLEL (2026-11-02): every 2026 match, about
+     * 5,400 rows in 6 pages one after another, 0.9 s, on every load of this page and of the staff
+     * app's Goals tab. The rows are the same for every account (the city filter is applied below,
+     * after this) and the mirror they come from syncs a few times a day. */
+    type YearRow = GoalMatch & { field_title: string | null; city_identifier: string | null };
+    const yearQuery = () => auth.supabase
+      .from("mdapi_matches")
+      .select("field_id, field_title, city_identifier, start_date, player_count, is_cancelled")
+      .gte("start_date", `${year}-01-01T00:00:00`)
+      .lt("start_date", `${year + 1}-01-01T00:00:00`)
+      .is("deleted_at", null)
+      .order("api_id");
+    const raw = await unstable_cache(
+      () => selectAllParallel<YearRow>(yearQuery, () => auth.supabase.from("mdapi_matches").select("api_id", { count: "exact", head: true })
+        .gte("start_date", `${year}-01-01T00:00:00`).lt("start_date", `${year + 1}-01-01T00:00:00`).is("deleted_at", null)),
+      ["field-goals-year-v1", String(year), yesterday], { revalidate: 600, tags: ["field-goals"] })();
     /* THE ROW SET COMES FROM EVERY COUNTED MATCH; ONLY THE SPOTS ARE FILTERED. Filtering here
      * instead deleted two whole fields from the page: Turf On (Houston, 14 matches) and One Touch
      * (Atlanta, 13), both signed and both starting 1 October, so every match they have is still
