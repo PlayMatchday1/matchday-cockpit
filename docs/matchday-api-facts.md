@@ -216,7 +216,15 @@ POST {api}/files            Authorization: Bearer <token>
 -> { "uploadURL": "https://<bucket>.s3.us-west-1.amazonaws.com/images/<uuid>?X-Amz-…" }
 ```
 
-Staging returns **`uploadURL` and no other key**. Retool reads
+**UPDATED 2026-11-03: staging now returns `uploadURL`, `header` and `fileKey`.** Evidence: the Clubhouse
+`POST /api/covers/fields/3` on the staging Clubhouse (OFFERS_ENV=staging), `entityContent:"extraCover"`, the answer's
+keys logged without the URL: `["uploadURL","header","fileKey"]`, `fileKey=images/a30e477e-9a15-4abc-ada0-a10d3b9dbbde`,
+host `matchday-stage.s3.us-west-1.amazonaws.com`, `X-Amz-SignedHeaders=host`, `x-amz-tagging=field=3&image=extraCover`
+in the query. The PUT landed, register LANDED, and the image served from `images-stage.playmatchday.com/images/<key>`
+(200, image/jpeg, bytes identical to the file sent; the bucket URL served the same). The rest of this entry is the
+2026-08-29 measurement, before staging had the field-covers backend.
+
+Staging (2026-08-29) returned **`uploadURL` and no other key**. Retool reads
 `getUploadedUrlField.data.header['x-amz-tagging']` for the PUT's header — that path does not
 exist, so it sends an empty header and the upload works anyway. Production's response shape is
 **UNKNOWN**; probing it is a non-GET against production.

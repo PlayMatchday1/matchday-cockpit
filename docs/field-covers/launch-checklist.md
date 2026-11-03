@@ -75,6 +75,9 @@ are under "Later" at the end.**
       `fileKey` as `images/<uuid>`, `header`), and from `uploadURL` the value of `X-Amz-SignedHeaders` and whether
       `x-amz-tagging` is in the query string. `SignedHeaders` must be `host` alone, or covers' PUT (no tag header) fails.
       Then the same on production, read-only in effect (it creates no row), before the first production cover.
+  - **Staging, 2026-11-03: PASS.** Keys `["uploadURL","header","fileKey"]`, `fileKey=images/a30e477e-…`, host
+    `matchday-stage.s3.us-west-1.amazonaws.com`, `X-Amz-SignedHeaders=host`, `x-amz-tagging=field=3&image=extraCover` in
+    the query (field 3, cover "ZZ test", since removed). Production: still to do.
 - [ ] **The host guard:** the PUT goes to `matchday-stage.s3.us-west-1.amazonaws.com` over https. The Clubhouse refuses
       any other parsed host (`assertCoverUploadHost`).
 - [ ] **The object:** it exists with the `public-read` ACL and its `x-amz-tagging` reads `field=<id>&image=extraCover`.
