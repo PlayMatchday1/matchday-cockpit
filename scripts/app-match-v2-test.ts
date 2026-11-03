@@ -41,6 +41,9 @@ is("9 to 8 a side takes one fake off the full team, highest bib first", overflow
 is("9 to 7 takes both of that team's fakes", overflowFakes(nine, 7), [9, 8]);
 is("presence control: a size that fits takes nothing", overflowFakes(nine, 9), []);
 is("real players alone overflowing is null, never a real removal", overflowFakes(nine, 6), null);
+const leftover = [P(1, 1, 1, false), P(2, 1, 10, true), P(3, 1, 12, true), P(4, 1, 2, true)];
+is("a fake on a bib above the new size comes off even when the team fits", overflowFakes(leftover, 9), [3, 2]);
+is("presence control: at 12 a side those bibs stay", overflowFakes(leftover, 12), []);
 is("3 teams writes the total only", sizeWrites({ maxPlayerCount: 27 }, 3, 8), { maxPlayerCount: 24 });
 is("2 teams writes the stored size, raising the rung", sizeWrites({ maxPlayerCount: 18, maxTeamSize2Team: 18 }, 2, 10), { maxPlayerCount: 20, maxTeamSize2Team: 20 });
 is("2 teams going down leaves a higher rung", sizeWrites({ maxPlayerCount: 20, maxTeamSize2Team: 20 }, 2, 9), { maxPlayerCount: 18 });

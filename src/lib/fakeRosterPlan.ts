@@ -143,6 +143,37 @@ export function planFakeRoster(opts: {
   return { ...base, removes };
 }
 
+/* WHERE EACH ADDED FAKE GOES (Ryan, 2026-11-02). Fakes are added ONE AT A TIME with the single
+ * add-fake call, into open bibs inside the team size, never the batch call: the batch picked the
+ * teams itself, and when MatchDay's pool of fake accounts runs out its lookup returns the first user
+ * in the table instead (staging: player 398, "Deleted Account", booked nine times, read back as
+ * real). Each slot goes to the team holding the fewest players, lowest team number on a tie, at its
+ * lowest free bib from 1 to the size. Fewer slots than asked when the teams are full; none when the
+ * capacity does not divide into the teams. */
+export function openFakeSlots(rows: PlanRow[], teamNumbers: number[], capacity: number, n: number): { team: number; playerNumber: number }[] {
+  const teams = [...teamNumbers].sort((a, b) => a - b);
+  if (teams.length === 0 || capacity <= 0 || capacity % teams.length !== 0) return [];
+  const size = capacity / teams.length;
+  const live = (rows ?? []).filter((r) => rosterRowCounts(r));
+  const count = new Map(teams.map((t) => [t, live.filter((r) => Number(r.team) === t).length]));
+  const taken = new Map(teams.map((t) => [t, new Set(live.filter((r) => Number(r.team) === t).map((r) => Number(r.playerNumber)))]));
+  const out: { team: number; playerNumber: number }[] = [];
+  for (let i = 0; i < n; i++) {
+    let pick: number | null = null;
+    for (const t of teams) {
+      const free = (count.get(t) ?? 0) < size && [...Array(size).keys()].some((k) => !taken.get(t)!.has(k + 1));
+      if (free && (pick == null || (count.get(t) ?? 0) < (count.get(pick) ?? 0))) pick = t;
+    }
+    if (pick == null) break;
+    let bib = 1;
+    while (taken.get(pick)!.has(bib)) bib++;
+    out.push({ team: pick, playerNumber: bib });
+    taken.get(pick)!.add(bib);
+    count.set(pick, (count.get(pick) ?? 0) + 1);
+  }
+  return out;
+}
+
 /** The line the operator is shown, and the line written to the change log. */
 export function fakePlanNote(plan: FakePlan, target: number): string {
   if (plan.refusal) return plan.refusal;

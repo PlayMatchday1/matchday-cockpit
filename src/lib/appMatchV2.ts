@@ -57,18 +57,21 @@ export function sizeRefusal(teamCount: number, perTeam: number, teamReals: reado
   if (realTotal > perTeam * teamCount) return `${realTotal} real players do not fit ${teamCount} teams of ${perTeam}.`;
   return teamShapeError(perTeam * teamCount, teamCount);
 }
-/** The fakes a smaller size takes off first: on each team, as many as it holds past the new size,
- *  highest bib first. Never a real player; null when a team's real players alone overflow it. */
+/** The fakes a smaller size takes off first: on each team, every fake on a bib above the new size
+ *  (a bib 10 left from 12 a side would otherwise sit on a 9-a-side team), then as many more as the
+ *  team still holds past the size, highest bib first. Never a real player; null when a team's real
+ *  players alone overflow it. */
 export function overflowFakes(players: readonly { userMatchId: number | null; team: number | null; bib: number | null; fake: boolean }[], perTeam: number): number[] | null {
   const out: number[] = [];
   const teams = new Set(players.map((p) => p.team).filter((t): t is number => t != null));
   for (const t of teams) {
     const on = players.filter((p) => p.team === t);
-    const over = on.length - perTeam;
-    if (over <= 0) continue;
     const fakes = on.filter((p) => p.fake && p.userMatchId != null).sort((a, b) => (b.bib ?? 0) - (a.bib ?? 0));
-    if (fakes.length < over) return null;
-    out.push(...fakes.slice(0, over).map((p) => p.userMatchId as number));
+    const high = fakes.filter((p) => (p.bib ?? 0) > perTeam);
+    const over = on.length - perTeam - high.length;
+    const rest = fakes.filter((p) => (p.bib ?? 0) <= perTeam);
+    if (over > rest.length) return null;
+    out.push(...high.map((p) => p.userMatchId as number), ...rest.slice(0, Math.max(0, over)).map((p) => p.userMatchId as number));
   }
   return out;
 }

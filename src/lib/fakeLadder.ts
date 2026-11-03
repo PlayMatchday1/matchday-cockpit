@@ -145,6 +145,16 @@ export function spotsLeftWriteDiff(
 export const spotsLeftNow = (ladder: Ladder, hoursToKickoff: number): number =>
   Number(ladder[rungKey(markInForce(hoursToKickoff))] ?? 0);
 
+/* THE FAKE COUNT A RESIZE LEAVES (Ryan, 2026-11-02): the stored spots left is kept and the fakes
+ * follow the capacity, so a smaller match needs fewer. The one rule for every team size write, the
+ * staff app's and the desktop Save's alike; both reach it through the fakes route's followSpotsLeft. */
+export function fakesFollowingSpotsLeft(match: Record<string, unknown>, real: number, nowMs: number): { target: number; spotsLeft: number; capacity: number } {
+  const ladder: Ladder = Object.fromEntries(RUNG_KEYS.map((k) => [k, Number(match[k] ?? 0)]));
+  const capacity = Number(match.maxPlayerCount ?? 0);
+  const spotsLeft = spotsLeftNow(ladder, (Date.parse(String(match.startDateUtc)) - nowMs) / 3_600_000);
+  return { target: fakesFor(capacity, spotsLeft, real), spotsLeft, capacity };
+}
+
 /* ── THE DEFAULT LADDER: FIXED VALUES (Ryan, 2026-10-24) ──────────────────────────────────────
  * Back to fixed values, replacing the capacity-relative ladder of 2026-10-23 (capacity −2 / −2 /
  * −3 / −2 / capacity), which ran for one day:

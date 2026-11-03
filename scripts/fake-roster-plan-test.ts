@@ -4,7 +4,7 @@
  * THE ASSERTION THIS FILE EXISTS FOR is "a real player is never in a removal plan". Everything else
  * here is arithmetic; that one is the safety property.
  */
-import { planFakeRoster, fakePlanNote, type PlanRow } from "../src/lib/fakeRosterPlan";
+import { planFakeRoster, fakePlanNote, openFakeSlots, type PlanRow } from "../src/lib/fakeRosterPlan";
 
 let pass = 0, fail = 0;
 const fails: string[] = [];
@@ -173,6 +173,18 @@ const real = (team: number, playerNumber: number | null, extra: Partial<PlanRow>
   const p = planFakeRoster({ rows, capacity: 0, targetFakes: 1 });
   is("no capacity: the ceiling does not fire", p.refusal, null);
   is("no capacity: two removals planned", p.removes.length, 2);
+}
+
+// ── single adds go into open bibs inside the size, the emptier team first ────────────────────────
+{
+  umId = 10000;
+  const rows = [real(1, 1), fake(1, 2), fake(1, 3), real(2, 1)];
+  is("2 x 4: three slots, team 2 first, lowest free bibs", openFakeSlots(rows, [1, 2], 8, 3), [{ team: 2, playerNumber: 2 }, { team: 2, playerNumber: 3 }, { team: 1, playerNumber: 4 }]);
+  is("never past the size: 5 asked, 4 open", openFakeSlots(rows, [1, 2], 8, 5).length, 4);
+  is("a bib above the size is never offered", openFakeSlots([real(1, 1)], [1, 2], 4, 4).every((s) => s.playerNumber <= 2), true);
+  is("a full team takes none", openFakeSlots([real(1, 1), real(1, 2), real(2, 1)], [1, 2], 4, 3), [{ team: 2, playerNumber: 2 }]);
+  is("capacity that does not divide: no slots", openFakeSlots(rows, [1, 2], 9, 2), []);
+  is("presence control: one slot asked, one given", openFakeSlots(rows, [1, 2], 8, 1).length, 1);
 }
 
 console.log(`fake-roster-plan: ${pass} passed, ${fail} failed`);
