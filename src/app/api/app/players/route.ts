@@ -52,17 +52,20 @@ async function getRoute(req: Request) {
   try {
     const t0 = Date.now();
     // Downloads (both pages) and Meta: the Acquisition route per period; Android from app_downloads.
+    // TIMING (2026-11-02): each read is timed and a slow answer is logged with the breakdown.
+    const timed = async <T,>(label: string, p: Promise<T>) => { const s = Date.now(); const r = await p; parts.push(`${label} ${Date.now() - s}ms`); return r; };
+    const parts: string[] = [];
     const [acq, android, stale] = await Promise.all([
-      Promise.all(periods.map((x) => acquisitionPeriod(auth.supabase, x, current(x)))),
-      Promise.all(periods.map((x) => androidPeriod(auth.supabase, x, current(x)))),
-      downloadSyncStale(auth.supabase),
+      timed("acquisition", Promise.all(periods.map((x) => acquisitionPeriod(auth.supabase, x, current(x))))),
+      timed("android", Promise.all(periods.map((x) => androidPeriod(auth.supabase, x, current(x))))),
+      timed("sync-stale", downloadSyncStale(auth.supabase)),
     ]);
     const through = { iphone: acq[SEL].iphoneThrough, android: android[SEL].androidThrough, meta: acq[SEL].metaThrough };
     const downloads = (i: number) => (scope ? null : { iphone: acq[i].iphone, android: android[i].android, total: acq[i].iphone == null ? null : acq[i].iphone! + android[i].android });
 
     let out: Record<string, unknown>[];
     if (page === "activity") {
-      const act = await activityPeriods(auth.supabase, periods, today);
+      const act = await timed("activity", activityPeriods(auth.supabase, periods, today));
       out = periods.map((x, i) => {
         const a = act[i];
         const cityNames = scope ? [scope.city] : [...new Set([...ACTIVE_CITIES, ...Object.keys(a.cities).filter((c) => (a.cities[c].spots ?? 0) > 0 && c !== "Unassigned")])];
@@ -84,6 +87,8 @@ async function getRoute(req: Request) {
       if (!last.some((c) => c.city === cityQ)) return Response.json({ error: "That city is not in your view." }, { status: 404 });
       for (const o of out) o.cities = (o.cities as { city: string }[]).filter((c) => c.city === cityQ);
     }
+    const ms = Date.now() - t0;
+    if (ms > 1500) console.warn(`[app-players] slow ${ms}ms page=${page} kind=${kind} from=${p.from}: ${parts.join(", ")}`);
     return Response.json({
       page, kind, today, scopeCity: scope?.city ?? null, through,
       // A download source with no clean sync in 3 days: the Downloads tile names its last day.

@@ -292,12 +292,21 @@ async function getRoute(req: Request) {
         .filter((x): x is number => typeof x === "number"),
     ),
   );
+  /* THE ROW LOOKUPS START TOGETHER (2026-11-02). Each needs only the list's ids, so each query is
+   * sent now and awaited where it was; they ran one after another, about six round trips. */
+  const earlyThreadIds = threads.map((t) => t.id);
+  const earlyAssigneeIds = Array.from(new Set(threads.map((t) => t.assigned_to_user_id).filter((x): x is string => typeof x === "string")));
+  const earlyAwaitingIds = threads.filter((t) => isAwaitingReply(t)).map((t) => t.id);
+  const playersQ = playerIds.length > 0 ? Promise.resolve(supabase.from("mdapi_users").select("id, first_name, last_name, preferable_city_normalized, is_member").in("id", playerIds)) : null;
+  const assigneesQ = earlyAssigneeIds.length > 0 ? Promise.resolve(supabase.from("app_users").select("id, email, full_name").in("id", earlyAssigneeIds)) : null;
+  const readsQ = viewerId && earlyThreadIds.length > 0 ? Promise.resolve(supabase.from("crm_thread_reads").select("thread_id, user_id, last_read_at").in("thread_id", earlyThreadIds)) : null;
+  const logQ = earlyAwaitingIds.length > 0 ? Promise.resolve(supabase.from("crm_thread_status_log").select("thread_id, performed_at, action").in("thread_id", earlyAwaitingIds).in("action", ["reopen", "auto_reopen"])) : null;
+  const draftsQ = earlyThreadIds.length > 0 ? Promise.resolve(supabase.from("crm_ai_drafts").select("thread_id, decision, decision_shadow, hold_status, hold_until, action, created_at")
+    .in("thread_id", earlyThreadIds).eq("outcome", "pending").not("decision", "is", null).order("created_at", { ascending: true })) : null;
+
   let playersById = new Map<number, PlayerRow>();
   if (playerIds.length > 0) {
-    const playersRes = await supabase
-      .from("mdapi_users")
-      .select("id, first_name, last_name, preferable_city_normalized, is_member")
-      .in("id", playerIds);
+    const playersRes = await playersQ!;
     if (playersRes.error) {
       console.error("[crm:threads.list] player lookup error", playersRes.error);
     } else {
@@ -317,10 +326,7 @@ async function getRoute(req: Request) {
   );
   let assigneesById = new Map<string, AssigneeRow>();
   if (assigneeIds.length > 0) {
-    const assigneesRes = await supabase
-      .from("app_users")
-      .select("id, email, full_name")
-      .in("id", assigneeIds);
+    const assigneesRes = await assigneesQ!;
     if (assigneesRes.error) {
       console.error(
         "[crm:threads.list] assignee lookup error",
@@ -342,10 +348,7 @@ async function getRoute(req: Request) {
   const readsByThreadAll = new Map<string, string>(); // thread_id → MAX(last_read_at)
   const readsForViewer = new Map<string, string>(); // thread_id → viewer's last_read_at
   if (viewerId && threadIds.length > 0) {
-    const readsRes = await supabase
-      .from("crm_thread_reads")
-      .select("thread_id, user_id, last_read_at")
-      .in("thread_id", threadIds);
+    const readsRes = await readsQ!;
     if (readsRes.error) {
       console.error("[crm:threads.list] reads lookup error", readsRes.error);
     } else {
@@ -397,11 +400,7 @@ async function getRoute(req: Request) {
   if (awaitingIds.length > 0) {
     // Episode start = latest reopen/auto_reopen per thread, else created_at.
     const episodeStartMs = new Map<string, number>();
-    const logRes = await supabase
-      .from("crm_thread_status_log")
-      .select("thread_id, performed_at, action")
-      .in("thread_id", awaitingIds)
-      .in("action", ["reopen", "auto_reopen"]);
+    const logRes = await logQ!;
     if (logRes.error) {
       console.error("[crm:threads.list] status-log lookup error", logRes.error);
     } else {
@@ -482,8 +481,7 @@ async function getRoute(req: Request) {
   // here leaves rows without a tag rather than an empty inbox.
   const autoByThread = new Map<string, Record<string, unknown>>();
   if (threadIds.length > 0) {
-    const ar = await supabase.from("crm_ai_drafts").select("thread_id, decision, decision_shadow, hold_status, hold_until, action, created_at")
-      .in("thread_id", threadIds).eq("outcome", "pending").not("decision", "is", null).order("created_at", { ascending: true });
+    const ar = await draftsQ!;
     if (ar.error) console.error("[crm:threads.list] auto-send lookup error", ar.error);
     else for (const a of ar.data ?? []) autoByThread.set(a.thread_id as string, a);
   }
