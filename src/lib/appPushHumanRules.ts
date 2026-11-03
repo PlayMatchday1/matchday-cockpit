@@ -1,6 +1,7 @@
 // The pure rules of the staff app's Needs a human push (appPushHuman.ts), apart so they run in tests.
 
 import { NO_DRAFT_YET, type Attention } from "./crmAttention";
+import { cityPushRecipients } from "./aiDraftPolicy";
 
 /** The tick drafts a thread 90 s after its last player message (aiDraftAutoRun DRAFT_AFTER_MS); two more
  *  ticks of grace before "No draft yet" is taken as final. */
@@ -27,14 +28,17 @@ export function settledHuman(a: Attention & { entered_at: string }, now: number,
 
 type Staff = { id: string; is_admin?: boolean | null; can_access_chats?: boolean | null; is_service_account?: boolean | null; city_identifier?: string | null };
 
-/** The assignee; with nobody assigned, every chat staff member the inbox shows an unassigned thread to:
- *  admin or Player Chats, not a service account, and not city-confined (crmScope never lists an
- *  unassigned thread to a confined account). */
-export function humanRecipients(staff: Staff[], assigneeId: string | null): string[] {
-  if (assigneeId) return staff.some((u) => u.id === assigneeId && u.is_service_account !== true) ? [assigneeId] : [];
-  return staff.filter((u) => u.is_service_account !== true && (u.is_admin === true || u.can_access_chats === true)
-    && !(typeof u.city_identifier === "string" && u.city_identifier.trim())).map((u) => u.id);
+/** The first push. The assignee; with nobody assigned, the thread's city's chat staff when the city has
+ *  any (2026-11-02), otherwise every unconfined chat staff member (admin or Player Chats, not a service
+ *  account). A confined account only ever sees its own city's threads (crmScope), so it is only pushed
+ *  those. Admins join after ESCALATE_AFTER_MS with no staff reply: escalationRecipients. */
+export function humanRecipients(staff: Staff[], assigneeId: string | null, cityCode: string | null = null): string[] {
+  return cityPushRecipients(staff, { assigneeId, cityCode }, "first");
 }
+export function escalationRecipients(staff: Staff[], assigneeId: string | null, cityCode: string | null): string[] {
+  return cityPushRecipients(staff, { assigneeId, cityCode }, "escalate");
+}
+export const escalationPath = (inboundMessageId: string) => `/crm/human-push/${inboundMessageId}/escalate`;
 
 /** "Bryan O. · ATX · Category other always goes to a person." An unlinked thread is named by the last
  *  four digits of its number; a missing city is left out. */

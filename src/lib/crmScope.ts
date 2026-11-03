@@ -1,9 +1,14 @@
-// THE CITY BOUNDARY FOR PLAYER CHATS, in one place. crm_threads carries no city and no match link,
-// so a thread belongs to a city through its ASSIGNEE (see the long note in
-// /api/crm/threads/route.ts). The listing used to work this out inline and every other thread route
-// did not work it out at all: a confined account that knew a thread id could read it, send to it,
-// resolve it and mark it read. Ryan, 2026-10-30: every route that names a thread refuses one
-// outside the caller's scope by the listing's own rule, and every count counts only that scope.
+// THE CITY BOUNDARY FOR PLAYER CHATS, in one place.
+//
+// SINCE 2026-11-02 A THREAD CARRIES ITS OWN CITY: crm_threads.city_code (migration 0250), set from the
+// linked player's city, a field named in the conversation, the draft's read of the text, or a person
+// on the thread header. It replaced the rule that a thread belonged to a city through its ASSIGNEE,
+// which left every unassigned thread outside every city.
+//
+// A confined account sees, counts, opens, drafts on and acts on ONLY threads whose city_code is its
+// city. A thread with no city yet is outside every confined scope: unconfined staff see it, confined
+// staff don't. Every route that names a thread refuses one outside the caller's scope, and every count
+// counts only that scope (Ryan, 2026-10-30, unchanged).
 //
 // Unconfined callers get null / ok with no query, so desktop behaviour for them is unchanged.
 
@@ -15,34 +20,30 @@ type Scoped = { confinedCity: string | null; supabase: SupabaseClient };
 
 const UUID_RX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** No assignee in the city => nothing can belong to it. A sentinel keeps the filter ON. */
-export const NO_ASSIGNEE = "00000000-0000-0000-0000-000000000000";
+/** The city a caller's thread queries filter on, or null when unconfined. */
+export const crmScopeCity = (auth: Pick<Scoped, "confinedCity">): string | null => auth.confinedCity ?? null;
 
-/**
- * The app_users ids whose threads a confined caller may see, or null when unconfined. Unassigned
- * threads belong to nobody: the list never contains null, so .in() excludes them.
- */
-export async function crmScopedAssignees(auth: Scoped): Promise<{ ok: true; ids: string[] | null } | { ok: false; status: number; error: string }> {
-  if (!auth.confinedCity) return { ok: true, ids: null };
-  const ur = await auth.supabase.from("app_users").select("id, city_identifier");
-  if (ur.error) return { ok: false, status: 500, error: "Could not resolve city scope" };
-  const ids = (ur.data ?? []).filter((u) => u.city_identifier === auth.confinedCity).map((u) => String(u.id));
-  return { ok: true, ids: ids.length > 0 ? ids : [NO_ASSIGNEE] };
+/** Narrow a crm_threads query to the caller's city. Unconfined: unchanged. */
+export function scopeThreads<Q extends { eq: (col: string, val: string) => Q }>(q: Q, city: string | null): Q {
+  return city ? q.eq("city_code", city) : q;
+}
+
+/** The pure decision, so the gate suite can assert it without a database. */
+export function threadInScope(confinedCity: string | null, threadCity: string | null | undefined): boolean {
+  if (!confinedCity) return true;
+  return typeof threadCity === "string" && threadCity === confinedCity;
 }
 
 /**
  * May this caller act on this thread? Deny by default for a confined caller: a thread that cannot be
- * read, does not exist, is unassigned, or is assigned outside the city is refused. The refusal is
- * the same 403 whether or not the thread exists, so an id cannot be probed.
+ * read, does not exist, has no city yet, or is in another city is refused. The refusal is the same
+ * 403 whether or not the thread exists, so an id cannot be probed.
  */
 export async function assertThreadInScope(auth: Scoped, threadId: string): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
   if (!auth.confinedCity) return { ok: true };
   if (!UUID_RX.test(threadId)) return { ok: false, status: 403, error: CONFINED_CITY_ERROR };
-  const scope = await crmScopedAssignees(auth);
-  if (!scope.ok) return scope;
-  const t = await auth.supabase.from("crm_threads").select("assigned_to_user_id").eq("id", threadId).maybeSingle();
+  const t = await auth.supabase.from("crm_threads").select("city_code").eq("id", threadId).maybeSingle();
   if (t.error) return { ok: false, status: 500, error: "Could not verify the thread's city" };
-  const who = t.data?.assigned_to_user_id ? String(t.data.assigned_to_user_id) : null;
-  if (!who || !scope.ids!.includes(who)) return { ok: false, status: 403, error: CONFINED_CITY_ERROR };
+  if (!threadInScope(auth.confinedCity, (t.data?.city_code as string | null | undefined) ?? null)) return { ok: false, status: 403, error: CONFINED_CITY_ERROR };
   return { ok: true };
 }

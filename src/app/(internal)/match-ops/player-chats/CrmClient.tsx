@@ -60,7 +60,6 @@ import {
 } from "@/lib/crmConversation";
 import { useAuth } from "@/lib/useAuth";
 import { UNKNOWN_CITY } from "@/lib/cityColors";
-import CityChip from "@/components/CityChip";
 import AssigneeChip, { type Assignee } from "@/components/AssigneeChip";
 import ChannelChip, {
   channelDisplay,
@@ -98,9 +97,40 @@ function fullNameOf(t: ThreadListRow): string {
   return t.phone_number;
 }
 
+// The thread's own city first (crm_threads.city_code, 0250: set from the account, a field they named,
+// the draft's read, or a person), then the linked player's.
 function cityCodeForThread(t: ThreadListRow): string {
-  const c = t.player?.preferable_city_normalized;
+  const c = t.city_code || t.player?.preferable_city_normalized;
   return c && c.length > 0 ? c : UNKNOWN_CITY;
+}
+
+const PICKABLE_CITIES = KNOWN_CITY_CODES.filter((c) => !HIDDEN_CITY_CODES.has(c));
+
+// THE THREAD'S CITY, set by a person. It decides who sees the thread and who is pushed; a person's
+// choice is never overwritten by a draft or a link. Saved through PATCH /api/crm/threads/{id}/city.
+function ThreadCityPicker({ threadId, code, source }: { threadId: string; code: string | null; source: string | null }) {
+  const [value, setValue] = useState(code ?? "");
+  const [state, setState] = useState<"idle" | "saving" | "error">("idle");
+  useEffect(() => { setValue(code ?? ""); setState("idle"); }, [threadId, code]);
+  const save = async (next: string) => {
+    const prev = value;
+    setValue(next); setState("saving");
+    const headers = await bearerHeaders();
+    if (!headers) { setValue(prev); setState("error"); return; }
+    const res = await fetch(`/api/crm/threads/${threadId}/city`, { method: "PATCH", headers, body: JSON.stringify({ city_code: next }) }).catch(() => null);
+    if (!res?.ok) { setValue(prev); setState("error"); return; }
+    setState("idle");
+  };
+  return (
+    <label className="inline-flex items-center gap-1" title={source ? `City from ${source === "staff" ? "a person" : source === "account" ? "the linked account" : source === "field" ? "a field they named" : "the draft's read of the conversation"}` : "No city yet: only unconfined staff see this thread"}>
+      <select data-testid="crm-thread-city" value={value} disabled={state === "saving"} onChange={(e) => void save(e.target.value)}
+        className="rounded border border-cream-line bg-white px-1 py-px text-[10px] font-semibold text-deep-green/70">
+        {!value && <option value="">No city</option>}
+        {PICKABLE_CITIES.map((c) => <option key={c} value={c}>{c}</option>)}
+      </select>
+      {state === "error" && <span className="text-[10px] font-semibold text-[#a82a18]">Didn&apos;t save</span>}
+    </label>
+  );
 }
 
 // Delegates to the shared, tested rule in src/lib/crmWindow (Phase 19 Step 0). A null detail
@@ -1744,7 +1774,6 @@ function ConversationHeader({
     );
   }
   const name = fullNameOf(detail.thread);
-  const cityCode = cityCodeForThread(detail.thread);
   const channel = detail.thread.channel ?? "sms";
   const email = detail.thread.player?.email?.trim() || null;
   return (
@@ -1789,7 +1818,7 @@ function ConversationHeader({
           </div>
         )}
         <div className="mt-0.5 hidden items-center gap-1.5 text-[10px] text-deep-green/55 lg:flex">
-            <CityChip code={cityCode} />
+            <ThreadCityPicker threadId={detail.thread.id} code={detail.thread.city_code ?? null} source={detail.thread.city_source ?? null} />
             <span aria-hidden>·</span>
             <span className="inline-flex items-center gap-0.5">
               <ChannelChip channel={channel} />

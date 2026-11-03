@@ -33,6 +33,7 @@ import { sendPushNotificationToMany, type StoredSubscription } from "@/lib/webPu
 import { isAwaitingReply } from "@/lib/awaitingReply";
 import { humanPushDue, humanPushPath, HUMAN_PUSH_WITHIN_MS } from "@/lib/crmAttention";
 import { notifyAppNeedsHuman } from "@/lib/appPushHuman";
+import { humanRecipients } from "@/lib/appPushHumanRules";
 import { loadAttention, strikeHoldingThreadIds } from "@/lib/crmAttentionLoad";
 import { POST as sendPOST } from "@/app/api/crm/send/route";
 
@@ -220,10 +221,10 @@ async function checkKillSwitch(sb: SupabaseClient, now: number): Promise<boolean
 // assignee, or all chat staff when unassigned. The marker is a change_log row keyed on the inbound id,
 // written before the push, so a failed push isn't sent twice either.
 async function notifyNeedsHuman(sb: SupabaseClient, now: number): Promise<number> {
-  const COLS = "id, assigned_to_user_id, last_message_at, last_message_preview, last_message_direction, no_reply_needed_at, status";
+  const COLS = "id, assigned_to_user_id, last_message_at, last_message_preview, last_message_direction, no_reply_needed_at, status, city_code";
   const open = await sb.from("crm_threads").select(COLS).eq("status", "open").eq("last_message_direction", "inbound").gte("last_message_at", new Date(now - HUMAN_PUSH_WITHIN_MS).toISOString());
   if (open.error) throw new Error(open.error.message);
-  const rows = [...(open.data ?? [])] as { id: string; assigned_to_user_id: string | null; last_message_at: string; last_message_preview: string | null; last_message_direction: "inbound" | "outbound"; no_reply_needed_at: string | null; status: "open" | "closed" }[];
+  const rows = [...(open.data ?? [])] as { id: string; assigned_to_user_id: string | null; last_message_at: string; last_message_preview: string | null; last_message_direction: "inbound" | "outbound"; no_reply_needed_at: string | null; status: "open" | "closed"; city_code: string | null }[];
   const held = await strikeHoldingThreadIds(sb, now);
   const heldRows = held.length ? await sb.from("crm_threads").select(COLS).in("id", held).eq("status", "open").eq("last_message_direction", "outbound") : null;
   if (heldRows?.error) throw new Error(heldRows.error.message);
@@ -248,12 +249,12 @@ async function notifyNeedsHuman(sb: SupabaseClient, now: number): Promise<number
       supabaseLogStore(),
     );
     if (!logged.logged) { console.error("[auto-send] push marker not written, not pushing", t.id); continue; }
-    let recipients: string[] = t.assigned_to_user_id ? [t.assigned_to_user_id] : [];
-    if (!t.assigned_to_user_id) {
-      const staff = await sb.from("app_users").select("*");
-      if (staff.error) throw new Error(staff.error.message);
-      recipients = (staff.data ?? []).filter((u) => (u.is_admin === true || u.can_access_chats === true) && u.is_service_account !== true).map((u) => u.id as string);
-    }
+    // The same people as the staff app's push: the assignee, else the thread's city's chat staff when
+    // it has any, else every unconfined chat staff member (humanRecipients). Admins join at 20 minutes
+    // through the staff app's escalation (appPushHuman).
+    const staff = await sb.from("app_users").select("*");
+    if (staff.error) throw new Error(staff.error.message);
+    const recipients = humanRecipients((staff.data ?? []) as Parameters<typeof humanRecipients>[0], t.assigned_to_user_id, t.city_code);
     const subs = recipients.length ? await sb.from("push_subscriptions").select("user_id, endpoint, p256dh, auth").in("user_id", recipients) : null;
     if (subs?.data?.length) {
       await sendPushNotificationToMany(subs.data as StoredSubscription[], {

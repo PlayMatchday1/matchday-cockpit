@@ -22,7 +22,7 @@ import { buildRecordedFields, CAMERA_LOOKAHEAD_DAYS, CAMERA_LOOKBACK_DAYS, type 
 import { linkThread, supabaseLinkIO } from "@/lib/crmThreadLink";
 import { AUTO_SEND_ACTOR } from "@/lib/aiDraftAction";
 import { AUTO_LINKED_NOTE } from "@/lib/aiDraftRun";
-import { membershipRefundPath, priorMembershipRefundFromLog, type CutShort, type RefundLogRow } from "@/lib/aiDraftPolicy";
+import { membershipRefundPath, priorMembershipRefundFromLog, type CitySource, type CutShort, type RefundLogRow } from "@/lib/aiDraftPolicy";
 
 const ENV = FULL_EDITOR_ENV;
 const ANTHROPIC_BASE_URL = `https://${ANTHROPIC_HOST}`;
@@ -35,14 +35,22 @@ export function draftDataDeps(args: DraftDataArgs): DataDeps {
   let threadPhone: string | null = null;
   return {
     async loadThread() {
-      // account_confirmed_at: migration 0228. Applied before this code shipped.
-      const r = await supabase.from("crm_threads").select("channel, phone_number, player_id, match_ambiguous, account_confirmed_at").eq("id", threadId).maybeSingle();
+      // account_confirmed_at: migration 0228. city_code / city_source: 0250. Both applied before this code shipped.
+      const r = await supabase.from("crm_threads").select("channel, phone_number, player_id, match_ambiguous, account_confirmed_at, city_code, city_source").eq("id", threadId).maybeSingle();
       if (r.error || !r.data) return null;
       threadPhone = (r.data.phone_number as string | null) ?? null;
       return {
         channel: (r.data.channel as string) ?? "sms", player_id: (r.data.player_id as number | null) ?? null,
         match_ambiguous: r.data.match_ambiguous === true, account_confirmed: r.data.account_confirmed_at != null,
+        city_code: (r.data.city_code as string | null) ?? null, city_source: (r.data.city_source as CitySource | null) ?? null,
       };
+    },
+
+    // THE THREAD'S CITY (0250). Never over a person's choice: the filter makes that true even if two
+    // writers race.
+    async setThreadCity(code, source) {
+      const r = await supabase.from("crm_threads").update({ city_code: code, city_source: source }).eq("id", threadId).or("city_source.is.null,city_source.neq.staff");
+      if (r.error) throw new Error(r.error.message);
     },
 
     async countAccounts() {

@@ -26,7 +26,7 @@
 // get is_unread=false everywhere and empty mine/starred views.
 
 import { authenticateCrm } from "@/lib/crmAuth";
-import { crmScopedAssignees } from "@/lib/crmScope";
+import { crmScopeCity, scopeThreads } from "@/lib/crmScope";
 import { isAwaitingReply, waitingSinceMs } from "@/lib/awaitingReply";
 import { loadAttention, type LoadedAttention } from "@/lib/crmAttentionLoad";
 import { reviewMasked } from "@/lib/reviewAccount";
@@ -51,7 +51,7 @@ function parseView(raw: string | null): ViewFilter {
 }
 
 const THREAD_COLS =
-  "id, phone_number, player_id, match_ambiguous, last_message_at, last_message_preview, last_message_direction, last_message_is_template, created_at, assigned_to_user_id, assigned_at, channel, status, closed_at, closed_by_user_id, no_reply_needed_at";
+  "id, phone_number, player_id, match_ambiguous, last_message_at, last_message_preview, last_message_direction, last_message_is_template, created_at, assigned_to_user_id, assigned_at, channel, status, closed_at, closed_by_user_id, no_reply_needed_at, city_code, city_source";
 
 type ThreadRow = {
   id: string;
@@ -75,6 +75,9 @@ type ThreadRow = {
   // Operator "Done · no reply needed" dismissal (0073). Governs the
   // refined awaiting state alongside the acknowledgment heuristic.
   no_reply_needed_at: string | null;
+  // The thread's city (0250): where it is listed, who it pushes, what a confined account can open.
+  city_code: string | null;
+  city_source: string | null;
 };
 
 type PlayerRow = {
@@ -98,25 +101,12 @@ async function getRoute(req: Request) {
   }
   const { supabase, appUserId: viewerId } = auth;
 
-  /* ── THE CITY BOUNDARY ON A TABLE WITH NO CITY ──────────────────────────────────────────────
-   * crm_threads carries no city and no match link. A thread belongs to a city through its
-   * ASSIGNEE: assignment is manual — a thread is handed to the Poland team when someone writes in
-   * about a Polish match or writes in Polish — so the tie fills forward, and an empty result today
-   * is the right answer rather than a broken filter.
-   *
-   * ONE COLUMN: city_identifier = 'WAW'. That covers both the people this rule was written for —
-   * a Warsaw city manager AND the Warsaw account itself — because confinement and the city-manager
-   * scope now read the same column. Assigning a thread straight to the Warsaw account puts it in
-   * their view; no extra account has to exist to make the filter work.
-   *
-   * UNASSIGNED THREADS BELONG TO NOBODY and are invisible here — 306 of 407 today, by design:
-   * .in() over a list that never contains null excludes them.
-   *
-   * RESOLVED HERE, ABOVE EVERY QUERY, because the COUNTS run before the list. A total that counts
-   * threads this account cannot open is a leak that shows a number instead of a row. */
-  const scope = await crmScopedAssignees(auth);
-  if (!scope.ok) return Response.json({ error: scope.error }, { status: scope.status });
-  const scopedAssignees = scope.ids;
+  /* ── THE CITY BOUNDARY (src/lib/crmScope.ts) ─────────────────────────────────────────────────
+   * Since 2026-11-02 a thread carries its own city (crm_threads.city_code, migration 0250). A
+   * confined account lists, counts and opens only its city's threads; a thread with no city yet is
+   * shown to unconfined staff only. RESOLVED HERE, ABOVE EVERY QUERY, because the COUNTS run before
+   * the list: a total that counts threads this account cannot open is a leak. */
+  const scopeCity = crmScopeCity(auth);
   const url = new URL(req.url);
   const view = parseView(url.searchParams.get("view"));
 
@@ -170,7 +160,7 @@ async function getRoute(req: Request) {
         .select("last_message_preview, last_message_at, no_reply_needed_at")
         .eq("status", "open")
         .eq("last_message_direction", "inbound");
-      if (scopedAssignees) scan = scan.in("assigned_to_user_id", scopedAssignees);
+      scan = scopeThreads(scan, scopeCity);
       const r = await scan.range(from, from + INDEX_PAGE - 1);
       if (r.error) {
         console.error("[crm:threads.list] awaiting count scan error", r.error);
@@ -194,7 +184,7 @@ async function getRoute(req: Request) {
 
   const countBase = () => {
     const q = supabase.from("crm_threads").select("id", { count: "exact", head: true });
-    return scopedAssignees ? q.in("assigned_to_user_id", scopedAssignees) : q;
+    return scopeThreads(q, scopeCity);
   };
   const countsPromise = (async () => {
     const [openR, closedR, mineR, awaiting] = await Promise.all([
@@ -232,7 +222,7 @@ async function getRoute(req: Request) {
 
   if (!emptyView) {
     let q = supabase.from("crm_threads").select(THREAD_COLS);
-    if (scopedAssignees) q = q.in("assigned_to_user_id", scopedAssignees);
+    q = scopeThreads(q, scopeCity);
     if (view === "open") {
       q = q.eq("status", "open");
     } else if (view === "closed") {

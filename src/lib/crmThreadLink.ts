@@ -18,6 +18,7 @@ import { randomUUID } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { recordWrite, supabaseLogStore, type LogStore } from "@/lib/changeLog";
 import { resolveCityScope } from "@/lib/cityScope";
+import { accountCityCode } from "@/lib/crmThreadCity";
 
 type ThreadLinkState = { player_id: number | null; account_confirmed_at: string | null; account_confirmed_by_user_id: string | null };
 
@@ -101,6 +102,13 @@ export function supabaseLinkIO(supabase: SupabaseClient, threadId: string, super
     async writeThread(patch) {
       const r = await supabase.from("crm_threads").update(patch).eq("id", threadId);
       if (r.error) throw new Error(r.error.message);
+      // THE THREAD TAKES THE ACCOUNT'S CITY (0250), unless a person set one. Best effort: the link
+      // itself has landed, and the next draft sets the city too.
+      const city = await accountCityCode(supabase, patch.player_id);
+      if (city) {
+        const c = await supabase.from("crm_threads").update({ city_code: city, city_source: "account" }).eq("id", threadId).or("city_source.is.null,city_source.neq.staff");
+        if (c.error) console.error("[crm:link] city not set", c.error.message);
+      }
     },
     async supersedePendingDrafts() {
       await supabase.from("crm_ai_drafts").update({ outcome: "superseded", outcome_at: new Date().toISOString(), outcome_by_user_id: supersededBy })

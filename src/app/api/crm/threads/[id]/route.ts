@@ -56,7 +56,7 @@ async function getRoute(req: Request, ctx: RouteCtx) {
   const threadRes = await supabase
     .from("crm_threads")
     .select(
-      "id, phone_number, player_id, match_ambiguous, last_message_at, last_message_preview, last_message_direction, created_at, assigned_to_user_id, assigned_at, channel, status, closed_at, closed_by_user_id, no_reply_needed_at",
+      "id, phone_number, player_id, match_ambiguous, last_message_at, last_message_preview, last_message_direction, created_at, assigned_to_user_id, assigned_at, channel, status, closed_at, closed_by_user_id, no_reply_needed_at, city_code, city_source",
     )
     .eq("id", threadId)
     .maybeSingle();
