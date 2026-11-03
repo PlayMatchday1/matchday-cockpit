@@ -25,7 +25,11 @@ is("a higher saved 4-team rung is left alone", pickerCapacityWrites({ maxPlayerC
 is("a capacity that does not divide writes nothing beside the count", pickerCapacityWrites({ maxPlayerCount: 19 }, 2, 3), {});
 
 console.log("\nteam size");
-is("bounds start at the team with the most real players", sizeBounds(2, [8, 6]), { min: 8, max: 20 });
+is("bounds start at the team with the most real players, up to 12", sizeBounds(2, [8, 6]), { min: 8, max: 12 });
+is("never below 6 a side", sizeBounds(2, [3, 2]), { min: 6, max: 12 });
+is("5 a side is refused", typeof sizeRefusal(2, 5, [1, 1]), "string");
+is("13 a side is refused", typeof sizeRefusal(2, 13, [1, 1]), "string");
+is("presence control: 12 a side is accepted", sizeRefusal(2, 12, [1, 1]), null);
 is("below a team's real players is refused", typeof sizeRefusal(2, 7, [8, 6]), "string");
 is("presence control: that team's own real count is accepted", sizeRefusal(2, 8, [8, 6]), null);
 is("all the real players must fit too", typeof sizeRefusal(2, 7, [7, 7], 15), "string");
@@ -57,13 +61,13 @@ is("too short to search", searchTerm("ab"), null);
 is("phone last four only", phoneLast4("+15125550188"), "0188");
 
 console.log("\nreduce to 2: the sizes offered");
-is("5 real: 6 to 11 (6 is the desktop's floor)", reduceSizes(5), { sizes: [6, 7, 8, 9, 10, 11], reason: null });
-is("15 real: from 8 (fits 15) up to 11", reduceSizes(15), { sizes: [8, 9, 10, 11], reason: null });
-is("not capped at the current size: 9v9 to 11v11 are offered", reduceSizes(10).sizes.slice(-3), [9, 10, 11]);
-is("presence control: 22 real fit 2 x 11 exactly", reduceSizes(22).sizes, [11]);
-is("23 real: nothing fits, and it says why", reduceSizes(23).sizes, []);
-is("…with a reason", typeof reduceSizes(23).reason, "string");
-is("12 a side is never offered", reduceSizes(1).sizes.includes(12), false);
+is("5 real: 6 to 12 (6 is the desktop's floor)", reduceSizes(5), { sizes: [6, 7, 8, 9, 10, 11, 12], reason: null });
+is("15 real: from 8 (fits 15) up to 12", reduceSizes(15), { sizes: [8, 9, 10, 11, 12], reason: null });
+is("not capped at the current size: 9v9 to 12v12 are offered", reduceSizes(10).sizes.slice(-4), [9, 10, 11, 12]);
+is("presence control: 24 real fit 2 x 12 exactly", reduceSizes(24).sizes, [12]);
+is("25 real: nothing fits, and it says why", reduceSizes(25).sizes, []);
+is("…with a reason", typeof reduceSizes(25).reason, "string");
+is("13 a side is never offered", reduceSizes(1).sizes.includes(13), false);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

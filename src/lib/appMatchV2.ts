@@ -5,6 +5,7 @@
 
 import { teamCountWrites, teamShapeError } from "./rosterEditModel";
 import { REDUCE_MAX_PER_TEAM, REDUCE_MIN_PER_TEAM } from "./reduceTwoTeams";
+export { REDUCE_MAX_PER_TEAM as SIZE_MAX, REDUCE_MIN_PER_TEAM as SIZE_MIN };
 
 /* WHICH DESKTOP PATH A TEAM COUNT CHANGE TAKES. Ryan: "use the desktop's exact paths (the
  * teamNumbers picker, Convert to 4, Reduce to 2), no custom spreading."
@@ -36,22 +37,23 @@ export function pickerCapacityWrites(match: Record<string, unknown>, current: nu
 
 /* THE TEAM SIZE STEPPER AND THE ADJUST SHEET'S CHIPS. Ryan: "for 2 and 4 teams write the stored team
  * size; for 3 teams write the total and show size as total divided by 3. Only offer values the
- * desktop's teamShapeError accepts." 20 a side is the ceiling the stepper offers; the Adjust sheet
- * offers SIZE_CHIPS, the same for every team count.
+ * desktop's teamShapeError accepts." EVERY TEAM SIZE CONTROL OFFERS 6 TO 12 A SIDE (Ryan, 2026-11-02):
+ * the Match screen stepper, the Adjust chips (SIZE_CHIPS, the same for every team count), the
+ * desktop's SPOTS PER TEAM and its format dropdowns, and Reduce to 2.
  *
  * ONLY REAL PLAYERS BLOCK A SIZE (Ryan, 2026-11-02). A size is refused when the real players on any
  * team, or all of them together, would not fit. Fakes never block it: a smaller size first takes the
  * fakes off the teams that would overflow (overflowFakes), as "Fakes leave the roster first" says. */
-export const SIZE_MAX = 20;
-export const SIZE_CHIPS = [6, 7, 8, 9, 10, 11] as const;
+export const SIZE_CHIPS = [6, 7, 8, 9, 10, 11, 12] as const;
 export function sizeBounds(teamCount: number, teamReals: readonly number[]): { min: number; max: number } {
-  return { min: Math.max(1, ...teamReals), max: Math.max(SIZE_MAX, ...teamReals) };
+  return { min: Math.max(REDUCE_MIN_PER_TEAM, ...teamReals), max: REDUCE_MAX_PER_TEAM };
 }
 export function sizeRefusal(teamCount: number, perTeam: number, teamReals: readonly number[], realTotal = 0): string | null {
   if (!Number.isInteger(perTeam) || perTeam < 1) return "Team size must be a whole number of players.";
   const b = sizeBounds(teamCount, teamReals);
+  if (perTeam < REDUCE_MIN_PER_TEAM) return `The smallest team size is ${REDUCE_MIN_PER_TEAM} a side.`;
+  if (perTeam > b.max) return `The largest team size is ${b.max} a side.`;
   if (perTeam < b.min) return `A team has ${b.min} real players, so the size cannot go below ${b.min} a side.`;
-  if (perTeam > b.max) return `The app offers up to ${b.max} a side.`;
   if (realTotal > perTeam * teamCount) return `${realTotal} real players do not fit ${teamCount} teams of ${perTeam}.`;
   return teamShapeError(perTeam * teamCount, teamCount);
 }
@@ -79,7 +81,7 @@ export function sizeWrites(match: Record<string, unknown>, teamCount: number, pe
 }
 
 /* THE SIZES A REDUCE TO 2 MAY OFFER (Ryan, 2026-10-31): every size where 2 x size holds all the real
- * players and teamShapeError accepts 2 x size, inside the desktop Reduce to 2's own range (6 to 11
+ * players and teamShapeError accepts 2 x size, inside the desktop Reduce to 2's own range (6 to 12
  * a side). NOT CAPPED AT THE CURRENT SIZE (Ryan, 2026-11-02): it was, so a 4-team match of 8 going
  * to 2 hid 9v9 to 11v11; the desktop picker never capped it. Empty, with the reason, when nothing fits. */
 export function reduceSizes(real: number): { sizes: number[]; reason: string | null } {
