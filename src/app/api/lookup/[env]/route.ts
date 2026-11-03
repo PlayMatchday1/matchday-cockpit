@@ -245,17 +245,18 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string }> 
         }
 
         const ids = pageIds.filter(Number.isFinite);
-        // LIVE DETAIL, one call per row on this page. `?id=` takes a single id — a comma list is a
-        // 400 — so these are parallel, bounded by the page size.
-        const settled = await Promise.all(ids.map((pid) =>
-          apiGet<{ data?: Record<string, unknown>[] } | Record<string, unknown>[]>(env, `/admin/players`, { id: pid, limit: 1, page: 1 })
-            .then((r) => (Array.isArray(r) ? r[0] : (r.data ?? [])[0]) ?? null)
-            .catch(() => null)));
-        const live = settled.filter((r): r is Record<string, unknown> => r !== null);
-        // A candidate the API no longer returns was deleted upstream since the sync. It is dropped
-        // rather than rendered from the mirror, and SAID — otherwise the count overstates the list.
+        /* THE LIST IS THE MIRROR'S, NOT A LIVE READ PER ROW (Ryan, 2026-11-02). Each row is built
+         * from mdapi_users: its raw MatchDay player row from the last sync (name, email, phone, city,
+         * ban flags, through the same lightRow) and is_member. It read every row live from MatchDay,
+         * 25 calls, and the slowest set the time (2.5 s seen). The profile still reads the player
+         * live when it is opened, so email and ban state are current there. */
+        const mirrorRes = ids.length ? await sb.from("mdapi_users").select("id, raw, is_member").in("id", ids) : { data: [], error: null };
+        if (mirrorRes.error) return Response.json({ error: `name search failed: ${mirrorRes.error.message}` }, { status: 500 });
+        const byId = new Map((mirrorRes.data ?? []).map((r) => [Number((r as { id: unknown }).id), r as { raw: unknown; is_member: unknown }]));
+        const live = ids.map((id) => byId.get(id)).filter((r): r is { raw: unknown; is_member: unknown } => r != null)
+          .map((r) => ({ ...(r.raw as Record<string, unknown>), __member: r.is_member === true }));
         const dropped = ids.length - live.length;
-        let results = live.map(lightRow);
+        let results = live.map((r) => ({ ...lightRow(r), hasMembership: r.__member }));
         /* THE SAME UNION AGAIN, ON THE ROWS THE API HANDED BACK. The query above already scoped
          * the ids; this is the belt to that braces, and it has to ask the same question or it
          * would re-narrow to home city and undo the widening one line after making it.
