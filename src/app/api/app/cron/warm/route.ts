@@ -1,11 +1,13 @@
 // Staff app WARM (Ryan, 2026-11-02): keeps the slow, cached reads ready so nobody opening the app
 // waits on them. CRON_SECRET only; nothing a person can call. Every 5 minutes (vercel.json).
 //
-//   HEALTH    the current week and month are read live and replace their cached copies, for all
-//             cities and for each city a Match Ops account is confined to; the default views' other
-//             trend periods (ended, cached a week) are read only if missing.
-//   PLAYERS   the default period of each kind and the five before it, for both pages; the cached
-//             reads refresh in the background once stale, as when a person opens the tab.
+//   HEALTH    each default view's periods (the current week and month, and the ended periods of
+//             their trends), for all cities and for each city a Match Ops account is confined to.
+//   PLAYERS   the default period of each kind and the five before it, for both pages.
+//
+// PLAIN CACHED READS, NEVER FORCED: a stale entry is served and refreshed in the background
+// (stale-while-revalidate), a missing one is read. Forcing (expiring the tag first) made the next
+// person's read wait for a live one. Health and Players run side by side.
 //
 // Production only. It writes nothing anywhere: every call is a read that fills the data cache.
 
@@ -51,24 +53,28 @@ export async function POST(req: Request) {
     if (next.from !== ps[ps.length - 1].from) ps.push(next);   // the current week, after the last full one
     return ps;
   });
-  for (const scope of scopes) {
-    for (const ps of healthViews) {
-      await Promise.all(ps.map((p) => run(`health ${scope ?? "all"} ${p.from}`, () => loadPeriod(sb, "production", p.from, p.to, scope, p.current, p.current))));
+  const health = async () => {
+    for (const scope of scopes) {
+      for (const ps of healthViews) {
+        await Promise.all(ps.map((p) => run(`health ${scope ?? "all"} ${p.from}`, () => loadPeriod(sb, "production", p.from, p.to, scope, p.current))));
+      }
     }
-  }
+  };
 
   // PLAYERS: the route's own reads for each kind's default view.
-  for (const kind of ["month", "week", "day"] as Kind[]) {
+  const players = () => Promise.all((["month", "week", "day"] as Kind[]).map((kind) => {
     const ps = [playersPeriodOf(kind, today)];
     for (let i = 1; i < TREND; i++) ps.unshift(stepOf(ps[0], -1));
     const cur = (x: { from: string; to: string }) => x.to >= today && x.from <= today;
-    await run(`players ${kind}`, () => Promise.all([
+    return run(`players ${kind}`, () => Promise.all([
       ...ps.map((x) => acquisitionPeriod(sb, x, cur(x))),
       ...ps.map((x) => androidPeriod(sb, x, cur(x))),
       activityPeriods(sb, ps, today),
     ]));
-  }
+  }));
 
+  await Promise.all([health(), players()]);
+  console.log(`[app-warm] ${done.length} warmed, ${failed.length} failed in ${Date.now() - t0} ms; scopes ${scopes.map((x) => x ?? "all").join(",")}${failed.length ? `; first failure: ${failed[0]}` : ""}`);
   return Response.json({ ok: failed.length === 0, ms: Date.now() - t0, scopes: scopes.map((s) => s ?? "all"), done: done.length, failed });
 }
 
