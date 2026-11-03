@@ -1288,7 +1288,8 @@ function MistInboxRow({
   // THREE KINDS OF ROW (2026-11-02). Human: Needs a human, an orange dot by the time. Agent: our last
   // message was an auto-send, or one is holding; a sparkle and "Agent:". Staff: as before. No colored
   // left edge on any of them, and red only for an error.
-  const agent = !needsHuman && (autoSending || thread.last_outbound_auto === true);
+  // The mark sits on OUR preview: a player's message after an auto-send is theirs, not the agent's.
+  const agent = !needsHuman && (autoSending || (!inbound && thread.last_outbound_auto === true));
   const speaker = inbound ? name.split(/\s+/)[0] || "Player" : agent ? "Agent" : "MatchDay";
 
   return (
