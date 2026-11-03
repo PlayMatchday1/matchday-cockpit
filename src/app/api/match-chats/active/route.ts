@@ -90,6 +90,43 @@ async function getRoute(req: Request) {
   };
   const activeByChat = new Map<string, ActiveAccum>();
 
+  /* UPCOMING AND PAST DO NOT WAIT FOR FIRESTORE (2026-11-02): both are started here and read
+   * while the collection-group query runs; only the join of active chat ids has to follow it.
+   * They were three database round trips after the Firestore one, one after another. */
+  const nowIso = new Date().toISOString();
+  const upperMs = Date.now() + UPCOMING_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+  const upperIso = new Date(upperMs).toISOString();
+
+  // THE CITY BOUNDARY, PUSHED INTO THE QUERY. mdapi_matches carries city_identifier, so this is a
+  // real .eq() rather than a post-filter — the SECTION_CAP limit is applied to the scoped set, so
+  // a confined account gets its own city's first N matches and not N minus whatever was dropped.
+  let upcomingQ = supabase
+    .from("mdapi_matches")
+    .select(
+      "api_id, field_title, start_date_utc, city_identifier, manager_email, is_cancelled",
+    )
+    .gte("start_date_utc", nowIso)
+    .lt("start_date_utc", upperIso)
+    .neq("is_cancelled", true);
+  if (auth.confinedCity) upcomingQ = upcomingQ.eq("city_identifier", auth.confinedCity);
+  const pastLowerMs = Date.now() - PAST_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+  const pastLowerIso = new Date(pastLowerMs).toISOString();
+  let pastQ = supabase
+    .from("mdapi_matches")
+    .select(
+      "api_id, field_title, start_date_utc, city_identifier, manager_email, is_cancelled, end_date_utc",
+    )
+    .gte("end_date_utc", pastLowerIso)
+    .lt("end_date_utc", nowIso)
+    .neq("is_cancelled", true);
+  /* THE BOUNDARY THIS QUERY NEVER HAD. Upcoming (above) and the active join both carry it; this one
+   * did not, so a confined viewer's Past section listed every recent match in the estate — 82 rows,
+   * none of them openable. Pushed into the query, not post-filtered, so SECTION_CAP applies to the
+   * scoped set rather than trimming the estate and leaving whatever survives. */
+  if (auth.confinedCity) pastQ = pastQ.eq("city_identifier", auth.confinedCity);
+  const upcomingP = Promise.resolve(upcomingQ.order("start_date_utc", { ascending: true }).limit(SECTION_CAP));
+  const pastP = Promise.resolve(pastQ.order("end_date_utc", { ascending: false }).limit(SECTION_CAP));
+
   let truncated = false;
   try {
     const snap = await db
@@ -143,25 +180,7 @@ async function getRoute(req: Request) {
   // ---------------- Section 2: Upcoming ----------------
   // Matches starting in the next UPCOMING_WINDOW_DAYS, not cancelled,
   // not already in active.
-  const nowIso = new Date().toISOString();
-  const upperMs = Date.now() + UPCOMING_WINDOW_DAYS * 24 * 60 * 60 * 1000;
-  const upperIso = new Date(upperMs).toISOString();
-
-  // THE CITY BOUNDARY, PUSHED INTO THE QUERY. mdapi_matches carries city_identifier, so this is a
-  // real .eq() rather than a post-filter — the SECTION_CAP limit is applied to the scoped set, so
-  // a confined account gets its own city's first N matches and not N minus whatever was dropped.
-  let upcomingQ = supabase
-    .from("mdapi_matches")
-    .select(
-      "api_id, field_title, start_date_utc, city_identifier, manager_email, is_cancelled",
-    )
-    .gte("start_date_utc", nowIso)
-    .lt("start_date_utc", upperIso)
-    .neq("is_cancelled", true);
-  if (auth.confinedCity) upcomingQ = upcomingQ.eq("city_identifier", auth.confinedCity);
-  const upcomingRes = await upcomingQ
-    .order("start_date_utc", { ascending: true })
-    .limit(SECTION_CAP);
+  const upcomingRes = await upcomingP;
   if (upcomingRes.error) {
     console.error(
       "[match-chats:active] upcoming query failed",
@@ -264,24 +283,7 @@ async function getRoute(req: Request) {
   // column on mdapi_matches; the sibling end_date column has the
   // same +00-offset wall-clock mislabel as start_date and must not
   // be used. Newest end-time first.
-  const pastLowerMs = Date.now() - PAST_WINDOW_DAYS * 24 * 60 * 60 * 1000;
-  const pastLowerIso = new Date(pastLowerMs).toISOString();
-  let pastQ = supabase
-    .from("mdapi_matches")
-    .select(
-      "api_id, field_title, start_date_utc, city_identifier, manager_email, is_cancelled, end_date_utc",
-    )
-    .gte("end_date_utc", pastLowerIso)
-    .lt("end_date_utc", nowIso)
-    .neq("is_cancelled", true);
-  /* THE BOUNDARY THIS QUERY NEVER HAD. Upcoming (above) and the active join both carry it; this one
-   * did not, so a confined viewer's Past section listed every recent match in the estate — 82 rows,
-   * none of them openable. Pushed into the query, not post-filtered, so SECTION_CAP applies to the
-   * scoped set rather than trimming the estate and leaving whatever survives. */
-  if (auth.confinedCity) pastQ = pastQ.eq("city_identifier", auth.confinedCity);
-  const pastRes = await pastQ
-    .order("end_date_utc", { ascending: false })
-    .limit(SECTION_CAP);
+  const pastRes = await pastP;
   if (pastRes.error) {
     console.error("[match-chats:active] past query failed", pastRes.error);
     return Response.json({ error: "DB error" }, { status: 500 });
