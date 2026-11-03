@@ -160,7 +160,7 @@ eq("ids from commas, spaces and lines, first kept, junk set aside", parsePlayerI
 eq("over the cap is flagged", parsePlayerIds("1 2 3", 2), { ids: [1, 2], bad: [], tooMany: true });
 // 20,000 IDS (2026-11-02): the cap is the backend's MAX_OFFER_PLAYER_IDS, not 2,000.
 // (Imported here rather than in the block at the top; ES imports are hoisted either way.)
-import { LOOKUP_BATCH, lookupInBatches, MAX_OFFER_PLAYER_IDS, pastedLine, playerLookupBlock, type Lookup, holdoutFor, playersHoldoutOn, heldBackLine, PLAYERS_HOLDOUT_MIN, DEFAULT_HOLDOUT_PERCENT } from "../src/lib/offersModel";
+import { LOOKUP_BATCH, lookupInBatches, MAX_OFFER_PLAYER_IDS, pastedLine, playerLookupBlock, refreshedLine, type Lookup, holdoutFor, playersHoldoutOn, heldBackLine, PLAYERS_HOLDOUT_MIN, DEFAULT_HOLDOUT_PERCENT } from "../src/lib/offersModel";
 {
   const big = Array.from({ length: 20_001 }, (_, i) => i + 1);
   const t0 = Date.now();
@@ -172,6 +172,13 @@ import { LOOKUP_BATCH, lookupInBatches, MAX_OFFER_PLAYER_IDS, pastedLine, player
     "5,829 pasted · 5,812 found · 17 not found");
   eq("pasted line, all found / one", [pastedLine(2, { players: [{ id: 1, name: null, city: null, matchesPlayed: 0 }, { id: 2, name: null, city: null, matchesPlayed: 0 }], notFound: [] }), pastedLine(1, { players: [], notFound: [9] })],
     ["2 pasted · 2 found", "1 pasted · 0 found · 1 not found"]);
+}
+// REFRESH SAYS WHAT IT DID (2026-11-03): a reload that brings back the same list looked like a dead button.
+{
+  const at = Date.UTC(2026, 10, 3, 20, 14, 5); // 2:14:05 PM in Chicago (CST, UTC-6)
+  eq("reading / read / nothing on screen yet", [refreshedLine(true, at), refreshedLine(true, null), refreshedLine(false, at), refreshedLine(false, null)],
+    ["Refreshing…", "Refreshing…", "Updated 2:14:05 PM", ""]);
+  eq("the time is Chicago's, not the machine's (summer: UTC-5)", refreshedLine(false, Date.UTC(2026, 6, 1, 19, 0, 0)), "Updated 2:00:00 PM");
 }
 // SAVE AND LAUNCH WAIT FOR THE ID LOOKUP (review 2026-11-02, OfferPanel): blocked until the answer is for the ids on screen
 // and playerIds is that list less the not-found ones.

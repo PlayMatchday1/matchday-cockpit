@@ -13,7 +13,7 @@ import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/useAuth";
 import {
   STATE_LABEL, audienceText, extraBookingsLine, usedOfLimit, chicagoWallNow, campaignsAfter, comparisonLine, dealText, matchTitle, matchWhere, money, namedMatchIds, progressText, resultsLines, scopeFieldsLine, usedPct, usesText, wallLabel,
-  withCovers, mergeMatches, type ListChange, type Campaign, type City, type FieldOpt, type MatchOpt,
+  withCovers, mergeMatches, refreshedLine, type ListChange, type Campaign, type City, type FieldOpt, type MatchOpt,
 } from "@/lib/offersModel";
 import OfferPanel, { type MatchRead } from "./OfferPanel";
 import { PushResultsRow, PushSettingsCard } from "./OfferPush";
@@ -37,14 +37,19 @@ export default function OffersView() {
   const [banner, setBanner] = useState<WriteOutcome | null>(null);
   const [pushLimit, setPushLimit] = useState(false);
 
+  // The page read in flight, and when the list on screen was read: what Refresh says (refreshedLine).
+  const [reading, setReading] = useState(false);
+  const [readAt, setReadAt] = useState<number | null>(null);
   useEffect(() => {
     if (access !== true) return;
     let cancelled = false;
+    setReading(true);
     (async () => {
       const r = await authed("/api/offers");
       if (cancelled) return;
-      if (!r.ok) { setErr(String(r.json.error ?? `HTTP ${r.status}`)); setData(null); return; }
-      setErr(null); setData(r.json as unknown as Data); setVer((v) => v + 1);
+      setReading(false);
+      if (!r.ok) { setErr(String(r.json.error ?? `HTTP ${r.status}`)); setData(null); setReadAt(null); return; }
+      setErr(null); setData(r.json as unknown as Data); setVer((v) => v + 1); setReadAt(Date.now());
     })();
     return () => { cancelled = true; };
   }, [access, key]);
@@ -97,7 +102,8 @@ export default function OffersView() {
         {/* Drawn at once, disabled until the page says whether pushes may be seen, so a click during the load
             never lands on nothing; hidden once it says no, or the load failed. */}
         {(data ? data.pushes : !err) && <Btn testId="offers-push-limit" disabled={!data} title={!data ? "Loading…" : undefined} onClick={() => setPushLimit((v) => !v)}>{data ? "Push limit" : "Push limit…"}</Btn>}
-        <Btn onClick={() => setKey((k) => k + 1)}>Refresh</Btn>
+        {refreshedLine(reading, readAt) && <span data-testid="offers-refreshed" className="text-[12px]" style={{ color: O.muted }}>{refreshedLine(reading, readAt)}</span>}
+        <Btn testId="offers-refresh" disabled={reading} onClick={() => setKey((k) => k + 1)}>Refresh</Btn>
       </div>
       {banner && <Banner outcome={banner} onDismiss={() => setBanner(null)} />}
       {data?.pushes && pushLimit && <PushSettingsCard onClose={() => setPushLimit(false)} />}

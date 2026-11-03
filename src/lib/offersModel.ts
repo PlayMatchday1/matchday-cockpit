@@ -724,6 +724,14 @@ export const endHasPassed = (endsLocal: string | null, nowWall: string) => endsL
 export const launchProblem = (x: { endsLocal: string | null }, nowWall: string): string | null =>
   endHasPassed(x.endsLocal, nowWall) ? "The end time has already passed. Pick a later end." : null;
 
+// WHAT REFRESH SAYS (2026-11-03). A reload that brings back the same offers changes nothing on screen, and the button
+// itself had an arrow cursor and no hover (Tailwind 4's base style for <button>), so Refresh read as dead. readAt: when
+// the list on screen was read, null when none is (still loading, or the read failed).
+export function refreshedLine(reading: boolean, readAt: number | null): string {
+  if (reading) return "Refreshing…";
+  return readAt === null ? "" : `Updated ${new Date(readAt).toLocaleTimeString("en-US", { timeZone: "America/Chicago", hour: "numeric", minute: "2-digit", second: "2-digit" })}`;
+}
+
 // THE LIVE COUNT'S STATE. asked is the body as the form stands; answered is the body the last answer
 // was for. A count for an older audience is loading, not ready, from the moment the form changes.
 export const COUNT_DEBOUNCE_MS = 800;

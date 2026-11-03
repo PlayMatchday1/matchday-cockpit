@@ -84,7 +84,7 @@ export function Btn({ children, onClick, kind = "plain", disabled, title, testId
     : { background: O.surface, borderColor: O.line, color: O.ink };
   return (
     <button type="button" data-testid={testId} onClick={onClick} disabled={disabled} title={title}
-      className="inline-flex items-center whitespace-nowrap rounded-[8px] border px-4 py-[8px] text-[13px] font-semibold disabled:cursor-not-allowed disabled:opacity-50" style={s}>
+      className="inline-flex cursor-pointer items-center whitespace-nowrap rounded-[8px] border px-4 py-[8px] text-[13px] font-semibold enabled:hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-50" style={s}>
       {children}
     </button>
   );
