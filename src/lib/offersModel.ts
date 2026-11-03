@@ -911,6 +911,18 @@ export function pastedLine(pasted: number, l: Lookup): string {
   const n = (x: number) => x.toLocaleString("en-US");
   return `${n(pasted)} pasted · ${n(l.players.length)} found` + (l.notFound.length > 0 ? ` · ${n(l.notFound.length)} not found` : "");
 }
+// SAVE AND LAUNCH WAIT FOR THE ID LOOKUP (specific players). Until the lookup has answered for the ids on screen,
+// playerIds can still hold the list from before the last edit, or ids the backend refuses because they are not players.
+// typed: the ids parsed from the box; answeredFor: the typed key (ids joined by ",") the last answer or error was for;
+// sending: the form's playerIds.
+export function playerLookupBlock(s: { players: boolean; typed: number[]; answeredFor: string | null; lookup: Lookup | null; failed: boolean; sending: number[] }): string | null {
+  if (!s.players || s.typed.length === 0) return null;
+  const key = s.typed.join(",");
+  if (s.answeredFor === key && s.failed) return "Couldn't look the IDs up. Change the list to try again.";
+  if (s.answeredFor !== key || s.lookup === null) return "Still looking up the IDs.";
+  const missing = new Set(s.lookup.notFound);
+  return s.sending.join(",") === s.typed.filter((id) => !missing.has(id)).join(",") ? null : "Still looking up the IDs.";
+}
 export const MAX_TEST_IDS = 20;
 // type: the account type. The lookup also returns ADMIN accounts, so staff can test on their own.
 export type Lookup = { players: { id: number; name: string | null; type?: string; city: string | null; matchesPlayed: number }[]; notFound: number[] };

@@ -5,7 +5,7 @@ import "server-only";
 // base URL and the allowed upload host. Anything unset or wrong answers 503, for everyone.
 //
 // TWO GATES, in order: Match Ops access (authenticateMatchOpsRead, the same check the Match Ops section
-// uses, read fresh from app_users on every request), then the config (503). So someone with no session
+// uses, read fresh from app_users on every request, and never a city-confined account), then the config (503). So someone with no session
 // only ever gets 401, and someone without access only ever gets the 404 a missing route gives. The backend's ADMIN-only rule is a separate check on the service
 // account; it says nothing about which Clubhouse user is asking. Who did a write is in change_log and in
 // X-Acting-Staff-Email, both from the session.
@@ -45,6 +45,9 @@ function cfg(): OffersConfig {
 export async function offersGate(req: Request): Promise<OffersAuth | Response> {
   const auth = await gateDeps.authenticate(req);
   if (!auth.ok) return auth.status === 403 ? Response.json(OFFERS_NOT_FOUND, { status: 404 }) : Response.json({ error: auth.error }, { status: auth.status });
+  // A CITY-CONFINED ACCOUNT NEVER USES OFFERS. authenticateMatchOpsRead already refuses it here, because /api/offers is
+  // not on the confined route allowlist (cityConfinement.ts); this holds even if someone adds it there.
+  if (auth.confined) return Response.json(OFFERS_NOT_FOUND, { status: 404 });
   const config = gateDeps.config();
   if (!config.ok) {
     console.error(`[offers] closed: ${config.problem}`);
@@ -66,6 +69,7 @@ function backendMessage(e: unknown): { code: string | null; message: string | nu
 }
 const NO_PUSHES = "This backend doesn't have offer pushes yet, so nothing was sent or saved.";
 const NO_PUSH_ROUTE = "OffersNoPushRoute";
+export const NO_OFFERS = "Offers isn't deployed on this backend yet.";
 export function errorText(e: unknown): string {
   const raw = e instanceof Error ? e.message : String(e);
   const staff = staffErrorKind(raw);
@@ -79,6 +83,9 @@ export function errorText(e: unknown): string {
   // ("Cannot PUT ...") or, on the local build, {"message":"Not Found"}. The push 404s it means carry one.
   if (e instanceof WriteFailedError && e.status === 404 && /\/push(\/|-settings|\b)/.test(raw) && backendMessage(e).code === null) return NO_PUSHES;
   if (e instanceof Error && e.name === NO_PUSH_ROUTE) return NO_PUSHES;
+  // A backend without Offers at all answers a page read the same way. Every 404 the Offers module raises carries an
+  // errorCode (backend core/offers/constants.ts: NOT_FOUND_OFFER_CAMPAIGN, NOT_FOUND_OFFER, NOT_FOUND_PREVIEW_PLAYER).
+  if (e instanceof WriteFailedError && e.status === 404 && /^GET \S*\/admin\/offers\//.test(raw) && backendMessage(e).code === null) return NO_OFFERS;
   if (e instanceof SyntaxError) { console.error(`[offers] the backend's answer was not JSON: ${raw.slice(0, 200)}`); return "The backend answered with something that isn't JSON. Offers may not be deployed there."; }
   if (e instanceof Error && e.name === READS_STOPPED) return "The backend just had a problem, so reads have stopped for a moment. Try again in 30 seconds.";
   const { code, message } = backendMessage(e);

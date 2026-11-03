@@ -20,7 +20,7 @@ import MatchPicker from "./MatchPicker";
 import { PushReach, PushSection, SendsTo } from "./OfferPush";
 import { defaultSendLocal, pushBodyOf, pushDirty, pushFormOf, pushLocked, pushProblem, pushSuggestion, pushText, type PushForm } from "@/lib/offersPush";
 import OfferPopupPreview from "./OfferPopupPreview";
-import { lookupInBatches, MAX_OFFER_PLAYER_IDS, pastedLine } from "@/lib/offersModel";
+import { lookupInBatches, MAX_OFFER_PLAYER_IDS, pastedLine, playerLookupBlock } from "@/lib/offersModel";
 import {
   Btn, Chip, ConfirmDialog, Labeled, O, PanelSection, VerdictLine, authed, inputCls, inputStyle, outcomeOf, settled, type WriteOutcome,
 } from "./offersUi";
@@ -305,9 +305,11 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
   const [lookupErr, setLookupErr] = useState<string | null>(null);
   // While a long list is looked up in batches: ids checked so far (null when no lookup is running).
   const [lookupDone, setLookupDone] = useState<number | null>(null);
+  // The ids (joined) the last answer or error was for. Save and Launch wait until it is the list on screen.
+  const [lookupFor, setLookupFor] = useState<string | null>(null);
   const idsKey = parsed.ids.join(",");
   useEffect(() => {
-    if (!players || parsed.ids.length === 0) { setLookup(null); setLookupErr(null); setLookupDone(null); return; }
+    if (!players || parsed.ids.length === 0) { setLookup(null); setLookupErr(null); setLookupDone(null); setLookupFor(null); return; }
     let cancelled = false;
     const t = setTimeout(async () => {
       setLookup(null); setLookupErr(null); setLookupDone(0);
@@ -316,7 +318,7 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
         return a.ok ? { ok: true, lookup: a.json as unknown as Lookup } : { ok: false, error: String(a.json.error) };
       }, (done) => { if (!cancelled) setLookupDone(done); }, () => cancelled);
       if (cancelled || r === null) return;
-      setLookupDone(null);
+      setLookupDone(null); setLookupFor(idsKey);
       if (!r.ok) { setLookupErr(r.error); setLookup(null); return; }
       setLookupErr(null); setLookup(r.lookup);
     }, 350);
@@ -477,7 +479,8 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
   };
   const dl = locked || frozen; // deal, audience and run locked
   const passed = endHasPassed(f.endsLocal, offerWall());
-  const launchWhy = matchUnread ? matchUnreadText(matchRead) : problem ?? pushProb ?? launchProblem(f, offerWall()) ?? COUNT_BLOCK[countNow];
+  const idsWhy = playerLookupBlock({ players, typed: parsed.ids, answeredFor: lookupFor, lookup, failed: lookupErr !== null, sending: f.playerIds });
+  const launchWhy = matchUnread ? matchUnreadText(matchRead) : problem ?? pushProb ?? idsWhy ?? launchProblem(f, offerWall()) ?? COUNT_BLOCK[countNow];
   const dealWarn = setPriceProblem(f, m);
   const anyWarn = setPriceAnyWarning(f, data.matches);
 
@@ -869,7 +872,7 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
             )}
             {c?.status === "PAUSED" && <Btn kind="primary" testId="offers-resume" disabled={busy || dirty || passed} title={passed ? "The end time has already passed." : dirty ? "Save or undo your changes first" : undefined} onClick={() => setConfirm("launch")}>Resume</Btn>}
             {(c === null || dirty) && (
-              <Btn testId="offers-save" disabled={busy || !!problem || !!pushProb || (c !== null && settled(outcome) && !dirty)} onClick={onSave}>{c === null ? "Save draft" : "Save changes"}</Btn>
+              <Btn testId="offers-save" disabled={busy || !!problem || !!pushProb || !!idsWhy || (c !== null && settled(outcome) && !dirty)} title={idsWhy ?? undefined} onClick={onSave}>{c === null ? "Save draft" : "Save changes"}</Btn>
             )}
             {c?.status === "LAUNCHED" && <Btn testId="offers-pause" disabled={busy} onClick={() => setConfirm("pause")}>Pause</Btn>}
             {(c?.status === "LAUNCHED" || c?.status === "PAUSED") && <Btn kind="danger" testId="offers-end" disabled={busy} onClick={() => setConfirm("end")}>End</Btn>}

@@ -7,11 +7,12 @@ import "server-only"; // no-op under --conditions=react-server
 //     only what changed; after launch a locked field is never sent, whatever the form says.
 //   - The deal's money matches the backend's applyOfferDeal, in cents.
 //   - Wall clock stays wall clock (a match's "Z" is not re-shifted; now is America/Chicago).
-//   - The gate: config unset or wrong 503, no session 401, without Match Ops 404, with it through.
+//   - The gate: config unset or wrong 503, no session 401, without Match Ops or confined to a city 404, with it through.
 
 import { offersAccessState } from "../src/lib/offersAccess";
 import { matchOpsReadGate } from "../src/lib/matchOpsAuth";
-import { apiWrite, NotAuthorizedError } from "../src/lib/matchdayStageApi";
+import { assertConfinedRoute } from "../src/lib/cityConfinement";
+import { apiWrite, NotAuthorizedError, WriteFailedError } from "../src/lib/matchdayStageApi";
 import { readdirSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
@@ -19,7 +20,7 @@ import {
   summary, wallFromMatch, withPreviewName, buttonOf, opensText, formProblem, stepUses, usesLine, stepLimit, limitLine, copyOf,
   addSection, autoCopy, canReset, copyAfterType, staleLines, staleSections, writtenForOnLoad, isRemovable, removeSection, resetCopy, sectionCollapsed, REMOVABLE_KEYS, canHidePhoto, copyAfterHide, hideUpload, extraBookingsLine, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, audienceText, parsePlayerIds, playerLine, notFoundLine, usedOfLimit, resultsLines, playedAtSuggestions, isAdminAccount, scopeFieldsLine, setPriceAnyWarning as anyPriceWarn, matchPicked, matchTitle, matchWhere, ranUntil, endNote, pauseNote, progressText, campaignsAfter, countWanted, lockedSummary, offerWallNow, offerZones, wallNowIn, mergeMatches, offerMatchOpt, pickerRange, withCovers, coverTiles, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, endHasPassed, launchProblem, namedMatchIds, offersLogBody, pickerDayLabel, pickerView, fillText, fillFraction, setPriceAnyWarning, setPriceProblem, on188Line, fullBody, type Campaign, type City, type MatchOpt, type Results,
 } from "../src/lib/offersModel";
-import { _setOffersGateDepsForTest, errorText, MAX_MATCH_PAGES, mismatches, offersGate, offersWrite, photoLinkProblem, readFirstMatchPage, readMatchesForCities, sendPreview, type OffersAuth } from "../src/lib/offersServer";
+import { _setOffersGateDepsForTest, errorText, GENERIC, NO_OFFERS, MAX_MATCH_PAGES, mismatches, offersGate, offersWrite, photoLinkProblem, readFirstMatchPage, readMatchesForCities, sendPreview, type OffersAuth } from "../src/lib/offersServer";
 import { readOffersConfig } from "../src/lib/offersConfig";
 import { assertAllowedHost, preflightWrite } from "../src/lib/matchdayStageApi";
 import { makePacer, OFFERS_READ_PACE_MS, READS_STOPPED } from "../src/lib/offersPacing";
@@ -159,7 +160,7 @@ eq("ids from commas, spaces and lines, first kept, junk set aside", parsePlayerI
 eq("over the cap is flagged", parsePlayerIds("1 2 3", 2), { ids: [1, 2], bad: [], tooMany: true });
 // 20,000 IDS (2026-11-02): the cap is the backend's MAX_OFFER_PLAYER_IDS, not 2,000.
 // (Imported here rather than in the block at the top; ES imports are hoisted either way.)
-import { LOOKUP_BATCH, lookupInBatches, MAX_OFFER_PLAYER_IDS, pastedLine, holdoutFor, playersHoldoutOn, heldBackLine, PLAYERS_HOLDOUT_MIN, DEFAULT_HOLDOUT_PERCENT } from "../src/lib/offersModel";
+import { LOOKUP_BATCH, lookupInBatches, MAX_OFFER_PLAYER_IDS, pastedLine, playerLookupBlock, type Lookup, holdoutFor, playersHoldoutOn, heldBackLine, PLAYERS_HOLDOUT_MIN, DEFAULT_HOLDOUT_PERCENT } from "../src/lib/offersModel";
 {
   const big = Array.from({ length: 20_001 }, (_, i) => i + 1);
   const t0 = Date.now();
@@ -171,6 +172,19 @@ import { LOOKUP_BATCH, lookupInBatches, MAX_OFFER_PLAYER_IDS, pastedLine, holdou
     "5,829 pasted · 5,812 found · 17 not found");
   eq("pasted line, all found / one", [pastedLine(2, { players: [{ id: 1, name: null, city: null, matchesPlayed: 0 }, { id: 2, name: null, city: null, matchesPlayed: 0 }], notFound: [] }), pastedLine(1, { players: [], notFound: [9] })],
     ["2 pasted · 2 found", "1 pasted · 0 found · 1 not found"]);
+}
+// SAVE AND LAUNCH WAIT FOR THE ID LOOKUP (review 2026-11-02, OfferPanel): blocked until the answer is for the ids on screen
+// and playerIds is that list less the not-found ones.
+{
+  const L = (notFound: number[]): Lookup => ({ players: [], notFound });
+  const s = { players: true, typed: [1, 2, 3], answeredFor: "1,2,3", lookup: L([2]), failed: false, sending: [1, 3] };
+  const wait = "Still looking up the IDs.";
+  eq("answered for the list on screen, not-found dropped: nothing blocks (the control)", playerLookupBlock(s), null);
+  eq("no answer yet / answer for an older list / sending still the typed list", [
+    playerLookupBlock({ ...s, answeredFor: null, lookup: null }), playerLookupBlock({ ...s, answeredFor: "1,2" }), playerLookupBlock({ ...s, sending: [1, 2, 3] }),
+  ], [wait, wait, wait]);
+  eq("the lookup failed for this list: blocked with its own reason", playerLookupBlock({ ...s, lookup: null, failed: true }), "Couldn't look the IDs up. Change the list to try again.");
+  eq("filters, or no ids typed: the lookup never blocks", [playerLookupBlock({ ...s, players: false, answeredFor: null }), playerLookupBlock({ ...s, typed: [], answeredFor: null })], [null, null]);
 }
 // SPECIFIC PLAYERS HOLDOUT (backend playersHoldout, 2026-11-02): 200 or more ids hold back the percent asked, fewer nobody.
 {
@@ -922,6 +936,14 @@ function routeFiles(dir: string): string[] {
   eq("the E2E account by email: 404", await status(await offersGate(req())), 404);
   _setOffersGateDepsForTest({ config: open, authenticate: async () => ({ ok: true as const, supabase: {} as never, appUserId: "u1", email: "not-an-email", isAdmin: false, canEditMatches: false, canManagePlayers: false, canManagePromos: false, canEditMemberships: false, confinedCity: null, confined: false }) });
   eq("in, but with no usable email: a write is refused 401", await status(await offersGate(req("POST"))), 401);
+  // offersGate's own confined check: the same caller let through by auth, confined or not (the control).
+  {
+    const passed = (confined: boolean) => async () => ({ ok: true as const, supabase: {} as never, appUserId: "u1", email: "jf@playmatchday.pl", isAdmin: false, canEditMatches: false, canManagePlayers: false, canManagePromos: false, canEditMemberships: false, confinedCity: confined ? "WAW" : null, confined });
+    _setOffersGateDepsForTest({ config: open, authenticate: passed(false) });
+    const notConfined = await status(await offersGate(req("POST")));
+    _setOffersGateDepsForTest({ config: open, authenticate: passed(true) });
+    eq("let through by auth: unconfined is in, confined is 404 from offersGate itself", [notConfined, await status(await offersGate(req("POST"))), await status(await offersGate(req()))], ["through", 404, 404]);
+  }
   // The real check, unstubbed, as far as it goes offline.
   _setOffersGateDepsForTest({ config: open });
   eq("the real check with no session: 401, not a 404", await status(await offersGate(req())), 401);
@@ -935,21 +957,45 @@ function routeFiles(dir: string): string[] {
     let handlers = 0;
     const answers: Record<string, unknown> = {};
     const through: Record<string, unknown> = {};
+    // CONFINED ACCOUNTS (review 2026-11-02): the Warsaw shape, Match Ops ticked and a city set. realConfined is
+    // authenticateMatchOpsRead's own two checks on the route's real path; leakedConfined is the same account let through,
+    // as if /api/offers were added to the confined allowlist, so only offersGate's own check stands.
+    const confinedRow = { can_access_matchops: true, city_identifier: "WAW" };
+    const realConfined = async (r: Request) => {
+      const g = matchOpsReadGate(confinedRow, "jf@playmatchday.pl");
+      if (!g.ok) return g;
+      const route = assertConfinedRoute(confinedRow, r.url);
+      return route.ok ? { ok: true as const, supabase: {} as never, appUserId: "u1", email: "jf@playmatchday.pl", isAdmin: false, canEditMatches: false, canManagePlayers: false, canManagePromos: false, canEditMemberships: false, confinedCity: "WAW", confined: true } : route;
+    };
+    const leakedConfined = async () => ({ ok: true as const, supabase: {} as never, appUserId: "u1", email: "jf@playmatchday.pl", isAdmin: false, canEditMatches: false, canManagePlayers: false, canManagePromos: false, canEditMemberships: false, confinedCity: "WAW", confined: true });
+    const confinedAnswers: Record<string, unknown> = {};
+    const confinedWant: Record<string, unknown> = {};
     for (const f of files) {
       const mod = (await import(f)) as Record<string, unknown>;
+      const path = `/api/offers${f.split("/api/offers")[1].replace(/\/route\.ts$/, "").replace("[id]", "1").replace("[action]", "launch")}`;
       for (const m of ["GET", "POST", "PATCH", "DELETE", "PUT"]) {
         const h = mod[m] as undefined | ((r: Request, c: typeof ctx) => Promise<Response>);
         if (!h) continue;
         handlers++;
         const name = `${m} ${f.split("/api/offers")[1]}`;
+        const mk = (url: string) => new Request(url, { method: m, ...(m === "GET" ? {} : { body: "{}" }) });
         _setOffersGateDepsForTest({ config: open, authenticate: asRow({ can_access_growth: true }) });
-        const r = await h(new Request("http://localhost/api/offers/1", { method: m, ...(m === "GET" ? {} : { body: "{}" }) }), ctx);
+        const r = await h(mk("http://localhost/api/offers/1"), ctx);
         answers[name] = r.status;
         through[name] = 404;
+        // A handler that gets past the gate may throw further in (no Supabase offline): recorded, not a crash.
+        const tryStatus = (url: string) => h(mk(url), ctx).then((x) => x.status, () => "threw past the gate");
+        _setOffersGateDepsForTest({ config: open, authenticate: realConfined });
+        const rc = await tryStatus(`http://localhost${path}`);
+        _setOffersGateDepsForTest({ config: open, authenticate: leakedConfined });
+        const lc = await tryStatus(`http://localhost${path}`);
+        confinedAnswers[name] = [rc, lc];
+        confinedWant[name] = [404, 404];
       }
     }
     eq("the positive control: the walk found the routes", handlers >= 13, true);
     eq("without Match Ops, every handler of every route answers 404", answers, through);
+    eq("a confined account, on every handler of every route: 404 through the real auth, and 404 from offersGate alone when the allowlist lets it through", confinedAnswers, confinedWant);
     eq("...and none of them reached the backend", fetched, 0);
     // The action is looked up with Object.hasOwn: what every object inherits is not an action.
     {
@@ -1113,6 +1159,18 @@ function routeFiles(dir: string): string[] {
       eq("a web page where JSON should be says Offers may not be there", await offersGetText(), "The backend answered with something that isn't JSON. Offers may not be deployed there.");
       // That failure stopped reads, as any non-4xx does. Move past the stop for what follows.
       _setOffersGateDepsForTest({ sleep, logStore, now: () => Date.now() + 60_000, config: () => ({ ok: true, config: { env: "staging", baseUrl: "https://matchday-stage.herokuapp.com", uploadHost: "b.s3.amazonaws.com" } }) });
+      // A BACKEND WITHOUT OFFERS (review 2026-11-02): a page read 404s with no errorCode, Nest's own body or the local
+      // build's. Said plainly, not the generic text. An Offers 404 carries its errorCode and keeps its own words (the control).
+      const answer404 = (body: string) => { globalThis.fetch = (async (input: RequestInfo | URL) => (String(input).endsWith("/auth/signin") ? new Response(JSON.stringify({ accessToken: JWT }), { status: 200 }) : new Response(body, { status: 404 }))) as typeof fetch; };
+      const reads: string[] = [];
+      for (const body of [JSON.stringify({ message: "Cannot GET /api/v1/admin/offers/matches", error: "Not Found", statusCode: 404 }), JSON.stringify({ message: "Not Found" }), "Not Found",
+        JSON.stringify({ errorCode: "NOT_FOUND_OFFER_CAMPAIGN", message: "Offer campaign not found", statusCode: 404 })]) { answer404(body); reads.push(await offersGetText()); }
+      eq("a page read 404 with no errorCode: Offers isn't deployed; with one: its own words", reads, [NO_OFFERS, NO_OFFERS, NO_OFFERS, "That offer no longer exists. Refresh the list."]);
+      eq("...only for a read under /admin/offers: a write 404 and another read 404 stay generic", [
+        errorText(new WriteFailedError(404, "PUT https://x.test/api/v1/admin/offers/campaigns/9: HTTP 404", "{\"message\":\"Not Found\"}")),
+        errorText(new WriteFailedError(404, "GET https://x.test/api/v1/admin/matches/9: HTTP 404", "{\"message\":\"Not Found\"}")),
+      ], [GENERIC, GENERIC]);
+      globalThis.fetch = realStub;
     }
 
     // THE MATCH READS, on the real functions: one page on load, a paced walk only when asked, and never admin/matches.
