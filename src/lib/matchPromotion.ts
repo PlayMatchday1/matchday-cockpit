@@ -72,6 +72,10 @@ export type PromoPush = {
   pushedBy: string | null;
   /** 0238. True = only send if the match is still low a couple of hours before. False = regular. */
   checkFirst: boolean;
+  /** 0249. When somebody decided NOT to send this check-first push. NULL = not skipped. Never
+   *  "sent": skipped is its own done state, and it is never past due. */
+  skippedAt: string | null;
+  skippedBy: string | null;
 };
 
 export type PromoPlan = {
@@ -92,15 +96,28 @@ export type DraftPush = { id?: number; channel: ChannelKey; pushAt: string | nul
  *
  * A PUSH WITH NO push_at IS NOT OVERDUE. NULL means "needs a date", and a decision nobody has made
  * is not a deadline anybody has missed. */
-export function isPushOverdue(push: Pick<PromoPush, "pushAt" | "pushedAt"> | null | undefined, now = Date.now()): boolean {
+export function isPushOverdue(push: Pick<PromoPush, "pushAt" | "pushedAt"> & { skippedAt?: string | null } | null | undefined, now = Date.now()): boolean {
   if (!push?.pushAt) return false;
   if (push.pushedAt) return false;
+  /* A SKIPPED PUSH IS DONE (0249). It was checked and deliberately not sent, so it has no
+   * deadline left to miss. */
+  if (push.skippedAt) return false;
   return Date.parse(push.pushAt) < now;
 }
 
 /** True once somebody has marked THIS push sent. Marking one leaves its siblings alone. */
 export const isPushSent = (push: Pick<PromoPush, "pushedAt"> | null | undefined): boolean =>
   !!push?.pushedAt;
+
+/** 0249. True once somebody chose not to send this check-first push. */
+export const isPushSkipped = (push: { skippedAt?: string | null } | null | undefined): boolean =>
+  !!push?.skippedAt;
+
+/** "Skipped Mon 6:30 PM by teresa". Same clock and same name rule as sentStamp. */
+export function skippedStamp(push: { skippedAt?: string | null; skippedBy?: string | null }): string {
+  if (!push.skippedAt) return "";
+  return sentStamp({ pushedAt: push.skippedAt, pushedBy: push.skippedBy ?? null }).replace(/^Sent/, "Skipped");
+}
 
 /* "Sent Mon 6:30 PM by Ryan". WHO AND WHEN, because the point of leaving a sent row on the strip is
  * that somebody else can see it was handled and by whom. The reader's own clock, like every other
@@ -843,6 +860,9 @@ async function fetchPlans(
         pushedBy: r.pushed_by ?? null,
         /* === true, so a row read before 0238 existed (no column) is a regular push. */
         checkFirst: r.check_first === true,
+        /* ?? null, so a row read before 0249 is applied (no column) is simply not skipped. */
+        skippedAt: r.skipped_at ?? null,
+        skippedBy: r.skipped_by ?? null,
       });
     }
   }
@@ -1106,6 +1126,9 @@ export type GeneralPush = {
   audience: string | null;
   /** 0238. Same meaning as on a match push: only send if the matches it reaches are still low. */
   checkFirst: boolean;
+  /** 0249. Same meaning as on a match push. */
+  skippedAt: string | null;
+  skippedBy: string | null;
 };
 
 /** The day column a general push falls in, or null when it carries no date. */
@@ -1142,9 +1165,16 @@ export function generalsCovering(
  * general push covering this match's day. An undated push reaches nothing, as before.
  *
  *   own dated regular push           planned          green
+ *   own dated pushes, all check first check           yellow, whatever group push covers it
  *   regular general push, no own     covered          green, dotted rail
  *   only check-first pushes reach    check            yellow
  *   own pushes, none dated           needs-decision   amber
+ *
+ * OWN PUSHES DECIDE (Teresa, 2026-11-02, confirmed by Ryan). Keswick Park Mon Nov 2 8:00 PM had one
+ * own WhatsApp push, check first, and stayed green because a regular Klaviyo SMS FIELD push covered
+ * that day. A match planned on its own as check first is yellow; a group push only colours a match
+ * that has no dated push of its own. Field tags (Key Field, Starting 11, Priority) are not pushes
+ * and are not read here at all.
  *
  * A REGULAR GENERAL PUSH NOW BEATS AN OWN UNDATED ONE. Before 0238 an undated own push made the
  * tile amber even when a city push carried the match; under the one rule something regular is
@@ -1157,6 +1187,7 @@ export function coverageOf(
   if (m.state === "cancelled") return "cancelled";
   const reach = pushReach(m, generals, days);
   if (reach.ownRegular > 0) return "planned";
+  if (reach.ownCheck > 0) return "check";
   if (reach.generalRegular > 0) return "covered";
   if (reach.check > 0) return "check";
   if (m.state === "needs-decision") return "needs-decision";
@@ -1169,11 +1200,12 @@ export function pushReach(
   m: PromoMatch,
   generals: readonly GeneralPush[],
   days: { iso: string }[],
-): { ownRegular: number; generalRegular: number; check: number } {
+): { ownRegular: number; ownCheck: number; generalRegular: number; check: number } {
   const own = datedPushes(m.plan);
   const gens = generalsCovering(m, generals, days);
   return {
     ownRegular: own.filter((p) => !p.checkFirst).length,
+    ownCheck: own.filter((p) => p.checkFirst).length,
     generalRegular: gens.filter((g) => !g.checkFirst).length,
     check: own.filter((p) => p.checkFirst).length + gens.filter((g) => g.checkFirst).length,
   };
@@ -1312,6 +1344,8 @@ async function fetchGeneralPushes(sb: SupabaseClient, days: { iso: string }[]): 
       city: String(r.scope_city ?? ""), fieldId: (r.scope_field_id as number | null) ?? null,
       audience: (r.audience as string | null) ?? null,
       checkFirst: r.check_first === true,
+      skippedAt: (r.skipped_at as string | null | undefined) ?? null,
+      skippedBy: (r.skipped_by as string | null | undefined) ?? null,
     });
   }
   return out.sort(byPushTime);

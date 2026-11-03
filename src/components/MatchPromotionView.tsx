@@ -25,15 +25,15 @@ import { useFinanceData } from "@/lib/useFinanceData";
 import { getCancelPatterns, rollUpSlotRisk, clustersForField, slotRiskKey, type SlotRisk } from "@/lib/cancelPatterns";
 import { normalizeMatchName } from "@/lib/venueNormalization";
 import { TAG_KEYS, TAG_KEY_ORDER, TAG_META, splitTags, tagTitle, tagTitleWithDates, tagLiveOn, tagRangeLabel, tagsAtScope, tagsInUse, isTagKey, type TagDates, type TagKey } from "@/lib/promoTags";
-import { weekQueueEntries, weekQueues, isPastWeek, defaultDayIdx, tabCounts, checkFirstFill, generalReachMatches, type QueueEntry } from "@/lib/promoDayQueue";
+import { weekQueueEntries, weekQueues, isPastWeek, defaultDayIdx, tabCounts, checkFirstFill, generalReachMatches, filterQueue, channelCounts, type QueueEntry } from "@/lib/promoDayQueue";
 import {
   CHANNELS, NEW_FLAG_LABEL, channelsOn, coverageCaption, coverageStateOf, coverageSummary, matchCodes,
   coverageOf, coverLabel, generalsCovering, generalPushDayIdx, pushReach, type GeneralPush,
   datedPushes, draftFromPlan, draftToPushes, fmtPushIn, fromInputValue, isPushOverdue, isPushSent, leadToKickoff,
-  sentStamp, toInputValue, venueOffsetMs,
-  type PromoMatch, type PromoPush, type PromoWeek, type PushDraft, type ZoneMode,
+  sentStamp, skippedStamp, isPushSkipped, toInputValue, venueOffsetMs,
+  type ChannelKey, type PromoMatch, type PromoPush, type PromoWeek, type PushDraft, type ZoneMode,
 } from "@/lib/matchPromotion";
-import MarkPushSent from "@/components/MarkPushSent";
+import MarkPushSent, { SkipPush } from "@/components/MarkPushSent";
 import PushPlanEditor, { CheckFirstToggle, CHECK_FIRST_BOX } from "@/components/PushPlanEditor";
 import Starting11Control from "@/components/Starting11Control";
 
@@ -793,13 +793,23 @@ function DayQueue({ week, zone, onMarked, onError, withPush, liveCount }: {
   const past = isPastWeek(week, now);
   const [sel, setSel] = useState(() => defaultDayIdx(week));
   const [showDone, setShowDone] = useState(false);
+  /* THE CHANNEL FILTER (Teresa, 2026-11-02). Null = All. NOT reset when the day changes: the
+   * filter is remembered while switching days, which is the point of having it. */
+  const [chan, setChan] = useState<ChannelKey | null>(null);
   // THE WEEK CAN CHANGE UNDER THE TAB. Stepping back a week has no "today", so the selection
   // returns to the first day rather than pointing at a day the new week does not highlight.
   useEffect(() => { setSel(defaultDayIdx(week)); setShowDone(false); }, [week.weekStart]);
 
   const queues = useMemo(() => weekQueues(week, now), [week, now]);
-  const q = queues[sel];
-  const total = q.late.length + q.todo.length + q.done.length;
+  const dayQ = queues[sel];
+  const total = dayQ.late.length + dayQ.todo.length + dayQ.done.length;
+  /* THE CHIPS: All, then only the channels with pushes this day, in CHANNELS order. A remembered
+   * channel with nothing today still shows, at 0, so the filter that is hiding everything is on
+   * screen to clear rather than invisible. */
+  const perChan = channelCounts(dayQ);
+  const chips = CHANNELS.filter((c) => (perChan.get(c.key) ?? 0) > 0 || c.key === chan);
+  const q = filterQueue(dayQ, chan);
+  const shown = q.late.length + q.todo.length + q.done.length;
 
   const move = (d: number) => {
     const next = Math.min(6, Math.max(0, sel + d));   // STOPS AT THE ENDS, never wraps
@@ -862,11 +872,35 @@ function DayQueue({ week, zone, onMarked, onError, withPush, liveCount }: {
             {DOW_FULL[sel]} {week.days[sel].date}{week.days[sel].today ? " · today" : ""}
           </span>
           <span className="text-[12px] font-bold text-deep-green/55" data-testid="queue-count">
-            {total} push{total === 1 ? "" : "es"} · {q.done.length} sent
-            {q.late.length > 0 ? ` · ${q.late.length} past due` : tabCounts(q).todo > 0 ? ` · ${tabCounts(q).todo} to send` : ""}
-            {tabCounts(q).check > 0 ? ` · ${tabCounts(q).check} to check` : ""}
+            {total} push{total === 1 ? "" : "es"} · {tabCounts(dayQ).done - tabCounts(dayQ).skipped} sent
+            {tabCounts(dayQ).skipped > 0 ? ` · ${tabCounts(dayQ).skipped} skipped` : ""}
+            {dayQ.late.length > 0 ? ` · ${dayQ.late.length} past due` : tabCounts(dayQ).todo > 0 ? ` · ${tabCounts(dayQ).todo} to send` : ""}
+            {tabCounts(dayQ).check > 0 ? ` · ${tabCounts(dayQ).check} to check` : ""}
           </span>
         </div>
+        {total > 0 && (
+          <div className="mb-1.5 mt-2 flex flex-wrap gap-1.5" role="group" aria-label="Channel" data-testid="chan-filter">
+            {[{ key: null as ChannelKey | null, label: "All", n: total },
+              ...chips.map((c) => ({ key: c.key as ChannelKey | null, label: c.label, n: perChan.get(c.key) ?? 0 }))].map((c) => {
+              const on = chan === c.key;
+              return (
+                <button key={c.key ?? "all"} type="button" aria-pressed={on}
+                  data-testid="chan-chip" data-chan={c.key ?? "all"} data-n={c.n}
+                  onClick={() => setChan(c.key)}
+                  className={`inline-flex min-h-[32px] items-center gap-1.5 rounded-full border px-3 text-[12.5px] font-bold ${
+                    on ? "border-deep-green bg-deep-green text-white" : "border-cream-line bg-white text-deep-green/80"}`}>
+                  {c.label}
+                  <b className={`text-[11.5px] font-extrabold ${on ? "text-mint" : "text-deep-green/45"}`}>{c.n}</b>
+                </button>
+              );
+            })}
+          </div>
+        )}
+        {chan && (
+          <div className="mb-1.5 text-[11.5px] text-deep-green/55" data-testid="chan-filter-note">
+            Showing {CHANNELS.find((c) => c.key === chan)?.label ?? chan} only · sorted by push time
+          </div>
+        )}
         {/* PAST DUE FIRST, IN ITS OWN GROUP. A push whose moment has gone is late; one whose moment
             has not arrived is not, however soon it is. */}
         {q.late.length > 0 && <div className="mb-1 mt-1.5 text-[9.5px] font-extrabold uppercase tracking-[0.08em] text-coral">Past due</div>}
@@ -878,9 +912,14 @@ function DayQueue({ week, zone, onMarked, onError, withPush, liveCount }: {
             Nothing planned for this day. Plan it on the week below.
           </div>
         )}
-        {total > 0 && q.late.length === 0 && q.todo.length === 0 && (
+        {total > 0 && shown === 0 && (
+          <div className="py-1.5 text-[12px] text-deep-green/40" data-testid="queue-chan-empty">
+            No {CHANNELS.find((c) => c.key === chan)?.label ?? ""} pushes on this day.
+          </div>
+        )}
+        {shown > 0 && q.late.length === 0 && q.todo.length === 0 && (
           <div className="py-1.5 text-[12px] font-bold text-emerald-700" data-testid="queue-clear">
-            Everything planned for this day has gone out.
+            {chan ? "Everything shown here is done." : "Everything planned for this day is done."}
           </div>
         )}
         {/* SENT GOES QUIET, NOT AWAY. Ryan: "they still show so everyone has visibility." */}
@@ -888,7 +927,7 @@ function DayQueue({ week, zone, onMarked, onError, withPush, liveCount }: {
           <>
             <button data-testid="queue-fold" aria-expanded={showDone} onClick={() => setShowDone((v) => !v)}
               className="mt-1.5 min-h-[32px] rounded-[9px] border border-cream-line bg-white px-2.5 text-[12px] font-bold text-deep-green/65">
-              {showDone ? "Hide" : "Show"} {q.done.length} already sent
+              {showDone ? "Hide" : "Show"} {q.done.length} {q.done.some((e) => isPushSkipped(e.p)) ? "sent or skipped" : "already sent"}
             </button>
             {showDone && q.done.map((e) => <QueueRow key={`d${e.p.id}`} e={e} zone={zone} past={past} week={week} onMarked={onMarked} onError={onError} />)}
           </>
@@ -905,7 +944,9 @@ function QueueRow({ e, zone, late, past, week, onMarked, onError }: {
   onMarked: () => void; onError: (msg: string) => void;
 }) {
   const { m, p, general } = e;
-  const sent = isPushSent(p);
+  /* SKIPPED READS LIKE SENT (0249): greyed, struck, stamped, never past due. */
+  const skipped = !isPushSent(p) && isPushSkipped(p);
+  const sent = isPushSent(p) || skipped;
   /* A GENERAL PUSH HAS NO MATCH TO TAKE A VENUE OFFSET FROM, so its time renders in the reader's
    * own clock rather than in a venue clock that does not exist for it. */
   const t = m ? fmtPush(m, p, zone) : fmtPushIn(p.pushAt, "me", null);
@@ -923,10 +964,10 @@ function QueueRow({ e, zone, late, past, week, onMarked, onError }: {
   const fill = check ? checkFirstFill(e, week) : null;
   return (
     <div data-testid="queue-row" data-push-id={p.id} data-channel={p.channel}
-      data-sent={sent ? "1" : "0"} data-late={late ? "1" : "0"} data-check-first={p.checkFirst ? "1" : "0"}
+      data-sent={sent ? "1" : "0"} data-skipped={skipped ? "1" : "0"} data-late={late ? "1" : "0"} data-check-first={p.checkFirst ? "1" : "0"}
       className={`mb-1.5 flex flex-wrap items-center gap-2.5 rounded-[9px] border px-2.5 py-[7px] text-[12.5px] ${
         sent ? "border-cream-line bg-[#f4f7f5]" : late ? "border-coral/40 bg-coral-soft/40"
-          : check ? "border-yellow-400 bg-yellow-50" : "border-cream-line bg-white"}`}>
+          : check ? "border-yellow-400 bg-yellow-50" : "border-mint/40 bg-mint-soft/30"}`}>
       <span className={`whitespace-nowrap text-[12.5px] font-extrabold ${sent ? "text-deep-green/45 line-through" : late ? "text-coral" : ""}`}>
         {t.time}
       </span>
@@ -970,10 +1011,16 @@ function QueueRow({ e, zone, late, past, week, onMarked, onError }: {
       )}
       {p.topic && <span data-testid="queue-topic" className={`min-w-0 truncate text-[12px] ${sent ? "text-deep-green/40" : "text-deep-green/55"}`}>{p.topic}</span>}
       {late && <span data-testid="queue-late" className="rounded-[5px] bg-coral px-[5px] py-px text-[9.5px] font-extrabold text-white">past due</span>}
-      {sent && <span data-testid="queue-stamp" className="text-[11.5px] text-deep-green/45">{sentStamp(p)}</span>}
+      {sent && <span data-testid="queue-stamp" className="text-[11.5px] text-deep-green/45">{skipped ? skippedStamp(p) : sentStamp(p)}</span>}
       {/* PAST WEEKS TAKE MARK SENT TOO (Ryan, 2026-10-05): a push that went out last week still
-          needs recording, so the past-week lock is gone. `past` stays for the row's other states. */}
-      {!sent && <MarkPushSent push={p} onDone={onMarked} onError={onError} />}
+          needs recording, so the past-week lock is gone. `past` stays for the row's other states.
+          SKIP SITS BESIDE IT on check-first pushes (0249), and turns into Undo skip once used. */}
+      {(!sent || skipped) && (
+        <span className="ml-auto flex flex-none items-center gap-2">
+          <SkipPush push={p} onDone={onMarked} onError={onError} />
+          {!sent && <MarkPushSent push={p} onDone={onMarked} onError={onError} />}
+        </span>
+      )}
     </div>
   );
 }

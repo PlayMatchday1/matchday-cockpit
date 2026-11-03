@@ -58,9 +58,9 @@ export default function MarkPushSent({
       });
       const json = (await res.json()) as { outcome?: string; error?: string };
       if (json.outcome === "LANDED") await onDone();
-      else onError?.(`${json.outcome ?? "FAILED"} — ${json.error ?? "nothing was written."}`);
+      else onError?.(`${json.outcome ?? "FAILED"}: ${json.error ?? "nothing was written."}`);
     } catch {
-      onError?.("Network error — nothing was written.");
+      onError?.("Network error. Nothing was written.");
     } finally {
       setBusy(false);
     }
@@ -83,6 +83,63 @@ export default function MarkPushSent({
       style={{ minHeight: 32 }}
     >
       {busy ? "…" : sent ? "Sent" : "Mark sent"}
+    </button>
+  );
+}
+
+/* ── SKIP A CHECK-FIRST PUSH (0249) ───────────────────────────────────────────────────────────
+ * Beside Mark sent, on check-first pushes only. Skip records "checked, not sending"; the row greys
+ * out with the sent ones and is never past due. On a skipped row the same button reads "Undo skip".
+ * No confirm, for the same reason Mark sent has none: it is reversible and moves no money. */
+export function SkipPush({
+  push,
+  onDone,
+  onError,
+}: {
+  push: PromoPush;
+  onDone: () => void | Promise<void>;
+  onError?: (msg: string) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const skipped = !!push.skippedAt;
+  if (!push.checkFirst || isPushSent(push) || !canMarkSent(push)) return null;
+
+  const toggle = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const { data: sess } = await supabase.auth.getSession();
+      const token = sess.session?.access_token;
+      const res = await fetch("/api/match-promotion", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ pushId: push.id, skipped: !skipped }),
+      });
+      const json = (await res.json()) as { outcome?: string; error?: string };
+      if (json.outcome === "LANDED") await onDone();
+      else onError?.(`${json.outcome ?? "FAILED"}: ${json.error ?? "nothing was written."}`);
+    } catch {
+      onError?.("Network error. Nothing was written.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      data-testid="skip-push"
+      data-push-id={push.id}
+      data-skipped={skipped ? "1" : "0"}
+      disabled={busy}
+      aria-pressed={skipped}
+      onClick={(e) => { e.stopPropagation(); void toggle(); }}
+      title={skipped ? "Put this push back on the list" : "Checked, not sending this one"}
+      className={`flex-none rounded-[8px] border px-2.5 text-[11.5px] font-extrabold disabled:opacity-50 ${
+        skipped ? "border-cream-line bg-white text-deep-green/55" : "border-cream-line bg-white text-deep-green/80"}`}
+      style={{ minHeight: 32 }}
+    >
+      {busy ? "…" : skipped ? "Undo skip" : "Skip"}
     </button>
   );
 }
