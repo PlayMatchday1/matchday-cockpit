@@ -93,7 +93,9 @@ export function shortName(s: string): string {
 const FULL_NAME_KEYS = new Set(["fullName", "full_name", "displayName", "display_name", "playerName", "player_name", "managerName",
   "primaryManagerName", "contactName", "contact_name", "senderName", "sender_name", "authorName", "author_name", "profileName",
   "profile_name", "customerName", "customer_name", "memberName", "member_name", "whatsappName", "whatsapp_name", "sent_by", "sentBy", "sender",
-  "author", "created_by_name", "createdByName", "closed_by_name", "closedByName", "operator_name", "operatorName", "assignee_name", "assigneeName"]);
+  "author", "created_by_name", "createdByName", "closed_by_name", "closedByName", "operator_name", "operatorName", "assignee_name", "assigneeName",
+  // A match card's manager is a person's name in a plain string (Gameday, the match screen, its manager sheet).
+  "manager", "secondManager", "second_manager"]);
 const LAST_NAME_RX = /last_?name$|^surname$/i;
 // A person's name under any prefix (manager_name, primaryManagerName, contact_display_name...); never
 // cityName, fieldName, teamName or matchName.
@@ -145,6 +147,25 @@ export function maskForReview(value: unknown, parentKey = ""): unknown {
     return out;
   }
   return typeof value === "string" ? scrub(value) : value;
+}
+
+/**
+ * Pure: the match details payload (Adjust) as the review account receives it, before masking. The
+ * manager arrives as the whole user record (home coordinates, address, credit); only id and name
+ * stay. The account cannot edit, so the option lists keep its own city's fields and managers only.
+ */
+export function reviewMatchDetails(p: { match: Record<string, unknown>; fields: { city: string | null }[]; managers: unknown[]; managersAllCities: unknown[] }) {
+  const person = (v: unknown) => {
+    if (!v || typeof v !== "object") return v ?? null;
+    const u = v as Record<string, unknown>;
+    return { id: u.id ?? null, firstName: u.firstName ?? null, lastName: u.lastName ?? null };
+  };
+  return {
+    match: { ...p.match, manager: person(p.match.manager), secondManager: person(p.match.secondManager) },
+    fields: p.fields.filter((f) => f.city === p.match.cityName),
+    managers: p.managers,
+    managersAllCities: [],
+  };
 }
 
 /** Wraps a GET handler: the review account's JSON is masked; everyone else's response is untouched. */

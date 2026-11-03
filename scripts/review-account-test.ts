@@ -10,7 +10,7 @@
  */
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { maskForReview, reviewAccountSafe, reviewCredentials, reviewMasked, reviewRefusal, shortName, tokenEmail, REVIEW_EMAIL } from "../src/lib/reviewAccount";
+import { maskForReview, reviewAccountSafe, reviewCredentials, reviewMasked, reviewMatchDetails, reviewRefusal, shortName, tokenEmail, REVIEW_EMAIL } from "../src/lib/reviewAccount";
 
 let pass = 0; const fails: string[] = [];
 const ok = (m: string) => { pass++; console.log(`  ok  ${m}`); };
@@ -55,6 +55,23 @@ is("chat body hidden", chat.messages[0].text, "Message hidden");
 is("chat sender masked, time kept", [chat.messages[0].senderName, chat.messages[0].sentAt], ["Sam R.", "2026-11-02T10:00:00Z"]);
 is("chat media gone", chat.messages[0].mediaUrl, null);
 is("thread name, preview and phone", [chat.thread.display_name, chat.thread.last_message, chat.thread.phone], ["Sam R.", "Message hidden", null]);
+is("a match card's manager string is masked (Gameday, match screen, manager sheet)", maskForReview({ matches: [{ name: "ATX - Zilker 12", manager: "Jordan Blake", secondManager: "Ana Lopez" }] }),
+  { matches: [{ name: "ATX - Zilker 12", manager: "Jordan B.", secondManager: "Ana L." }] });
+is("a bare manager string on the manager sheet is masked", maskForReview({ manager: "Jordan Blake", options: [] }), { manager: "Jordan B.", options: [] });
+{
+  const details = reviewMatchDetails({
+    match: { id: 1, cityName: "Austin", managerId: 5, manager: { id: 5, firstName: "Jordan", lastName: "Blake", lat: 30.1, lng: -97.7, currentLat: 30.2, currentLng: -97.8, currentZipCode: "78701", address: { street: "1 Main St", city: "Austin", country: "United States" }, creditAmount: 500, introMatchText: "hi" }, secondManager: null },
+    fields: [{ city: "Austin" }, { city: "Houston" }, { city: null }],
+    managers: [{ id: 5, name: "Jordan Blake" }],
+    managersAllCities: [{ id: 9, name: "Pat Kim" }],
+  });
+  const shown = maskForReview(details) as { match: { manager: Record<string, unknown>; secondManager: unknown }; fields: unknown[]; managers: { name: string }[]; managersAllCities: unknown[] };
+  is("Adjust: the manager keeps only id and a masked name (no coordinates, zip, address, credit or intro)", shown.match.manager, { id: 5, firstName: "Jordan", lastName: "B." });
+  is("Adjust: no second manager stays null", shown.match.secondManager, null);
+  is("Adjust: only the match's own city's fields", shown.fields, [{ city: "Austin" }]);
+  is("Adjust: the city's managers stay, masked", shown.managers, [{ id: 5, name: "Jordan B." }]);
+  is("Adjust: no other cities' managers", shown.managersAllCities, []);
+}
 is("a match chat sender is masked", (maskForReview({ last_message: { body: "hi", sent_by: "Sam Rivera" } }) as { last_message: { sent_by: string } }).last_message.sent_by, "Sam R.");
 is("prefixed name keys too", maskForReview({ match: { manager_first_name: "Jordan", manager_last_name: "Blake", manager_display_name: "Jordan Blake", city_name: "Austin", field_title: "Zilker Park Field 3" } }), { match: { manager_first_name: "Jordan", manager_last_name: "B.", manager_display_name: "Jordan B.", city_name: "Austin", field_title: "Zilker Park Field 3" } });
 is("a manager avatar on a match card is gone, the field cover stays", maskForReview({ matches: [{ managerAvatar: "https://x/a.jpg", coverUrl: "https://x/c.jpg" }] }), { matches: [{ managerAvatar: null, coverUrl: "https://x/c.jpg" }] });
