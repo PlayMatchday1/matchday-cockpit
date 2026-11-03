@@ -34,6 +34,7 @@
 // otherwise it stands alone under its own title.
 
 import { groupIntoUnits, type VenueLink } from "./venueUnits";
+import { venueCategory } from "./venueResolver";
 
 export const SCHEMA_VERSION = 1;
 export const WINDOW_DAYS = 30;
@@ -178,8 +179,12 @@ export function buildSitePayload(inp: BuildInput): SitePayload {
     const usedSlugs = new Set<string>();
     const siteFields: SiteField[] = units.map((u) => {
       const ms = u.fields.flatMap((uf) => byField.get(uf.id) ?? []).sort((a, b) => a.start_date_utc.localeCompare(b.start_date_utc));
-      // The representative field record: the busiest in the window. Its address, pin and cover are the venue's.
-      const rep = [...u.fields].sort((a, b) => (byField.get(b.id)?.length ?? 0) - (byField.get(a.id)?.length ?? 0) || a.id - b.id)
+      /* THE REPRESENTATIVE FIELD RECORD: its address, pin and cover are the venue's. A regular-play listing first,
+       * then the busiest. Busiest alone picked "NEMP Tournaments", whose cover is a "Special event: Tournament night"
+       * graphic. Event names are venueResolver's own markers; a discount listing is a price variant, so it ranks
+       * after the regular one too. */
+      const plain = (id: number) => { const t = fieldById.get(id)?.title ?? ""; return venueCategory(t) === "regular" && !/\bdiscount(ed)?\b/i.test(t) ? 0 : 1; };
+      const rep = [...u.fields].sort((a, b) => plain(a.id) - plain(b.id) || (byField.get(b.id)?.length ?? 0) - (byField.get(a.id)?.length ?? 0) || a.id - b.id)
         .map((uf) => fieldById.get(uf.id)!).find((f) => f.cover) ?? fieldById.get(u.fields[0].id)!;
       const kicked = ms.filter((m) => Date.parse(m.start_date_utc) <= nowMs);
       const future = ms.filter((m) => Date.parse(m.start_date_utc) > nowMs);

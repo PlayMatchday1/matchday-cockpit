@@ -8321,3 +8321,17 @@ The draft (id 36) was saved and then deleted, LANDED both, never launched.**
   the preview showed it (800×800), and the saved draft carried it as `photoUrl`.
 - Same run, first try: `GET /admin/offers/page` answered **500 "Internal server error" after 10.6 s**; the next read,
   seconds later, 200 in 1.1 s. Cause UNKNOWN (a cold dyno fits, not proven).
+
+## Public website feed: `/api/public/site.json` (2026-11-03)
+
+Code: `src/lib/publicSite.ts` (rule, pure), `src/lib/publicSiteServer.ts` (reads), check: `scripts/verify-public-site.mts`.
+
+- **A field's address, coordinates and cover exist only on `GET /admin/fields`.** The mirror has `field_address`/`field_zipcode` on match rows but no lat/lng and no cover. Evidence: `GET /admin/fields` on production, 2026-11-03, 58 rows; keys `title,description,parkingNote,address,zipcode,lat,lng,cityId,recommendedPlayerCount,abbr,id,createdAt,updatedAt,cover,city,images,orderPosition,deletedAt,mergedIntoFieldId`.
+- **`zipcode` is a NUMBER on that endpoint** (`78746`, Warsaw `1452`), so a leading zero is lost. The feed pads US zips to five digits. Same probe.
+- **No neighborhood or suburb field exists** on fields or cities. The feed sends `null`.
+- **No format field exists.** The feed derives `NvN` as `maxPlayerCount / teams.length` (raw `teams[]`), and sends null when that does not divide.
+- **Data-quality items in that probe:** field 992 has lat/lng swapped (lat `-90.49893`); field 2047 Richardson has no cover; field 2146 (Warsaw) has no coordinates. Addresses are free text: some street-only, some with city, one with ", United States", and 1816 starts with an event name ("Southlake Invite, …").
+- **Three covers are PNGs served as `binary/octet-stream`**: 1816 Bob Jones Park, 2014 Saginaw High School, 1883 One Touch. The bytes start `89504e47`, and an `<img>` renders them. They were uploaded without a Content-Type (see FIELD IMAGES). Evidence: `scripts/verify-public-site.mts` against the deployed feed, 2026-11-03.
+- **No page showed a distinct all-time match count.** The Data Room's "Matches" is one per player spot (`dataRoom.ts` `matches: 1 // 1 per play`; 171,560 rows). The feed's `matches_all_time` = `mdapi_matches` alive, not cancelled, `start_date_utc <= now`, not WAW: 8,368 on 2026-11-03. `players_all_time` = `growth_player_profile` rows with any non-WAW city: 16,724, against 16,891 rows in total.
+- **`fin_venues.schedule_end_date` is not evidence a venue stopped.** Westlake (#49) reads 2026-09-30 and was playing with players booked on 2026-11-03. Ryan: the schedule is correct and the record is stale. The feed reads the schedule. Stale on 2026-11-03: #16 PRUMC (2026-08-30), #65 Ann Richards (2026-09-13), #49 Westlake and #21 Scissortail (2026-09-30), all `is_active` true. Live field 1981 (Scissortail Park Discounted) has no `fin_venue_fields` link, and nor does 2113 (Friends Select, Philadelphia).
+- **Vercel's edge honours `Vary: Origin`** on this route: per-origin MISS then HIT, each with the right `Access-Control-Allow-Origin`, and none for `playmatchday.com.evil.com`. The browser sees `cache-control: public, max-age=300` because the edge consumes `s-maxage`.
