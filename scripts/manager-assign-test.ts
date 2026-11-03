@@ -21,6 +21,7 @@ import "server-only"; // no-op under --conditions=react-server
 import {
   normalizeManagerId, assignBody, pickerOptions, offeredCounts, confirmLines,
   DETACH_VALUE, DETACH_PROOF, CAN_ASSIGN_MANAGER_TO_MATCH, CAN_UNASSIGN_MANAGER_FROM_MATCH,
+  busyManagers, type DayMatch,
 } from "../src/lib/managerAssign";
 import { payAmount } from "../src/lib/managerPayCompute";
 import { readFileSync } from "node:fs";
@@ -249,6 +250,29 @@ console.log("\nthe route: the diff is the body, and it goes through the guarded 
   if (block && /patch\.manager_first_name/.test(block[0]) && /patch\.manager_last_name/.test(block[0]))
     ok("…and the denormalised name, so the pay sheet does not show the old one");
   else bad("…and the denormalised name");
+}
+
+console.log("\nfree or busy at this match's time (the staff app picker)");
+{
+  const T = { id: 1, startDateUtc: "2026-11-06T01:00:00Z", endDateUtc: "2026-11-06T02:00:00Z" };
+  const row = (id: number, mgr: number | null, s: string, e: string | null, extra: Partial<DayMatch> = {}): DayMatch =>
+    ({ id, managerId: mgr, secondManagerId: null, isCancelled: false, startDate: `2026-11-05T${s}:00.000Z`, startDateUtc: `2026-11-06T${s}:00Z`, endDateUtc: e && `2026-11-06T${e}:00Z`, fieldTitle: `F${id}`, ...extra });
+  const b = busyManagers(T, [
+    row(1, 10, "01:00", "02:00"),                                  // this match itself
+    row(2, 20, "01:30", "02:30"),                                  // overlaps the end
+    row(3, 30, "00:00", "01:00"),                                  // ends as this starts: free
+    row(4, 40, "02:00", "03:00"),                                  // starts as this ends: free
+    row(5, 50, "00:30", "01:30", { isCancelled: true }),           // cancelled: free
+    row(6, null, "01:00", "02:00", { secondManagerId: 60 }),       // second manager counts
+    row(7, 70, "00:30", null),                                     // no end: an hour, overlaps
+  ]);
+  JSON.stringify(Object.keys(b).map(Number).sort()) === JSON.stringify([20, 60, 70]) ? ok("busy: overlap, second manager, missing end (an hour)") : bad("busy ids", JSON.stringify(b));
+  !(10 in b) ? ok("this match's own manager is not busy with it") : bad("own match counted");
+  !(30 in b) && !(40 in b) ? ok("back to back is free") : bad("back to back counted busy");
+  !(50 in b) ? ok("a cancelled match keeps nobody busy") : bad("cancelled counted");
+  b[20]?.matchId === 2 && b[20]?.fieldTitle === "F2" && b[20]?.startDate === "2026-11-05T01:30:00.000Z" ? ok("busy names the other match, its field and local start") : bad("busy detail", JSON.stringify(b[20]));
+  const two = busyManagers(T, [row(8, 80, "01:45", "02:45"), row(9, 80, "00:15", "01:15")]);
+  two[80]?.matchId === 9 ? ok("two overlaps: the earlier one is named") : bad("earliest", JSON.stringify(two));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

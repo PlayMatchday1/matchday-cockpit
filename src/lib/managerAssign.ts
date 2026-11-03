@@ -97,6 +97,30 @@ export function pickerOptions(
     Number(a.offCity) - Number(b.offCity) || a.name.localeCompare(b.name) || a.id - b.id);
 }
 
+/* FREE OR BUSY AT THIS MATCH'S TIME (Ryan, 2026-11-03, the staff app's manager picker). A manager is
+ * busy when they are the manager or second manager of another match that day, not cancelled, whose
+ * time overlaps this one's (start before this one ends, end after this one starts, on the true UTC
+ * instants). Busy people stay selectable; this only says where they already are. */
+export type DayMatch = {
+  id: number; managerId: number | null; secondManagerId: number | null; isCancelled: boolean;
+  startDate: string; startDateUtc: string; endDateUtc: string | null; fieldTitle: string | null;
+};
+export type BusyWith = { matchId: number; startDate: string; fieldTitle: string | null };
+export function busyManagers(target: { id: number; startDateUtc: string; endDateUtc: string | null }, day: readonly DayMatch[]): Record<number, BusyWith> {
+  const span = (a: string, b: string | null) => { const s = Date.parse(a); const e = b ? Date.parse(b) : NaN; return [s, Number.isFinite(e) && e > s ? e : s + 60 * 60_000] as const; };
+  const [ts, te] = span(target.startDateUtc, target.endDateUtc);
+  const out: Record<number, BusyWith> = {};
+  for (const m of [...day].sort((a, b) => Date.parse(a.startDateUtc) - Date.parse(b.startDateUtc))) {
+    if (m.id === target.id || m.isCancelled) continue;
+    const [s, e] = span(m.startDateUtc, m.endDateUtc);
+    if (!(s < te && e > ts)) continue;
+    for (const id of [m.managerId, m.secondManagerId]) {
+      if (id != null && !(id in out)) out[id] = { matchId: m.id, startDate: m.startDate, fieldTitle: m.fieldTitle };
+    }
+  }
+  return out;
+}
+
 /* ONE NAME LOOKUP, SEARCHING BOTH LISTS, SHARED BY BOTH SURFACES. It used to search the city
  * roster only, so an off-city manager — and any manager who has since come off this city's roster
  * — rendered as "id 41207" in the diff and in the confirmation. A confirmation that names an id is
