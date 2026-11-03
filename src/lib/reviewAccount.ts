@@ -6,7 +6,8 @@
 //               refuses it as well.
 //   LOGGED      every attempt is a row in app_review_sign_ins (migration 0248).
 //   READ ONLY   src/proxy.ts refuses the account's token everywhere except GETs on the paths the app
-//               reads (REVIEW_READ_PREFIXES), and refuses manager pay outright ("Not available").
+//               reads (REVIEW_READ_PREFIXES). Manager pay is readable (Ryan, 2026-11-03: Apple must
+//               not see an empty screen; payout amounts are allowed, names masked like the rest).
 //   MASKED      every GET the app reads goes through reviewMasked, which rewrites the JSON for this
 //               account only: player names to first name plus last initial, no phone numbers or
 //               emails, chat bodies "Message hidden", review comments "Comment hidden" (stars and
@@ -67,7 +68,7 @@ export async function logReviewAttempt(sb: SupabaseClient, req: Request, outcome
 /* ── READ ONLY ───────────────────────────────────────────────────────────────────────────────── */
 
 export const REVIEW_READ_PREFIXES = ["/api/app/", "/api/crm/threads", "/api/crm/canned-responses", "/api/crm/metrics", "/api/match-chats/"];
-const REVIEW_NOT_AVAILABLE = ["/api/app/manager-pay"];
+const REVIEW_NOT_AVAILABLE: string[] = [];
 
 /** Pure: the proxy's answer for the review account, or null to let the request through. */
 export function reviewRefusal(method: string, pathname: string): { status: number; error: string } | null {
@@ -92,7 +93,9 @@ export function shortName(s: string): string {
 const FULL_NAME_KEYS = new Set(["fullName", "full_name", "displayName", "display_name", "playerName", "player_name", "managerName",
   "primaryManagerName", "contactName", "contact_name", "senderName", "sender_name", "authorName", "author_name", "profileName",
   "profile_name", "customerName", "customer_name", "memberName", "member_name", "whatsappName", "whatsapp_name", "sent_by", "sentBy", "sender",
-  "author", "created_by_name", "createdByName", "closed_by_name", "closedByName", "operator_name", "operatorName", "assignee_name", "assigneeName"]);
+  "author", "created_by_name", "createdByName", "closed_by_name", "closedByName", "operator_name", "operatorName", "assignee_name", "assigneeName",
+  // A match card's manager is a person's name in a plain string (Gameday, the match screen, its manager sheet).
+  "manager", "secondManager", "second_manager"]);
 const LAST_NAME_RX = /last_?name$|^surname$/i;
 // A person's name under any prefix (manager_name, primaryManagerName, contact_display_name...); never
 // cityName, fieldName, teamName or matchName.
@@ -106,8 +109,10 @@ const NOTE_KEYS = new Set(["note", "notes", "internalNote", "internal_note", "ma
 const FACE_RX = /avatar|profile_?(image|photo|picture)|headshot/i;
 const PHOTO_RX = /avatar|photo|picture|profileImage|profile_image|^imageUrl$|^image_url$|mediaUrl|media_url|attachment/i;
 const PERSON_HINT_KEYS = new Set(["playerId", "player_id", "userId", "user_id", "userMatchId", "phone", "phoneNumber", "phone_number",
-  "email", "initials", "firstName", "first_name", "lastName", "last_name", "bib"]);
-const PERSON_PARENT_RX = /player|manager|member|contact|sender|author|participant|review|comment|ranked|toofew|user|customer|attendee|waitlist|people|person|staff|recipient|roster|signup|guest/i;
+  "email", "initials", "firstName", "first_name", "lastName", "last_name", "bib",
+  // Player Lookup search rows (id, name, city, status, member): no other hint, so these mark them.
+  "member", "memberChecked", "hasMembership"]);
+const PERSON_PARENT_RX = /player|manager|member|contact|sender|author|participant|review|comment|ranked|toofew|user|customer|attendee|waitlist|people|person|staff|recipient|roster|signup|guest|^results$/i;
 const COMMENT_PARENT_RX = /comment|review/i;
 const EMAIL_RX = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
 const PHONE_RX = /\+\d{10,15}|\(?\b\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}\b/g;
@@ -126,7 +131,8 @@ export function maskForReview(value: unknown, parentKey = ""): unknown {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(o)) {
       if (typeof v === "string") {
-        if (/phone|email/i.test(k)) out[k] = null;
+        // "iphone" is a platform (the Players tab's iPhone data-through date), not a phone number.
+        if (/phone|email/i.test(k) && !/^iphone/i.test(k)) out[k] = null;
         else if (FULL_NAME_KEYS.has(k) || PERSON_NAME_RX.test(k) || (k === "name" && person)) out[k] = shortName(v);
         else if (LAST_NAME_RX.test(k)) out[k] = v.trim() ? `${v.trim()[0].toUpperCase()}.` : v;
         else if (COMMENT_KEYS.has(k)) out[k] = v.trim() ? HIDDEN_COMMENT : v;
@@ -141,6 +147,25 @@ export function maskForReview(value: unknown, parentKey = ""): unknown {
     return out;
   }
   return typeof value === "string" ? scrub(value) : value;
+}
+
+/**
+ * Pure: the match details payload (Adjust) as the review account receives it, before masking. The
+ * manager arrives as the whole user record (home coordinates, address, credit); only id and name
+ * stay. The account cannot edit, so the option lists keep its own city's fields and managers only.
+ */
+export function reviewMatchDetails(p: { match: Record<string, unknown>; fields: { city: string | null }[]; managers: unknown[]; managersAllCities: unknown[] }) {
+  const person = (v: unknown) => {
+    if (!v || typeof v !== "object") return v ?? null;
+    const u = v as Record<string, unknown>;
+    return { id: u.id ?? null, firstName: u.firstName ?? null, lastName: u.lastName ?? null };
+  };
+  return {
+    match: { ...p.match, manager: person(p.match.manager), secondManager: person(p.match.secondManager) },
+    fields: p.fields.filter((f) => f.city === p.match.cityName),
+    managers: p.managers,
+    managersAllCities: [],
+  };
 }
 
 /** Wraps a GET handler: the review account's JSON is masked; everyone else's response is untouched. */
