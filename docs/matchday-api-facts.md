@@ -8301,3 +8301,23 @@ with done. The route refuses a skip on a regular push or a sent one.
 - Rule since then (`src/lib/crmScope.ts`): a confined account sees and acts on only `city_code` =
   its city; a thread with no city is visible to every chat staff member who is not confined, and to
   no confined account.
+
+## Offer photo upload on staging: browser PUT to S3, CORS, upload host (2026-11-03)
+
+**Evidence: staging Clubhouse on 3073 (`npm run dev:offers-staging`), Match Ops › Offers, a new draft (Houston, Never
+played), Popup › Edit text › Photo › Upload of an 800×800 JPEG; responses read in Playwright, the S3 requests over CDP.
+The draft (id 36) was saved and then deleted, LANDED both, never launched.**
+
+- **The browser PUTs the file to S3 itself** (`putPhoto`, `src/components/offers/OfferPanel.tsx`), so the bucket needs
+  CORS for the Clubhouse origin. Cover uploads do not: the Clubhouse server PUTs them (`uploadCoverImage`).
+- `POST /admin/offers/photo-uploads` answered `method: PUT`, headers `Content-Type`, `Content-Length`, `If-None-Match`,
+  `x-amz-acl`, `fileKey: offers/photos/<uuid>.jpg`, link valid 50 minutes. **Upload host
+  `matchday-stage.s3.us-west-1.amazonaws.com`**: the staging `OFFERS_UPLOAD_HOST`. Production's is still UNKNOWN until
+  a real production link is seen.
+- With CORS on `matchday-stage` for `http://localhost:3073` (PUT; `content-type`, `if-none-match`, `x-amz-acl`): the
+  preflight answered 200 with `Access-Control-Allow-Origin: http://localhost:3073`, the PUT 200. Before that rule the
+  bucket had no CORS at all, so the photo upload had never worked from a browser on staging.
+- Register LANDED with `url: https://images-stage.playmatchday.com/offers/photos/<uuid>.jpg` (the CDN, not the bucket),
+  the preview showed it (800×800), and the saved draft carried it as `photoUrl`.
+- Same run, first try: `GET /admin/offers/page` answered **500 "Internal server error" after 10.6 s**; the next read,
+  seconds later, 200 in 1.1 s. Cause UNKNOWN (a cold dyno fits, not proven).

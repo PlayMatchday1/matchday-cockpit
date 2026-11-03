@@ -27,7 +27,7 @@ staging and production prerequisites are in `docs/field-covers/launch-checklist.
 |---|---|---|
 | `OFFERS_ENV` | `local`, `staging` or `production` | No default. `local` needs local mode on; the other two need it off. |
 | `OFFERS_API_BASE_URL` | `https://playmatchday.herokuapp.com` on production, `https://matchday-stage.herokuapp.com` on staging, `http://localhost:3070` on local | Bare origin. Its host must be the write client's own allowlisted host for that environment (`MATCHDAY_HOSTS`), so a new backend host is a code change, not a variable. |
-| `OFFERS_UPLOAD_HOST` | The exact host in the backend's upload links, such as the S3 bucket's host. `localhost:3070` on local | Bare host, no scheme, path or wildcard. **The production value is UNKNOWN from here:** take it from the host in a real `POST /admin/offers/photo-uploads` answer on that environment. |
+| `OFFERS_UPLOAD_HOST` | The exact host in the backend's upload links, such as the S3 bucket's host. `localhost:3070` on local | Bare host, no scheme, path or wildcard. **The production value is UNKNOWN from here:** take it from the host in a real `POST /admin/offers/photo-uploads` answer on that environment. Staging, seen 2026-11-03: `matchday-stage.s3.us-west-1.amazonaws.com`. |
 
 **Who may use it, decided by Ryan, 2026-10-30.** Anyone with Match Ops access (admin or
 `can_access_matchops`) can view and do everything in Offers, including launching. There is no separate write
@@ -102,7 +102,7 @@ Also needed, none of them new variables:
 - That service account's email in the backend's `CLUBHOUSE_SERVICE_ACCOUNT_EMAILS`, or every Offers write is refused.
   The backend's `RELEASE-CHECKLIST.md` names `clubhouse-earnings@example.com`, which is the local seed account
   (`apps/api/tasks/seed-offers-local.mjs:40`), so that name needs replacing.
-- CORS on the upload bucket for the Clubhouse origin, or the browser's PUT fails.
+- CORS on the upload bucket for the Clubhouse origin, or the browser's PUT fails. Set 2026-11-03 (Ryan): `playmatchday` for `https://matchday-clubhouse.vercel.app`, `matchday-stage` for `http://localhost:3073`; PUT with `content-type`, `if-none-match`, `x-amz-acl`. Staging upload passed the same day (facts doc).
 
 Not changed by these variables: `photoUrlOk` (`src/lib/offersModel.ts`) still accepts the local backend's
 `http://localhost:3070/dev/uploads/` as well as any https address. The backend refuses that local address
