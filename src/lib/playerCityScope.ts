@@ -121,3 +121,42 @@ export async function playerIdsWhoPlayedIn(sb: SupabaseClient, cityName: string)
   if (unique.length > SCOPE_ID_CAP) throw new ScopeTooLargeError(cityName, unique.length);
   return unique;
 }
+
+/* A CITY ACCOUNT'S NAME SEARCH, NAME FIRST (Ryan, 2026-11-02). Every player whose name matches, in
+ * the search's own order (first name, last name, id), then only those in the city: home city, or a
+ * match played there, checked by id against player_match_mv for just these ids. It replaces
+ * collecting everyone who ever played in the city first (Austin: 8,149, over SCOPE_ID_CAP, so the
+ * search refused after about 5 s). Null when the name is too broad to check (more than
+ * NAME_SCAN_CAP matches); the caller says "type more" and never how many there were. */
+export const NAME_SCAN_CAP = 5000;
+type Builder = { range: (a: number, b: number) => PromiseLike<{ data: unknown[] | null; error: { message: string } | null }> };
+export async function nameMatchesInCity(
+  sb: SupabaseClient,
+  nameQuery: (cols: string, head: boolean) => Builder & PromiseLike<{ count: number | null; error: { message: string } | null }>,
+  cityName: string,
+): Promise<number[] | null> {
+  const head = await nameQuery("id", true);
+  if (head.error) throw new Error(`name search failed: ${head.error.message}`);
+  const total = head.count ?? 0;
+  if (total > NAME_SCAN_CAP) return null;
+  const pages = await Promise.all(Array.from({ length: Math.ceil(total / 1000) }, (_, i) => nameQuery("id, preferable_city_name", false).range(i * 1000, i * 1000 + 999)));
+  const rows: { id: number; home: string | null }[] = [];
+  for (const p of pages) {
+    if (p.error) throw new Error(`name search failed: ${p.error.message}`);
+    for (const r of (p.data ?? []) as { id: unknown; preferable_city_name: unknown }[]) rows.push({ id: Number(r.id), home: typeof r.preferable_city_name === "string" ? r.preferable_city_name : null });
+  }
+  const others = rows.filter((r) => r.home !== cityName).map((r) => r.id);
+  const played = new Set<number>();
+  const chunks = Array.from({ length: Math.ceil(others.length / 500) }, (_, i) => others.slice(i * 500, i * 500 + 500));
+  // A row per match played, so a chunk can return more than PostgREST's 1,000-row cap: each chunk
+  // is paged until a short page, the chunks side by side.
+  await Promise.all(chunks.map(async (ids) => {
+    for (let from = 0; ; from += 1000) {
+      const a = await sb.from("player_match_mv").select("user_id").eq("city_name", cityName).in("user_id", ids).order("user_id").range(from, from + 999);
+      if (a.error) throw new Error(`city scope lookup failed: ${a.error.message}`);
+      for (const r of a.data ?? []) played.add(Number((r as { user_id: unknown }).user_id));
+      if ((a.data ?? []).length < 1000) break;
+    }
+  }));
+  return rows.filter((r) => r.home === cityName || played.has(r.id)).map((r) => r.id);
+}

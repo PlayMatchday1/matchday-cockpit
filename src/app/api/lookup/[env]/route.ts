@@ -27,7 +27,7 @@
 import { authenticateMatchOpsRead } from "@/lib/matchOpsAuth";
 import { cityNameFor } from "@/lib/cityScope";
 import { CONFINED_CITY_ERROR, playerInConfinedScope } from "@/lib/cityConfinement";
-import { playedInCity, hasPlayedInCity, playerIdsWhoPlayedIn, ScopeTooLargeError } from "@/lib/playerCityScope";
+import { playedInCity, hasPlayedInCity, nameMatchesInCity, ScopeTooLargeError } from "@/lib/playerCityScope";
 import { isFakePlayerEmail } from "@/lib/mdapiFakePlayer";
 import { apiGet, StageHostGuardError, StageConfigError, type MatchdayEnv } from "@/lib/matchdayStageApi";
 import {
@@ -208,42 +208,43 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string }> 
         const terms = splitNameTerms(q);
         // ONE PREDICATE PER WORD, ANDed. "anderson king" is two predicates, not one impossible
         // substring; order does not matter, so "king anderson" finds the same person.
-        let sel = sb.from("mdapi_users").select("id", { count: "exact" });
         // ONE definition of "matches a name" — nameOrFilter is the query form of
         // matchesNameTerms, and player-lookup-search-test asserts the two agree.
-        for (const t of terms) {
-          const f = nameOrFilter(t);
-          if (f) sel = sel.or(f);
-        }
-        /* CONFINEMENT IN THE QUERY, not after it — otherwise the count is the unscoped one and the
-         * page is a filtered slice of somebody else's page.
-         *
-         * THE UNION, AS AN OR INSIDE THAT QUERY. It was `.eq("preferable_city_name", want)`; it is
-         * now home city OR membership of the set that has played in this city. PostgREST ANDs
-         * successive .or() calls, so this composes with the per-term name predicates above rather
-         * than replacing them: (term1) AND (term2) AND (home OR played).
-         *
-         * THE ID LIST IS BOUNDED AND THE BOUND REFUSES. playerIdsWhoPlayedIn throws over
-         * SCOPE_ID_CAP rather than silently truncating, because a truncated list is a boundary
-         * that quietly loses people. Warsaw is 97. */
-        if (want) {
-          const playedIds = await playerIdsWhoPlayedIn(sb, want);
-          sel = playedIds.length
-            ? sel.or(`preferable_city_name.eq.${want},id.in.(${playedIds.join(",")})`)
-            : sel.eq("preferable_city_name", want);
-        }
+        const named = (cols: string, opts?: { count?: "exact"; head?: boolean }) => {
+          let q = sb.from("mdapi_users").select(cols, opts);
+          for (const t of terms) {
+            const f = nameOrFilter(t);
+            if (f) q = q.or(f);
+          }
+          // Ordered the same way the API orders — first_name ascending — so the two paths agree
+          // about who is on page 1. last_name and id break ties so paging is deterministic.
+          return q.order("first_name", { ascending: true }).order("last_name", { ascending: true }).order("id", { ascending: true });
+        };
         const from = (pageN - 1) * SEARCH_PAGE_SIZE;
-        // Ordered the same way the API orders — first_name ascending — so the two paths agree
-        // about who is on page 1. last_name and id break ties so paging is deterministic.
-        const { data, count, error } = await sel
-          .order("first_name", { ascending: true }).order("last_name", { ascending: true }).order("id", { ascending: true })
-          .range(from, from + SEARCH_PAGE_SIZE - 1);
-        /* AN ERROR IS NOT AN EMPTY RESULT. `?.length ?? 0` on a failed PostgREST call renders a
-         * swallowed error and a genuinely empty search identically — that has already cost us a
-         * wrong answer on this very table. */
-        if (error) return Response.json({ error: `name search failed: ${error.message}` }, { status: 500 });
+        let pageIds: number[];
+        let count: number | null;
+        if (want) {
+          /* A CITY ACCOUNT: THE NAME FIRST, THEN THE CITY (Ryan, 2026-11-02). Every name match, then
+           * only those whose home city is this one or who played here, checked by id on the server
+           * (nameMatchesInCity). Nothing about the players left out leaves this route: no count, no
+           * "hidden". A name too broad to check gets a hint to type more, also without a count. */
+          const inCity = await nameMatchesInCity(sb, (cols, head) => named(cols, head ? { count: "exact", head: true } : undefined) as never, want);
+          if (inCity == null) {
+            return Response.json({ kind: d.kind, results: [], page: pageN, pageSize: SEARCH_PAGE_SIZE, total: 0, totalKnown: false, dropped: 0, via: "mirror", terms, hint: "Type more of the name." });
+          }
+          count = inCity.length;
+          pageIds = inCity.slice(from, from + SEARCH_PAGE_SIZE);
+        } else {
+          const { data, count: c, error } = await named("id", { count: "exact" }).range(from, from + SEARCH_PAGE_SIZE - 1);
+          /* AN ERROR IS NOT AN EMPTY RESULT. `?.length ?? 0` on a failed PostgREST call renders a
+           * swallowed error and a genuinely empty search identically — that has already cost us a
+           * wrong answer on this very table. */
+          if (error) return Response.json({ error: `name search failed: ${error.message}` }, { status: 500 });
+          count = c;
+          pageIds = (data ?? []).map((r) => Number((r as unknown as { id: unknown }).id));
+        }
 
-        const ids = (data ?? []).map((r) => Number((r as { id: unknown }).id)).filter(Number.isFinite);
+        const ids = pageIds.filter(Number.isFinite);
         // LIVE DETAIL, one call per row on this page. `?id=` takes a single id — a comma list is a
         // 400 — so these are parallel, bounded by the page size.
         const settled = await Promise.all(ids.map((pid) =>
