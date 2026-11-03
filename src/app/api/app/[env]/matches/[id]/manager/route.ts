@@ -67,8 +67,8 @@ async function getRoute(req: Request, ctx: { params: Promise<{ env: string; id: 
       offCity: toId != null && !cityIds.has(toId),
     }).map((l) => (slot === "secondManagerId" ? `Second manager: ${l}` : l));
   }
-  const city = ((c.json?.managers as { id: number; name: string }[]) ?? []);
-  const all = ((c.json?.managersAllCities as { id: number; name: string }[]) ?? []);
+  const city = ((c.json?.managers as { id: number; name: string; deleted?: boolean }[]) ?? []);
+  const all = ((c.json?.managersAllCities as { id: number; name: string; deleted?: boolean }[]) ?? []);
   const named = (id: unknown) => (id == null ? null : { id: Number(id), name: all.find((o) => o.id === Number(id))?.name ?? city.find((o) => o.id === Number(id))?.name ?? nameOf(Number(id) === Number(m.managerId) ? m.manager : m.secondManager) ?? `Manager ${id}` });
   const offered = {
     managerId: pickerOptions(city, all, false, named(m.managerId)),
@@ -92,7 +92,8 @@ async function getRoute(req: Request, ctx: { params: Promise<{ env: string; id: 
     confirm, offered, busy, startDate: m.startDate ?? null, confined: auth.confined,
     matchId: Number(g.id), managerId: m.managerId ?? null, secondManagerId: m.secondManagerId ?? null,
     manager: nameOf(m.manager), secondManager: nameOf(m.secondManager), cityName: m.cityName ?? null,
-    managers: city, managersAllCities: auth.confined ? all.filter((o) => attached.has(o.id)) : all,
+    // The Manager Schedule sheet reads this list as is: deleted accounts out unless attached here.
+    managers: city.filter((o) => !o.deleted || attached.has(o.id)), managersAllCities: auth.confined ? all.filter((o) => attached.has(o.id)) : all,
   });
 }
 

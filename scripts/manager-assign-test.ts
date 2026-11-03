@@ -21,7 +21,7 @@ import "server-only"; // no-op under --conditions=react-server
 import {
   normalizeManagerId, assignBody, pickerOptions, offeredCounts, confirmLines,
   DETACH_VALUE, DETACH_PROOF, CAN_ASSIGN_MANAGER_TO_MATCH, CAN_UNASSIGN_MANAGER_FROM_MATCH,
-  busyManagers, type DayMatch,
+  busyManagers, type DayMatch, isDeletedUser, rosterOptions,
 } from "../src/lib/managerAssign";
 import { payAmount } from "../src/lib/managerPayCompute";
 import { readFileSync } from "node:fs";
@@ -273,6 +273,35 @@ console.log("\nfree or busy at this match's time (the staff app picker)");
   b[20]?.matchId === 2 && b[20]?.fieldTitle === "F2" && b[20]?.startDate === "2026-11-05T01:30:00.000Z" ? ok("busy names the other match, its field and local start") : bad("busy detail", JSON.stringify(b[20]));
   const two = busyManagers(T, [row(8, 80, "01:45", "02:45"), row(9, 80, "00:15", "01:15")]);
   two[80]?.matchId === 9 ? ok("two overlaps: the earlier one is named") : bad("earliest", JSON.stringify(two));
+}
+
+console.log("\ndeleted accounts are not offered (MatchDay's soft delete)");
+{
+  const raw = [
+    { id: 5, firstName: "Jordan", lastName: "Blake", email: "jordan@x.com" },
+    { id: 21, firstName: "Deleted", lastName: "Account", email: "del_0123456789abcdef0123456789abcdef01234567@playmatchday.com" },
+    { id: 22, firstName: "Sam", lastName: "Lee", email: "del_0123456789abcdef0123456789abcdef01234567@playmatchday.com" },
+    { id: 23, firstName: "Ana", lastName: "Ruiz", email: "ana@x.com", deletedAt: "2026-10-01T00:00:00Z" },
+    { id: 24, firstName: "Deleted", lastName: "Lopez", email: "d@x.com" },
+    { firstName: "No", lastName: "Id" },
+    null,
+  ];
+  const opts = rosterOptions({ data: raw });
+  JSON.stringify(opts.map((o) => [o.id, o.deleted])) === JSON.stringify([[5, false], [21, true], [22, true], [23, true], [24, false], [NaN, true], [NaN, true]].map(([a, b]) => [a, b]))
+    ? ok("rosterOptions marks the name, the del_ email, deletedAt and a missing user; a real surname 'Deleted' is kept")
+    : bad("rosterOptions marks", JSON.stringify(opts.map((o) => [o.id, o.deleted])));
+  !isDeletedUser({ id: 5, firstName: "Jordan", lastName: "Blake", email: "del_short@playmatchday.com" }) ? ok("a del_ email without the 40-hex tail is not taken as deleted") : bad("del_ short");
+  const city = opts.filter((o) => Number.isFinite(o.id));
+  const p = pickerOptions(city, city, false, null);
+  JSON.stringify(p.map((o) => o.id)) === JSON.stringify([24, 5]) ? ok("pickerOptions leaves deleted accounts out") : bad("picker without current", JSON.stringify(p.map((o) => o.id)));
+  const cur = pickerOptions(city, city, false, { id: 21, name: "Deleted Account" });
+  cur.some((o) => o.id === 21 && o.name === "Deleted Account") && cur.length === 3 ? ok("a deleted account attached to the match stays, as the current manager") : bad("deleted current", JSON.stringify(cur));
+  const all = pickerOptions(city, city, true, null);
+  all.length === 2 ? ok("show all leaves them out too") : bad("show all", JSON.stringify(all));
+  const n = offeredCounts(city, city);
+  n.city === 2 && n.all === 2 ? ok("offeredCounts counts only live accounts") : bad("counts", JSON.stringify(n));
+  const plain = pickerOptions([{ id: 1, name: "A" }], [{ id: 1, name: "A" }], false, null);
+  plain.length === 1 ? ok("options without the flag are offered as before") : bad("no flag");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

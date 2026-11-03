@@ -38,6 +38,28 @@ export type ManagerOption = {
   offCity: boolean;
 };
 
+/* DELETED ACCOUNTS ARE NOT OFFERED (Ryan, 2026-11-03). MatchDay soft-deletes a user in place
+ * (backend users.service getUserSoftDeleteDto): deletedAt is set, the name becomes "Deleted
+ * Account" and the email del_<40 hex>@playmatchday.com, and the city roster keeps returning the row.
+ * /city-managers/users does not carry deletedAt, so any of the three marks counts, and a row with no
+ * numeric id (no user behind it) counts as missing. */
+export function isDeletedUser(u: Record<string, unknown> | null | undefined): boolean {
+  if (!u || !Number.isInteger(Number(u.id)) || Number(u.id) <= 0) return true;
+  if (u.deletedAt != null) return true;
+  if (typeof u.email === "string" && /^del_[0-9a-f]{40}@playmatchday\.com$/i.test(u.email)) return true;
+  return String(u.firstName ?? "").trim() === "Deleted" && String(u.lastName ?? "").trim() === "Account";
+}
+
+/** A roster response (/city-managers/users) as picker options: id and name only, deleted marked. */
+export function rosterOptions(raw: unknown): { id: number; name: string; deleted: boolean }[] {
+  const arr = Array.isArray(raw) ? raw : ((raw as { data?: unknown[] })?.data ?? []);
+  return (arr as Record<string, unknown>[]).map((u) => ({
+    id: Number(u?.id),
+    name: [u?.firstName, u?.lastName].filter(Boolean).join(" ").trim() || `User ${u?.id}`,
+    deleted: isDeletedUser(u),
+  }));
+}
+
 /** The one value that detaches. Never "", never undefined, never an omitted field. */
 export const DETACH_VALUE = null;
 
@@ -81,15 +103,16 @@ export function assignBody(next: number | null, current: number | null): { manag
  * attached to someone who has since left the city's roster must still render their name; dropping
  * them makes the control show a different person than the match has. */
 export function pickerOptions(
-  cityManagers: readonly { id: number; name: string }[],
-  allManagers: readonly { id: number; name: string }[],
+  cityManagers: readonly { id: number; name: string; deleted?: boolean }[],
+  allManagers: readonly { id: number; name: string; deleted?: boolean }[],
   showAll: boolean,
   current?: { id: number; name: string } | null,
 ): ManagerOption[] {
   const cityIds = new Set(cityManagers.map((m) => m.id));
   const base = showAll ? allManagers : cityManagers;
   const by = new Map<number, ManagerOption>();
-  for (const m of base) by.set(m.id, { id: m.id, name: m.name, offCity: !cityIds.has(m.id) });
+  // A deleted account is left out; if it is the one attached, the current-manager rule below keeps it.
+  for (const m of base) if (!m.deleted) by.set(m.id, { id: m.id, name: m.name, offCity: !cityIds.has(m.id) });
   if (current && current.id > 0 && !by.has(current.id)) {
     by.set(current.id, { id: current.id, name: current.name, offCity: !cityIds.has(current.id) });
   }
@@ -133,10 +156,10 @@ export function managerNameIn(all: readonly { id: number; name: string }[], id: 
 
 /** How many people the picker is offering, and how many it is holding back. */
 export function offeredCounts(
-  cityManagers: readonly { id: number }[],
-  allManagers: readonly { id: number }[],
+  cityManagers: readonly { id: number; deleted?: boolean }[],
+  allManagers: readonly { id: number; deleted?: boolean }[],
 ): { city: number; all: number; hidden: number } {
-  const city = cityManagers.length, all = allManagers.length;
+  const city = cityManagers.filter((m) => !m.deleted).length, all = allManagers.filter((m) => !m.deleted).length;
   return { city, all, hidden: Math.max(0, all - city) };
 }
 

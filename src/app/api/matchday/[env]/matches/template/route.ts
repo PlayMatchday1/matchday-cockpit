@@ -13,6 +13,7 @@ import { apiGet, type MatchdayEnv } from "@/lib/matchdayStageApi";
 import { fieldCityInScope } from "@/lib/fieldScope";
 import { CONFINED_CITY_ERROR } from "@/lib/cityConfinement";
 import { newMatchTemplate } from "@/lib/newMatchFromField";
+import { rosterOptions } from "@/lib/managerAssign";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -48,19 +49,12 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string }> 
 
     // THE CITY'S MANAGERS, the same two lists and the same endpoint the detail route reads. Only id
     // and name cross to the client.
-    const toOptions = (r: unknown) => {
-      const arr = Array.isArray(r) ? r : ((r as { data?: unknown[] })?.data ?? []);
-      return (arr as Record<string, unknown>[]).map((u) => ({
-        id: u.id as number,
-        name: [u.firstName, u.lastName].filter(Boolean).join(" ").trim() || `User ${u.id}`,
-      }));
-    };
     const cityId = field.city?.id;
     const [managers, managersAllCities] = await Promise.all([
       cityId != null
-        ? apiGet<unknown>(env, "/city-managers/users", { cityId }).then(toOptions).catch(() => [])
+        ? apiGet<unknown>(env, "/city-managers/users", { cityId }).then(rosterOptions).catch(() => [])
         : Promise.resolve([] as { id: number; name: string }[]),
-      apiGet<unknown>(env, "/city-managers/users").then(toOptions).catch(() => []),
+      apiGet<unknown>(env, "/city-managers/users").then(rosterOptions).catch(() => []),
     ]);
 
     const match = newMatchTemplate({

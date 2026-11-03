@@ -17,6 +17,7 @@ import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
 // say different things about the same denial. The GATE below is unchanged.
 import { NO_EDIT_MATCHES } from "@/lib/matchEditAccess";
 import { refreshMatchMirror, tombstoneMatchMirror } from "@/lib/mirrorWriteThrough";
+import { rosterOptions } from "@/lib/managerAssign";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -72,16 +73,9 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string; id
       city: ((f.city as Record<string, unknown> | undefined)?.name as string | undefined) ?? null,
     }));
     // The match's city managers (for the manager dropdown). GET /city-managers/users
-    // — NO /admin prefix, but still Bearer-authenticated. Only id + name are passed
-    // to the client (no email/phone).
+    // — NO /admin prefix, but still Bearer-authenticated. Only id, name and whether the account
+    // is deleted are passed to the client (no email/phone); pickerOptions leaves deleted ones out.
     const cityId = ((match.field as Record<string, unknown> | undefined)?.city as Record<string, unknown> | undefined)?.id;
-    const toOptions = (raw: unknown) => {
-      const arr = Array.isArray(raw) ? raw : ((raw as { data?: unknown[] })?.data ?? []);
-      return (arr as Record<string, unknown>[]).map((u) => ({
-        id: u.id as number,
-        name: [u.firstName, u.lastName].filter(Boolean).join(" ").trim() || `User ${u.id}`,
-      }));
-    };
     /* TWO LISTS, AND THE SECOND ONE IS THE ESCAPE. The city list is the default — a typical Austin
      * fixture offers 28 of the 87. The full roster is fetched alongside it so "show all cities"
      * is instant and so the CURRENT manager always has a name even when they have since come off
@@ -91,9 +85,9 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string; id
      * Same endpoint, no cityId. Only id + name cross to the client — never email or phone. */
     const [managers, managersAllCities] = await Promise.all([
       cityId != null
-        ? apiGet<unknown>(env, `/city-managers/users`, { cityId: cityId as number }).then(toOptions).catch(() => [])
+        ? apiGet<unknown>(env, `/city-managers/users`, { cityId: cityId as number }).then(rosterOptions).catch(() => [])
         : Promise.resolve([] as { id: number; name: string }[]),
-      apiGet<unknown>(env, `/city-managers/users`).then(toOptions).catch(() => []),
+      apiGet<unknown>(env, `/city-managers/users`).then(rosterOptions).catch(() => []),
     ]);
     const picked = pickMatch(match);
     // REAL active players (excl fakes AND cancelled) for the fakeSpotLeft ceiling math. Derived from
