@@ -4,6 +4,7 @@
 //   HEALTH    each default view's periods (the current week and month, and the ended periods of
 //             their trends), for all cities and for each city a Match Ops account is confined to.
 //   PLAYERS   the default period of each kind and the five before it, for both pages.
+//   GOALS     the year's field rollup (src/lib/fieldGoalsRollup.ts) that Field Goals and Goals read.
 //
 // PLAIN CACHED READS, NEVER FORCED: a stale entry is served and refreshed in the background
 // (stale-while-revalidate), a missing one is read. Forcing (expiring the tag first) made the next
@@ -12,6 +13,8 @@
 // Production only. It writes nothing anywhere: every call is a read that fills the data cache.
 
 import { makeServerClient } from "@/lib/supabaseServer";
+import { fieldGoalsRollup } from "@/lib/fieldGoalsRollup";
+import { GOAL_YEAR, businessYesterday } from "@/lib/fieldGoals";
 import { confinedCity } from "@/lib/cityConfinement";
 import { todayBusinessDate } from "@/lib/goalPace";
 import { loadPeriod } from "@/lib/healthLoad";
@@ -73,7 +76,7 @@ export async function POST(req: Request) {
     ]));
   }));
 
-  await Promise.all([health(), players()]);
+  await Promise.all([health(), players(), run("goals rollup", () => fieldGoalsRollup(sb, GOAL_YEAR, businessYesterday(new Date())))]);
   console.log(`[app-warm] ${done.length} warmed, ${failed.length} failed in ${Date.now() - t0} ms; scopes ${scopes.map((x) => x ?? "all").join(",")}${failed.length ? `; first failure: ${failed[0]}` : ""}`);
   return Response.json({ ok: failed.length === 0, ms: Date.now() - t0, scopes: scopes.map((s) => s ?? "all"), done: done.length, failed });
 }
