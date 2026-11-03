@@ -67,6 +67,10 @@ export type SiteField = {
   formats: string[]; weekdays: string[];
   status: "live" | "upcoming"; first_match_date: string | null;
   matches_last_30_days: number;
+  /** Regular-play listings only, matches under $5 ignored (see PRICE RANGE). Null when none qualify. */
+  price_per_match_cents: { min: number; max: number } | null;
+  /** The venue's existing page on playmatchday.com, or null (SITE_URLS). */
+  site_url: string | null;
   next_14_days: SiteMatch[];
   mdapi_field_ids: number[];
 };
@@ -83,7 +87,7 @@ export type SitePayload = {
   schema_version: number; generated_at: string;
   window: { days_back: number; days_ahead: number; schedule_days: number };
   definitions: Record<string, string>;
-  totals: { live_cities: number; launching_cities: number; live_fields: number; upcoming_fields: number; matches_all_time: number; players_all_time: number };
+  totals: { live_cities: number; launching_cities: number; live_fields: number; upcoming_fields: number; matches_all_time: number; players_all_time: number; matches_display: string; players_display: string };
   cities: SiteCity[];
 };
 
@@ -139,6 +143,60 @@ export function extendLinksByPosition(fields: ApiFieldRow[], links: ReadonlyMap<
   return out;
 }
 
+/* ── PUBLIC VENUE NAMES (Ryan, 2026-11-03) ──────────────────────────────────────────────────────
+ * A display name never carries an internal product word. Stripped: Tourney, Tournament(s), Discounted,
+ * Discount, Premier Match, and the "at" / "-" that joined them to the place ("Tourney at Soccer Central"
+ * -> "Soccer Central", "Tourney ATH Pearland" -> "ATH Pearland", "Scissortail Park Discounted" ->
+ * "Scissortail Park"). Applied to every display name, whether it came from a field title or a venue.
+ * NAME_OVERRIDES is for what the rule cannot fix, keyed by the venue's lowest MatchDay field id, so a
+ * rename upstream does not lose it. Empty on purpose until something needs it. */
+export const NAME_OVERRIDES: Readonly<Record<number, string>> = {};
+const PRODUCT_WORDS = /\b(premier\s+match|tournaments?|tourney|discounted|discount)\b/gi;
+export function publicVenueName(raw: string): string {
+  let t = raw.replace(PRODUCT_WORDS, " ").replace(/\s+/g, " ").trim();
+  for (let prev = ""; prev !== t;) {
+    prev = t;
+    t = t.replace(/^(at|-|–|—)\s+/i, "").replace(/\s+(at|-|–|—)$/i, "").replace(/^(at|-|–|—)$/i, "").trim();
+  }
+  return t || raw.trim();
+}
+
+/* ── PRICE RANGE (Ryan, 2026-11-03) ──────────────────────────────────────────────────────────────
+ * A city's and a venue's from/to price reads only REGULAR-PLAY listings and ignores any match under $5.
+ * Regular play = the field id is ticked counts_as_regular_play on Field Costs (an event-named listing that
+ * is really the weekly game: NEMP Tournaments, Tourney ATH Pearland, Tourney at Soccer Central, Tourney
+ * ATH Katy, Tourney at Lou Fusz), OR its title is not a tournament (venueResolver's event markers), a
+ * discounted or a premier listing. Every match keeps its real price in next_14_days. */
+export const MIN_RANGE_PRICE_CENTS = 500;
+export function isRegularPlayListing(title: string, countsAsRegularPlay: boolean): boolean {
+  if (countsAsRegularPlay) return true;
+  return venueCategory(title) === "regular" && !/\bdiscount(ed)?\b/i.test(title) && !/\bpremier\b/i.test(title);
+}
+export function priceRange(ms: readonly Pick<MatchRow, "registration_price">[]): { min: number; max: number } | null {
+  const ps = ms.map((m) => num(m.registration_price)).filter((p): p is number => p != null && p >= MIN_RANGE_PRICE_CENTS);
+  return ps.length ? { min: Math.min(...ps), max: Math.max(...ps) } : null;
+}
+
+/** "16,700+": rounded DOWN to the hundred, so the site never rounds on its own (and never up). */
+export const displayCount = (n: number) => `${(Math.floor(n / 100) * 100).toLocaleString("en-US")}+`;
+
+/* ── EXISTING WEBSITE PAGES ─────────────────────────────────────────────────────────────────────
+ * The ten venues that already have a page on playmatchday.com, from
+ * ~/Code/matchday-website/docs/feed-to-site-map.md (inventory of 2026-11-03), keyed by MatchDay field
+ * id so a rename does not drop the link. A venue takes the first of its field ids found here. */
+export const SITE_URLS: Readonly<Record<number, string>> = {
+  1321: "https://www.playmatchday.com/pickup-soccer-crossbar-rowlett-dallas/",
+  1288: "https://www.playmatchday.com/pickup-soccer-hattrick-tomball-houston/",
+  22: "https://www.playmatchday.com/pickup-soccer-ath-pearland-houston/",
+  892: "https://www.playmatchday.com/pickup-soccer-ath-katy-houston/",
+  1156: "https://www.playmatchday.com/pickup-soccer-katy-isc-houston/",
+  102: "https://www.playmatchday.com/pickup-soccer-soccer-central-san-antonio/",
+  1057: "https://www.playmatchday.com/pickup-soccer-star-complex-san-antonio/",
+  958: "https://www.playmatchday.com/pickup-soccer-prumc-buckhead-atlanta/",
+  664: "https://www.playmatchday.com/pickup-soccer-lou-fusz-athletic-st-louis/",
+  1090: "https://www.playmatchday.com/pickup-soccer-scissortail-park-okc/",
+};
+
 export type BuildInput = {
   now: Date;
   cities: ApiCityRow[];
@@ -146,6 +204,8 @@ export type BuildInput = {
   /** Alive, non-cancelled matches whose wall-clock date is near the window (the builder applies the exact per-city window). */
   matches: MatchRow[];
   links: ReadonlyMap<number, VenueLink>;
+  /** Field ids ticked counts_as_regular_play in fin_venue_fields. */
+  regularPlayFieldIds: ReadonlySet<number>;
   /** By city abbr. */
   cityTotals: ReadonlyMap<string, CityTotals>;
   playersAllTime: number;
@@ -177,6 +237,7 @@ export function buildSitePayload(inp: BuildInput): SitePayload {
       links,
     );
     const usedSlugs = new Set<string>();
+    const regularCityFieldIds = new Set<number>();
     const siteFields: SiteField[] = units.map((u) => {
       const ms = u.fields.flatMap((uf) => byField.get(uf.id) ?? []).sort((a, b) => a.start_date_utc.localeCompare(b.start_date_utc));
       /* THE REPRESENTATIVE FIELD RECORD: its address, pin and cover are the venue's. A regular-play listing first,
@@ -193,7 +254,11 @@ export function buildSitePayload(inp: BuildInput): SitePayload {
        * "Zipp Family Sports Park"); fin_venues names are internal ("Hattrick", "New Braunfels", "KISC (Katy Intl)").
        * Several records: the venue name, because the records are product listings ("Tourney at Soccer Central",
        * "NEMP Discounted") and none of them names the place. */
-      const name = u.fields.length === 1 ? ((fieldById.get(u.fields[0].id)!.title ?? "").trim() || u.title) : u.title;
+      const ids = u.fields.map((f) => f.id).sort((a, b) => a - b);
+      const rawName = u.fields.length === 1 ? ((fieldById.get(u.fields[0].id)!.title ?? "").trim() || u.title) : u.title;
+      const name = NAME_OVERRIDES[ids[0]] ?? publicVenueName(rawName);
+      const regularIds = new Set(u.fields.filter((uf) => isRegularPlayListing(fieldById.get(uf.id)?.title ?? "", inp.regularPlayFieldIds.has(uf.id))).map((uf) => uf.id));
+      for (const id of regularIds) regularCityFieldIds.add(id);
       let slug = slugify(name) || `field-${u.fields[0].id}`;
       if (usedSlugs.has(slug)) slug = `${slug}-${u.fields[0].id}`;
       usedSlugs.add(slug);
@@ -208,12 +273,14 @@ export function buildSitePayload(inp: BuildInput): SitePayload {
         status,
         first_match_date: status === "upcoming" ? wallYmd(future[0].start_date) : null,
         matches_last_30_days: kicked.length,
+        price_per_match_cents: priceRange(ms.filter((m) => regularIds.has(Number(m.field_id)))),
+        site_url: ids.map((id) => SITE_URLS[id]).find(Boolean) ?? null,
         next_14_days: future.filter((m) => wallYmd(m.start_date) <= schedHi).map((m) => ({
           date: wallYmd(m.start_date), weekday: weekdayOf(wallYmd(m.start_date)),
           kickoff: wallHm(m.start_date), kickoff_label: kickoffLabel(wallHm(m.start_date)),
           format: formatOf(m), price_cents: num(m.registration_price), spots_total: num(m.max_player_count),
         })),
-        mdapi_field_ids: u.fields.map((f) => f.id).sort((a, b) => a - b),
+        mdapi_field_ids: ids,
       };
     }).sort((a, b) => (a.status === b.status ? 0 : a.status === "live" ? -1 : 1) || b.matches_last_30_days - a.matches_last_30_days || a.name.localeCompare(b.name));
 
@@ -224,14 +291,13 @@ export function buildSitePayload(inp: BuildInput): SitePayload {
     else if (!totals.everHadMatch) status = "coming_soon";
     else continue; // history, nothing counting: omitted (El Paso, New York today).
 
-    const prices = counting.map((m) => num(m.registration_price)).filter((p): p is number => p != null && p > 0);
     const upcomingDates = siteFields.filter((f) => f.first_match_date).map((f) => f.first_match_date!).sort();
     cities.push({
       slug: CITY_SLUGS[abbr] ?? slugify(c.name), name: c.name,
       state: c.state?.abbr ?? null, state_name: c.state?.name ?? null,
       status, time_zone: tz,
       first_match_date: status === "launching" ? upcomingDates[0] ?? null : null,
-      price_per_match_cents: prices.length ? { min: Math.min(...prices), max: Math.max(...prices) } : null,
+      price_per_match_cents: priceRange(counting.filter((m) => regularCityFieldIds.has(Number(m.field_id)))),
       membership_monthly_cents: inp.membershipMonthlyCents?.get(abbr) ?? null,
       counts: {
         matches_last_30_days: siteFields.reduce((s, f) => s + f.matches_last_30_days, 0),
@@ -250,10 +316,13 @@ export function buildSitePayload(inp: BuildInput): SitePayload {
     window: { days_back: WINDOW_DAYS, days_ahead: WINDOW_DAYS, schedule_days: SCHEDULE_DAYS },
     definitions: {
       counting_match: "Scheduled, not cancelled, local date within 30 days before or after today in the city's time zone.",
-      field: "One entry per venue (a place can hold several MatchDay field records, e.g. a discounted or tournament listing). Named as the app names it when the venue has one record, by the venue when it has several.",
+      field: "One entry per venue (a place can hold several MatchDay field records, e.g. a discounted or tournament listing). Named as the app names it when the venue has one record, by the venue when it has several, with internal product words (Tourney, Tournament, Discount(ed), Premier Match) removed.",
       matches_all_time: "Matches that have kicked off and were not cancelled, Warsaw excluded.",
       players_all_time: "Distinct people who have played at least one match (staff, test and fake accounts excluded; a re-registered person counted once), Warsaw excluded.",
-      price_per_match_cents: "Lowest and highest public per-match price among counting matches, in cents.",
+      price_per_match_cents: "Lowest and highest per-match price, in cents, among counting matches on regular-play listings (not discounted, tournament or premier listings unless marked regular play), ignoring any match under $5. next_14_days carries every match at its real price.",
+      matches_display: "matches_all_time rounded down to the hundred, with a plus: show this, do not round on the site.",
+      players_display: "players_all_time rounded down to the hundred, with a plus.",
+      site_url: "The venue's existing page on playmatchday.com, or null.",
       membership_monthly_cents: "Not yet known per city; null.",
       neighborhood: "Not stored by MatchDay; null.",
     },
@@ -264,6 +333,8 @@ export function buildSitePayload(inp: BuildInput): SitePayload {
       upcoming_fields: cities.reduce((s, c) => s + c.fields.filter((f) => f.status === "upcoming").length, 0),
       matches_all_time: [...inp.cityTotals].filter(([a]) => !EXCLUDED_CITY_ABBRS.has(a)).reduce((s, [, t]) => s + t.matchesAllTime, 0),
       players_all_time: inp.playersAllTime,
+      matches_display: displayCount([...inp.cityTotals].filter(([a]) => !EXCLUDED_CITY_ABBRS.has(a)).reduce((s, [, t]) => s + t.matchesAllTime, 0)),
+      players_display: displayCount(inp.playersAllTime),
     },
     cities,
   };

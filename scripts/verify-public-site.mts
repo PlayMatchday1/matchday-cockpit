@@ -66,6 +66,30 @@ const prof = await sb.from("growth_player_profile").select("user_id", { count: "
 const wawOnly = await sb.from("growth_player_profile").select("user_id", { count: "exact", head: true }).not("city_counts->WAW", "is", null);
 console.log(`      info: players_all_time ${p.totals.players_all_time}; growth_player_profile rows (the Data Room's all-time Players) ${prof.count}; of those with any Warsaw play ${wawOnly.count}`);
 
+// ── 2026-11-03 follow-ups ──────────────────────────────────────────────────────────────────────
+// Price range: regular-play listings, nothing under $5. Every city with a range, printed.
+const ranges = p.cities.map((c: any) => `${c.slug} ${c.price_per_match_cents ? `$${c.price_per_match_cents.min / 100}–$${c.price_per_match_cents.max / 100}` : "null"}`);
+const withRange = p.cities.filter((c: any) => c.price_per_match_cents);
+check("no city's price range starts below $5 (control: cities with a range > 0)", withRange.length > 0 && withRange.every((c: any) => c.price_per_match_cents.min >= 500), ranges);
+const venuesWithRange = p.cities.flatMap((c: any) => c.fields.filter((f: any) => f.price_per_match_cents));
+check("no venue's price range starts below $5 (control: venues with a range > 0)", venuesWithRange.length > 0 && venuesWithRange.every((f: any) => f.price_per_match_cents.min >= 500), `${venuesWithRange.length} venues with a range; lowest min ${Math.min(...venuesWithRange.map((f: any) => f.price_per_match_cents.min))}`);
+const under5 = p.cities.flatMap((c: any) => c.fields.flatMap((f: any) => f.next_14_days.filter((m: any) => m.price_cents != null && m.price_cents < 500).map((m: any) => `${f.name} ${m.date} $${m.price_cents / 100}`)));
+console.log(`      info: next_14_days matches under $5 kept at their real price: ${under5.length ? under5.join("; ") : "none in the window today"}`);
+// Display counts: rounded DOWN to the hundred.
+const fl = (n: number) => `${(Math.floor(n / 100) * 100).toLocaleString("en-US")}+`;
+check("totals.matches_display / players_display = rounded down to the hundred, with +", p.totals.matches_display === fl(p.totals.matches_all_time) && p.totals.players_display === fl(p.totals.players_all_time), { matches_all_time: p.totals.matches_all_time, matches_display: p.totals.matches_display, players_all_time: p.totals.players_all_time, players_display: p.totals.players_display });
+// Names: no product word in any display name. Control: field 22, whose title is "Tourney ATH Pearland", is present and stripped.
+const allVenues = p.cities.flatMap((c: any) => c.fields.map((f: any) => ({ city: c.slug, ...f })));
+const PW = /\b(tourney|tournaments?|discounted|discount|premier match)\b/i;
+const pearland = allVenues.find((f: any) => f.mdapi_field_ids.includes(22));
+check("no venue display name carries Tourney/Tournament/Discount(ed)/Premier Match (control: field 22 'Tourney ATH Pearland' -> 'ATH Pearland')", !!pearland && pearland.name === "ATH Pearland" && !allVenues.some((f: any) => PW.test(f.name)),
+  "\n        " + allVenues.map((f: any) => `${f.city}/${f.slug}: ${f.name} [${f.status}] fields ${f.mdapi_field_ids.join(",")}`).join("\n        "));
+// site_url: the ten mapped venues, each 200.
+const urls = allVenues.filter((f: any) => f.site_url);
+const urlRows: string[] = []; let urlBad = 0;
+for (const f of urls) { const r = await fetch(f.site_url, { redirect: "manual" }); await r.body?.cancel(); if (r.status !== 200) urlBad++; urlRows.push(`${r.status} ${f.name} -> ${f.site_url}`); }
+check("site_url set on the 10 mapped venues, each returning 200", urls.length === 10 && urlBad === 0, "\n        " + urlRows.join("\n        "));
+
 // CORS
 for (const o of ["https://playmatchday.com", "https://www.playmatchday.com", "https://playmatchday.com.evil.com"]) {
   const r = await fetch(`${BASE}/api/public/site.json`, { headers: { Origin: o } }); await r.body?.cancel();

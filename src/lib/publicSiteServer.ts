@@ -40,7 +40,7 @@ export async function buildPublicSite(now = new Date()): Promise<SitePayload> {
   const matches: MatchRow[] = raw.map(({ teams, ...m }) => ({ ...m, team_count: Array.isArray(teams) && teams.length > 0 ? teams.length : null }));
 
   // Venue links: fin_venue_fields -> fin_venues.venue_name.
-  const { data: linkRows, error: le } = await sb.from("fin_venue_fields").select("mdapi_field_id,fin_venue_id");
+  const { data: linkRows, error: le } = await sb.from("fin_venue_fields").select("mdapi_field_id,fin_venue_id,counts_as_regular_play");
   if (le) throw new Error(`fin_venue_fields: ${le.message}`);
   const { data: venueRows, error: ve } = await sb.from("fin_venues").select("id,venue_name");
   if (ve) throw new Error(`fin_venues: ${ve.message}`);
@@ -77,7 +77,8 @@ export async function buildPublicSite(now = new Date()): Promise<SitePayload> {
     cityTotals.set(a, { matchesAllTime: held.count, playersAllTime: playersByCity.get(a) ?? 0, everHadMatch: ever.count > 0 });
   }
 
-  return buildSitePayload({ now, cities, fields, matches, links, cityTotals, playersAllTime });
+  const regularPlayFieldIds = new Set((linkRows ?? []).filter((l) => l.counts_as_regular_play === true && l.mdapi_field_id != null).map((l) => Number(l.mdapi_field_id)));
+  return buildSitePayload({ now, cities, fields, matches, links, regularPlayFieldIds, cityTotals, playersAllTime });
 }
 
 /* CORS: the two site origins, exact match on the parsed origin. Anything else gets no ACAO header. */

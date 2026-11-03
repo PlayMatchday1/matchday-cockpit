@@ -23,7 +23,7 @@ function fieldRow(f: SiteField): string {
     : `<span class="dim">none</span>`;
   return `<tr>
     <td class="img">${f.cover_photo_url ? `<img src="${esc(f.cover_photo_url)}" alt="" loading="lazy">` : MISSING}</td>
-    <td><b>${esc(f.name)}</b><div class="dim">${esc(f.slug)} · field ${f.mdapi_field_ids.join(", ")}</div></td>
+    <td><b>${esc(f.name)}</b><div class="dim">${esc(f.slug)} · field ${f.mdapi_field_ids.join(", ")}</div><div class="dim">${f.price_per_match_cents ? (f.price_per_match_cents.min === f.price_per_match_cents.max ? usd(f.price_per_match_cents.min) : `${usd(f.price_per_match_cents.min)}–${usd(f.price_per_match_cents.max)}`) : "no regular price"}${f.site_url ? ` · <a href="${esc(f.site_url)}">site page</a>` : " · no site page"}</div></td>
     <td><span class="pill ${f.status}">${f.status}</span>${f.first_match_date ? `<div>first ${esc(dateLabel(f.first_match_date))}</div>` : ""}</td>
     <td>${f.address.street ? esc(addr) : MISSING}<div class="dim">${f.lat != null ? `${f.lat}, ${f.lng}` : MISSING}</div></td>
     <td>${esc(f.formats.join(", ") || "—")}</td>
@@ -66,7 +66,7 @@ dl{display:grid;grid-template-columns:max-content 1fr;gap:4px 12px;font-size:12p
 <div class="tiles">
  <div class="tile"><b>${t.live_cities}</b>live cities</div><div class="tile"><b>${t.launching_cities}</b>launching</div>
  <div class="tile"><b>${t.live_fields}</b>live fields</div><div class="tile"><b>${t.upcoming_fields}</b>upcoming fields</div>
- <div class="tile"><b>${n(t.matches_all_time)}</b>matches all time</div><div class="tile"><b>${n(t.players_all_time)}</b>players all time</div>
+ <div class="tile"><b>${esc(t.matches_display)}</b>matches all time (${n(t.matches_all_time)})</div><div class="tile"><b>${esc(t.players_display)}</b>players all time (${n(t.players_all_time)})</div>
 </div>
 ${p.cities.map(citySection).join("")}
 <h2>Definitions</h2><dl>${Object.entries(p.definitions).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl>
