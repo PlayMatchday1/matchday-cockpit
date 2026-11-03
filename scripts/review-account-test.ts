@@ -80,7 +80,12 @@ is("a match chat reply is refused", reviewRefusal("POST", "/api/match-chats/abc/
 is("push registration is refused", reviewRefusal("POST", "/api/app/push-token")?.status, 403);
 is("a sync GET is refused", reviewRefusal("GET", "/api/sync/play-installs")?.status, 403);
 is("an auto-send tick GET is refused", reviewRefusal("GET", "/api/crm/auto-send/tick")?.status, 403);
-is("manager pay is Not available", reviewRefusal("GET", "/api/app/manager-pay"), { status: 403, error: "Not available" });
+is("manager pay is readable (2026-11-03)", reviewRefusal("GET", "/api/app/manager-pay"), null);
+is("presence control: a manager pay write is still refused", reviewRefusal("POST", "/api/app/manager-pay").status, 403);
+is("an iPhone data-through date is not a phone number", (maskForReview({ through: { iphone: "2026-10-31", android: "2026-10-30" } }) as { through: { iphone: unknown } }).through.iphone, "2026-10-31");
+is("presence control: a phone number still is", (maskForReview({ player: { phone: "+15125550100" } }) as { player: { phone: unknown } }).player.phone, null);
+is("a Lookup search row's name is first name and last initial", (maskForReview({ results: [{ id: 920, name: "Pat Example", city: "Austin", status: "ok", member: false }] }) as { results: { name: string }[] }).results[0].name, "Pat E.");
+is("presence control: a city name in a results row is kept", (maskForReview({ results: [{ id: 920, name: "Pat Example", city: "Austin", member: false }] }) as { results: { city: string }[] }).results[0].city, "Austin");
 
 console.log("\nthe switch and the token");
 const env = { ...process.env };
