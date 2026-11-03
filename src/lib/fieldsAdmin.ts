@@ -186,13 +186,17 @@ export type ValidationResult =
 // Required: Field (venue_name) and a known City. Optional everything
 // else; blanks persist as null. min/max must be ints; schedule_url, if
 // present, must be an http(s) URL.
-export function buildFieldPayload(input: FieldFormInput): ValidationResult {
+//
+// knownCities: the cities the caller offers. Field Ops passes MatchDay's own list (GET /cities via
+// /api/city-directory) plus the cities its venues already carry, so Philadelphia (not in CITIES)
+// can be saved. Omitted, it is CITIES, as before.
+export function buildFieldPayload(input: FieldFormInput, knownCities?: readonly string[]): ValidationResult {
   const venue_name = input.venue_name.trim();
   if (!venue_name) return { ok: false, error: "Field (short name) is required." };
 
   const city = input.city.trim();
   if (!city) return { ok: false, error: "City is required." };
-  if (!isKnownCity(city)) {
+  if (knownCities ? !knownCities.includes(city) : !isKnownCity(city)) {
     return { ok: false, error: `"${city}" is not a known city.` };
   }
 

@@ -24,6 +24,7 @@ import { Pencil, Trash2, Plus, X } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { errorText } from "@/lib/errorText";
 import { CITIES } from "@/lib/types";
+import { orderedCityGroups, venueFormCities } from "@/lib/fieldOpsCities";
 import { normalizeCityName } from "@/lib/cityNormalization";
 import {
   cityManagerFor,
@@ -268,6 +269,28 @@ export default function CitiesFieldsLens() {
 
   useEffect(() => { void load(); }, [load]);
 
+  /* CITIES ARE NO LONGER A TYPED LIST HERE (fieldOpsCities.ts). The groups are the active venues' own
+   * cities; CITIES (lib/types) has no Philadelphia, so Friends Select School (venue #92) was active and
+   * never drawn. The Add venue form's choices come from MatchDay's GET /cities via /api/city-directory;
+   * if that read fails the form offers the cities already grouped below. */
+  const [dirCities, setDirCities] = useState<string[] | null>(null);
+  useEffect(() => {
+    let live = true;
+    void (async () => {
+      const { data: sess } = await supabase.auth.getSession();
+      const t = sess.session?.access_token;
+      if (!t) return;
+      const r = await fetch("/api/city-directory", { headers: { Authorization: `Bearer ${t}` } }).catch(() => null);
+      const j = r && r.ok ? ((await r.json().catch(() => null)) as { cities?: { abbr: string | null; display: string }[] } | null) : null;
+      if (!live) return;
+      if (!j?.cities) { console.warn(`[field-ops] city directory unavailable (${r?.status ?? "network"}); grouping by the venues' own cities`); return; }
+      setDirCities(venueFormCities(j.cities));
+    })();
+    return () => { live = false; };
+  }, []);
+  const cityGroups = useMemo(() => orderedCityGroups(rows.map((r) => r.venue.city)), [rows]);
+  const formCities = dirCities && dirCities.length ? dirCities : cityGroups;
+
   const weeks = useMemo(() => buildWeeks(nowMs), [nowMs]);
 
   // ── filter predicates ──
@@ -301,11 +324,11 @@ export default function CitiesFieldsLens() {
   }, []);
   const openAdd = useCallback((city?: string) => {
     setModalError(null);
-    setModal({ mode: "add", form: { ...EMPTY_FORM, city: city ?? CITIES[0] } });
-  }, []);
+    setModal({ mode: "add", form: { ...EMPTY_FORM, city: city ?? formCities[0] ?? CITIES[0] } });
+  }, [formCities]);
   const save = useCallback(async () => {
     if (!modal) return;
-    const result = buildFieldPayload(modal.form);
+    const result = buildFieldPayload(modal.form, [...formCities, ...cityGroups]);
     if (!result.ok) { setModalError(result.error); return; }
     setSaving(true); setModalError(null);
     try {
@@ -323,7 +346,7 @@ export default function CitiesFieldsLens() {
          Deonna read after filling in the whole drawer. See errorText. */
       setModalError(errorText(e));
     } finally { setSaving(false); }
-  }, [modal, load]);
+  }, [modal, load, formCities, cityGroups]);
   const doDelete = useCallback(async () => {
     if (!confirmDelete) return;
     const { patch } = resolveDeleteAction();
@@ -433,7 +456,7 @@ export default function CitiesFieldsLens() {
           <select value={cityFilter} onChange={(e) => setCityFilter(e.target.value)}
             className="h-9 rounded-[9px] border pl-[11px] pr-8 text-[13.5px] font-semibold" style={{ background: C.railB, borderColor: C.line, color: C.ink }}>
             <option value="all">All cities</option>
-            {CITIES.filter((c) => rows.some((r) => r.venue.city === c)).map((c) => (
+            {cityGroups.map((c) => (
               <option key={c} value={c}>{c} ({rows.filter((r) => r.venue.city === c).length})</option>
             ))}
           </select>
@@ -514,7 +537,7 @@ export default function CitiesFieldsLens() {
             {view !== "all" ? <> under <b style={{ color: C.forest }}>{VIEWS.find((v) => v.k === view)?.lbl}</b></> : null}. Clear a filter to widen it.
           </div>
         ) : (
-          CITIES.filter((c) => rows.some((r) => r.venue.city === c)).map((city) => {
+          cityGroups.map((city) => {
             const rs = visible.filter((r) => r.venue.city === city);
             if (!rs.length) return null;
             const code = normalizeCityName(city) ?? city;
@@ -568,7 +591,7 @@ export default function CitiesFieldsLens() {
       </div>
 
       {modal && (
-        <FieldModal state={modal} roster={roster} saving={saving} error={modalError}
+        <FieldModal state={modal} roster={roster} cities={formCities} saving={saving} error={modalError}
           onChange={(form) => setModal((m) => (m ? { ...m, form } : m))} onClose={() => setModal(null)} onSave={save} />
       )}
       {confirmDelete && (
@@ -813,8 +836,8 @@ function CmPhoneLink({ phone }: { phone: string | null }) {
   return <a href={link.href} className="inline-flex items-center gap-1 tabular-nums text-deep-green/70 underline decoration-cream-line underline-offset-2">{formatE164UsPretty(phone)}</a>;
 }
 
-function FieldModal({ state, roster, saving, error, onChange, onClose, onSave }: {
-  state: NonNullable<ModalState>; roster: CityManagerRoster; saving: boolean; error: string | null;
+function FieldModal({ state, roster, cities, saving, error, onChange, onClose, onSave }: {
+  state: NonNullable<ModalState>; roster: CityManagerRoster; cities: readonly string[]; saving: boolean; error: string | null;
   onChange: (form: FieldFormInput) => void; onClose: () => void; onSave: () => void;
 }) {
   const f = state.form;
@@ -860,7 +883,8 @@ function FieldModal({ state, roster, saving, error, onChange, onClose, onSave }:
           <Labeled label="Venue" required><input value={f.venue_name} onChange={(e) => set({ venue_name: e.target.value })} placeholder="ATH Pearland" className={inputCls} /></Labeled>
           <Labeled label="City" required>
             <select value={f.city} onChange={(e) => set({ city: e.target.value })} className={inputCls}>
-              {CITIES.map((c) => <option key={c} value={c}>{c}</option>)}
+              {/* The venue's own city stays selectable when the list does not carry it (an El Paso venue, or the list failed to load). */}
+              {(cities.includes(f.city) || !f.city ? cities : [...cities, f.city]).map((c) => <option key={c} value={c}>{c}</option>)}
             </select>
           </Labeled>
           <Labeled label="Field Contact Name"><input value={f.contact_name} onChange={(e) => set({ contact_name: e.target.value })} className={inputCls} /></Labeled>
