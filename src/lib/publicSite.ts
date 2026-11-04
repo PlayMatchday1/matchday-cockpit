@@ -157,7 +157,15 @@ export function extendLinksByPosition(fields: ApiFieldRow[], links: ReadonlyMap<
  * "Scissortail Park"). Applied to every display name, whether it came from a field title or a venue.
  * NAME_OVERRIDES is for what the rule cannot fix, keyed by the venue's lowest MatchDay field id, so a
  * rename upstream does not lose it. Empty on purpose until something needs it. */
-export const NAME_OVERRIDES: Readonly<Record<number, string>> = {};
+export const NAME_OVERRIDES: Readonly<Record<number, string>> = {
+  /* Ryan, 2026-11-03: the website shows the full place name, not the app's abbreviated listing. The slug follows the
+   * name; site_url (keyed by field id) is unaffected, so a venue with a page keeps it. */
+  1: "Westlake High School",                       // was "Westlake HS Field 3"
+  25: "Round Rock Multipurpose Complex",           // was "Stadium Field at Round Rock M.C."
+  1024: "The Hattrick Leander",                    // was "The Hattrick L."
+  1288: "The Hattrick Tomball",                    // was "The Hattrick T."
+  1585: "Parmer Stadium",                          // was "PARMER Stadium"
+};
 const PRODUCT_WORDS = /\b(premier\s+match|tournaments?|tourney|discounted|discount)\b/gi;
 export function publicVenueName(raw: string): string {
   let t = raw.replace(PRODUCT_WORDS, " ").replace(/\s+/g, " ").trim();

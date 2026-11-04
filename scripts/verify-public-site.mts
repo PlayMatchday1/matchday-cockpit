@@ -107,6 +107,12 @@ const blankArea = liveV.filter((f: any) => !(typeof f.neighborhood === "string" 
 check("every live and upcoming venue has a neighborhood (control: venues listed > 0)", liveV.length > 0 && blankArea.length === 0,
   "\n        " + liveV.map((f: any) => `${f.city}/${f.slug}: ${f.name} -> ${f.neighborhood ?? "(blank)"}`).join("\n        "));
 
+// ── name overrides (2026-11-03) ──────────────────────────────────────────────────────────────
+const byField = (id: number) => venuesAll.find((f: any) => f.mdapi_field_ids.includes(id));
+const want: [number, string, string][] = [[1, "Westlake High School", "westlake-high-school"], [25, "Round Rock Multipurpose Complex", "round-rock-multipurpose-complex"], [1024, "The Hattrick Leander", "the-hattrick-leander"], [1288, "The Hattrick Tomball", "the-hattrick-tomball"], [1585, "Parmer Stadium", "parmer-stadium"]];
+check("display-name overrides applied, slugs follow, The Hattrick Tomball keeps its site_url", want.every(([id, n, sl]) => byField(id)?.name === n && byField(id)?.slug === sl) && byField(1288)?.site_url === "https://www.playmatchday.com/pickup-soccer-hattrick-tomball-houston/",
+  want.map(([id]) => { const f = byField(id); return `${id}: ${f?.name} (${f?.slug})${f?.site_url ? " -> " + f.site_url : ""}`; }));
+
 // CORS
 for (const o of ["https://playmatchday.com", "https://www.playmatchday.com", "https://playmatchday.com.evil.com"]) {
   const r = await fetch(`${BASE}/api/public/site.json`, { headers: { Origin: o } }); await r.body?.cancel();
