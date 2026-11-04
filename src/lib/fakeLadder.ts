@@ -192,6 +192,35 @@ export function ladderDiff(current: Record<string, unknown>, target: Ladder): La
   return diff;
 }
 
+/* ── NO RUNG ABOVE CAPACITY (Ryan, 2026-11-04) ────────────────────────────────────────────────
+ * A rung above maxPlayerCount is accepted and stored by MatchDay and means zero fakes there — so a
+ * ladder like 34/34/33/34/36 on a 32-capacity match does nothing at all. It got that way when the
+ * one-day capacity-relative ladder (2026-10-23) was written at capacity 36 and the match was later
+ * cut to 4 × 8.
+ *
+ * Every write that sends a rung OR a capacity runs this. It returns the rungs to add to the body:
+ * each one that would sit above the capacity AFTER the write (the sent capacity if there is one,
+ * else the stored one), set to that capacity. A rung being sent is clamped; a stored rung is
+ * clamped only because this write touched the ladder or the capacity — an edit to a price never
+ * drags the ladder along. No capacity (a special event) clamps nothing.
+ *
+ * This is part of the person's save, not a job: nothing calls it on a schedule. */
+export function ladderClampPatch(current: Record<string, unknown>, changes: Record<string, unknown>): Ladder {
+  const touches = "maxPlayerCount" in changes || RUNG_KEYS.some((k) => k in changes);
+  if (!touches) return {};
+  const capRaw = "maxPlayerCount" in changes ? changes.maxPlayerCount : current.maxPlayerCount;
+  const cap = Number(capRaw);
+  if (capRaw == null || capRaw === "" || !Number.isFinite(cap) || cap <= 0) return {};
+  const out: Ladder = {};
+  for (const k of RUNG_KEYS) {
+    const raw = k in changes ? changes[k] : current[k];
+    if (raw == null || raw === "") continue;
+    const v = Number(raw);
+    if (Number.isFinite(v) && v > cap) out[k] = Math.round(cap);
+  }
+  return out;
+}
+
 /* ── THE ONE-OFF BULK ACTION'S PLAN, ONE MATCH AT A TIME ──────────────────────────────────────
  * Pure, so the preview count and the write decision are the SAME function: the card counts what
  * this returns as "change", and the write route re-runs it on a fresh read immediately before

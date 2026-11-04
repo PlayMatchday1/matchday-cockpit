@@ -341,7 +341,7 @@ export default function MatchEditor({ id, mode = "edit", sourceId, fieldId: from
             if (!cur) return cur;
             const next: Data = { ...cur };
             for (const k of EDITABLE_KEYS) {
-              /* EXCEPT THE FAKE LADDER. The copy was created on the NEW default ladder (copyMatch.ts);
+              /* EXCEPT THE FAKE LADDER. The copy was created on the default ladder (copyMatch.ts);
                * overlaying the source's rungs here would stage the old ladder as a change and put it
                * back on Save. */
               if (RUNG_KEYS.includes(k)) continue;
@@ -1114,6 +1114,12 @@ export default function MatchEditor({ id, mode = "edit", sourceId, fieldId: from
               <div className="ladderNote" data-testid="ladder-note">
                 The most spots shown as left from each mark. Fakes fill the rest: capacity − this − real players.
               </div>
+              {/* ABOVE CAPACITY IS SAVED AS CAPACITY — the routes clamp (fakeLadder.ts ladderClampPatch). */}
+              {Number(state.maxPlayerCount) > 0 && LADDER.some((k) => Number(state[k]) > Number(state.maxPlayerCount)) && (
+                <div className="ladderNote" data-testid="ladder-overcap">
+                  Above capacity ({Number(state.maxPlayerCount)}) means no fakes at that mark. Saving sends those as {Number(state.maxPlayerCount)}.
+                </div>
+              )}
               {/* STAGES the default like any hand edit — nothing goes out until Save. */}
               {defLadder && (
                 <div className="ladderNote" data-testid="ladder-default">

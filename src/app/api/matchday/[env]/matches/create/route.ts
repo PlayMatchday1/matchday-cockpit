@@ -24,7 +24,7 @@ import { EDITABLE_KEYS } from "@/lib/matchEditModel";
 import { supabaseLogStore } from "@/lib/changeLog";
 import { NO_EDIT_MATCHES } from "@/lib/matchEditAccess";
 import { cityNameFor } from "@/lib/cityScope";
-import { defaultLadder, RUNG_KEYS } from "@/lib/fakeLadder";
+import { defaultLadder, ladderClampPatch, RUNG_KEYS } from "@/lib/fakeLadder";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -222,6 +222,8 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string }>
      * spot shown as taken. A rung the caller DID send is theirs and is left alone. */
     const ladder = defaultLadder(payload.maxPlayerCount);
     if (ladder) for (const k of RUNG_KEYS) if (payload[k] === undefined || payload[k] === null || payload[k] === "") payload[k] = ladder[k];
+    /* …BUT NEVER ABOVE THE CAPACITY (ladderClampPatch). A sent rung above it is sent as it. */
+    Object.assign(payload, ladderClampPatch({}, payload));
 
     const saveId = body?.saveId || randomUUID();
     let created: Record<string, unknown> | null = null;

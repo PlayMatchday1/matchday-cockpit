@@ -18,6 +18,7 @@ import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
 import { NO_EDIT_MATCHES } from "@/lib/matchEditAccess";
 import { refreshMatchMirror, tombstoneMatchMirror } from "@/lib/mirrorWriteThrough";
 import { rosterOptions } from "@/lib/managerAssign";
+import { ladderClampPatch } from "@/lib/fakeLadder";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -158,6 +159,12 @@ export async function PUT(req: Request, ctx: { params: Promise<{ env: string; id
     // cached so a name lookup does not add a fourth. Logging is best-effort and never
     // throws over the write.
     let cached = await apiGet<Record<string, unknown>>(env, `/admin/matches/${id}`); // before + name
+    /* NO RUNG ABOVE CAPACITY. A write that sends a rung or a capacity has any rung that would end
+     * up above the capacity sent as the capacity instead (fakeLadder.ts ladderClampPatch). Merged
+     * into the body AND the keys, so the read-back judges it and change_log records it. */
+    const clamped = ladderClampPatch(cached, changes);
+    Object.assign(changes, clamped);
+    for (const k of Object.keys(clamped)) if (!keys.includes(k)) keys.push(k);
     let reads = 0;
     const { outcome, error, logged } = await recordWrite(
       {
@@ -185,7 +192,7 @@ export async function PUT(req: Request, ctx: { params: Promise<{ env: string; id
      * `reason` distinguishes the three cases that are NOT failures: staging (the mirror holds
      * production ids), a non-landed outcome, and an edit that touched only unmirrored fields. */
     return Response.json({
-      ok: true, outcome, logRecorded: logged, match: pickMatch(cached),
+      ok: true, outcome, logRecorded: logged, match: pickMatch(cached), clamped,
       mirrored: mirror.refreshed, mirrorReason: mirror.reason ?? null,
     });
   } catch (e) {

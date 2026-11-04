@@ -11,6 +11,7 @@ import { readFileSync } from "node:fs";
 import {
   RUNG_MARKS, RUNG_KEYS, rungKey, fakesFor, rungFor, markInForce, marksFrom,
   fakesWriteDiff, fakesWriteNote, defaultLadder, ladderDiff, planFixedLadder, isHandLadderEdit, FIXED_LADDER_SOURCE, type ChangeLogRow,
+  ladderClampPatch,
 } from "../src/lib/fakeLadder";
 import { buildCopyBody } from "../src/lib/copyMatch";
 import { EDITABLE_KEYS } from "../src/lib/matchEditModel";
@@ -225,6 +226,26 @@ console.log("\nA NEW MATCH GETS THE DEFAULT LADDER");
   /* STEP TWO OF A COPY MUST NOT PUT THE SOURCE'S LADDER BACK. */
   const editor = readFileSync("src/app/(internal)/match-ops/matches/[id]/MatchEditor.tsx", "utf8");
   is("  the editor's copy overlay skips the rung keys", /if \(RUNG_KEYS\.includes\(k\)\) continue;/.test(editor), true);
+}
+
+console.log("\nNO RUNG ABOVE CAPACITY (2026-11-04)");
+{
+  /* PRODUCTION 20612 (Parmer Stadium - Premier): copied 2026-10-24 at capacity 36 under the one-day
+   * capacity-relative ladder, now 4 × 8 = 32, stored 34/34/33/34/36. */
+  const PARMER = { maxPlayerCount: 32, fakeSpotLeft36h: 34, fakeSpotLeft24h: 34, fakeSpotLeft12h: 33, fakeSpotLeft6h: 34, fakeSpotLeft3h: 36 };
+  is("  an edit to one rung clamps every stored rung above capacity",
+    ladderClampPatch(PARMER, { fakeSpotLeft6h: 6 }), { fakeSpotLeft36h: 32, fakeSpotLeft24h: 32, fakeSpotLeft12h: 32, fakeSpotLeft3h: 32 });
+  is("  a sent rung above capacity is sent as capacity", ladderClampPatch({ maxPlayerCount: 18 }, { fakeSpotLeft3h: 40 }), { fakeSpotLeft3h: 18 });
+  is("  a capacity cut clamps against the NEW capacity",
+    ladderClampPatch({ maxPlayerCount: 36, ...{ fakeSpotLeft36h: 12, fakeSpotLeft24h: 8, fakeSpotLeft12h: 8, fakeSpotLeft6h: 6, fakeSpotLeft3h: 6 } }, { maxPlayerCount: 10 }),
+    { fakeSpotLeft36h: 10 });
+  is("  a capacity RAISE clamps nothing", ladderClampPatch(PARMER, { maxPlayerCount: 40 }), {});
+  is("  an edit that touches neither ladder nor capacity clamps nothing (a price never drags the ladder)",
+    ladderClampPatch(PARMER, { registrationPrice: 900 }), {});
+  is("  no capacity (special event) clamps nothing", ladderClampPatch({ maxPlayerCount: null }, { fakeSpotLeft3h: 99 }), {});
+  is("  a rung AT capacity is left alone", ladderClampPatch({ maxPlayerCount: 18 }, { fakeSpotLeft3h: 18 }), {});
+  is("  the create shape: rungs and capacity both in the body", ladderClampPatch({}, { maxPlayerCount: 8, fakeSpotLeft36h: 12, fakeSpotLeft3h: 6 }), { fakeSpotLeft36h: 8 });
+  is("  control: the default ladder never needs clamping", ladderClampPatch({}, { maxPlayerCount: 7, ...defaultLadder(7)! }), {});
 }
 
 console.log(`\nfake-ladder: ${pass} passed, ${fails.length} failed`);

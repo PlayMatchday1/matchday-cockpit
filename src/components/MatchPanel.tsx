@@ -1546,6 +1546,13 @@ export default function MatchPanel({ matchId, env = DRAWER_ENV, onDirtyChange, o
                 );
               })}
             </div>
+            {/* ABOVE CAPACITY IS SAVED AS CAPACITY — the route clamps (fakeLadder.ts ladderClampPatch);
+                this says so before Save rather than after. */}
+            {capacity > 0 && MARKS.some((h) => Number(cur[`fakeSpotLeft${h}h`]) > capacity) && (
+              <div className="mp-ladderdef" data-testid="mp-ladder-overcap">
+                <span>Above capacity ({capacity}) means no fakes at that mark. Saving sends those as {capacity}.</span>
+              </div>
+            )}
             {/* THE DEFAULT, ONE CLICK AWAY AND NOT APPLIED. It STAGES the five rungs for this
                 match's capacity (fakeLadder.ts defaultLadder) like any hand edit, so the diff shows
                 them and nothing goes out until Save. Hidden when the match is already on it. */}

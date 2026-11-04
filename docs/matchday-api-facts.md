@@ -1647,6 +1647,35 @@ about 8 a day, so a removal is known only to within a few hours unless a run hap
 - **178 of the 411 cancelled matches in the window were also DELETED upstream** (tombstoned in the
   mirror), most of them days before kickoff. Only 8 ever carried a fake row.
 
+## WHY 400 NOVEMBER MATCHES WERE OFF THE DEFAULT LADDER (read 2026-11-04)
+
+**NOTHING REWRITES A LADDER ON A SCHEDULE.** The off-default ladders are leftovers of the one-day
+capacity-relative ladder (`2aab6e9`, 2026-10-23), written by two things that ran while it was live:
+
+- **"Apply new ladder"**, the bulk run of 2026-10-23 21:20–21:31 UTC (184 matches, `fake_ladder_switches` row 2).
+- **Master Schedule · copy to dates on 2026-10-24 between 15:00 and 19:00 UTC — 472 creates**, before
+  `bf91938` (fixed ladder, committed 18:18 UTC) was serving. From 19:00 UTC every copy sent 12/8/8/6/6.
+
+Evidence: production `change_log` rows since 2026-10-20 carrying a `fakeSpotLeft*` key (1,251 of
+3,430), grouped by source and hour; the live `GET /admin/matches` list from 2026-11-04 (559 matches,
+read once, ≥2s between pages). Of the 400 off-default upcoming matches, 392 read exactly
+`cap−2/cap−2/cap−3/cap−2/cap` for SOME capacity, and every one's last rung write was "Apply new
+ladder" (35) or "copy to dates" (365). **39 sit ABOVE today's capacity** because the copy's
+`maxPlayerCount` was cut afterwards — 20612 Parmer Stadium - Premier was created at 36 (the copy's
+body) and now reads 32, so 34/34/33/34/36.
+
+**"Apply fixed ladder" was never run** — no `change_log` row carries its source.
+
+**Positive control for "nothing pushes them back":** all 19 of 2026-11-04's matches, reset by hand
+around 16:00 UTC (`Match panel`, 14 rows), still read the default at 2026-11-04 ~17:00 UTC.
+
+**SINCE 2026-11-04: NO RUNG ABOVE CAPACITY.** `ladderClampPatch` (`src/lib/fakeLadder.ts`) runs on
+every write that sends a rung or `maxPlayerCount` — the match PUT route (panel, full editor, Gameday
+"Spots left now", staff app Adjust and size), the create route, reduce-2, convert-4 and the roster
+`shape` op. A rung that would end above the post-write capacity is sent as the capacity, inside the
+same body, so `change_log` records it. A capacity RAISE clamps nothing; a write touching neither
+ladder nor capacity clamps nothing.
+
 ## THE DEFAULT LADDER IS FIXED VALUES AGAIN (2026-10-24) — supersedes the section below
 
 **Rungs (most spots shown as left): 12 / 8 / 8 / 6 / 6 at 36h / 24h / 12h / 6h / 3h, each capped at
@@ -1687,7 +1716,7 @@ the full editor's create mode and Master Schedule "copy to dates", `copyMatch.ts
 server fallback for any rung a create omits (`matches/create/route.ts`), a "Use new ladder" button
 that STAGES it in the match panel, and the bulk "Apply new ladder" at `/match-ops/fake-ladder` (removed 2026-10-24).
 
-**MEASURED ON STAGING 2026-10-23, match 2620, capacity 18, 0 real** (`scripts/stage-new-ladder-probe.mjs`),
+**MEASURED ON STAGING 2026-10-23, match 2620, capacity 18, 0 real** (`scripts/stage-new-ladder-probe.mjs`, removed 2026-11-04 with the rest of the experiment),
 new ladder written, kickoff moved into each band, live roster sampled every ~19s:
 
 ```

@@ -54,7 +54,7 @@ import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
 import { refreshMatchMirror } from "@/lib/mirrorWriteThrough";
 import { assertMatchInScope } from "@/lib/matchOpsAuth";
 import { NO_EDIT_MATCHES } from "@/lib/matchEditAccess";
-import { markInForce, rungKey } from "@/lib/fakeLadder";
+import { markInForce, rungKey, ladderClampPatch } from "@/lib/fakeLadder";
 import {
   buildReducePlan, reduceRefusal, capacityRefusal, capacityRefusalWhy,
   defaultPerTeam, perTeamError, REDUCE_MIN_PER_TEAM, REDUCE_MAX_PER_TEAM, type ReducePlayer,
@@ -378,7 +378,8 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
    * teamCountWrites(2, perTeam): maxPlayerCount AND maxTeamSize2Team, both TOTALS for the whole
    * match. Writing the per-side number here is the bug that showed production match 18125's
    * players 5.5 players per team; the helper exists so no call site computes it. */
-  const shapeBody = { ...plan.shape, teamNumbers: plan.targetTeams };
+  /* NO RUNG ABOVE THE NEW CAPACITY (fakeLadder.ts ladderClampPatch) — rides on the shape write. */
+  const shapeBody = { ...plan.shape, teamNumbers: plan.targetTeams, ...ladderClampPatch(m as Record<string, unknown>, plan.shape as Record<string, unknown>) };
   const shapeWrite = await recordWrite(
     {
       env, source, actorName: auth.email, actorEmail: auth.email, saveId,

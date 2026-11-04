@@ -8,6 +8,7 @@
 
 import { pathEnv, type PathEnv } from "@/lib/localMode";
 import { randomUUID } from "node:crypto";
+import { ladderClampPatch } from "@/lib/fakeLadder";
 import { authenticateCapability } from "@/lib/capabilityAuth";
 import { authenticateMatchOpsRead, assertMatchInScope } from "@/lib/matchOpsAuth"; // GET is a Match Ops READ (Part D round 2); POST stays admin + EDIT MATCHES
 import { apiGet, apiWrite, AmbiguousWriteError, WriteFailedError, DeniedFieldError, DeniedEndpointError, ProductionWriteBoltedError, StageHostGuardError, StageConfigError, NotAuthorizedError, type MatchdayEnv } from "@/lib/matchdayStageApi";
@@ -242,6 +243,13 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; m
   if (op.kind === "teams" || op.kind === "shape") {
     readResource = readMatch;
     const before = await readMatch(); // read once for change labels + name (reused below)
+    /* NO RUNG ABOVE CAPACITY after a capacity change (fakeLadder.ts ladderClampPatch). Into the
+     * body before the change labels are built, so change_log shows the clamped rungs too. */
+    if (op.kind === "shape" && body) {
+      const clamp = ladderClampPatch((before.match ?? {}) as Record<string, unknown>, body);
+      Object.assign(body, clamp);
+      if (op.fields) Object.assign(op.fields, clamp);
+    }
     preName = op.matchName ?? ((before.match as Record<string, unknown>)?.name as string) ?? null;
     changes = fieldsChanges(before, op.fields ?? {}, op.kind);
     applied = op.kind === "teams"

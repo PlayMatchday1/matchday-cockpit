@@ -35,6 +35,7 @@ import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
 import { refreshMatchMirror } from "@/lib/mirrorWriteThrough";
 import { assertMatchInScope } from "@/lib/matchOpsAuth";
 import { NO_EDIT_MATCHES } from "@/lib/matchEditAccess";
+import { ladderClampPatch } from "@/lib/fakeLadder";
 import {
   buildConvertPlan, convertRefusal, convertSummary, type ConvertPlayer,
 } from "@/lib/convertFourTeams";
@@ -132,12 +133,14 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
    * If this fails nothing else runs. The before-map rides on this write's change_log row because
    * it must exist BEFORE the first move, and this is the write that happens first. */
   let shapeOk = false;
+  /* NO RUNG ABOVE THE NEW CAPACITY (fakeLadder.ts ladderClampPatch) — rides on the shape write. */
+  const shapeBody = { ...plan.shape, teamNumbers: 4, ...ladderClampPatch(m as Record<string, unknown>, plan.shape as Record<string, unknown>) };
   const shapeWrite = await recordWrite(
     {
       env, source: "Match panel · convert to 4 teams", actorName: auth.email, actorEmail: auth.email,
       saveId, matchId: Number(id), matchName: String(m.name ?? ""),
       method: "PUT", path: `/admin/matches/${id}`,
-      body: { ...plan.shape, teamNumbers: 4 },
+      body: shapeBody,
       keys: [], label: (k) => k,
       changes: [{
         key: "convert4:shape", field: "Convert to 4 teams",
@@ -148,7 +151,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
     },
     {
       readResource: async () => ({ match: await apiGet(env, `/admin/matches/${id}`) }),
-      write: () => apiWrite(env, "PUT", `/admin/matches/${id}`, { ...plan.shape, teamNumbers: 4 }, actor),
+      write: () => apiWrite(env, "PUT", `/admin/matches/${id}`, shapeBody, actor),
       now: () => new Date().toISOString(),
     },
     supabaseLogStore(),
