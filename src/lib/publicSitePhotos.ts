@@ -10,7 +10,9 @@ import "server-only";
 //   3. null.
 import { unstable_cache } from "next/cache";
 
-export type CityPhoto = { url: string; credit: string | null; source: "override" | "wikipedia" };
+/** author, license and file_page are the credit's parts (2026-11-03: the website's Photo credits page lists them, and
+ *  the card carries the credit only in the image's title). Null for an override. */
+export type CityPhoto = { url: string; credit: string | null; source: "override" | "wikipedia"; author: string | null; license: string | null; file_page: string | null };
 
 export const CITY_PHOTO_OVERRIDES: Readonly<Record<string, string>> = {
   ATX: "https://www.playmatchday.com/wp-content/uploads/2026/04/Website-Picture-8-3.png",
@@ -58,15 +60,18 @@ export async function lookupWikipediaPhoto(title: string): Promise<CityPhoto | n
   if (!acceptedLicense(code, shortName)) return null;
   const author = plainText(String(meta.Artist?.value ?? "")) || "Unknown author";
   const url = String(info.thumburl).split("?")[0];
-  return { url, credit: `Photo: ${author}, ${shortName || code} (Wikimedia Commons)`, source: "wikipedia" };
+  const license = shortName || code;
+  const page = String(info.descriptionurl ?? "");
+  const file_page = /^https:\/\/commons\.wikimedia\.org\/wiki\/File:/.test(page) ? page : `https://commons.wikimedia.org/wiki/File:${encodeURIComponent(file.replace(/ /g, "_"))}`;
+  return { url, credit: `Photo: ${author}, ${license} (Wikimedia Commons)`, source: "wikipedia", author, license, file_page };
 }
 
-const cachedLookup = (title: string) => unstable_cache(() => lookupWikipediaPhoto(title), ["public-site-city-photo", title], { revalidate: 7 * 24 * 3600 })();
+const cachedLookup = (title: string) => unstable_cache(() => lookupWikipediaPhoto(title), ["public-site-city-photo-v2", title], { revalidate: 7 * 24 * 3600 })();
 
 /** The photo for a city, by the order above. Never throws. */
 export async function cityPhoto(abbr: string, cityName: string, stateName: string | null): Promise<CityPhoto | null> {
   const o = CITY_PHOTO_OVERRIDES[abbr];
-  if (o) return { url: o, credit: null, source: "override" };
+  if (o) return { url: o, credit: null, source: "override", author: null, license: null, file_page: null };
   if (!stateName) return null;
   try {
     return await cachedLookup(`${cityName}, ${stateName}`);

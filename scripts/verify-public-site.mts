@@ -128,6 +128,12 @@ for (const c of p.cities) {
 }
 const phlP = p.cities.find((c: any) => c.slug === "philadelphia");
 check("every listed city has a photo that loads (200, image/*), Wikipedia photos carry a credit; Philadelphia from Wikipedia", photoBad === 0 && phlP?.photo_source === "wikipedia", "\n        " + photoRows.join("\n        "));
+// The credit's parts (2026-11-03): a Wikipedia photo names its author, licence and Commons file page; an override has none.
+const partsBad = p.cities.filter((c: any) => c.photo_source === "wikipedia"
+  ? !(c.photo_author && c.photo_license && /^https:\/\/commons\.wikimedia\.org\/wiki\/File:/.test(c.photo_file_url ?? "") && c.photo_credit?.includes(c.photo_author) && c.photo_credit?.includes(c.photo_license))
+  : (c.photo_author !== null || c.photo_license !== null || c.photo_file_url !== null));
+check("photo_author / photo_license / photo_file_url: set and consistent with the credit for Wikipedia photos, null otherwise", partsBad.length === 0 && !!phlP?.photo_file_url,
+  p.cities.map((c: any) => `${c.slug}: ${c.photo_author ?? "-"} | ${c.photo_license ?? "-"} | ${c.photo_file_url ?? "-"}`).join("\n        "));
 
 // CORS
 for (const o of ["https://playmatchday.com", "https://www.playmatchday.com", "https://playmatchday.com.evil.com"]) {

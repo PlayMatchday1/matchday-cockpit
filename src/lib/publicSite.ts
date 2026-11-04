@@ -89,6 +89,8 @@ export type SiteCity = {
   membership_monthly_cents: number | null;
   /** A photo of the city (see publicSitePhotos.ts), its credit when the licence asks for one, and where it came from. */
   photo_url: string | null; photo_credit: string | null; photo_source: "override" | "wikipedia" | null;
+  /** The credit's parts, for a credits page: null for an override or no photo. */
+  photo_author: string | null; photo_license: string | null; photo_file_url: string | null;
   counts: { matches_last_30_days: number; matches_all_time: number; players_all_time: number };
   fields: SiteField[];
 };
@@ -244,7 +246,7 @@ export type BuildInput = {
   playersAllTime: number;
   membershipMonthlyCents?: ReadonlyMap<string, number>;
   /** By city abbr. */
-  cityPhotos?: ReadonlyMap<string, { url: string; credit: string | null; source: "override" | "wikipedia" }>;
+  cityPhotos?: ReadonlyMap<string, { url: string; credit: string | null; source: "override" | "wikipedia"; author: string | null; license: string | null; file_page: string | null }>;
 };
 
 export function buildSitePayload(inp: BuildInput): SitePayload {
@@ -345,6 +347,7 @@ export function buildSitePayload(inp: BuildInput): SitePayload {
       price_per_match_cents: priceRange(counting.filter((m) => regularCityFieldIds.has(Number(m.field_id)))),
       membership_monthly_cents: inp.membershipMonthlyCents?.get(abbr) ?? null,
       photo_url: inp.cityPhotos?.get(abbr)?.url ?? null, photo_credit: inp.cityPhotos?.get(abbr)?.credit ?? null, photo_source: inp.cityPhotos?.get(abbr)?.source ?? null,
+      photo_author: inp.cityPhotos?.get(abbr)?.author ?? null, photo_license: inp.cityPhotos?.get(abbr)?.license ?? null, photo_file_url: inp.cityPhotos?.get(abbr)?.file_page ?? null,
       counts: {
         matches_last_30_days: siteFields.reduce((s, f) => s + f.matches_last_30_days, 0),
         matches_all_time: totals.matchesAllTime,
@@ -374,7 +377,7 @@ export function buildSitePayload(inp: BuildInput): SitePayload {
       players_display: "players_all_time rounded down to the hundred, with a plus.",
       site_url: "The venue's existing page on playmatchday.com, or null.",
       membership_monthly_cents: "Not yet known per city; null.",
-      photo_url: "A photo of the city: the website's own skyline image where it has one, else the city's Wikipedia lead image (Public domain, CC0, CC BY or CC BY-SA only), else null. photo_credit is set when the licence requires attribution; photo_source says which.",
+      photo_url: "A photo of the city: the website's own skyline image where it has one, else the city's Wikipedia lead image (Public domain, CC0, CC BY or CC BY-SA only), else null. photo_credit is set when the licence requires attribution; photo_source says which. photo_author, photo_license and photo_file_url (the file's Wikimedia Commons page) are the credit's parts, null for the site's own images.",
       neighborhood: "The venue's public area label (\"North Austin\"), set on Clubhouse Field Ops. Null when none is set.",
     },
     totals: {

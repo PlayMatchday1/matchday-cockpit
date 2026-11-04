@@ -16,7 +16,7 @@ import { apiGet } from "./matchdayStageApi";
 import { makeServerClient } from "./supabaseServer";
 import { selectAll, selectAllParallel } from "./supabasePagination";
 import type { VenueLink } from "./venueUnits";
-import { cityPhoto } from "./publicSitePhotos";
+import { cityPhoto, type CityPhoto } from "./publicSitePhotos";
 import { addDays, buildSitePayload, CITY_DISPLAY_NAMES, EXCLUDED_CITY_ABBRS, WINDOW_DAYS, type ApiCityRow, type ApiFieldRow, type CityTotals, type MatchRow, type SitePayload } from "./publicSite";
 
 export async function buildPublicSite(now = new Date()): Promise<SitePayload> {
@@ -82,7 +82,7 @@ export async function buildPublicSite(now = new Date()): Promise<SitePayload> {
   const venueNeighborhoods = new Map<number, string>();
   for (const v of venueRows ?? []) { const n = String((v as { neighborhood?: string | null }).neighborhood ?? "").trim(); if (n) venueNeighborhoods.set(Number(v.id), n); }
   /* City photos: an override or a cached Wikipedia lookup per city (publicSitePhotos.ts). Warsaw is never shown. */
-  const cityPhotos = new Map<string, { url: string; credit: string | null; source: "override" | "wikipedia" }>();
+  const cityPhotos = new Map<string, CityPhoto>();
   await Promise.all(cities.filter((c) => (c.abbr ?? "").trim() && !EXCLUDED_CITY_ABBRS.has((c.abbr ?? "").trim())).map(async (c) => {
     const abbr = (c.abbr ?? "").trim();
     const name = CITY_DISPLAY_NAMES[abbr] ?? c.name;
