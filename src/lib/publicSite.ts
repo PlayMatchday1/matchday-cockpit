@@ -223,6 +223,8 @@ export type BuildInput = {
   /** Alive, non-cancelled matches whose wall-clock date is near the window (the builder applies the exact per-city window). */
   matches: MatchRow[];
   links: ReadonlyMap<number, VenueLink>;
+  /** fin_venues.neighborhood by venue id (migration 0252): the public area label. */
+  venueNeighborhoods?: ReadonlyMap<number, string>;
   /** Field ids ticked counts_as_regular_play in fin_venue_fields. */
   regularPlayFieldIds: ReadonlySet<number>;
   /** By city abbr. */
@@ -283,7 +285,7 @@ export function buildSitePayload(inp: BuildInput): SitePayload {
       usedSlugs.add(slug);
       const ll = validLatLng(rep.lat, rep.lng);
       return {
-        slug, name, neighborhood: null,
+        slug, name, neighborhood: (u.venueId != null ? inp.venueNeighborhoods?.get(u.venueId) : undefined) ?? null,
         address: { street: String(rep.address ?? "").trim() || null, city: c.name, state: c.state?.abbr ?? null, zip: zipOf(rep.zipcode) },
         lat: ll?.lat ?? null, lng: ll?.lng ?? null,
         cover_photo_url: rep.cover || null,
@@ -348,7 +350,7 @@ export function buildSitePayload(inp: BuildInput): SitePayload {
       players_display: "players_all_time rounded down to the hundred, with a plus.",
       site_url: "The venue's existing page on playmatchday.com, or null.",
       membership_monthly_cents: "Not yet known per city; null.",
-      neighborhood: "Not stored by MatchDay; null.",
+      neighborhood: "The venue's public area label (\"North Austin\"), set on Clubhouse Field Ops. Null when none is set.",
     },
     totals: {
       live_cities: cities.filter((c) => c.status === "live").length,

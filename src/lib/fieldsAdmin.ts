@@ -162,6 +162,8 @@ export type FieldFormInput = {
   min_players: string;
   max_players: string;
   schedule_url: string;
+  /** Public area label (fin_venues.neighborhood, migration 0252): the website's venue badge. */
+  neighborhood: string;
 };
 
 // The validated, DB-ready payload written to fin_venues. Deliberately has
@@ -176,6 +178,7 @@ export type FieldPayload = {
   min_players: number | null;
   max_players: number | null;
   schedule_url: string | null;
+  neighborhood: string | null;
 };
 
 export type ValidationResult =
@@ -216,6 +219,12 @@ export function buildFieldPayload(input: FieldFormInput, knownCities?: readonly 
     };
   }
 
+  /* THE AREA is public copy: it prints as the venue's badge on playmatchday.com. Short, and no em dash (the site's
+   * copy rule). Blank clears it. */
+  const area = String(input.neighborhood ?? "").trim().replace(/\s+/g, " ");
+  if (area.length > 40) return { ok: false, error: "Area must be 40 characters or fewer." };
+  if (/\u2014/.test(area)) return { ok: false, error: "Area cannot contain an em dash." };
+
   const orNull = (s: string) => (s.trim() ? s.trim() : null);
   return {
     ok: true,
@@ -227,6 +236,7 @@ export function buildFieldPayload(input: FieldFormInput, knownCities?: readonly 
       min_players: min.value,
       max_players: max.value,
       schedule_url: scheduleRaw || null,
+      neighborhood: area || null,
     },
   };
 }

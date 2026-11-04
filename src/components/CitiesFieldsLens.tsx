@@ -22,6 +22,8 @@ import { useScheduleMarks, type ScheduleMark } from "@/lib/useScheduleMarks";
 import { useScheduleEnds, type ScheduleEnd } from "@/lib/useScheduleEnds";
 import { Pencil, Trash2, Plus, X } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { useAuth } from "@/lib/useAuth";
+import { logChange } from "@/lib/financeAudit";
 import { errorText } from "@/lib/errorText";
 import { CITIES } from "@/lib/types";
 import { orderedCityGroups, venueFormCities } from "@/lib/fieldOpsCities";
@@ -127,18 +129,21 @@ type ModalState =
 
 const EMPTY_FORM: FieldFormInput = {
   venue_name: "", city: CITIES[0], contact_name: "", contact_number: "",
-  min_players: "", max_players: "", schedule_url: "",
+  min_players: "", max_players: "", schedule_url: "", neighborhood: "",
 };
 
 type RawVenue = {
   id: number; venue_name: string; city: string;
   contact_name: string | null; contact_number: string | null;
   min_players: number | null; max_players: number | null; schedule_url: string | null;
+  neighborhood: string | null;
 };
 // NOTE: no money column is selected — none renders on this page.
-const VENUE_COLS = "id, venue_name, city, contact_name, contact_number, min_players, max_players, schedule_url";
+// neighborhood: migration 0252 (applied before this shipped). It is the website's area badge, via the public feed.
+const VENUE_COLS = "id, venue_name, city, contact_name, contact_number, min_players, max_players, schedule_url, neighborhood";
 
 export default function CitiesFieldsLens() {
+  const { appUser } = useAuth();
   const [rows, setRows] = useState<FieldRow[]>([]);
   const [roster, setRoster] = useState<CityManagerRoster>(new Map());
   const [rawById, setRawById] = useState<Map<number, RawVenue>>(new Map());
@@ -318,6 +323,7 @@ export default function CitiesFieldsLens() {
         contact_name: raw.contact_name ?? "", contact_number: raw.contact_number ?? "",
         min_players: raw.min_players?.toString() ?? "", max_players: raw.max_players?.toString() ?? "",
         schedule_url: raw.schedule_url ?? "",
+        neighborhood: raw.neighborhood ?? "",
       },
     });
     void focus;
@@ -336,8 +342,16 @@ export default function CitiesFieldsLens() {
         const { error: e } = await supabase.from("fin_venues").insert(result.payload);
         if (e) throw e;
       } else {
+        const oldArea = rawById.get(modal.id)?.neighborhood ?? null;
         const { error: e } = await supabase.from("fin_venues").update(result.payload).eq("id", modal.id);
         if (e) throw e;
+        /* THE AREA IS LOGGED: it is public copy on the website. One fin_change_log row when it changed. The venue
+           write has already landed, so a failed log is reported in the console, not as a failed save. */
+        if (oldArea !== result.payload.neighborhood && appUser?.email) {
+          await logChange({ tableName: "fin_venues", rowId: modal.id, action: "update", changedBy: appUser.email,
+            before: { neighborhood: oldArea }, after: { neighborhood: result.payload.neighborhood } })
+            .catch((err) => console.error("[field-ops] fin_change_log for area failed (venue saved):", err));
+        }
       }
       setModal(null);
       await load();
@@ -346,7 +360,7 @@ export default function CitiesFieldsLens() {
          Deonna read after filling in the whole drawer. See errorText. */
       setModalError(errorText(e));
     } finally { setSaving(false); }
-  }, [modal, load, formCities, cityGroups]);
+  }, [modal, load, formCities, cityGroups, rawById, appUser]);
   const doDelete = useCallback(async () => {
     if (!confirmDelete) return;
     const { patch } = resolveDeleteAction();
@@ -887,6 +901,7 @@ function FieldModal({ state, roster, cities, saving, error, onChange, onClose, o
               {(cities.includes(f.city) || !f.city ? cities : [...cities, f.city]).map((c) => <option key={c} value={c}>{c}</option>)}
             </select>
           </Labeled>
+          <Labeled label="Area" hint="The badge on the website, e.g. North Austin"><input value={f.neighborhood} onChange={(e) => set({ neighborhood: e.target.value })} maxLength={40} placeholder="North Austin" className={inputCls} /></Labeled>
           <Labeled label="Field Contact Name"><input value={f.contact_name} onChange={(e) => set({ contact_name: e.target.value })} className={inputCls} /></Labeled>
           <Labeled label="Field Contact" hint="Phone or email"><input value={f.contact_number} onChange={(e) => set({ contact_number: e.target.value })} placeholder="Phone or email" className={inputCls} /></Labeled>
           <Labeled label="Min Players"><input inputMode="numeric" value={f.min_players} onChange={(e) => set({ min_players: e.target.value })} className={inputCls} /></Labeled>

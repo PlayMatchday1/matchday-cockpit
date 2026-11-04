@@ -100,6 +100,13 @@ const someTaken = allM.filter((m: any) => m.spots_open != null && m.spots_total 
 check("spots_open is an integer 0..spots_total on every listed match (control: some matches have spots taken)", allM.length > 0 && badSpots.length === 0 && someTaken.length > 0,
   { matches: allM.length, invalid: badSpots.slice(0, 5).map((m: any) => `${m.v} ${m.date} ${m.spots_open}/${m.spots_total}`), withSpotsTaken: someTaken.length, full: allM.filter((m: any) => m.spots_open === 0).length, sample: someTaken.slice(0, 4).map((m: any) => `${m.v} ${m.date} ${m.kickoff}: ${m.spots_open} of ${m.spots_total} open`) });
 
+// ── neighborhood (2026-11-03) ──────────────────────────────────────────────────────────────────
+const venuesAll = p.cities.flatMap((c: any) => c.fields.map((f: any) => ({ city: c.slug, ...f })));
+const liveV = venuesAll.filter((f: any) => f.status === "live" || f.status === "upcoming");
+const blankArea = liveV.filter((f: any) => !(typeof f.neighborhood === "string" && f.neighborhood.trim()));
+check("every live and upcoming venue has a neighborhood (control: venues listed > 0)", liveV.length > 0 && blankArea.length === 0,
+  "\n        " + liveV.map((f: any) => `${f.city}/${f.slug}: ${f.name} -> ${f.neighborhood ?? "(blank)"}`).join("\n        "));
+
 // CORS
 for (const o of ["https://playmatchday.com", "https://www.playmatchday.com", "https://playmatchday.com.evil.com"]) {
   const r = await fetch(`${BASE}/api/public/site.json`, { headers: { Origin: o } }); await r.body?.cancel();

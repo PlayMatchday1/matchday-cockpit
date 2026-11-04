@@ -42,7 +42,7 @@ export async function buildPublicSite(now = new Date()): Promise<SitePayload> {
   // Venue links: fin_venue_fields -> fin_venues.venue_name.
   const { data: linkRows, error: le } = await sb.from("fin_venue_fields").select("mdapi_field_id,fin_venue_id,counts_as_regular_play");
   if (le) throw new Error(`fin_venue_fields: ${le.message}`);
-  const { data: venueRows, error: ve } = await sb.from("fin_venues").select("id,venue_name");
+  const { data: venueRows, error: ve } = await sb.from("fin_venues").select("id,venue_name,neighborhood");
   if (ve) throw new Error(`fin_venues: ${ve.message}`);
   const venueName = new Map((venueRows ?? []).map((v) => [Number(v.id), String(v.venue_name ?? "").trim()]));
   const links = new Map<number, VenueLink>();
@@ -78,7 +78,9 @@ export async function buildPublicSite(now = new Date()): Promise<SitePayload> {
   }
 
   const regularPlayFieldIds = new Set((linkRows ?? []).filter((l) => l.counts_as_regular_play === true && l.mdapi_field_id != null).map((l) => Number(l.mdapi_field_id)));
-  return buildSitePayload({ now, cities, fields, matches, links, regularPlayFieldIds, cityTotals, playersAllTime });
+  const venueNeighborhoods = new Map<number, string>();
+  for (const v of venueRows ?? []) { const n = String((v as { neighborhood?: string | null }).neighborhood ?? "").trim(); if (n) venueNeighborhoods.set(Number(v.id), n); }
+  return buildSitePayload({ now, cities, fields, matches, links, venueNeighborhoods, regularPlayFieldIds, cityTotals, playersAllTime });
 }
 
 /* CORS: the two site origins, exact match on the parsed origin. Anything else gets no ACAO header. */

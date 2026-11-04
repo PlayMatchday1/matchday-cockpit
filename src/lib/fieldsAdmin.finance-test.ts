@@ -134,6 +134,7 @@ test("the save payload has no City Manager field", () => {
     "contact_number",
     "max_players",
     "min_players",
+    "neighborhood", // migration 0252: the public area label (2026-11-03)
     "schedule_url",
     "venue_name",
   ]);
