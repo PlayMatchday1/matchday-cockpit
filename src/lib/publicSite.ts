@@ -276,7 +276,14 @@ export function buildSitePayload(inp: BuildInput): SitePayload {
        * graphic. Event names are venueResolver's own markers; a discount listing is a price variant, so it ranks
        * after the regular one too. */
       const plain = (id: number) => { const t = fieldById.get(id)?.title ?? ""; return venueCategory(t) === "regular" && !/\bdiscount(ed)?\b/i.test(t) ? 0 : 1; };
-      const rep = [...u.fields].sort((a, b) => plain(a.id) - plain(b.id) || (byField.get(b.id)?.length ?? 0) - (byField.get(a.id)?.length ?? 0) || a.id - b.id)
+      /* Candidates: the venue's active listings AND every other field record linked to the same venue, active or
+       * not. ATH Pearland's only active listing is "Tourney ATH Pearland" (22), whose cover is a tournament-night
+       * graphic; its regular listing "ATH Pearland" (32) has the photo of the place and no matches this month. */
+      const sameVenue = u.venueId != null
+        ? [...fieldById.values()].filter((f) => links.get(Number(f.id))?.venueId === u.venueId && Number(f.cityId) === Number(c.id)).map((f) => ({ id: Number(f.id) }))
+        : [];
+      const candidates = [...u.fields, ...sameVenue.filter((f) => !u.fields.some((uf) => uf.id === f.id))];
+      const rep = candidates.sort((a, b) => plain(a.id) - plain(b.id) || (byField.get(b.id)?.length ?? 0) - (byField.get(a.id)?.length ?? 0) || a.id - b.id)
         .map((uf) => fieldById.get(uf.id)!).find((f) => f.cover) ?? fieldById.get(u.fields[0].id)!;
       const kicked = ms.filter((m) => Date.parse(m.start_date_utc) <= nowMs);
       const future = ms.filter((m) => Date.parse(m.start_date_utc) > nowMs);

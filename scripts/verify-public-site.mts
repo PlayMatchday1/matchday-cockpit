@@ -113,6 +113,10 @@ const want: [number, string, string][] = [[1, "Westlake High School", "westlake-
 check("display-name overrides applied, slugs follow, The Hattrick Tomball keeps its site_url", want.every(([id, n, sl]) => byField(id)?.name === n && byField(id)?.slug === sl) && byField(1288)?.site_url === "https://www.playmatchday.com/pickup-soccer-hattrick-tomball-houston/",
   want.map(([id]) => { const f = byField(id); return `${id}: ${f?.name} (${f?.slug})${f?.site_url ? " -> " + f.site_url : ""}`; }));
 
+// ATH Pearland's cover is the regular listing's photo (field 32), not the tournament-night graphic on field 22.
+const pear = venuesAll.find((f: any) => f.mdapi_field_ids.includes(22));
+check("ATH Pearland uses its regular listing's cover (field 32), not the Tourney listing's (field 22)", pear?.cover_photo_url === "https://images.playmatchday.com/images/1cc628ed-0395-452c-9837-0db92bcf118a", pear?.cover_photo_url);
+
 // CORS
 for (const o of ["https://playmatchday.com", "https://www.playmatchday.com", "https://playmatchday.com.evil.com"]) {
   const r = await fetch(`${BASE}/api/public/site.json`, { headers: { Origin: o } }); await r.body?.cancel();
