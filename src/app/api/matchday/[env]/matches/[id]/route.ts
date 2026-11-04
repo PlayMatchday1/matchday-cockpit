@@ -22,7 +22,7 @@ import { ladderClampPatch } from "@/lib/fakeLadder";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 30;
+export const maxDuration = 120; // was 30: see fixed-ladder/[id]/route.ts — a 504 between a landed write and its change_log row
 
 const EDITABLE = new Set<string>(EDITABLE_KEYS);
 const DATE_PAIR = new Set<string>(["startDate", "endDate"]);

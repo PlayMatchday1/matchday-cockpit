@@ -117,9 +117,13 @@ export default function ApplyFixedLadderCard() {
       } else if (res.ok && j.outcome === "landed") {
         out.push({ id: r.id, label, verdict: "landed", note: ladderText(r.target) });
       } else {
-        const verdict = (j.outcome === "notapplied" || j.outcome === "unknown") ? j.outcome : "failed";
+        /* NO OUTCOME IN THE BODY IS UNKNOWN, NOT FAILED. Production 20552 (2026-11-04): the route hit
+         * its time limit and Vercel answered 504 with no JSON — AFTER the MatchDay write had landed and
+         * BEFORE change_log was written. Only a body that says "failed" is a failure. */
+        const verdict = (j.outcome === "notapplied" || j.outcome === "unknown" || j.outcome === "failed") ? j.outcome
+          : "unknown";
         out.push({ id: r.id, label, verdict, note: String(j.error ?? `HTTP ${res.status}`) });
-        stopped = `Match ${r.id} came back ${String(verdict).toUpperCase()}: ${String(j.error ?? "the read-back did not show the fixed ladder")}. Stopped — nothing after it was sent.`;
+        stopped = `Match ${r.id} came back ${String(verdict).toUpperCase()}: ${String(j.error ?? `no outcome came back (HTTP ${res.status}) — it may or may not have been written; check it before running again`)}. Stopped — nothing after it was sent.`;
         break;
       }
       setResults([...out]);

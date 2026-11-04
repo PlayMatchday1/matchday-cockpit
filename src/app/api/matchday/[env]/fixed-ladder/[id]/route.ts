@@ -37,7 +37,10 @@ import { handEditsFor } from "@/lib/fakeLadderHandEdits";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 30;
+/* 120, NOT 30. At 30 a slow MatchDay call got this function killed between the write landing and
+ * change_log being written (production 20552, 2026-11-04, a 504): a landed write with no record.
+ * The route spends 4s in deliberate gaps on top of three MatchDay requests and a Supabase read. */
+export const maxDuration = 120;
 
 const isEnv = (x: string): x is MatchdayEnv => x === "staging" || x === "production";
 /** The pause before each MatchDay request after the first in a call. */
