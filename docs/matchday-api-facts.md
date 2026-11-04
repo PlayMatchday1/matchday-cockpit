@@ -8365,3 +8365,23 @@ Code: `src/lib/publicSite.ts` (rule, pure), `src/lib/publicSiteServer.ts` (reads
 - **`fin_venues.schedule_end_date` is not evidence a venue stopped.** Westlake (#49) reads 2026-09-30 and was playing with players booked on 2026-11-03. Ryan: the schedule is correct and the record is stale. The feed reads the schedule. Stale on 2026-11-03: #16 PRUMC (2026-08-30), #65 Ann Richards (2026-09-13), #49 Westlake and #21 Scissortail (2026-09-30), all `is_active` true. Live field 1981 (Scissortail Park Discounted) has no `fin_venue_fields` link, and nor does 2113 (Friends Select, Philadelphia).
   **Cleaned up the same day (Ryan approved, 2026-11-03 21:46 UTC, one-off service-role script, each step read back LANDED):** #16, #21, #49 and #65 set to `schedule_end_date` null and `schedule_indefinite` true (Field Ops shows them as STANDING RESERVATION). Field 1981 linked to #21. Venue #92 "Friends Select School" (Philadelphia, `per_match`, no cost terms yet) created and linked to 2113. Seven `fin_change_log` rows were written under rmancuso@playmatchday.com. The only venues still past their end date are #5 Onion Creek and #13 Bicentennial Park, both `is_active` false.
 - **Vercel's edge honours `Vary: Origin`** on this route: per-origin MISS then HIT, each with the right `Access-Control-Allow-Origin`, and none for `playmatchday.com.evil.com`. The browser sees `cache-control: public, max-age=300` because the edge consumes `s-maxage`.
+
+## firstMatchFreeEnabled (free first match) — backend 1.89, NOT ON PRODUCTION YET
+
+**Evidence is code-read, not probed.** Source: `~/Code/backend-189` on `feature/1.89-backend` (9eb1099).
+
+- A boolean on the match, `@default(true)` (`apps/api/prisma/schema.prisma:252`), optional in
+  `CreateMatchDto` (`core/matches/dto/create-match.dto.ts:195`). Accepted by `POST admin/matches` and
+  `PUT admin/matches/:id` (UpdateMatchDto is a partial of it) and `POST admin/matches/batches`.
+- **Admin-only on create and PUT** (`matches.service.ts:245`, `:1482`, `:1536`): a non-admin changing
+  it gets 403 `FIRST_MATCH_FREE_ADMIN_ONLY`; resending the current value is allowed. **`batches` has no
+  such check** (`createMatchesInBatches` takes no user).
+- **That check judges the API ACCOUNT.** Every Clubhouse write goes out as the one service account, so
+  it can never fire for a Clubhouse user. The admin-only rule is enforced in our PUT route on
+  `app_users.is_admin` (`src/app/api/matchday/[env]/matches/[id]/route.ts`).
+- Admin list rows use Prisma `include`, not `select` (`matches.repository.ts`), so list and detail both
+  return it once deployed.
+- **PRODUCTION, 2026-11-04:** `GET /admin/matches/21182` and all 19 `/admin/matches` rows for
+  2026-11-04 carry no such key (read through the deployed Clubhouse routes, 28a5ab5).
+- Clubhouse match copy builds a create body from EDITABLE_KEYS, which deliberately excludes this key,
+  so a copied match takes the backend default (on), not the source's value.
