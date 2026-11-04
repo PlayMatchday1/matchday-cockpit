@@ -34,3 +34,10 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+
+## Data credits
+
+- **Venue towns** in the public website feed (`/api/public/site.json`, `address.town`) come from the GeoNames US postal
+  code file, bundled as `src/lib/data/us-zip-towns.json` (built by `scripts/build-zip-towns.mjs` from
+  `download.geonames.org/export/zip/US.zip`). GeoNames data is licensed under
+  [Creative Commons Attribution 4.0](https://creativecommons.org/licenses/by/4.0/), © [GeoNames](https://www.geonames.org/).

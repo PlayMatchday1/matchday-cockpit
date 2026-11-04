@@ -33,6 +33,7 @@
 // link joins a linked field of the SAME city at the IDENTICAL coordinates (same place, same pin);
 // otherwise it stands alone under its own title.
 
+import { venueTown, type TownSource } from "./publicSiteTown";
 import { groupIntoUnits, type VenueLink } from "./venueUnits";
 import { venueCategory } from "./venueResolver";
 
@@ -68,7 +69,10 @@ export type SiteMatch = { date: string; weekday: string; kickoff: string; kickof
   book_url: string | null };
 export type SiteField = {
   slug: string; name: string; neighborhood: string | null;
-  address: { street: string | null; city: string; state: string | null; zip: string | null };
+  /** street is MatchDay's address line as entered; city is MatchDay's market name, not the town. street_line, town and
+   *  town_source come from publicSiteTown.ts: the line without its town/state/ZIP, the venue's real town (the street's
+   *  own, else the bundled GeoNames ZIP table), and which of the two it came from. */
+  address: { street: string | null; city: string; state: string | null; zip: string | null; street_line: string | null; town: string | null; town_source: TownSource };
   lat: number | null; lng: number | null; cover_photo_url: string | null;
   formats: string[]; weekdays: string[];
   status: "live" | "upcoming"; first_match_date: string | null;
@@ -309,7 +313,10 @@ export function buildSitePayload(inp: BuildInput): SitePayload {
       const ll = validLatLng(rep.lat, rep.lng);
       return {
         slug, name, neighborhood: (u.venueId != null ? inp.venueNeighborhoods?.get(u.venueId) : undefined) ?? null,
-        address: { street: String(rep.address ?? "").trim() || null, city: c.name, state: c.state?.abbr ?? null, zip: zipOf(rep.zipcode) },
+        address: (() => {
+          const street = String(rep.address ?? "").trim() || null, state = c.state?.abbr ?? null, zip = zipOf(rep.zipcode);
+          return { street, city: c.name, state, zip, ...venueTown(street, state, zip) };
+        })(),
         lat: ll?.lat ?? null, lng: ll?.lng ?? null,
         cover_photo_url: rep.cover || null,
         formats: [...new Set(ms.map(formatOf).filter((x): x is string => !!x))].sort(formatSort),
@@ -378,6 +385,7 @@ export function buildSitePayload(inp: BuildInput): SitePayload {
       site_url: "The venue's existing page on playmatchday.com, or null.",
       membership_monthly_cents: "Not yet known per city; null.",
       photo_url: "A photo of the city: the website's own skyline image where it has one, else the city's Wikipedia lead image (Public domain, CC0, CC BY or CC BY-SA only), else null. photo_credit is set when the licence requires attribution; photo_source says which. photo_author, photo_license and photo_file_url (the file's Wikimedia Commons page) are the credit's parts, null for the site's own images.",
+      address_town: "address.town is the venue's town for a postal line \"street_line, town, ST zip\": the town the address line itself names, else the town for the ZIP from the GeoNames US postal code table (CC BY 4.0, geonames.org) when its state matches, else null. address.town_source says which (street | zip). address.city remains MatchDay's market name.",
       neighborhood: "The venue's public area label (\"North Austin\"), set on Clubhouse Field Ops. Null when none is set.",
     },
     totals: {

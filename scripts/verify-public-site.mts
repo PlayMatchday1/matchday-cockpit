@@ -55,6 +55,23 @@ for (const f of live) {
 }
 check(`every live field has an address and a cover returning 200 with image bytes (${live.length} live fields)`, live.length > 0 && bad === 0, "\n        " + rows.join("\n        "));
 
+// Every listed venue's postal line (2026-11-04): "street_line, town, ST zip", printed in full for a read-through. A town
+// is required; the line must not repeat the town, state or ZIP; town_source must say where it came from. Saginaw is the
+// positive control for "the street's own town wins" (its ZIP, 76131, is Fort Worth in the table).
+const allVenues = p.cities.flatMap((c: any) => c.fields.map((f: any) => ({ city: c.slug, ...f })));
+const addrRows: string[] = []; let addrBad = 0;
+for (const f of allVenues) {
+  const a = f.address ?? {};
+  const line = `${a.street_line ?? "NO STREET"}, ${a.town ?? "NO TOWN"}, ${a.state ?? "??"} ${a.zip ?? "NO ZIP"}`;
+  const repeats = a.street_line && a.town && new RegExp(`(,|\\s)${a.town.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i").test(a.street_line);
+  const ok = !!a.street_line && !!a.town && !!a.zip && (a.town_source === "street" || a.town_source === "zip") && !repeats && !/United States|\b\d{5}\b$/.test(a.street_line);
+  if (!ok) addrBad++;
+  addrRows.push(`${ok ? "ok " : "BAD"} ${f.city}/${f.slug}: ${line}  [${a.town_source ?? "none"}]`);
+}
+const sag = allVenues.find((f: any) => f.slug === "saginaw-high-school");
+check(`every listed venue has a postal line with a town (${allVenues.length} venues); Saginaw keeps its own town over the ZIP's Fort Worth`,
+  allVenues.length > 0 && addrBad === 0 && sag?.address?.town === "Saginaw" && sag?.address?.town_source === "street", "\n        " + addrRows.join("\n        "));
+
 // All-time matches: no existing page shows a distinct-match count (the Data Room's "Matches" is one per player
 // spot). Cross-checked against the mirror directly, with the same definition, outside the route's code.
 const now = new Date().toISOString();
