@@ -17,7 +17,7 @@
 import zipTowns from "./data/us-zip-towns.json";
 
 const TABLE = zipTowns as Record<string, string>;
-export type TownSource = "street" | "zip" | null;
+export type TownSource = "street" | "zip" | "override" | null;
 export type VenueTown = { street_line: string | null; town: string | null; town_source: TownSource };
 
 const STATE_NAMES: Record<string, string> = { TX: "Texas", GA: "Georgia", MO: "Missouri", OK: "Oklahoma", PA: "Pennsylvania", CO: "Colorado", NY: "New York", IL: "Illinois", FL: "Florida", CA: "California", AZ: "Arizona", NC: "North Carolina", TN: "Tennessee", NJ: "New Jersey" };

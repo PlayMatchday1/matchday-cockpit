@@ -174,6 +174,13 @@ export const NAME_OVERRIDES: Readonly<Record<number, string>> = {
   1288: "The Hattrick Tomball",                    // was "The Hattrick T."
   1585: "Parmer Stadium",                          // was "PARMER Stadium"
 };
+
+/* TOWN_OVERRIDES: a venue's town where the GeoNames postal town is not the town people know it by, keyed by MatchDay
+ * field id (any of the venue's ids) so an upstream rename does not lose it. Wins over the street's own town and the ZIP
+ * table; town_source reads "override". */
+export const TOWN_OVERRIDES: Readonly<Record<number, string>> = {
+  1717: "Chamblee",                                // Keswick Park: ZIP 30341's postal town is "Atlanta" (Ryan, 2026-11-04)
+};
 const PRODUCT_WORDS = /\b(premier\s+match|tournaments?|tourney|discounted|discount)\b/gi;
 export function publicVenueName(raw: string): string {
   let t = raw.replace(PRODUCT_WORDS, " ").replace(/\s+/g, " ").trim();
@@ -315,7 +322,8 @@ export function buildSitePayload(inp: BuildInput): SitePayload {
         slug, name, neighborhood: (u.venueId != null ? inp.venueNeighborhoods?.get(u.venueId) : undefined) ?? null,
         address: (() => {
           const street = String(rep.address ?? "").trim() || null, state = c.state?.abbr ?? null, zip = zipOf(rep.zipcode);
-          return { street, city: c.name, state, zip, ...venueTown(street, state, zip) };
+          const vt = venueTown(street, state, zip), forced = ids.map((id) => TOWN_OVERRIDES[id]).find(Boolean);
+          return { street, city: c.name, state, zip, ...vt, ...(forced ? { town: forced, town_source: "override" as const } : {}) };
         })(),
         lat: ll?.lat ?? null, lng: ll?.lng ?? null,
         cover_photo_url: rep.cover || null,
@@ -385,7 +393,7 @@ export function buildSitePayload(inp: BuildInput): SitePayload {
       site_url: "The venue's existing page on playmatchday.com, or null.",
       membership_monthly_cents: "Not yet known per city; null.",
       photo_url: "A photo of the city: the website's own skyline image where it has one, else the city's Wikipedia lead image (Public domain, CC0, CC BY or CC BY-SA only), else null. photo_credit is set when the licence requires attribution; photo_source says which. photo_author, photo_license and photo_file_url (the file's Wikimedia Commons page) are the credit's parts, null for the site's own images.",
-      address_town: "address.town is the venue's town for a postal line \"street_line, town, ST zip\": the town the address line itself names, else the town for the ZIP from the GeoNames US postal code table (CC BY 4.0, geonames.org) when its state matches, else null. address.town_source says which (street | zip). address.city remains MatchDay's market name.",
+      address_town: "address.town is the venue's town for a postal line \"street_line, town, ST zip\": the town the address line itself names, else the town for the ZIP from the GeoNames US postal code table (CC BY 4.0, geonames.org) when its state matches, else null; a hand-set override (TOWN_OVERRIDES) wins over both. address.town_source says which (street | zip | override). address.city remains MatchDay's market name.",
       neighborhood: "The venue's public area label (\"North Austin\"), set on Clubhouse Field Ops. Null when none is set.",
     },
     totals: {

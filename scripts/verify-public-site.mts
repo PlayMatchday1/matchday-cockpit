@@ -64,13 +64,14 @@ for (const f of postalVenues) {
   const a = f.address ?? {};
   const line = `${a.street_line ?? "NO STREET"}, ${a.town ?? "NO TOWN"}, ${a.state ?? "??"} ${a.zip ?? "NO ZIP"}`;
   const repeats = a.street_line && a.town && new RegExp(`(,|\\s)${a.town.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i").test(a.street_line);
-  const ok = !!a.street_line && !!a.town && !!a.zip && (a.town_source === "street" || a.town_source === "zip") && !repeats && !/United States|\b\d{5}\b$/.test(a.street_line);
+  const ok = !!a.street_line && !!a.town && !!a.zip && (a.town_source === "street" || a.town_source === "zip" || a.town_source === "override") && !repeats && !/United States|\b\d{5}\b$/.test(a.street_line);
   if (!ok) addrBad++;
   addrRows.push(`${ok ? "ok " : "BAD"} ${f.city}/${f.slug}: ${line}  [${a.town_source ?? "none"}]`);
 }
 const sag = postalVenues.find((f: any) => f.slug === "saginaw-high-school");
-check(`every listed venue has a postal line with a town (${postalVenues.length} venues); Saginaw keeps its own town over the ZIP's Fort Worth`,
-  postalVenues.length > 0 && addrBad === 0 && sag?.address?.town === "Saginaw" && sag?.address?.town_source === "street", "\n        " + addrRows.join("\n        "));
+const kes = postalVenues.find((f: any) => /^keswick-park/.test(f.slug));
+check(`every listed venue has a postal line with a town (${postalVenues.length} venues); Saginaw keeps its own town over the ZIP's Fort Worth; Keswick Park's override reads Chamblee`,
+  postalVenues.length > 0 && addrBad === 0 && sag?.address?.town === "Saginaw" && sag?.address?.town_source === "street" && kes?.address?.town === "Chamblee" && kes?.address?.town_source === "override", "\n        " + addrRows.join("\n        "));
 
 // All-time matches: no existing page shows a distinct-match count (the Data Room's "Matches" is one per player
 // spot). Cross-checked against the mirror directly, with the same definition, outside the route's code.
