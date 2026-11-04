@@ -2108,6 +2108,10 @@ function GRow({ m, now, selected, onOpen, money, atRiskRow, expanded, onAdjust, 
               ("3 real · 9 fake · 12/18"). A chip restating a fact stated better beside it, at the
               cost of width the field name needs. The counts themselves are untouched. */}
           <span className="gpz" data-testid="gday-price">{money(m.registrationPrice)}</span>
+          {/* FREE FIRST MATCH SWITCHED OFF. Only an explicit false — the field is absent on a
+              backend without it, and absent is not "off". Inside .n, beside the price it qualifies,
+              so it never competes with the cancels chip for the grid's one chip area. */}
+          {m.firstMatchFreeEnabled === false && <span className="gtag" data-testid="gday-not-free" title="Free first match is off: new players pay full price">Not free</span>}
         </div>
         {/* THE CHIP IS A DIRECT CHILD OF .gm, NOT OF .n, AND THAT IS THE WHOLE POINT.
             Inside .n it shared the title's inline flow, so a long name pushed it onto a line of its

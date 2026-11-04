@@ -27,6 +27,20 @@ export const EDITABLE_KEYS = [
   "minPlayerCount", "isFreeMember", "isAutoBump", "maxTeamSize2Team", "maxTeamSize4Team", "maxPlayerCount",
 ] as const;
 
+/* ── FREE FIRST MATCH — DELIBERATELY NOT IN EDITABLE_KEYS ─────────────────────────────────────
+ * `firstMatchFreeEnabled` (backend 1.89: ~/Code/backend-189 create-match.dto.ts:195, default true)
+ * is ADMIN-ONLY and does NOT EXIST on production yet. EDITABLE_KEYS is read by MatchEditor (which
+ * seeds a missing toggle as `false`, so an absent field would read as a change and send false), by
+ * copyMatch and by the create route (which would carry an absent field into a POST body as null).
+ * Every one of those would put the key on the wire against a backend that has no such column.
+ *
+ * So it is its own key, handled only by Match panel and the PUT route, and a match only HAS the
+ * field when the API returned a real boolean for it. Absent means: no control, never sent. */
+export const FIRST_MATCH_FREE_KEY = "firstMatchFreeEnabled" as const;
+export function hasFirstMatchFree(m: Record<string, unknown> | null | undefined): boolean {
+  return !!m && typeof m[FIRST_MATCH_FREE_KEY] === "boolean";
+}
+
 export const MONEY_KEYS = new Set<string>(["registrationPrice", "additionalSpotPrice"]);
 export const TOGGLE_KEYS = new Set<string>(["autoCanceled", "isFreeMember", "isAutoBump"]);
 export const NULLABLE_NUM = new Set<string>(["managerId", "secondManagerId", "maxPlayerCount"]);

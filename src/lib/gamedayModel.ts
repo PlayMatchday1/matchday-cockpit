@@ -40,6 +40,8 @@ export type ApiMatch = {
   fakeSpotLeft36h?: number; fakeSpotLeft24h?: number; fakeSpotLeft12h?: number;
   fakeSpotLeft6h?: number; fakeSpotLeft3h?: number;
   isAutoBump?: boolean;
+  /** Free first match switch (backend 1.89). ABSENT on a backend without it; only `false` means off. */
+  firstMatchFreeEnabled?: boolean;
   category?: string; type?: string;
   /* THE RATING, carried on the /admin/matches list rows the gameday route already pages through —
    * no second read. starRating is 0 rather than null when nothing has been left, so COUNT is the
