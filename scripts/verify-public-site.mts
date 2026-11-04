@@ -117,6 +117,18 @@ check("display-name overrides applied, slugs follow, The Hattrick Tomball keeps 
 const pear = venuesAll.find((f: any) => f.mdapi_field_ids.includes(22));
 check("ATH Pearland uses its regular listing's cover (field 32), not the Tourney listing's (field 22)", pear?.cover_photo_url === "https://images.playmatchday.com/images/1cc628ed-0395-452c-9837-0db92bcf118a", pear?.cover_photo_url);
 
+// ── city photos (2026-11-03) ───────────────────────────────────────────────────────────────────
+const photoRows: string[] = []; let photoBad = 0;
+for (const c of p.cities) {
+  let st = 0, type = "";
+  if (c.photo_url) { const r = await fetch(c.photo_url, { headers: { "User-Agent": "MatchDayClubhouse-verify/1.0" } }); st = r.status; type = r.headers.get("content-type") ?? ""; await r.body?.cancel(); }
+  const ok = !!c.photo_url && st === 200 && /^image\//.test(type) && (c.photo_source !== "wikipedia" || !!c.photo_credit);
+  if (!ok) photoBad++;
+  photoRows.push(`${c.slug}: ${c.photo_source ?? "none"} ${st} ${type} ${c.photo_url ?? "null"}${c.photo_credit ? " | credit: " + c.photo_credit : ""}`);
+}
+const phlP = p.cities.find((c: any) => c.slug === "philadelphia");
+check("every listed city has a photo that loads (200, image/*), Wikipedia photos carry a credit; Philadelphia from Wikipedia", photoBad === 0 && phlP?.photo_source === "wikipedia", "\n        " + photoRows.join("\n        "));
+
 // CORS
 for (const o of ["https://playmatchday.com", "https://www.playmatchday.com", "https://playmatchday.com.evil.com"]) {
   const r = await fetch(`${BASE}/api/public/site.json`, { headers: { Origin: o } }); await r.body?.cancel();

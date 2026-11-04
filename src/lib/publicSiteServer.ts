@@ -16,7 +16,8 @@ import { apiGet } from "./matchdayStageApi";
 import { makeServerClient } from "./supabaseServer";
 import { selectAll, selectAllParallel } from "./supabasePagination";
 import type { VenueLink } from "./venueUnits";
-import { addDays, buildSitePayload, EXCLUDED_CITY_ABBRS, WINDOW_DAYS, type ApiCityRow, type ApiFieldRow, type CityTotals, type MatchRow, type SitePayload } from "./publicSite";
+import { cityPhoto } from "./publicSitePhotos";
+import { addDays, buildSitePayload, CITY_DISPLAY_NAMES, EXCLUDED_CITY_ABBRS, WINDOW_DAYS, type ApiCityRow, type ApiFieldRow, type CityTotals, type MatchRow, type SitePayload } from "./publicSite";
 
 export async function buildPublicSite(now = new Date()): Promise<SitePayload> {
   const [cities, fields] = await Promise.all([
@@ -80,7 +81,15 @@ export async function buildPublicSite(now = new Date()): Promise<SitePayload> {
   const regularPlayFieldIds = new Set((linkRows ?? []).filter((l) => l.counts_as_regular_play === true && l.mdapi_field_id != null).map((l) => Number(l.mdapi_field_id)));
   const venueNeighborhoods = new Map<number, string>();
   for (const v of venueRows ?? []) { const n = String((v as { neighborhood?: string | null }).neighborhood ?? "").trim(); if (n) venueNeighborhoods.set(Number(v.id), n); }
-  return buildSitePayload({ now, cities, fields, matches, links, venueNeighborhoods, regularPlayFieldIds, cityTotals, playersAllTime });
+  /* City photos: an override or a cached Wikipedia lookup per city (publicSitePhotos.ts). Warsaw is never shown. */
+  const cityPhotos = new Map<string, { url: string; credit: string | null; source: "override" | "wikipedia" }>();
+  await Promise.all(cities.filter((c) => (c.abbr ?? "").trim() && !EXCLUDED_CITY_ABBRS.has((c.abbr ?? "").trim())).map(async (c) => {
+    const abbr = (c.abbr ?? "").trim();
+    const name = CITY_DISPLAY_NAMES[abbr] ?? c.name;
+    const p = await cityPhoto(abbr, name, c.state?.name ?? null);
+    if (p) cityPhotos.set(abbr, p);
+  }));
+  return buildSitePayload({ now, cities, fields, matches, links, venueNeighborhoods, regularPlayFieldIds, cityTotals, playersAllTime, cityPhotos });
 }
 
 /* CORS: the two site origins, exact match on the parsed origin. Anything else gets no ACAO header. */
