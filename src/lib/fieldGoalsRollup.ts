@@ -11,7 +11,7 @@ import { selectAllParallel } from "./supabasePagination";
 import { countsTowardGoals, matchMonthIndex, playedByYesterday, rowKeyForField, type GoalMatch } from "./fieldGoals";
 
 type VenueRow = { id: number; venue_name: string | null; city: string | null };
-export type RollupRow = { key: string; name: string; city: string | null; venueId: number | null; fieldId: number | null; spots: number[]; perMonth: number[]; matches: number };
+export type RollupRow = { key: string; name: string; city: string | null; /** The MatchDay city_identifier of the row's first match (ATX, DFW, WAW…). The 2026 Daily Matches page places a row in a city by this. */ cityCode: string | null; venueId: number | null; fieldId: number | null; spots: number[]; perMonth: number[]; matches: number };
 
 export function fieldGoalsRollup(sb: SupabaseClient, year: number, yesterday: string): Promise<{ rows: RollupRow[]; monthSpots: number[]; matchCount: number }> {
   return unstable_cache(async () => {
@@ -52,7 +52,7 @@ export function fieldGoalsRollup(sb: SupabaseClient, year: number, yesterday: st
      * A venue's several mdapi fields collapse into one row here, which is the whole reason the key
      * is the venue: keyed on field_id, Soccer Central would be two rows reading 1.1 and 3.3 rather
      * than one reading 4.4. */
-    type Acc = { key: string; name: string; city: string | null; venueId: number | null; fieldId: number | null; spots: number[]; perMonth: number[]; matches: number };
+    type Acc = { key: string; name: string; city: string | null; cityCode: string | null; venueId: number | null; fieldId: number | null; spots: number[]; perMonth: number[]; matches: number };
     const acc = new Map<string, Acc>();
     const monthSpots = new Array(12).fill(0);
     for (const m of matches) {
@@ -65,6 +65,7 @@ export function fieldGoalsRollup(sb: SupabaseClient, year: number, yesterday: st
         key,
         name: vid != null ? (venueById.get(vid)?.venue_name ?? `Venue ${vid}`) : (m.field_title ?? `Field ${fieldId}`),
         city: vid != null ? (venueById.get(vid)?.city ?? null) : (m.city_identifier ?? null),
+        cityCode: m.city_identifier ?? null,
         venueId: vid, fieldId: vid == null ? fieldId : null,
         spots: new Array(12).fill(0), perMonth: new Array(12).fill(0), matches: 0,
       };
@@ -83,5 +84,5 @@ export function fieldGoalsRollup(sb: SupabaseClient, year: number, yesterday: st
 
 
     return { rows: [...acc.values()], monthSpots, matchCount: matches.length };
-  }, ["field-goals-rollup-v1", String(year), yesterday], { revalidate: 600, tags: ["field-goals"] })();
+  }, ["field-goals-rollup-v2", String(year), yesterday], { revalidate: 600, tags: ["field-goals"] })();
 }

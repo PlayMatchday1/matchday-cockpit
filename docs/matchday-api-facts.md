@@ -8385,3 +8385,19 @@ Code: `src/lib/publicSite.ts` (rule, pure), `src/lib/publicSiteServer.ts` (reads
   2026-11-04 carry no such key (read through the deployed Clubhouse routes, 28a5ab5).
 - Clubhouse match copy builds a create body from EDITABLE_KEYS, which deliberately excludes this key,
   so a copied match takes the backend default (on), not the source's value.
+
+## 2026 DAILY MATCHES: CITIES ARE STORED (0253, applied 2026-11-04)
+
+`growth_cities` (name, short_code, dec_goal_daily, hidden) is the city list for /growth/daily-matches.
+An existing field lands in the city whose `short_code` equals its matches' `mdapi_matches.city_identifier`
+(`fieldGoalsRollup` carries it as `cityCode`); a new field points at its city by
+`field_goal_rows.growth_city_id`. A row with no city row is not on the page — that is how WAW stays off
+(also refused by code and name in `api/growth/field-goals/route.ts`; Warsaw elsewhere is untouched).
+A city's December is the STORED goal; its fields are a breakdown, and the difference shows as
+"Unassigned".
+
+Evidence read 2026-11-04: 4,238 live 2026 matches → 43 rows; 41 have one city code that agrees with
+their `fin_venues.city`; the other 2 are Warsaw (code WAW). El Paso (ELP, Galatzan Park) has 2 matches
+in 2026, both cancelled, so it never produced a row. San Diego existed only as a new field "TBD"
+(deleted with 0253). Seeded goals = each city's counted December field targets as the page summed them
+(28.9 before, 27.9 after removing San Diego's 1.0).

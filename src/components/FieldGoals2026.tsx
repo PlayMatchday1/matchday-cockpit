@@ -47,10 +47,24 @@ type Action = { id: string; text: string; done: boolean; sortOrder: number };
 type Row = {
   key: string; rowId: string | null; kind: "existing" | "slot";
   name: string; city: string | null; venueId: number | null; fieldId: number | null;
+  /** growth_cities.id — every row on this page has one since 0253. */
+  cityId?: string;
+  /** A new field's Field Pipeline card (field_goal_rows.kanban_card_id). */
+  kanbanCardId?: string | null;
   notCounted: boolean;
   matches: number; monthly: MonthCell[]; targets: Record<string, number>; actions: Action[];
 };
-type Payload = { year: number; today: string; currentMonth: number; months: MonthCell[]; rows: Row[]; slots: Row[] };
+/** A growth_cities row as the route sends it. `hasMatches`: its fields have recorded matches, so
+ *  it can be hidden but not removed. */
+type City = { id: string; name: string; shortCode: string | null; decGoal: number; hidden: boolean; sortOrder: number; hasMatches: boolean };
+type Payload = { year: number; today: string; currentMonth: number; months: MonthCell[]; rows: Row[]; slots: Row[]; cities: City[]; hiddenCities: City[] };
+type PipelineCard = { id: string; title: string; stage: string };
+/** The one dialog open at a time. */
+type DialogState =
+  | { kind: "add" }
+  | { kind: "goal"; city: City }
+  | { kind: "rename"; city: City }
+  | { kind: "remove"; city: City; newFields: number };
 
 const BAND_HUE: Record<Band, string> = { behind: "#E8553F", warn: "#E8A33F", near: "#8FBF6A", over: "#12694A" };
 /* THE CHART'S HUE IS NOT THE BRAND MINT. #2CDB87 fails contrast against this surface at 1.77:1 and
@@ -100,7 +114,13 @@ export default function FieldGoals2026() {
    * top of the list is where the work is. It also makes the band rule self-evident — in gap order
    * the dots run red, amber, green, dark in sequence, which alphabetical order scrambles. */
   const [sort, setSort] = useState<GoalSort>("gap");
-  const [showDormant, setShowDormant] = useState(false);
+  /* DORMANT FOLDS PER CITY now that the field table is gone: the toggle lives inside each open city. */
+  const [showDormantIn, setShowDormantIn] = useState<Set<string>>(() => new Set());
+  const [dialog, setDialog] = useState<DialogState | null>(null);
+  const [dialogErr, setDialogErr] = useState<string | null>(null);
+  /** The city whose "+ Add field" input is open, if any. */
+  const [addingIn, setAddingIn] = useState<string | null>(null);
+  const [cards, setCards] = useState<PipelineCard[]>([]);
   /* ── HISTORY IS OFF BY DEFAULT, AND THAT IS THE DECISION ─────────────────────────────────────
    * Ryan: "What's the best way to show historical months? I want it to be optional."
    *
@@ -114,9 +134,6 @@ export default function FieldGoals2026() {
    * has seven completed days, then the live month to date. A press overrides it for this visit
    * only; it is not persisted, so every load opens on the rule. */
   const [compareOverride, setCompareOverride] = useState<CompareFrom | null>(null);
-  /* CITIES ON LOAD. The sort default is untouched and still per the sort control — "by gap",
-     descending — which means the page opens on the city with the most to find. */
-  const [grain, setGrain] = useState<Grain>("city");
   /* SHUT AT REST. Seven cities open at once is the field table with extra steps. A Set rather than
    * one open key: opening Austin does not close Houston, and opening one opens nobody else. */
   const [openCities, setOpenCities] = useState<Set<string>>(() => new Set());
@@ -214,32 +231,71 @@ export default function FieldGoals2026() {
     } finally { setBusy(false); }
   }, [ensureRow, reload]);
 
-  const addSlot = useCallback(async () => {
-    const { error } = await supabase.from("field_goal_rows").insert({ slot_name: "New Field - ", sort_order: Date.now() % 1e6 });
-    if (error) { failed("fg-new", error); return; }
-    saved();
+  /* ── A NEW FIELD IS ALWAYS CREATED INSIDE A CITY (2026-11-04) ─────────────────────────────────
+   * The global "+ Add a new field" inserted a row named "New Field - " with no city; five of those
+   * from one afternoon had to be deleted by hand. Now the only way in is "+ Add field to <City>",
+   * which asks for the name first and writes the city with it — there is no city-less insert left. */
+  const addFieldToCity = useCallback(async (city: City, name: string): Promise<boolean> => {
+    const n = name.trim();
+    if (!n) return false;
+    setBusy(true);
+    try {
+      const { error } = await supabase.from("field_goal_rows")
+        .insert({ slot_name: n, city: city.name, growth_city_id: city.id, sort_order: Date.now() % 1e6 });
+      if (error) { failed(`city:${city.id}`, error); return false; }
+      saved();
+      return true;
+    } finally { setBusy(false); }
   }, [failed, saved]);
 
-  const renameSlot = useCallback(async (r: Row, name: string) => {
-    if (!name.trim() || !r.rowId) return;
-    const { error } = await supabase.from("field_goal_rows").update({ slot_name: name.trim() }).eq("id", r.rowId);
-    if (error) { failed(r.key, error); return; }
-    saved();
-  }, [failed, saved]);
-
-  /* A SLOT'S CITY IS TYPED, because a slot has no venue to read one from. MEASURED on production
-   * 2026-09-23: all nine slots carry a null city and five of them hold 3.5 of the 28.2 December
-   * goal, so without this control 12.4% of the goal sits in a bucket with no way to move it and the
-   * city grain is a view the operator cannot finish. The city is NOT parsed out of the slot's name:
-   * "New Field - Oklahoma" against a venue city of "OKC" would silently invent an eighth city. */
-  const setSlotCity = useCallback(async (r: Row, city: string) => {
+  /** Link (or unlink, with null) a new field's Field Pipeline card. */
+  const linkCard = useCallback(async (r: Row, cardId: string | null) => {
     if (!r.rowId) return;
-    const v = city.trim();
-    const { error } = await supabase.from("field_goal_rows")
-      .update({ city: v === "" ? null : v }).eq("id", r.rowId);
+    const { error } = await supabase.from("field_goal_rows").update({ kanban_card_id: cardId }).eq("id", r.rowId);
     if (error) { failed(r.key, error); return; }
     saved();
   }, [failed, saved]);
+
+  /* ── THE CITY WRITES. Each one is a single statement against growth_cities, under the same 0170
+   * policy as the goal tables (growth_pages_readable), and a refusal is shown in the dialog that
+   * asked for it rather than closing it. */
+  const cityWrite = useCallback(async (run: () => PromiseLike<{ error: unknown }>): Promise<boolean> => {
+    setBusy(true); setDialogErr(null);
+    try {
+      const { error } = await run();
+      if (error) { setDialogErr(errorText(error, "That did not save.")); return false; }
+      setDialog(null); saved();
+      return true;
+    } finally { setBusy(false); }
+  }, [saved]);
+  const addCity = useCallback((name: string, code: string, goal: number) => cityWrite(() =>
+    supabase.from("growth_cities").insert({ name: name.trim(), short_code: code.trim().toUpperCase() || null,
+      dec_goal_daily: goal, sort_order: Date.now() % 1e6 })), [cityWrite]);
+  const setCityGoal = useCallback((c: City, goal: number) => cityWrite(() =>
+    supabase.from("growth_cities").update({ dec_goal_daily: goal }).eq("id", c.id)), [cityWrite]);
+  /* A RENAME MOVES THE LABEL, NOT THE LINKS: existing fields find the city by short code and new
+   * fields by id. The new fields' legacy `city` text is kept in step so nothing reading it drifts. */
+  const renameCity = useCallback((c: City, name: string) => cityWrite(async () => {
+    const r1 = await supabase.from("growth_cities").update({ name: name.trim() }).eq("id", c.id);
+    if (r1.error) return r1;
+    return supabase.from("field_goal_rows").update({ city: name.trim() }).eq("growth_city_id", c.id);
+  }), [cityWrite]);
+  /* REMOVE ONLY WHAT HAS NO HISTORY. The route says whether a city's fields have recorded matches;
+   * one that does is HIDDEN (nothing deleted, back from the Cities header), one that does not is
+   * deleted, and its new fields and their goals go with it (ON DELETE CASCADE, 0253). */
+  const removeCity = useCallback((c: City) => cityWrite(() =>
+    c.hasMatches
+      ? supabase.from("growth_cities").update({ hidden: true, hidden_at: new Date().toISOString(), hidden_by: appUser?.email ?? null }).eq("id", c.id)
+      : supabase.from("growth_cities").delete().eq("id", c.id)), [cityWrite, appUser]);
+  const unhideCity = useCallback((c: City) => cityWrite(() =>
+    supabase.from("growth_cities").update({ hidden: false, hidden_at: null, hidden_by: null }).eq("id", c.id)), [cityWrite]);
+
+  /* THE PIPELINE CARDS a new field can link to. Read once; a failure leaves the picker empty and
+   * says nothing louder, because the link is optional and the page's numbers do not depend on it. */
+  useEffect(() => {
+    void supabase.from("kanban_cards").select("id, title, stage").eq("board_type", "field_pipeline").neq("stage", "archived")
+      .order("title").then(({ data: d }) => setCards((d ?? []) as PipelineCard[]));
+  }, []);
 
   const removeSlot = useCallback(async (r: Row) => {
     if (!r.rowId) return;
@@ -296,9 +352,13 @@ export default function FieldGoals2026() {
    * city sum built on its own filter would miss the headline above it by a rounding amount nobody
    * could find. Existing fields and slots go in together: a city's December goal spans both tables
    * and this is the only place they meet. */
+  /* THE STORED CITIES DRIVE THE ROWS AND THEIR DECEMBER (Ryan, 2026-11-04): every city in
+   * growth_cities is a row even with no fields yet, and its December is the goal stored on it. */
+  const storedCities = useMemo(() => (data?.cities ?? []).map((c) => ({ id: c.id, name: c.name, decGoal: c.decGoal })), [data]);
+  const cityByName = useMemo(() => new Map((data?.cities ?? []).map((c) => [c.name, c])), [data]);
   const cities = useMemo(
-    () => cityRollup(all, data?.year ?? 2026, cur, sort, baseIdx, unit),
-    [all, data?.year, cur, sort, baseIdx, unit]);
+    () => cityRollup(all, data?.year ?? 2026, cur, sort, baseIdx, unit, { cities: storedCities }),
+    [all, data?.year, cur, sort, baseIdx, unit, storedCities]);
   const cityTot = useMemo(() => cityTotals(cities), [cities]);
   /* THE TILES READ THE FOOTER. They used to sum the rows separately — the same figures by a second
    * path — and "To find" was its own subtraction, which is how the tile read 11.1 under a footer
@@ -321,52 +381,6 @@ export default function FieldGoals2026() {
     });
   }, []);
 
-  const decOf = (r: Row) => r.targets[monthKey(data?.year ?? 2026, DEC)] ?? null;
-  /** The baseline month's figure for a row — what its gap and its ramp run from. */
-  const baseOf = (r: Row) => r.monthly[baseIdx]?.daily ?? 0;
-  const rampOf = (r: Row) => ramp(baseOf(r), decOf(r));
-
-  /* THE TWELVE BARS AND THE TABLE ARE ONE NUMBER. Recorded months come from the months array the
-   * route computed off the same filtered matches; October to December are the SUM OF THE ROWS'
-   * targets, ramp included, so editing a December goal moves the bar and the headline together. */
-  const chart = useMemo(() => {
-    if (!data) return [];
-    /* THE RECORDED BARS ARE SUMMED FROM THE COUNTED ROWS ON SCREEN, not from a separate aggregate.
-     * Measured: with the exclusion applied to the rows only, the table dropped 0.4 and the
-     * September bar did not move — bars above the sum of the rows beneath them, which is the
-     * spreadsheet's own fault and the thing this page exists to end. One predicate, applied once,
-     * governs the table, the headline and every bar. The route still supplies the calendar facts
-     * (how many days elapsed) because those are not row data. */
-    const counted = all.filter(rowCountsTowardTotals);
-    const r1 = (v: number) => roundTo(v, 1);
-    /* SUMMED FROM THE ROWS AS DISPLAYED, the same rule the tiles and the city column now use, so a
-     * bar and the tile beside it cannot disagree. This was `sum(spots)/18/days`, which is the same
-     * quantity at full precision and therefore 0.2 away from a tile that rounds its parts. */
-    const dailyFromRows = (i: number) =>
-      r1(counted.reduce((sum, r) => sum + r1(r.monthly[i]?.daily ?? 0), 0));
-    return MONTH_LABELS.map((label, i) => {
-      if (i < cur) return { label, value: dailyFromRows(i), state: "done" as const, days: data.months[i].days, of: data.months[i].daysInMonth };
-      if (i === cur) return { label, value: dailyFromRows(i), state: "partial" as const, days: data.months[i].days, of: data.months[i].daysInMonth };
-      const k = monthKey(data.year, i);
-      const value = r1(all.filter(rowCountsTowardTotals).reduce((s, r) => {
-        const typed = r.targets[k];
-        if (typed != null) return s + r1(typed);
-        if (i === DEC) return s;
-        const idx = RAMP_MONTHS.indexOf(i as 9 | 10);
-        const v = idx >= 0 ? rampOf(r)[idx] : null;
-        return s + r1(v ?? 0);
-      }, 0));
-      /* ON THE 1st A RAMP MONTH IS UNKNOWN, NOT LOW. The ramp is a straight line FROM the current
-       * month's actual, and on day one there is no actual, so it would run from zero: measured on
-       * the day-one render, October drew 9.5 and November 18.5 against the ~21 and ~25 they carry
-       * the rest of the month. A third of the December goal is not a suggestion anybody made.
-       * December is untouched — it is a number a person typed, not a line drawn from anything. */
-      const unknown = noBase && i !== DEC && RAMP_MONTHS.indexOf(i as 9 | 10) >= 0;
-      return { label, value: unknown ? 0 : value, state: "goal" as const, unknown, days: 0, of: data.months[i].daysInMonth };
-    });
-    // rampOf/decOf are derived from `all` and `data`, which are the dependencies that matter.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, all, cur, noBase, baseIdx]);
 
   /* THE EARLY RETURN IS FOR A LOAD FAILURE AND NOTHING ELSE. A page that cannot read its data must
    * not pretend to render; a page whose last write was refused must not blank itself. */
@@ -411,9 +425,7 @@ export default function FieldGoals2026() {
         )}
       </div>
 
-      {grain === "city"
-        ? <CityChart cities={cities} unit={unit} baseIdx={baseIdx} noCompletedDay={noBase} />
-        : <YearChart months={chart} unit={unit} noCompletedDay={noCompletedDay} />}
+      <CityChart cities={cities} unit={unit} baseIdx={baseIdx} noCompletedDay={noBase} />
 
       <div className="mb-3 mt-3 flex flex-wrap items-center gap-2">
         <span className="inline-flex overflow-hidden rounded-[9px] border bg-white" style={{ borderColor: "#D3DCD8" }}>
@@ -434,41 +446,26 @@ export default function FieldGoals2026() {
           set={(v) => setCompareOverride(v)} />
       </div>
 
-      {grain === "city" ? (
-        <CityTable
-          cities={cities} totals={cityTot} unit={unit} cur={cur} noCompletedDay={noCompletedDay}
-          baseIdx={baseIdx} noBase={noBase} liveDays={liveDays}
-          sort={sort} setSort={setSort} grain={grain} setGrain={setGrain}
-          openCities={openCities} toggleCity={toggleCity}
-          rowByKey={rowByKey} year={data.year} busy={locked} revert={revert}
-          onTarget={setTarget} open={open} setOpen={setOpen} draft={draft} setDraft={setDraft}
-          onAddAction={addAction} onToggleAction={toggleAction} onRemoveAction={removeAction}
-          onNotCounted={setNotCounted} writeErr={writeErr}
-          showHistory={showHistory} setShowHistory={setShowHistory}
-        />
-      ) : (
-        <>
-          <GoalTable
-            title="Existing fields" rows={rows} unit={unit} year={data.year} cur={cur} busy={locked}
-            open={open} setOpen={setOpen} draft={draft} setDraft={setDraft}
-            onTarget={setTarget} onAddAction={addAction} onToggleAction={toggleAction} onRemoveAction={removeAction}
-            onNotCounted={setNotCounted} writeErr={writeErr} revert={revert}
-            sort={sort} setSort={setSort} grain={grain} setGrain={setGrain}
-            showDormant={showDormant} setShowDormant={setShowDormant} noCompletedDay={noCompletedDay}
-            baseIdx={baseIdx} noBase={noBase} liveDays={liveDays}
-            testId="fg-existing"
-          />
-          <GoalTable
-            title="New fields" rows={slots} unit={unit} year={data.year} cur={cur} busy={locked}
-            open={open} setOpen={setOpen} draft={draft} setDraft={setDraft}
-            onTarget={setTarget} onAddAction={addAction} onToggleAction={toggleAction} onRemoveAction={removeAction}
-            onNotCounted={setNotCounted} writeErr={writeErr} revert={revert} sort={sort}
-            onAddRow={addSlot} onRename={renameSlot} onRemoveRow={removeSlot}
-            onCity={setSlotCity} noCompletedDay={noCompletedDay}
-            baseIdx={baseIdx} noBase={noBase} liveDays={liveDays}
-            testId="fg-new"
-          />
-        </>
+      <CityTable
+        cities={cities} totals={cityTot} unit={unit} cur={cur} noCompletedDay={noCompletedDay}
+        baseIdx={baseIdx} noBase={noBase} liveDays={liveDays}
+        sort={sort} setSort={setSort}
+        openCities={openCities} toggleCity={toggleCity}
+        rowByKey={rowByKey} year={data.year} busy={locked} revert={revert}
+        onTarget={setTarget} open={open} setOpen={setOpen} draft={draft} setDraft={setDraft}
+        onAddAction={addAction} onToggleAction={toggleAction} onRemoveAction={removeAction}
+        onNotCounted={setNotCounted} writeErr={writeErr}
+        showHistory={showHistory} setShowHistory={setShowHistory}
+        cityByName={cityByName} hiddenCities={data.hiddenCities ?? []} readOnly={readOnly}
+        onOpenDialog={(d) => { setDialogErr(null); setDialog(d); }} onUnhide={unhideCity}
+        showDormantIn={showDormantIn} setShowDormantIn={setShowDormantIn}
+        addingIn={addingIn} setAddingIn={setAddingIn} onAddField={addFieldToCity}
+        onRemoveSlot={removeSlot} onLinkCard={linkCard} cards={cards}
+      />
+      {dialog && (
+        <CityDialog d={dialog} busy={busy} err={dialogErr} totalDec={cityTot.dec}
+          onClose={() => { setDialog(null); setDialogErr(null); }}
+          onAdd={addCity} onGoal={setCityGoal} onRename={renameCity} onRemove={removeCity} />
       )}
     </div>
   );
@@ -480,84 +477,6 @@ export function Big({ k, v, u, tone, testId }: { k: string; v: string; u: ReactN
       <div className="text-[10.5px] font-extrabold uppercase tracking-widest" style={{ color: "#5C6F66" }}>{k}</div>
       <div className="mt-0.5 text-[34px] font-black leading-none tracking-tight tabular-nums" style={{ color: tone ?? "#003326" }} data-testid={`${testId}-v`}>{v}</div>
       <div className="mt-0.5 text-[11.5px]" style={{ color: "#5C6F66" }} data-testid={`${testId}-u`}>{u}</div>
-    </div>
-  );
-}
-
-/* ── THE YEAR, ONE MEASURE, ONE AXIS ───────────────────────────────────────────────────────────
- * Recorded months are solid. The CURRENT month is hatched, because eleven days beside eleven whole
- * months is a lie by omission, and it is direct-labelled with its own value. The remaining months
- * are the same hue OUTLINED — the same measure in a different state, not a second series in a
- * second colour. Three marks, three legend entries, and a tooltip on every bar. */
-function YearChart({ months, unit, noCompletedDay }: { months: { label: string; value: number; state: "done" | "partial" | "goal"; unknown?: boolean; days: number; of: number }[]; unit: "day" | "week"; noCompletedDay?: boolean }) {
-  const [tip, setTip] = useState<{ x: number; y: number; html: string } | null>(null);
-  const W = 920, H = 250, L = 38, R = 8, T = 16, B = 26;
-  const shown = months.map((m) => (unit === "day" ? m.value : weekly(m.value)));
-  const max = Math.max(5, Math.ceil(Math.max(...shown, 1) / 5) * 5);
-  const iw = W - L - R, ih = H - T - B;
-  const step = iw / months.length, bw = Math.min(44, step - 10);
-  const y = (v: number) => T + ih - (v / max) * ih;
-
-  return (
-    <div className="relative rounded-2xl border-[1.5px] bg-white px-4 pb-2 pt-3" style={{ borderColor: "#D3DCD8" }} data-testid="fg-chart">
-      <div className="mb-1 flex flex-wrap items-start justify-between gap-3">
-        <div className="text-[13px] font-extrabold">Daily matches by month</div>
-        <div className="flex flex-wrap items-center gap-3 text-[11.5px]" style={{ color: "#5C6F66" }} data-testid="fg-legend">
-          <span className="inline-flex items-center gap-1.5"><i className="h-2.5 w-2.5 rounded-[3px]" style={{ background: CHART_HUE }} />recorded</span>
-          <span className="inline-flex items-center gap-1.5"><i className="h-2.5 w-2.5 rounded-[3px]" style={{ background: CHART_HUE, opacity: 0.45 }} />month to date</span>
-          <span className="inline-flex items-center gap-1.5"><i className="h-2.5 w-2.5 rounded-[3px] border-2" style={{ borderColor: CHART_HUE, background: "#fff" }} />goal</span>
-        </div>
-      </div>
-      <svg viewBox={`0 0 ${W} ${H}`} className="block w-full overflow-visible" role="img" aria-label={`Daily matches by month, ${new Date().getFullYear()}`}>
-        <defs>
-          <pattern id="fg-hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
-            <rect width="6" height="6" fill="#fff" /><rect width="3" height="6" fill={CHART_HUE} />
-          </pattern>
-        </defs>
-        {Array.from({ length: 5 }, (_, g) => (max / 4) * g).map((g) => (
-          <g key={g}>
-            <line x1={L} x2={W - R} y1={y(g)} y2={y(g)} stroke="#E8EEEA" strokeWidth={1} />
-            <text x={L - 8} y={y(g) + 3.5} textAnchor="end" fontSize={10} fill="#8FA096">{Math.round(g)}</text>
-          </g>
-        ))}
-        {months.map((m, i) => {
-          const v = shown[i];
-          const x = L + i * step + (step - bw) / 2;
-          const yy = y(v), h = Math.max(2, T + ih - yy), r = Math.min(4, h / 2);
-          const path = `M${x},${T + ih} L${x},${yy + r} Q${x},${yy} ${x + r},${yy} L${x + bw - r},${yy} Q${x + bw},${yy} ${x + bw},${yy + r} L${x + bw},${T + ih} Z`;
-          const fill = m.state === "goal" ? "#fff" : m.state === "partial" ? "url(#fg-hatch)" : CHART_HUE;
-          return (
-            <g key={m.label}>
-              <path d={path} fill={fill} stroke={m.state === "done" ? "none" : CHART_HUE} strokeWidth={m.state === "goal" ? 2 : 1.5}
-                data-testid={`fg-bar-${m.label}`} data-state={m.state} data-value={v.toFixed(1)} data-fill={fill} />
-              <rect x={x - 4} y={T} width={bw + 8} height={ih} fill="transparent"
-                onMouseMove={(e) => {
-                  const box = (e.currentTarget.ownerSVGElement?.parentElement as HTMLElement)?.getBoundingClientRect();
-                  setTip({ x: e.clientX - (box?.left ?? 0) + 12, y: e.clientY - (box?.top ?? 0) - 10,
-                    html: m.unknown
-                      ? `${m.label} · no suggestion yet · the ramp needs a completed day to run from`
-                      : `${m.label} · ${v.toFixed(1)} a ${unit === "day" ? "day" : "week"}` +
-                      (m.state === "partial" ? ` · ${m.days} of ${m.of} days so far` : m.state === "goal" ? " · goal" : "") +
-                      (unit === "day" ? ` · ${weekly(m.value).toFixed(0)} a week` : "") });
-                }}
-                onMouseLeave={() => setTip(null)} />
-              {/* THE 1st: the month-to-date bar has no value to label. A "0.0" over a flat bar
-                  reads as a month that has started badly rather than one that has not started. */}
-              {m.state !== "done" && (
-                <text x={x + bw / 2} y={yy - 6} textAnchor="middle" fontSize={10.5} fontWeight={700} fill="#12694A">
-                  {(noCompletedDay && m.state === "partial") || m.unknown ? "\u2014" : v.toFixed(1)}
-                </text>
-              )}
-              <text x={x + bw / 2} y={H - 8} textAnchor="middle" fontSize={10.5}
-                fill={m.state === "goal" ? "#8FA096" : "#54655C"} fontWeight={m.state === "partial" ? 800 : 400}>{m.label}</text>
-            </g>
-          );
-        })}
-      </svg>
-      {tip && (
-        <div className="pointer-events-none absolute z-10 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-[11.5px] text-white"
-          data-testid="fg-tip" style={{ left: tip.x, top: tip.y, background: "#0b2018" }}>{tip.html}</div>
-      )}
     </div>
   );
 }
@@ -729,11 +648,19 @@ function CityChart({ cities, unit, baseIdx, noCompletedDay }: { cities: CityRow[
  * a drawer whose numbers do not add up to the row you opened is worse than no drawer on a page
  * whose entire job is a gap. */
 function CityTable({
-  cities, totals, unit, cur, noCompletedDay, sort, setSort, grain, setGrain, openCities, toggleCity,
+  cities, totals, unit, cur, noCompletedDay, sort, setSort, openCities, toggleCity,
   rowByKey, year, busy, revert, onTarget, open, setOpen, draft, setDraft,
   onAddAction, onToggleAction, onRemoveAction, onNotCounted, writeErr,
   showHistory, setShowHistory, baseIdx, noBase, liveDays,
+  cityByName, hiddenCities, readOnly, onOpenDialog, onUnhide, showDormantIn, setShowDormantIn,
+  addingIn, setAddingIn, onAddField, onRemoveSlot, onLinkCard, cards,
 }: {
+  cityByName: Map<string, City>; hiddenCities: City[]; readOnly: boolean;
+  onOpenDialog: (d: DialogState) => void; onUnhide: (c: City) => void;
+  showDormantIn: Set<string>; setShowDormantIn: React.Dispatch<React.SetStateAction<Set<string>>>;
+  addingIn: string | null; setAddingIn: (k: string | null) => void;
+  onAddField: (c: City, name: string) => Promise<boolean>;
+  onRemoveSlot: (r: Row) => void; onLinkCard: (r: Row, cardId: string | null) => void; cards: PipelineCard[];
   cities: CityRow[];
   totals: ReturnType<typeof cityTotals>;
   unit: "day" | "week"; cur: number;
@@ -743,7 +670,6 @@ function CityTable({
   /** The 1st of a month: no completed day, so every current-month figure is a dash. */
   noCompletedDay?: boolean;
   sort: GoalSort; setSort: (s: GoalSort) => void;
-  grain: Grain; setGrain: (g: Grain) => void;
   openCities: Set<string>; toggleCity: (city: string) => void;
   /* ── EVERYTHING BELOW IS THE FIELD TABLE'S EDIT SURFACE, PASSED THROUGH UNCHANGED ───────────
    * The drawer edits through the SAME handlers the field table edits through, so there is one
@@ -784,13 +710,17 @@ function CityTable({
   const trendLabel = `${MONTH_LABELS[historyIndexes(cur)[0] ?? 0]} \u2192 ${MONTH_LABELS[baseIdx]}`;
   const thCls = "whitespace-nowrap border-b px-3 py-2 text-right text-[10px] font-extrabold uppercase tracking-wider";
   const thSt = { color: "#5C6F66", background: "#F2F4F3", borderColor: "#D3DCD8" };
+  /** Every column a field line spans: City, Progress, history, baseline, live, Oct, Nov, Dec, trend, Gap, Fields, menu. */
+  const span = 9 + histIdx.length + (showHistory ? 1 : 0) + (extraBase ? 1 : 0);
+  /** The columns between the name and the Dec column (Progress, history, baseline, live, Oct, Nov). */
+  const lead = 4 + histIdx.length + (extraBase ? 1 : 0);
+  const [menuFor, setMenuFor] = useState<string | null>(null);
+  const [hiddenOpen, setHiddenOpen] = useState(false);
   return (
     <>
-      <h2 className="mb-2 mt-6 flex items-baseline gap-2 text-[15px] font-extrabold">
-        Cities <span className="text-[11.5px] font-semibold" style={{ color: "#5C6F66" }} data-testid="fg-city-count">{cities.length}</span>
-        <GrainSeg grain={grain} setGrain={setGrain} />
-        <HistorySeg on={showHistory} set={setShowHistory} />
-        <span className="inline-flex overflow-hidden rounded-lg border" style={{ borderColor: "#D3DCD8" }} data-testid="fg-sort">
+      <h2 className="mb-2 mt-6 flex flex-wrap items-center gap-2 text-[15px] font-extrabold">
+        Cities <span className="rounded-full border px-2 text-[11.5px] font-semibold" style={{ color: "#5C6F66", borderColor: "#D3DCD8" }} data-testid="fg-city-count">{cities.length}</span>
+        <span className="ml-1 inline-flex overflow-hidden rounded-lg border" style={{ borderColor: "#D3DCD8" }} data-testid="fg-sort">
           {([["gap", "By gap"], ["city", "By city"], ["name", "A–Z"]] as const).map(([k, label]) => (
             <button key={k} type="button" data-testid={`fg-sort-${k}`} aria-pressed={sort === k}
               onClick={() => setSort(k)} className="px-2.5 py-1 text-[11.5px] font-bold"
@@ -798,6 +728,36 @@ function CityTable({
               {label}
             </button>
           ))}
+        </span>
+        <HistorySeg on={showHistory} set={setShowHistory} />
+        <span className="ml-auto flex items-center gap-2">
+          {/* A HIDDEN CITY COMES BACK FROM HERE. Its row is off the page, so its own ••• menu is not
+              reachable; this is the city menu for the cities that are not on screen. */}
+          {hiddenCities.length > 0 && (
+            <span className="relative">
+              <button type="button" data-testid="fg-hidden-cities" onClick={() => setHiddenOpen(!hiddenOpen)}
+                className="rounded-lg border px-2.5 py-1 text-[11.5px] font-bold" style={{ minHeight: 32, borderColor: "#D3DCD8", background: "#fff", color: "#3C4F44" }}>
+                {hiddenCities.length} hidden
+              </button>
+              {hiddenOpen && (
+                <span className="absolute right-0 top-full z-20 mt-1 flex w-56 flex-col rounded-xl border bg-white py-1 shadow-lg" style={{ borderColor: "#D3DCD8" }}>
+                  {hiddenCities.map((c) => (
+                    <button key={c.id} type="button" disabled={busy || readOnly} data-testid="fg-unhide"
+                      onClick={() => { setHiddenOpen(false); onUnhide(c); }}
+                      className="px-3 py-2 text-left text-[12.5px] font-semibold hover:bg-[#F2F4F3]" style={{ color: "#003326" }}>
+                      Show {c.name} again
+                    </button>
+                  ))}
+                </span>
+              )}
+            </span>
+          )}
+          {!readOnly && (
+            <button type="button" data-testid="fg-add-city" disabled={busy} onClick={() => onOpenDialog({ kind: "add" })}
+              className="rounded-lg px-3.5 py-1.5 text-[12.5px] font-bold text-white" style={{ minHeight: 32, background: "#003326" }}>
+              + Add city
+            </button>
+          )}
         </span>
       </h2>
       <div className="overflow-x-auto rounded-xl border-[1.5px] scroll" style={{ borderColor: "#D3DCD8" }}>
@@ -818,7 +778,7 @@ function CityTable({
                 <td colSpan={3} data-testid="cap-goal"
                   className="border-b px-3 text-[9.5px] font-extrabold uppercase tracking-[0.13em]"
                   style={{ height: 24, color: "#5C6F66", borderColor: "#D3DCD8", ...rule }}>Goal</td>
-                <td /><td /><td />
+                <td /><td /><td /><td />
               </tr>
             )}
             <tr>
@@ -857,10 +817,11 @@ function CityTable({
                   className="whitespace-nowrap border-b px-3 py-2 text-right text-[10px] font-extrabold uppercase tracking-wider"
                   style={{ color: "#5C6F66", background: "#F2F4F3", borderColor: "#D3DCD8" }}>Trend <span className="normal-case tracking-normal">{trendLabel}</span></th>
               )}
-              {["Gap", "Fields"].map((h, i) => (
-                <th key={h} className={`whitespace-nowrap border-b px-3 py-2 text-[10px] font-extrabold uppercase tracking-wider ${i === 0 ? "text-right" : "text-left"}`}
+              {["Gap", "Fields"].map((h) => (
+                <th key={h} className="whitespace-nowrap border-b px-3 py-2 text-right text-[10px] font-extrabold uppercase tracking-wider"
                   style={{ color: "#5C6F66", background: "#F2F4F3", borderColor: "#D3DCD8" }}>{h}</th>
               ))}
+              <th className="border-b" style={{ background: "#F2F4F3", borderColor: "#D3DCD8", width: 40 }} aria-label="City menu" />
             </tr>
           </thead>
           <tbody>
@@ -947,25 +908,79 @@ function CityTable({
                       </td>
                     )}
                     <td className="border-t px-3 py-2 text-right text-[13px] font-extrabold tabular-nums" style={{ borderColor: "#EDF2EF", color: BAND_HUE[band] }} data-v={c.gapDaily.toFixed(4)} data-testid="gap">{noBase ? <span style={{ color: "#C3CEC8" }}>{"\u2014"}</span> : fmtShownSigned(c.gapSort, unit)}</td>
-                    {/* "9 +2 new · 2 no goal". A city with no unsigned fields says nothing rather than
-                        "+0 new", and a December figure carrying absent targets says so here rather
-                        than reading as low. */}
-                    <td className="border-t px-3 py-2 text-[11px]" style={{ borderColor: "#EDF2EF", color: "#9AA8A1" }} data-testid="fields">
-                      {c.existing}
-                      {c.slots > 0 && <>{" "}<span className="font-bold" style={{ color: CHART_HUE }}>+{c.slots} new</span></>}
-                      {c.noGoal > 0 && <>{" \u00b7 "}{c.noGoal} no goal</>}
+                    {/* "N fields" AND A "+N new" PILL (2026-11-04). The "· N no goal" note is gone: an empty
+                        goal now shows on the field itself as an amber "Set". */}
+                    <td className="whitespace-nowrap border-t px-3 py-2 text-right text-[11.5px]" style={{ borderColor: "#EDF2EF", color: "#5C6F66" }} data-testid="fields">
+                      {(() => { const n = c.fields.filter((f) => f.kind === "existing").length; return `${n} ${n === 1 ? "field" : "fields"}`; })()}
+                      {c.fields.some((f) => f.kind === "slot") && (
+                        <span data-testid="fg-newpill" className="ml-1.5 rounded-full px-2 py-0.5 text-[10.5px] font-bold" style={{ background: "#E3F5EA", color: "#12694A" }}>
+                          +{c.fields.filter((f) => f.kind === "slot").length} new
+                        </span>
+                      )}
+                    </td>
+                    <td className="relative border-t px-2 py-2 text-center" style={{ borderColor: "#EDF2EF" }} onClick={(e) => e.stopPropagation()}>
+                      {!readOnly && cityByName.get(c.city) && (
+                        <CityMenu open={menuFor === c.city} setOpen={(v) => setMenuFor(v ? c.city : null)} busy={busy}
+                          onGoal={() => onOpenDialog({ kind: "goal", city: cityByName.get(c.city)! })}
+                          onAddField={() => { if (!isOpen) toggleCity(c.city); setAddingIn(cityByName.get(c.city)!.id); }}
+                          onRename={() => onOpenDialog({ kind: "rename", city: cityByName.get(c.city)! })}
+                          onRemove={() => onOpenDialog({ kind: "remove", city: cityByName.get(c.city)!, newFields: c.fields.filter((f) => f.kind === "slot").length })} />
+                      )}
                     </td>
                   </tr>
-                  {isOpen && c.fields.map((f) => (
-                    <CityFieldTr key={f.key} f={f} city={c.city} row={rowByKey.get(f.key)}
-                      unit={unit} cur={cur} year={year} busy={busy} revert={revert}
-                      noCompletedDay={noCompletedDay} onTarget={onTarget}
-                      open={open} setOpen={setOpen} draft={draft} setDraft={setDraft}
-                      onAddAction={onAddAction} onToggleAction={onToggleAction}
-                      onRemoveAction={onRemoveAction} onNotCounted={onNotCounted} writeErr={writeErr}
-                      histIdx={histIdx} showHistory={showHistory} rule={rule}
-                      baseIdx={baseIdx} noBase={noBase} extraBase={extraBase} baseHistAt={baseHistAt} />
-                  ))}
+                  {isOpen && (() => {
+                    const city = cityByName.get(c.city);
+                    const fieldTr = (f: CityFieldRow) => (
+                      <CityFieldTr key={f.key} f={f} city={c.city} row={rowByKey.get(f.key)}
+                        unit={unit} cur={cur} year={year} busy={busy} revert={revert}
+                        noCompletedDay={noCompletedDay} onTarget={onTarget}
+                        open={open} setOpen={setOpen} draft={draft} setDraft={setDraft}
+                        onAddAction={onAddAction} onToggleAction={onToggleAction}
+                        onRemoveAction={onRemoveAction} onNotCounted={onNotCounted} writeErr={writeErr}
+                        histIdx={histIdx} showHistory={showHistory} rule={rule}
+                        baseIdx={baseIdx} noBase={noBase} extraBase={extraBase} baseHistAt={baseHistAt} />
+                    );
+                    const existing = c.fields.filter((f) => f.kind === "existing");
+                    const newFields = c.fields.filter((f) => f.kind === "slot");
+                    /* DORMANT FOLDS INSIDE THE CITY: no match in the baseline month nor the live one so
+                       far (isDormantFor). It changes the list's length and nothing else — those rows
+                       still count toward the city above them. */
+                    const dormant = existing.filter((f) => { const r = rowByKey.get(f.key); return !!r && isDormantFor(r, baseIdx, cur); });
+                    const awake = existing.filter((f) => !dormant.includes(f));
+                    const showD = showDormantIn.has(c.city);
+                    return (
+                      <>
+                        <SubHead label="Existing fields" span={span} testId="fg-sub-existing" />
+                        {(showD ? [...awake, ...dormant] : awake).map(fieldTr)}
+                        {dormant.length > 0 && (
+                          <tr><td colSpan={span} className="border-t py-1.5 pl-9" style={{ borderColor: "#EDF2EF", background: "#FAFCFB" }}>
+                            <button type="button" data-testid="fg-dormant-toggle" data-count={dormant.length}
+                              onClick={() => setShowDormantIn((prev) => { const n = new Set(prev); if (n.has(c.city)) n.delete(c.city); else n.add(c.city); return n; })}
+                              className="text-[11.5px] font-bold" style={{ color: "#5C6F66" }}>
+                              {showD ? "Hide" : "Show"} {dormant.length} dormant — no match {baseIdx === cur ? `this ${MONTH_LABELS[cur]}` : `in ${MONTH_LABELS[baseIdx]} or ${MONTH_LABELS[cur]} so far`}
+                            </button>
+                          </td></tr>
+                        )}
+                        <SubHead label={`New fields \u00b7 ${newFields.length}`} span={span} testId="fg-sub-new" />
+                        {newFields.map((f) => {
+                          const r = rowByKey.get(f.key);
+                          return r ? (
+                            <NewFieldTr key={f.key} r={r} lead={lead} showHistory={showHistory} unit={unit} year={year}
+                              busy={busy || readOnly} revert={revert} onTarget={onTarget} onRemove={onRemoveSlot}
+                              onLinkCard={onLinkCard} cards={cards} writeErr={writeErr} span={span} />
+                          ) : null;
+                        })}
+                        {c.unassigned != null && Math.abs(c.unassigned) >= 0.05 && (
+                          <UnassignedTr amount={c.unassigned} fieldsDec={c.fieldsDec ?? 0} cityDec={c.dec} lead={lead} showHistory={showHistory} unit={unit} />
+                        )}
+                        {!readOnly && city && (
+                          <AddFieldTr city={city} span={span} busy={busy} adding={addingIn === city.id}
+                            setAdding={(v) => setAddingIn(v ? city.id : null)} onAdd={onAddField}
+                            err={writeErr?.key === `city:${city.id}` ? writeErr.message : null} />
+                        )}
+                      </>
+                    );
+                  })()}
                 </Fragmentish>
               );
             })}
@@ -989,9 +1004,12 @@ function CityTable({
               <td className="border-t-2 px-3 py-2 text-right text-[13px] font-extrabold tabular-nums" style={{ borderColor: "#D3DCD8", color: "#003326" }} data-v={totals.dec.toFixed(4)} data-testid="tdec">{fmtUnit(totals.dec, unit)}</td>
               {showHistory && <td className="border-t-2" style={{ borderColor: "#D3DCD8" }} />}
               <td className="border-t-2 px-3 py-2 text-right text-[13px] font-extrabold tabular-nums" style={{ borderColor: "#D3DCD8", color: "#A8341F" }} data-v={totals.gapDaily.toFixed(4)} data-testid="tgap">{noBase ? <span style={{ color: "#C3CEC8" }}>{"\u2014"}</span> : fmtShownSigned(shownGap(dailyIn(totals.dec, unit), dailyIn(totals.base, unit), unit) as number, unit)}</td>
-              <td className="border-t-2 px-3 py-2 text-[11px]" style={{ borderColor: "#D3DCD8", color: "#9AA8A1" }}>
-                {totals.existing}{totals.slots > 0 && <>{" "}<span className="font-bold" style={{ color: CHART_HUE }}>+{totals.slots} new</span></>}
+              <td className="whitespace-nowrap border-t-2 px-3 py-2 text-right text-[11.5px]" style={{ borderColor: "#D3DCD8", color: "#5C6F66" }}>
+                {(() => { const ex = cities.reduce((n, c) => n + c.fields.filter((f) => f.kind === "existing").length, 0);
+                  const nw = cities.reduce((n, c) => n + c.fields.filter((f) => f.kind === "slot").length, 0);
+                  return <>{ex} fields{nw > 0 && <span className="ml-1.5 rounded-full px-2 py-0.5 text-[10.5px] font-bold" style={{ background: "#E3F5EA", color: "#12694A" }}>+{nw} new</span>}</>; })()}
               </td>
+              <td className="border-t-2" style={{ borderColor: "#D3DCD8" }} />
             </tr>
           </tfoot>
         </table>
@@ -1148,17 +1166,18 @@ function CityFieldTr({
               </button>
             : <span style={{ color: "#9AA8A1" }}>—</span>}
         </td>
+        <td className="border-t" style={tdStyle} />
       </tr>
       {/* IN PLACE, NOT INSTEAD OF THE PAGE, exactly as the field table does it. */}
       {row && writeErr?.key === row.key && (
         <tr data-testid="fg-write-error" data-key={row.key}>
-          <td colSpan={8 + histIdx.length + (showHistory ? 1 : 0) + (extraBase ? 1 : 0)} className="px-3 pb-2 text-[12px]" style={{ color: "#A8341F", background: "#FDF3EF" }}>
+          <td colSpan={9 + histIdx.length + (showHistory ? 1 : 0) + (extraBase ? 1 : 0)} className="px-3 pb-2 text-[12px]" style={{ color: "#A8341F", background: "#FDF3EF" }}>
             {writeErr.message}
           </td>
         </tr>
       )}
       {row && isOpen && (
-        <tr data-testid="fg-actions-row"><td colSpan={8 + histIdx.length + (showHistory ? 1 : 0) + (extraBase ? 1 : 0)} className="px-3 pb-3 pl-9" style={{ background: TONE.bg }}>
+        <tr data-testid="fg-actions-row"><td colSpan={9 + histIdx.length + (showHistory ? 1 : 0) + (extraBase ? 1 : 0)} className="px-3 pb-3 pl-9" style={{ background: TONE.bg }}>
           <ActionsDrawer r={row} busy={busy} draft={draft} setDraft={setDraft}
             onAddAction={onAddAction} onToggleAction={onToggleAction}
             onRemoveAction={onRemoveAction} onNotCounted={onNotCounted} />
@@ -1295,213 +1314,264 @@ function ActionsDrawer({
   );
 }
 
-function GoalTable({
-  title, rows, unit, year, cur, busy, open, setOpen, draft, setDraft,
-  onTarget, onAddAction, onToggleAction, onRemoveAction, onNotCounted, writeErr, revert,
-  sort, setSort, grain, setGrain, showDormant, setShowDormant,
-  onAddRow, onRename, onRemoveRow, onCity, noCompletedDay, testId, baseIdx, noBase, liveDays,
-}: {
-  title: string; rows: Row[]; unit: "day" | "week"; year: number; cur: number; busy: boolean;
-  open: string | null; setOpen: (k: string | null) => void;
-  draft: Record<string, string>; setDraft: React.Dispatch<React.SetStateAction<Record<string, string>>>;
-  onTarget: (r: Row, month: string, v: number | null) => void;
-  onAddAction: (r: Row, text: string) => void;
-  onToggleAction: (a: Action, rowKey: string) => void;
-  onRemoveAction: (a: Action, rowKey: string) => void;
-  onNotCounted: (r: Row, value: boolean) => void;
-  /* THE WRITE ERROR RENDERS BESIDE THE CONTROL THAT FAILED, keyed on the row. `revert` re-syncs the
-   * inputs from the stored values so a refused number does not sit there looking saved. */
-  writeErr: { key: string; message: string } | null;
-  revert: number;
-  sort: GoalSort; setSort?: (s: GoalSort) => void;
-  grain?: Grain; setGrain?: (g: Grain) => void;
-  showDormant?: boolean; setShowDormant?: (v: boolean) => void;
-  onAddRow?: () => void; onRename?: (r: Row, name: string) => void; onRemoveRow?: (r: Row) => void;
-  onCity?: (r: Row, city: string) => void;
-  /** The 1st of a month: no completed day, so every current-month figure is a dash. */
-  noCompletedDay?: boolean;
-  testId: string;
-  /** The baseline month, whether it has no figure, and the live month's completed days. */
-  baseIdx: number; noBase: boolean; liveDays: number;
+
+/* ── INSIDE AN OPEN CITY (2026-11-04) ─────────────────────────────────────────────────────────
+ * "Existing fields", then "New fields · N", then the Unassigned line when the fields do not add up
+ * to the city's stored goal, then "+ Add field to <City>". */
+function SubHead({ label, span, testId }: { label: string; span: number; testId: string }) {
+  return (
+    <tr data-testid={testId}>
+      <td colSpan={span} className="border-t py-1.5 pl-9 text-[10px] font-extrabold uppercase tracking-[0.12em]"
+        style={{ borderColor: "#DCEFE3", background: "#EAF6EE", color: "#12694A" }}>{label}</td>
+    </tr>
+  );
+}
+
+/* A NEW FIELD: no history, so every actual column is a dash; the December goal is typed inline (an
+ * empty one is an amber "Set", not "no goal"); the gap is that goal against nothing yet; then its
+ * Field Pipeline card and a remove ×. Its Oct/Nov targets are not shown on the row — they are still
+ * stored, and still summed into the city's Oct/Nov columns. */
+function NewFieldTr({ r, lead, showHistory, unit, year, busy, revert, onTarget, onRemove, onLinkCard, cards, writeErr, span }: {
+  r: Row; lead: number; showHistory: boolean; unit: "day" | "week"; year: number; busy: boolean; revert: number;
+  onTarget: (r: Row, month: string, v: number | null) => void; onRemove: (r: Row) => void;
+  onLinkCard: (r: Row, cardId: string | null) => void; cards: PipelineCard[];
+  writeErr: { key: string; message: string } | null; span: number;
 }) {
+  const [confirm, setConfirm] = useState(false);
   const decKey = monthKey(year, DEC);
-  const baseIsLive = baseIdx === cur;
-  /* THE ORDER, AND THE FOLD. Sorting is on the GAP the row shows, so a no-goal row (no gap) falls
-   * last under every order rather than sitting in the middle of the work as a pretend zero.
-   * DORMANT is computed — no match in the BASELINE month and none in the live month so far
-   * (isDormantFor) — and folds into one line at the foot. A field that played all September is not
-   * dormant on 2 October. It changes the table's LENGTH and nothing else: those rows still count.
-   * The gap, and so the gap sort, is measured from the baseline. */
-  const withGap = rows.map((r) => {
-    const dec = r.targets[decKey] ?? null;
-    const base = r.monthly[baseIdx]?.daily ?? 0;
-    return { r, name: r.name, city: r.city,
-      gapDaily: shownGap(dec, base, "day"),
-      gapSort: dec == null ? null : shownGap(dailyIn(dec, unit), dailyIn(base, unit), unit) };
-  });
-  const ordered = sortGoalRows(withGap, sort);
-  const live = ordered.filter((x) => x.r.kind === "slot" || !isDormantFor(x.r, baseIdx, cur));
-  const dormant = ordered.filter((x) => x.r.kind !== "slot" && isDormantFor(x.r, baseIdx, cur));
-  const shown = showDormant ? [...live, ...dormant] : live;
+  const dec = r.targets[decKey] ?? null;
+  const out = r.notCounted === true;
+  const st = { borderColor: "#EDF2EF", background: "#fff" };
+  const dash = <span style={{ color: "#C3CEC8" }}>{"–"}</span>;
+  const card = r.kanbanCardId ? cards.find((c) => c.id === r.kanbanCardId) : undefined;
   return (
     <>
-      <h2 className="mb-2 mt-6 flex items-baseline gap-2 text-[15px] font-extrabold">
-        {title} <span className="text-[11.5px] font-semibold" style={{ color: "#5C6F66" }} data-testid={`${testId}-count`}>{rows.length}</span>
-        {setGrain && grain && <GrainSeg grain={grain} setGrain={setGrain} />}
-        {setSort && (
-          <span className="inline-flex overflow-hidden rounded-lg border" style={{ borderColor: "#D3DCD8" }} data-testid="fg-sort">
-            {([["gap", "By gap"], ["city", "By city"], ["name", "A–Z"]] as const).map(([k, label]) => (
-              <button key={k} type="button" data-testid={`fg-sort-${k}`} aria-pressed={sort === k}
-                onClick={() => setSort(k)} className="px-2.5 py-1 text-[11.5px] font-bold"
-                style={sort === k ? { background: "#003326", color: "#fff" } : { background: "#fff", color: "#3C4F44" }}>
-                {label}
-              </button>
-            ))}
-          </span>
-        )}
-        {onAddRow && (
-          <button type="button" data-testid="fg-add-row" onClick={onAddRow} disabled={busy}
-            className="ml-auto rounded-lg border px-3 py-1.5 text-[12px] font-bold"
-            style={{ background: "#003326", borderColor: "#003326", color: "#fff" }}>+ Add a new field</button>
-        )}
-      </h2>
-      {/* THE TABLE SCROLLS IN ITS OWN CONTAINER, so a narrow screen never scrolls the page. */}
-      <div className="overflow-x-auto rounded-xl border-[1.5px]" style={{ borderColor: "#D3DCD8" }}>
-        <table className="w-full min-w-[620px] border-collapse bg-white" data-testid={testId}>
-          <thead>
-            <tr>
-              {/* KEYED BY POSITION: on 2 October the live month and the first target are both "Oct". */}
-              {([
-                ["Field", "left"], ["Progress", "left"],
-                ...(baseIsLive ? [] : [[MONTH_LABELS[baseIdx], "right", "base"]]),
-                [MONTH_LABELS[cur], "right", "live"], ["Oct", "right"], ["Nov", "right"], ["Dec", "right"], ["Gap", "right"], ["Actions", "left"],
-              ] as [string, string, string?][]).map(([h, align, tag], i) => (
-                <th key={i} className={`whitespace-nowrap border-b px-3 py-2 text-[10px] font-extrabold uppercase tracking-wider text-${align}`}
-                  style={{ color: "#5C6F66", background: "#F2F4F3", borderColor: "#D3DCD8" }}>
-                  {h}
-                  {tag === "base" && <BaselineTag />}
-                  {tag === "live" && (baseIsLive ? <BaselineTag /> : <DaysTag days={liveDays} />)}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {shown.map(({ r }) => {
-              const liveV = r.monthly[cur]?.daily ?? 0;
-              const base = r.monthly[baseIdx]?.daily ?? 0;
-              const dec = r.targets[decKey] ?? null;
-              const noGoal = dec == null;
-              const gap = noGoal ? 0 : shownGap(dec, base, "day") as number;   // daily: the dot's colour
-              const over = !noGoal && gap < 0;
-              const openN = r.actions.filter((a) => !a.done).length;
-              const out = r.notCounted === true;   // deliberate, stored, and out of every total
-              const dormantHere = r.kind !== "slot" && isDormantFor(r, baseIdx, cur);
-              return (
-                <Fragmentish key={r.key}>
-                  <tr data-testid="fg-row" data-key={r.key} data-band={out ? "out" : noGoal ? "none" : bandForDisplay(gap)}
-                    data-counted={out ? "0" : "1"} data-dormant={dormantHere ? "1" : "0"}
-                    style={out ? { opacity: 0.55 } : undefined}
-                    className="cursor-pointer hover:bg-[#FAFCFB]"
-                    onClick={(e) => { if ((e.target as HTMLElement).closest("input,button")) return; setOpen(open === r.key ? null : r.key); }}>
-                    <td className="border-t px-3 py-2 text-[13px]" style={{ borderColor: "#EDF2EF" }}>
-                      <span className="mr-2 inline-block h-2.5 w-2.5 rounded-full align-middle" data-testid="fg-dot"
-                        style={{ background: out || noGoal || noBase ? "#C3CEC8" : BAND_HUE[bandForDisplay(gap)] }} />
-                      {r.kind === "slot" && onRename ? (
-                        <input key={`${r.key}-${revert}`} data-testid="fg-slot-name" defaultValue={r.name} disabled={busy}
-                          onBlur={(e) => { if (e.target.value.trim() !== r.name) onRename(r, e.target.value); }}
-                          className="w-[210px] rounded-md border border-transparent px-1.5 py-0.5 text-[13px] font-bold hover:border-[#D3DCD8] focus:border-[#2CDB87] focus:outline-none" />
-                      ) : (
-                        <><b className="font-bold">{r.name}</b>{r.city && <span className="ml-1.5 text-[11px]" style={{ color: "#9AA8A1" }}>{r.city}</span>}
-                          {/* THE MARK STAYS VISIBLE. Hiding an excluded field would mean nobody
-                              ever reviews the decision. */}
-                          {out && <span className="ml-1.5 rounded px-1.5 py-0.5 text-[10px] font-bold" data-testid="fg-notcounted"
-                            style={{ background: "#EEF3F0", color: "#5C6F66" }}>not counted</span>}</>
-                      )}
-                      {/* THE CITY, TYPED, and it is what puts this row in a city row rather than in
-                          the "No city set" bucket. Placeholder rather than a label: a state that
-                          belongs on a row goes on the row. */}
-                      {r.kind === "slot" && onCity && (
-                        <input key={`${r.key}-city-${revert}`} data-testid="fg-slot-city" defaultValue={r.city ?? ""}
-                          disabled={busy} placeholder="city" aria-label={`City for ${r.name}`}
-                          onBlur={(e) => { if (e.target.value.trim() !== (r.city ?? "")) onCity(r, e.target.value); }}
-                          className="ml-1 w-[110px] rounded-md border border-transparent px-1.5 py-0.5 text-[11.5px] hover:border-[#D3DCD8] focus:border-[#2CDB87] focus:outline-none"
-                          style={{ color: r.city ? "#5C6F66" : "#9AA8A1" }} />
-                      )}
-                      {r.kind === "slot" && onRemoveRow && (
-                        <button type="button" data-testid="fg-slot-remove" aria-label={`Remove ${r.name}`} disabled={busy}
-                          onClick={() => onRemoveRow(r)} className="ml-1 px-1 text-[15px]" style={{ color: "#9AA8A1" }}>×</button>
-                      )}
-                    </td>
-                    <td className="border-t px-3 py-2" style={{ borderColor: "#EDF2EF" }}>
-                      {!noGoal && !noBase && (
-                        <span className="relative inline-block h-[7px] w-24 overflow-hidden rounded-full border align-middle" style={{ background: "#F2F4F3", borderColor: "#D3DCD8" }}>
-                          <i className="absolute inset-y-0 left-0 rounded-full" style={{ width: `${dec > 0 ? Math.min(100, (base / dec) * 100) : 100}%`, background: over ? "#12694A" : "#2CDB87" }} />
-                        </span>
-                      )}
-                    </td>
-                    {!baseIsLive && (
-                      <td className="border-t px-3 py-2 text-right text-[13px] tabular-nums" style={{ borderColor: "#EDF2EF" }} data-testid="fg-base">
-                        {r.kind === "slot" ? <span style={{ color: "#C3CEC8" }}>{"\u2014"}</span> : fmtUnit(base, unit)}</td>
-                    )}
-                    <td className="border-t px-3 py-2 text-right text-[13px] tabular-nums" style={{ borderColor: "#EDF2EF", color: baseIsLive ? undefined : "#5C6F66" }} data-testid="fg-actual">
-                      {noCompletedDay ? <span style={{ color: "#C3CEC8" }}>{"\u2014"}</span> : fmtUnit(liveV, unit)}</td>
-                    {/* THE SAME FOUR CELLS THE CITY DRAWER RENDERS. One component, so a field is
-                        editable identically in both grains. */}
-                    <GoalCells r={r} year={year} baseIdx={baseIdx} unit={unit} busy={busy} revert={revert}
-                      noCompletedDay={noBase} onTarget={onTarget} />
-                    <td className="border-t px-3 py-2 text-[11px]" style={{ borderColor: "#EDF2EF" }} data-testid="fg-action-count">
-                      {r.actions.length
-                        ? <span className="rounded-full px-2 py-0.5 font-bold" style={{ background: "#EEF3F0", color: "#5C6F66" }}>{openN} open</span>
-                        : <span style={{ color: "#9AA8A1" }}>—</span>}
-                    </td>
-                  </tr>
-                  {/* IN PLACE, NOT INSTEAD OF THE PAGE. The table is fine; one control was refused. */}
-                  {writeErr?.key === r.key && (
-                    <tr data-testid="fg-write-error" data-key={r.key}>
-                      <td colSpan={8 + (baseIsLive ? 0 : 1)} className="px-3 pb-2 text-[12px]" style={{ color: "#A8341F", background: "#FDF3EF" }}>
-                        {writeErr.message}
-                      </td>
-                    </tr>
-                  )}
-                  {open === r.key && (
-                    <tr data-testid="fg-actions-row"><td colSpan={8 + (baseIsLive ? 0 : 1)} className="px-3 pb-3" style={{ background: "#FAFCFB" }}>
-                      <ActionsDrawer r={r} busy={busy} draft={draft} setDraft={setDraft}
-                        onAddAction={onAddAction} onToggleAction={onToggleAction}
-                        onRemoveAction={onRemoveAction} onNotCounted={onNotCounted} />
-                    </td></tr>
-                  )}
-                </Fragmentish>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-      {writeErr?.key === testId && (
-        <p data-testid="fg-write-error" data-key={testId} className="mt-1.5 rounded-md px-2.5 py-1.5 text-[12px]"
-          style={{ color: "#A8341F", background: "#FDF3EF" }}>{writeErr.message}</p>
-      )}
-      {/* ONE LINE, FOLDED AWAY AND NOT DELETED: the rows are one press from view and their goals and
-          actions survive. They still count in every total and in the year chart — dormancy is about
-          the table's length, not the arithmetic. */}
-      {setShowDormant && dormant.length > 0 && (
-        <button type="button" data-testid="fg-dormant-toggle" data-count={dormant.length}
-          onClick={() => setShowDormant(!showDormant)}
-          className="mt-1.5 text-[11.5px] font-semibold underline underline-offset-2"
-          style={{ color: "#5C6F66" }}>
-          {showDormant ? "Hide" : "Show"} {dormant.length} dormant — no match {baseIsLive ? `this ${MONTH_LABELS[cur]}` : `in ${MONTH_LABELS[baseIdx]} or ${MONTH_LABELS[cur]} so far`}
-        </button>
+      <tr data-testid="fg-newrow" data-f={r.name} style={out ? { opacity: 0.55 } : undefined}>
+        <td className="sticky left-0 z-[1] border-t py-2 pl-9 pr-3 text-[12.5px]" style={{ ...st, color: "#003326" }}>
+          {r.name}
+          <span className="ml-1.5 rounded-full px-1.5 py-0.5 text-[9.5px] font-extrabold tracking-wide" style={{ background: "#E3F5EA", color: "#12694A" }}>NEW</span>
+          {out && <span className="ml-1.5 rounded px-1.5 py-0.5 text-[10px] font-bold" style={{ background: "#EEF3F0", color: "#5C6F66" }}>not counted</span>}
+        </td>
+        {Array.from({ length: lead }, (_, i) => (
+          <td key={i} className="border-t px-3 py-2 text-right text-[12px]" style={st}>{i === 0 ? null : dash}</td>
+        ))}
+        <td data-m="dec" className="border-t px-3 py-1.5 text-right" style={st}>
+          <GoalInput value={dec == null ? "" : fmtUnit(dec, unit)} suggested={false} placeholder="Set" amberEmpty
+            revert={revert} testId="fg-goal-Dec" disabled={busy} title="December goal for this field"
+            onCommit={(v) => onTarget(r, decKey, v == null ? null : unit === "day" ? v : v / 7)} />
+        </td>
+        {showHistory && <td className="border-t px-3 py-2 text-right" style={st}>{dash}</td>}
+        <td className="border-t px-3 py-2 text-right text-[13px] font-extrabold tabular-nums" style={st} data-testid="fg-gap-cell">
+          {dec == null ? dash : <span style={{ color: "#A8341F" }}>{fmtShownSigned(shownGap(dailyIn(dec, unit), 0, unit) as number, unit)}</span>}
+        </td>
+        <td className="whitespace-nowrap border-t px-3 py-2 text-right text-[11.5px]" style={st}>
+          {r.kanbanCardId
+            ? <a href={`/growth/field-pipeline?card=${r.kanbanCardId}`} data-testid="fg-pipeline" title={card?.title ?? "Field Pipeline card"}
+                className="font-bold" style={{ color: "#12694A" }}>Pipeline →</a>
+            /* NO CARD LINKED YET: a picker, because nothing links a new field to a card otherwise and
+               guessing one from the name would link the wrong card. */
+            : <select data-testid="fg-link-card" disabled={busy || cards.length === 0} value=""
+                onChange={(e) => { if (e.target.value) onLinkCard(r, e.target.value); }}
+                className="max-w-[120px] rounded-md border bg-white px-1 py-0.5 text-[11px]" style={{ borderColor: "#D3DCD8", color: "#5C6F66" }}>
+                <option value="">Link card…</option>
+                {cards.map((c) => <option key={c.id} value={c.id}>{c.title}</option>)}
+              </select>}
+        </td>
+        <td className="border-t px-2 py-2 text-center" style={st}>
+          {/* TWO PRESSES, because this deletes the field and every goal typed against it. */}
+          <button type="button" data-testid="fg-remove-new" disabled={busy}
+            aria-label={confirm ? `Confirm removing ${r.name}` : `Remove ${r.name}`}
+            onClick={() => { if (confirm) { setConfirm(false); onRemove(r); } else setConfirm(true); }}
+            onBlur={() => setConfirm(false)}
+            className="rounded px-1 text-[12px] font-bold" style={{ color: confirm ? "#C0392B" : "#9AA8A1" }}>
+            {confirm ? "Remove?" : "×"}
+          </button>
+        </td>
+      </tr>
+      {writeErr?.key === r.key && (
+        <tr data-testid="fg-write-error"><td colSpan={span} className="px-3 pb-2 pl-9 text-[12px]" style={{ color: "#A8341F", background: "#FDF3EF" }}>{writeErr.message}</td></tr>
       )}
     </>
   );
 }
 
+/* THE PART OF THE CITY'S GOAL NO FIELD CARRIES — or, negative, how far the fields run past it. */
+function UnassignedTr({ amount, fieldsDec, cityDec, lead, showHistory, unit }: {
+  amount: number; fieldsDec: number; cityDec: number; lead: number; showHistory: boolean; unit: "day" | "week";
+}) {
+  const over = amount < 0;
+  const st = { borderColor: "#EDF2EF", background: over ? "#FDF3EF" : "#FFFBF0" };
+  return (
+    <tr data-testid="fg-unassigned" data-over={over ? "1" : "0"}>
+      <td className="sticky left-0 z-[1] border-t py-2 pl-9 pr-3 text-[12.5px] italic" style={{ ...st, color: over ? "#A8341F" : "#8A5A12" }}>
+        {over ? "Over the city goal" : "Unassigned"}
+      </td>
+      {Array.from({ length: lead }, (_, i) => <td key={i} className="border-t" style={st} />)}
+      <td className="border-t px-3 py-2 text-right text-[13px] font-bold tabular-nums" style={{ ...st, color: over ? "#A8341F" : "#8A5A12" }} data-testid="fg-unassigned-v">
+        {over ? fmtShownSigned(dailyIn(amount, unit), unit) : fmtUnit(amount, unit)}
+      </td>
+      {showHistory && <td className="border-t" style={st} />}
+      <td className="border-t" style={st} />
+      <td colSpan={2} className="border-t px-3 py-2 text-right text-[11px]" style={{ ...st, color: over ? "#A8341F" : "#8A5A12" }}>
+        {over
+          ? `Fields add up to ${fmtUnit(fieldsDec, unit)}, over the ${fmtUnit(cityDec, unit)} city goal`
+          : `Fields add up to ${fmtUnit(fieldsDec, unit)} of ${fmtUnit(cityDec, unit)}`}
+      </td>
+    </tr>
+  );
+}
+
+function AddFieldTr({ city, span, busy, adding, setAdding, onAdd, err }: {
+  city: City; span: number; busy: boolean; adding: boolean; setAdding: (v: boolean) => void;
+  onAdd: (c: City, name: string) => Promise<boolean>; err: string | null;
+}) {
+  const [name, setName] = useState("");
+  const submit = async () => { if (await onAdd(city, name)) { setName(""); setAdding(false); } };
+  return (
+    <tr data-testid="fg-addfield-row">
+      <td colSpan={span} className="border-t py-2.5 pl-9" style={{ borderColor: "#EDF2EF", background: "#fff" }}>
+        {adding ? (
+          <span className="flex flex-wrap items-center gap-2">
+            <input autoFocus data-testid="fg-addfield-name" value={name} disabled={busy} placeholder="Field name"
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") void submit(); if (e.key === "Escape") setAdding(false); }}
+              className="w-56 rounded-md border px-2 py-1 text-[12.5px]" style={{ borderColor: "#D3DCD8" }} />
+            <button type="button" data-testid="fg-addfield-save" disabled={busy || !name.trim()} onClick={() => void submit()}
+              className="rounded-md px-3 py-1 text-[12px] font-bold text-white" style={{ background: "#003326", opacity: name.trim() ? 1 : 0.5 }}>Add</button>
+            <button type="button" onClick={() => { setName(""); setAdding(false); }} className="px-2 text-[12px] font-bold" style={{ color: "#5C6F66" }}>Cancel</button>
+            {err && <span className="text-[12px]" style={{ color: "#A8341F" }}>{err}</span>}
+          </span>
+        ) : (
+          <button type="button" data-testid="fg-addfield" disabled={busy} onClick={() => setAdding(true)}
+            className="rounded-lg border border-dashed px-3 py-1.5 text-[12px] font-bold" style={{ borderColor: "#12694A", color: "#12694A" }}>
+            + Add field to {city.name}
+          </button>
+        )}
+      </td>
+    </tr>
+  );
+}
+
+function CityMenu({ open, setOpen, busy, onGoal, onAddField, onRename, onRemove }: {
+  open: boolean; setOpen: (v: boolean) => void; busy: boolean;
+  onGoal: () => void; onAddField: () => void; onRename: () => void; onRemove: () => void;
+}) {
+  const item = (label: string, fn: () => void, danger = false, testId = "") => (
+    <button type="button" data-testid={testId} disabled={busy} onClick={() => { setOpen(false); fn(); }}
+      className="block w-full px-4 py-2 text-left text-[12.5px] font-semibold hover:bg-[#F2F4F3]" style={{ color: danger ? "#C0392B" : "#003326" }}>
+      {label}
+    </button>
+  );
+  return (
+    <span className="relative inline-block">
+      <button type="button" data-testid="fg-city-menu" aria-label="City menu" aria-expanded={open} onClick={() => setOpen(!open)}
+        className="rounded px-1.5 text-[14px] font-black leading-none" style={{ color: "#9AA8A1" }}>•••</button>
+      {open && (
+        <span className="absolute right-0 top-full z-20 mt-1 block w-48 rounded-xl border bg-white py-1 text-left shadow-lg" style={{ borderColor: "#D3DCD8" }}>
+          {item("Edit December goal", onGoal, false, "fg-menu-goal")}
+          {item("Add field", onAddField, false, "fg-menu-addfield")}
+          {item("Rename city", onRename, false, "fg-menu-rename")}
+          {item("Remove city", onRemove, true, "fg-menu-remove")}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/* ── THE CITY DIALOGS ─────────────────────────────────────────────────────────────────────────
+ * Add, edit goal, rename, and remove — which becomes HIDE for a city whose fields have recorded
+ * matches, and says so, because deleting it would orphan history. */
+function CityDialog({ d, busy, err, totalDec, onClose, onAdd, onGoal, onRename, onRemove }: {
+  d: DialogState; busy: boolean; err: string | null; totalDec: number; onClose: () => void;
+  onAdd: (name: string, code: string, goal: number) => Promise<boolean>;
+  onGoal: (c: City, goal: number) => Promise<boolean>;
+  onRename: (c: City, name: string) => Promise<boolean>;
+  onRemove: (c: City) => Promise<boolean>;
+}) {
+  const [name, setName] = useState(d.kind === "rename" ? d.city.name : "");
+  const [code, setCode] = useState("");
+  const [goal, setGoal] = useState(d.kind === "goal" ? String(d.city.decGoal) : "");
+  const goalN = Number(goal);
+  const goalOk = goal.trim() !== "" && Number.isFinite(goalN) && goalN >= 0;
+  const codeOk = /^[A-Za-z]{2,5}$/.test(code.trim());
+  const label = "text-[10.5px] font-extrabold uppercase tracking-widest";
+  const input = "w-full rounded-xl border px-3 py-2.5 text-[14px]";
+  const btn = "rounded-xl px-4 py-2.5 text-[13px] font-bold";
+  const r1 = (v: number) => roundTo(v, 1).toFixed(1);
+  let title = "", body: ReactNode = null, action: ReactNode = null;
+  if (d.kind === "add") {
+    title = "Add a city";
+    body = (<>
+      <p className="mb-4 text-[12.5px]" style={{ color: "#6B7C73" }}>It shows up in the chart and table right away.</p>
+      <div className="mb-4 flex gap-3">
+        <label className="flex-1"><span className={label} style={{ color: "#5C6F66" }}>City name</span>
+          <input autoFocus data-testid="fg-dlg-name" className={`mt-1.5 ${input}`} style={{ borderColor: "#D3DCD8" }} value={name} onChange={(e) => setName(e.target.value)} /></label>
+        <label className="w-[110px]"><span className={label} style={{ color: "#5C6F66" }}>Short code</span>
+          <input data-testid="fg-dlg-code" className={`mt-1.5 ${input} uppercase`} style={{ borderColor: "#D3DCD8" }} maxLength={5} value={code} onChange={(e) => setCode(e.target.value.toUpperCase())} /></label>
+      </div>
+      <label className="block"><span className={label} style={{ color: "#5C6F66" }}>December goal (matches a day)</span>
+        <input data-testid="fg-dlg-goal" inputMode="decimal" placeholder="e.g. 1.0" className={`mt-1.5 ${input}`} style={{ borderColor: "#D3DCD8" }} value={goal} onChange={(e) => setGoal(e.target.value)} /></label>
+      <p className="mt-3 text-[12px]" style={{ color: "#6B7C73" }}>
+        The short code is the city&apos;s MatchDay code (ATX, DFW…); its fields join it by that code. You can add fields to it from the table after it is created.
+      </p>
+    </>);
+    action = <button type="button" data-testid="fg-dlg-ok" disabled={busy || !name.trim() || !codeOk || !goalOk}
+      onClick={() => void onAdd(name, code, goalN)} className={`${btn} text-white`} style={{ background: "#003326", opacity: name.trim() && codeOk && goalOk ? 1 : 0.5 }}>Add city</button>;
+  } else if (d.kind === "goal") {
+    title = `${d.city.name} December goal`;
+    body = (<label className="block"><span className={label} style={{ color: "#5C6F66" }}>Matches a day</span>
+      <input autoFocus data-testid="fg-dlg-goal" inputMode="decimal" className={`mt-1.5 ${input}`} style={{ borderColor: "#D3DCD8" }} value={goal} onChange={(e) => setGoal(e.target.value)}
+        onKeyDown={(e) => { if (e.key === "Enter" && goalOk) void onGoal(d.city, goalN); }} />
+      <p className="mt-3 text-[12px]" style={{ color: "#6B7C73" }}>The December total goes from {r1(totalDec)} to {goalOk ? r1(totalDec - d.city.decGoal + goalN) : "—"}.</p></label>);
+    action = <button type="button" data-testid="fg-dlg-ok" disabled={busy || !goalOk} onClick={() => void onGoal(d.city, goalN)}
+      className={`${btn} text-white`} style={{ background: "#003326", opacity: goalOk ? 1 : 0.5 }}>Save goal</button>;
+  } else if (d.kind === "rename") {
+    title = `Rename ${d.city.name}`;
+    body = (<label className="block"><span className={label} style={{ color: "#5C6F66" }}>City name</span>
+      <input autoFocus data-testid="fg-dlg-name" className={`mt-1.5 ${input}`} style={{ borderColor: "#D3DCD8" }} value={name} onChange={(e) => setName(e.target.value)}
+        onKeyDown={(e) => { if (e.key === "Enter" && name.trim()) void onRename(d.city, name); }} /></label>);
+    action = <button type="button" data-testid="fg-dlg-ok" disabled={busy || !name.trim() || name.trim() === d.city.name} onClick={() => void onRename(d.city, name)}
+      className={`${btn} text-white`} style={{ background: "#003326" }}>Rename</button>;
+  } else {
+    const c = d.city;
+    if (c.hasMatches) {
+      title = `Hide ${c.name}?`;
+      body = <p className="text-[13px]" style={{ color: "#6B7C73" }}>{c.name} has fields with recorded matches, so it is hidden from this page instead of deleted. History stays intact, and you can bring it back from &ldquo;hidden&rdquo; beside the Cities heading. The December total drops from {r1(totalDec)} to {r1(totalDec - c.decGoal)} while it is hidden.</p>;
+      action = <button type="button" data-testid="fg-dlg-ok" disabled={busy} onClick={() => void onRemove(c)} className={`${btn} text-white`} style={{ background: "#D9483B" }}>Hide city</button>;
+    } else {
+      title = `Remove ${c.name}?`;
+      body = <p className="text-[13px]" style={{ color: "#6B7C73" }}>
+        {d.newFields > 0 ? `Its ${d.newFields} new ${d.newFields === 1 ? "field" : "fields"} and its` : "Its"} {r1(c.decGoal)} a day December goal come off the page. The December total drops from {r1(totalDec)} to {r1(totalDec - c.decGoal)}.
+      </p>;
+      action = <button type="button" data-testid="fg-dlg-ok" disabled={busy} onClick={() => void onRemove(c)} className={`${btn} text-white`} style={{ background: "#D9483B" }}>Remove city</button>;
+    }
+  }
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center px-4" style={{ background: "rgba(0,26,19,0.35)" }} onClick={onClose}>
+      <div role="dialog" aria-modal="true" aria-label={title} data-testid="fg-dialog" onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => { if (e.key === "Escape") onClose(); }}
+        className="w-full max-w-[420px] rounded-2xl bg-white p-6 shadow-xl">
+        <h3 className="mb-1 text-[19px] font-black" style={{ color: "#003326" }}>{title}</h3>
+        {body}
+        {err && <p className="mt-3 text-[12.5px]" style={{ color: "#A8341F" }} data-testid="fg-dlg-err">{err}</p>}
+        <div className="mt-5 flex justify-end gap-2">
+          <button type="button" onClick={onClose} className={`${btn} border`} style={{ borderColor: "#D3DCD8", color: "#003326" }}>Cancel</button>
+          {action}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* A SUGGESTED GOAL IS NOT A SET ONE, and it says so by being grey and italic. Typing over it stores
  * a number and it stops being a suggestion; clearing it hands the cell back to the ramp. */
-export function GoalInput({ value, suggested, onCommit, testId, disabled, title, placeholder, revert, widthClass = "w-14" }: {
+export function GoalInput({ value, suggested, onCommit, testId, disabled, title, placeholder, revert, widthClass = "w-14", amberEmpty = false }: {
   value: string; suggested: boolean; onCommit: (v: number | null) => void;
   testId: string; disabled: boolean; title: string; placeholder?: string; revert: number;
   /** The 2027 plan edits monthly spots, which need more room than a one-decimal daily figure. */
   widthClass?: string;
+  /** An empty goal reads as an amber "Set" box rather than a quiet dash (new fields, 2026-11-04). */
+  amberEmpty?: boolean;
 }) {
   const [local, setLocal] = useState(value);
   // `revert` is in the deps on purpose: a refused write bumps it, and the cell goes back to the
@@ -1519,8 +1589,9 @@ export function GoalInput({ value, suggested, onCommit, testId, disabled, title,
         if (local !== value) onCommit(n);
       }}
       onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
-      className={`${widthClass} rounded-md border border-transparent px-1.5 py-0.5 text-right text-[13px] tabular-nums hover:border-[#D3DCD8] hover:bg-white focus:border-[#2CDB87] focus:bg-white focus:outline-none ${suggested ? "italic" : "font-semibold"}`}
-      style={{ color: suggested ? "#9AA8A1" : "#003326" }}
+      className={`${amberEmpty ? "w-16 border-[1.5px] placeholder:text-center placeholder:font-semibold placeholder:text-[#D08A1E]" : `${widthClass} border border-transparent hover:border-[#D3DCD8]`} rounded-md px-1.5 py-0.5 text-right text-[13px] tabular-nums hover:bg-white focus:border-[#2CDB87] focus:bg-white focus:outline-none ${suggested ? "italic" : "font-semibold"}`}
+      style={{ color: suggested ? "#9AA8A1" : "#003326",
+               ...(amberEmpty ? { borderColor: local.trim() === "" ? "#E8A33F" : "#D3DCD8", background: local.trim() === "" ? "#FFFBF0" : "#fff" } : {}) }}
     />
   );
 }

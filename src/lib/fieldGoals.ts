@@ -461,7 +461,13 @@ export type CityFieldRow = {
   gapSort: number | null;
   /** The three months before the live one, oldest first. A null is "not yet a pitch", never 0.0. */
   hist: (number | null)[];
+  /** Listed but adding nothing (field_goal_rows.not_counted). Only present with `opts.cities`. */
+  notCounted?: boolean;
 };
+
+/** A city as the page stores it (growth_cities, 0253). Passing these to cityRollup makes the stored
+ *  goal the city's December — see cityRollup's `opts`. */
+export type StoredCity = { id: string; name: string; decGoal: number };
 
 export type CityRow = {
   city: string; hasCity: boolean;
@@ -479,6 +485,9 @@ export type CityRow = {
   trend: number | null;
   /** No activity in any history month — a market that did not exist yet, not one at zero. */
   isNew: boolean;
+  /** With `opts.cities` only: the stored city's id, the sum of its counted fields' December goals,
+   *  and `dec - fieldsDec` — positive is goal not yet given to a field, negative is fields over it. */
+  cityId?: string; fieldsDec?: number; unassigned?: number;
 };
 
 /** What cityRollup needs off a page row. Narrow on purpose, so the maths is exercisable. */
@@ -526,10 +535,22 @@ export function cityRollup(
   baseline: number = currentMonth,
   /** The unit on screen. Only the gap SORT reads it; every stored figure stays daily. */
   unit: "day" | "week" = "day",
+  /* ── STORED CITIES (2026-11-04, growth_cities) ───────────────────────────────────────────────
+   * Ryan: the city's December goal is a STORED number; the fields are a breakdown of it that need
+   * not add up. With `cities` passed: every listed city is a row even with no fields yet (a city
+   * just added); its `dec` — and so its gap, the footer, the tiles and the chart — is the stored
+   * goal; `fieldsDec` and `unassigned` say how much of it the fields account for. A not-counted
+   * field is LISTED in its city with `notCounted`, and adds to nothing. Without `cities` this is
+   * the rollup exactly as before. */
+  opts: { cities?: StoredCity[] } = {},
 ): CityRow[] {
   const decKey = monthKey(year, DEC_INDEX);
   const byCity = new Map<string, CityRow>();
   const HIST = historyIndexes(currentMonth);
+  const stored = opts.cities;
+  const blank = (label: string): CityRow => ({ city: label, hasCity: label !== NO_CITY, live: 0, base: 0, oct: 0, nov: 0, dec: 0,
+    gapDaily: 0, gapSort: 0, existing: 0, slots: 0, noGoal: 0, fields: [], hist: HIST.map(() => null), trend: null, isNew: false });
+  if (stored) for (const s of stored) byCity.set(s.name, { ...blank(s.name), cityId: s.id });
 
   /* ── A MONTH BEFORE A PITCH EXISTED IS A DASH, NOT A ZERO ────────────────────────────────────
    * THIS IS THE RULE THAT WOULD OTHERWISE SHIP WRONG. A 0.0 sitting in June beside a December
@@ -548,12 +569,15 @@ export function cityRollup(
   };
 
   for (const r of rows) {
-    if (!rowCountsTowardTotals(r)) continue;
+    const counted = rowCountsTowardTotals(r);
+    if (!counted && !stored) continue;
     const label = r.city != null && r.city.trim() !== "" ? r.city.trim() : NO_CITY;
+    /* WITH STORED CITIES, A ROW WHOSE CITY IS NOT ONE OF THEM IS NOT ON THE PAGE — the route
+     * already drops those; this is the same rule held at the arithmetic. */
+    if (stored && !byCity.has(label)) continue;
     let c = byCity.get(label);
     if (!c) {
-      c = { city: label, hasCity: label !== NO_CITY, live: 0, base: 0, oct: 0, nov: 0, dec: 0, gapDaily: 0, gapSort: 0,
-            existing: 0, slots: 0, noGoal: 0, fields: [], hist: HIST.map(() => null), trend: null, isNew: false };
+      c = blank(label);
       byCity.set(label, c);
     }
 
@@ -568,13 +592,15 @@ export function cityRollup(
       r.targets[monthKey(year, RAMP_INDEXES[i])] ?? suggested[i] ?? null;
     const oct = monthAt(0), nov = monthAt(1);
 
-    c.live += live;
-    c.base += base;
-    c.dec += dec ?? 0;
-    c.oct += oct ?? 0;
-    c.nov += nov ?? 0;
-    if (r.kind === "slot") c.slots += 1; else c.existing += 1;
-    if (dec == null) c.noGoal += 1;
+    if (counted) {
+      c.live += live;
+      c.base += base;
+      c.dec += dec ?? 0;
+      c.oct += oct ?? 0;
+      c.nov += nov ?? 0;
+      if (r.kind === "slot") c.slots += 1; else c.existing += 1;
+      if (dec == null) c.noGoal += 1;
+    }
 
     const fa = r.kind === "slot" ? Number.POSITIVE_INFINITY : firstActive(r);
     const fHist = HIST.map((i) => (i < fa ? null : r.monthly[i]?.daily ?? 0));
@@ -588,6 +614,7 @@ export function cityRollup(
       oct, nov, dec,
       gapDaily: shownGap(dec, base, "day"),
       gapSort: dec == null ? null : shownGap(dailyIn(dec, unit), dailyIn(base, unit), unit),
+      ...(stored ? { notCounted: !counted } : {}),
     });
   }
 
@@ -619,7 +646,12 @@ export function cityRollup(
   const sumRounded = (xs: (number | null)[]): number =>
     roundTo(xs.reduce<number>((a, v) => a + roundTo(v ?? 0, 1), 0), 1);
 
+  const storedById = new Map((stored ?? []).map((s) => [s.name, s]));
   for (const c of byCity.values()) {
+    /* A NOT-COUNTED FIELD IS LISTED AND ADDS NOTHING: every sum below reads `all`, the counted
+     * ones; `c.fields` keeps both for the drawer. */
+    const listed = c.fields;
+    c.fields = listed.filter((f) => !f.notCounted);
     /* ── THE CITY'S HISTORY, UNDER THE SAME TWO RULES AS THE REST OF THE COLUMN ───────────────
      * SUMMED FROM THE FIELD VALUES AS DISPLAYED, so a history column foots to its drawer exactly
      * as September and December do. And a month where EVERY pitch dashes dashes at city level too
@@ -646,11 +678,19 @@ export function cityRollup(
     c.oct = sumRounded(c.fields.map((f) => f.oct));
     c.nov = sumRounded(c.fields.map((f) => f.nov));
     c.dec = sumRounded(c.fields.map((f) => f.dec));
+    /* THE STORED GOAL IS THE CITY'S DECEMBER. The fields' own sum is kept beside it, and the
+     * difference is what the drawer prints as "Unassigned". */
+    const s = storedById.get(c.city);
+    if (s) {
+      c.fieldsDec = c.dec;
+      c.dec = roundTo(s.decGoal, 2);
+      c.unassigned = roundTo(c.dec - c.fieldsDec, 1);
+    }
     /* THE CITY'S GAP IS ITS OWN DISPLAYED DECEMBER MINUS ITS OWN DISPLAYED BASELINE — not the sum
      * of its fields' gaps, which is how OKC printed +0.4 under 0.7 and 1.0. */
     c.gapDaily = shownGap(c.dec, c.base, "day") as number;
     c.gapSort = shownGap(dailyIn(c.dec, unit), dailyIn(c.base, unit), unit) as number;
-    c.fields = sortGoalRows(c.fields.map((f) => ({ ...f, city: c.city })), sort);
+    c.fields = sortGoalRows((stored ? listed : c.fields).map((f) => ({ ...f, city: c.city })), sort);
   }
 
   /* NO CITY SET GOES LAST UNDER EVERY ORDER, the same treatment a row with no goal already gets:

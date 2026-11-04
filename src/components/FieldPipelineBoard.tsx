@@ -203,6 +203,17 @@ export default function FieldPipelineBoard() {
     setCollapsedStored(readLS(COLLAPSE_KEY));
     setShutGroups(readLS(GROUPS_KEY));
   }, []);
+  /* ?card=<id> OPENS THAT CARD — the "Pipeline →" link on a 2026 Daily Matches new field lands here.
+   * Once, after the cards load; an unknown id opens nothing. */
+  const deepLinked = useRef(false);
+  useEffect(() => {
+    if (deepLinked.current || loading) return;
+    const id = new URLSearchParams(window.location.search).get("card");
+    if (!id) { deepLinked.current = true; return; }
+    const c = cards.find((x) => x.id === id);
+    deepLinked.current = true;
+    if (c) setModal({ mode: "edit", card: c });
+  }, [cards, loading]);
 
   // Drag-and-drop (native HTML5, same interaction model as the shared
   // KanbanBoard — no drag library). A drop changes ONLY the card's stage; city,

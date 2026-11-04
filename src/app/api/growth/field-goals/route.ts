@@ -74,6 +74,23 @@ export async function GET(req: Request) {
       auth.supabase.from("field_goal_actions").select("id, row_id, text, done, sort_order").order("sort_order"),
     ]);
     if (rowsErr) throw new Error(`field_goal_rows: ${rowsErr.message}`);
+
+    /* ── THE CITIES ARE A LIST NOW (0253 growth_cities), not whatever label a field carries ──────
+     * An existing field lands in the city whose short_code is its MatchDay city code; a new field
+     * points at its city by id. A row with no city row is NOT on this page, and that is the
+     * mechanism, not a side effect: it is how WAW stays off whatever a sync or a new field brings.
+     * WAW is also refused by name below, so even a growth_cities row for it could not bring it back.
+     * (Warsaw is untouched everywhere else in Clubhouse — this filter lives in this route only.) */
+    const { data: cityRows, error: cityErr } = await auth.supabase.from("growth_cities").select("*").order("sort_order");
+    if (cityErr) throw new Error(`growth_cities: ${cityErr.message}`);
+    const EXCLUDED_CODES = new Set(["WAW"]);
+    type City = { id: string; name: string; shortCode: string | null; decGoal: number; hidden: boolean; sortOrder: number };
+    const cityList: City[] = (cityRows ?? [])
+      .filter((c) => !EXCLUDED_CODES.has(String(c.short_code ?? "").toUpperCase()) && !/^(waw|warsaw)$/i.test(String(c.name ?? "").trim()))
+      .map((c) => ({ id: c.id as string, name: String(c.name).trim(), shortCode: (c.short_code as string | null) ?? null,
+        decGoal: Number(c.dec_goal_daily ?? 0), hidden: c.hidden === true, sortOrder: Number(c.sort_order ?? 0) }));
+    const cityByCode = new Map(cityList.filter((c) => c.shortCode).map((c) => [String(c.shortCode).toUpperCase(), c]));
+    const cityById = new Map(cityList.map((c) => [c.id, c]));
     /* THE 2027 PLAN SHARES THESE TABLES (0199). Its rows and its spot estimates are filtered here,
      * once, before anything below reads them — see rowBelongsToGoalYear. */
     const goalRows = (allGoalRows ?? []).filter((r) => rowBelongsToGoalYear(r as Record<string, unknown>, year));
@@ -100,31 +117,48 @@ export async function GET(req: Request) {
         .map((a) => ({ id: a.id as string, text: a.text as string, done: a.done === true, sortOrder: Number(a.sort_order) }));
 
     // ── the computed rows, one per venue (or unmapped field) with a 2026 match ──────────────────
-    const computed = [...acc.values()].map((a) => {
+    const computed = [...acc.values()].flatMap((a) => {
+      const code = String(a.cityCode ?? "").toUpperCase();
+      const home = EXCLUDED_CODES.has(code) ? undefined : cityByCode.get(code);
+      if (!home) return [];
       const stored = storedByKey.get(a.key);
       const monthly = a.spots.map((spots, i) => {
         const { days, of, partial } = daysElapsed(i, year, now);
         return { month: monthKey(year, i), label: MONTH_LABELS[i], spots, matches: a.perMonth[i], days, daysInMonth: of, partial, daily: dailyAverage(spots, days) };
       });
-      return {
+      return [{
         key: a.key, rowId: stored?.id ?? null, kind: "existing" as const,
-        name: a.name, city: a.city, venueId: a.venueId, fieldId: a.fieldId,
+        name: a.name, city: home.name, cityId: home.id, cityCode: code, cityHidden: home.hidden,
+        venueId: a.venueId, fieldId: a.fieldId,
         notCounted: stored?.notCounted === true,
         matches: a.matches, monthly,
         targets: monthsOf(stored?.id ?? null),
         actions: actionsOf(stored?.id ?? null),
-      };
+      }];
     }).sort((x, y) => x.name.localeCompare(y.name));
 
-    /* ── THE CITY BOUNDARY ── applied before anything below sums a row. */
+    /* ── THE CITY BOUNDARY ── applied before anything below sums a row. By the city's SHORT CODE
+     * (cityIdentifierForLabel accepts an identifier), so renaming a city cannot move it out of a
+     * confined account's scope. A city with no code falls back to its name. */
     const scope = auth.confinedCity;
-    const inScope = (city: string | null) => !scope || cityIdentifierForLabel(city) === scope;
-    const rows = computed.filter((r) => inScope(r.city));
+    const inScope = (c: { shortCode: string | null; name: string } | undefined) =>
+      !!c && (!scope || cityIdentifierForLabel(c.shortCode ?? c.name) === scope);
+    /* A HIDDEN CITY IS OFF THE PAGE — its rows leave the table, the chart and every total — but
+     * nothing is deleted, and the city itself is still returned (hiddenCities) so it can be shown again. */
+    const rows = computed.filter((r) => inScope(cityById.get(r.cityId)) && !r.cityHidden);
 
     // ── the slots: typed rows for fields that do not exist yet ─────────────────────────────────
-    const allSlots = (goalRows ?? []).filter((r) => r.slot_name != null && String(r.slot_name).trim() !== "").map((r) => ({
+    /* A NEW FIELD BELONGS TO A CITY BY ID (growth_city_id). One with no city is not on this page —
+     * since 0253 the page cannot create one, and the last five were deleted with it. */
+    const allSlots = (goalRows ?? []).filter((r) => r.slot_name != null && String(r.slot_name).trim() !== ""
+        && (r as Record<string, unknown>).growth_city_id != null && cityById.has(String((r as Record<string, unknown>).growth_city_id)))
+      .map((r) => {
+      const home = cityById.get(String((r as Record<string, unknown>).growth_city_id))!;
+      return {
       key: `s${r.id}`, rowId: r.id as string, kind: "slot" as const,
-      name: r.slot_name as string, city: (r.city as string | null) ?? null, venueId: null, fieldId: null,
+      name: r.slot_name as string, city: home.name, cityId: home.id, cityCode: home.shortCode, cityHidden: home.hidden,
+      kanbanCardId: ((r as Record<string, unknown>).kanban_card_id as string | null) ?? null,
+      venueId: null, fieldId: null,
       notCounted: (r as Record<string, unknown>).not_counted === true,
       matches: 0,
       monthly: MONTH_LABELS.map((label, i) => {
@@ -134,8 +168,16 @@ export async function GET(req: Request) {
       targets: monthsOf(r.id as string),
       actions: actionsOf(r.id as string),
       sortOrder: Number(r.sort_order),
-    })).sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name));
-    const slots = allSlots.filter((r) => inScope(r.city));
+    }; }).sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name));
+    const slots = allSlots.filter((r) => inScope(cityById.get(r.cityId)) && !r.cityHidden);
+
+    /* THE CITIES THIS ACCOUNT SEES, with what the remove/hide decision needs: a city whose fields
+     * have recorded matches can only be HIDDEN; one with none can be removed. Every existing row
+     * comes from a counted 2026 match, so "has an existing row" is "has recorded matches". */
+    const withMatches = new Set(computed.filter((r) => r.matches > 0).map((r) => r.cityId));
+    const shape = (c: City) => ({ ...c, hasMatches: withMatches.has(c.id) });
+    const cities = cityList.filter((c) => inScope(c) && !c.hidden).map(shape);
+    const hiddenCities = cityList.filter((c) => inScope(c) && c.hidden).map(shape);
 
     /* THE YEAR'S TWELVE BUCKETS, off the SAME matches the rows came from — so the chart and the
      * table cannot disagree. Recorded months are computed; October to December have no elapsed days
@@ -167,6 +209,8 @@ export async function GET(req: Request) {
       months,
       rows,
       slots,
+      cities,
+      hiddenCities,
       scopeCity: scope,
       counts: { matches: scope ? rows.reduce((n, r) => n + r.matches, 0) : rollup.matchCount, rows: rows.length, unmappedFields: rows.filter((r) => r.fieldId != null).length },
     }, { headers: { "Cache-Control": "no-store" } });
