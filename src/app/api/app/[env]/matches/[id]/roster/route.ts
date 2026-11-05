@@ -8,11 +8,14 @@
 //   move     POST /api/matchday/{env}/roster/{id}            { kind: "move" }   one per player
 //   add      POST /api/matchday/{env}/roster/{id}            { kind: "add" }
 //   remove   POST /api/matchday/{env}/roster/{id}            { kind: "remove" }
-//   teams    2 -> 4        POST /api/matchday/{env}/matches/{id}/convert-4
-//            3 or 4 -> 2   POST /api/matchday/{env}/matches/{id}/reduce-2
+//   teams    2 -> 4        POST /api/matchday/{env}/matches/{id}/convert-4?perTeam=N  (fakes off first,
+//                          the shape, the deal, then the fakes for the spots left, all inside it)
+//            3 or 4 -> 2   POST /api/matchday/{env}/matches/{id}/reduce-2?perTeam=N, then the fakes
 //            otherwise     POST roster { kind: "shape", fields: { teamNumbers } }, then
-//                          PUT  /api/matchday/{env}/matches/{id}  { changes: capacity }
+//                          PUT  /api/matchday/{env}/matches/{id}  { changes: target x perTeam }, then the fakes
 //                          (the desktop Save's own order: the shape first, the fields after)
+//            EVERY PATH OFFERS 6 TO 12 A SIDE (Ryan, 2026-11-05: teamChangeSizes) and the capacity is
+//            target x perTeam; without perTeam (an older app build) the current size carries over.
 //   size     POST /api/matchday/{env}/roster/{id}            { kind: "remove" }  each fake past the new size
 //            PUT  /api/matchday/{env}/matches/{id}            { changes: teamCountWrites(...) }
 //            POST /api/matchday/{env}/matches/{id}/fakes      { followSpotsLeft }  (Ryan, 2026-11-02:
@@ -35,7 +38,9 @@ import { countedPlayers, fetchPlayersLive, isEnv } from "@/lib/appLive";
 import { apiGet, StageConfigError, StageHostGuardError, type MatchdayEnv } from "@/lib/matchdayStageApi";
 import { CONFINED_CITY_ERROR } from "@/lib/cityConfinement";
 import { rosterRowIsFake } from "@/lib/gamedayModel";
-import { moneyLine, overflowFakes, pickerCapacityWrites, reduceSizes, sizeRefusal, sizeWrites, teamsPath } from "@/lib/appMatchV2";
+import { moneyLine, overflowFakes, pickerCapacityWrites, sizeRefusal, sizeWrites, teamChangeSizes, teamsPath } from "@/lib/appMatchV2";
+import { fakesFollowingSpotsLeft } from "@/lib/fakeLadder";
+import { teamShapeError } from "@/lib/rosterEditModel";
 import { POST as desktopRosterPost } from "@/app/api/matchday/[env]/roster/[matchId]/route";
 import { PUT as desktopMatchPut } from "@/app/api/matchday/[env]/matches/[id]/route";
 import { POST as desktopFakesPost } from "@/app/api/matchday/[env]/matches/[id]/fakes/route";
@@ -75,6 +80,8 @@ async function readLive(env: MatchdayEnv, id: string) {
 }
 type Live = Awaited<ReturnType<typeof readLive>>;
 const realFills = (l: Live) => l.teams.map((t) => l.players.filter((p) => p.team === t.teamNumber && !p.fake).length);
+const teamReals = (l: Live) => l.teams.map((t) => ({ teamNumber: t.teamNumber, real: l.players.filter((p) => p.team === t.teamNumber && !p.fake).length }));
+const realCount = (l: Live) => l.players.filter((p) => !p.fake).length;
 const cityOf = (m: Row) => ((m.field as Row | undefined)?.city as Row | undefined)?.name;
 const view = (l: Live) => ({
   teams: l.teams, players: l.players.map(({ amount: _a, totalAmount: _t, creditAmount: _c, ...p }) => p),
@@ -112,43 +119,37 @@ async function getRoute(req: Request, ctx: { params: Promise<{ env: string; id: 
     const headers = { authorization: req.headers.get("authorization") ?? "" };
     const origin = url.origin;
     const params = { params: Promise.resolve({ env, id }) };
-    let spotsAfter: number | null = null, refusal: string | null = null;
-    /* REDUCE TO 2 ASKS FOR A SIZE FIRST (Ryan, 2026-10-31). Each size the rule offers is planned by the
-     * desktop's own reduce-2 GET at that size (it writes nothing), so the spots, the open spots and
-     * the fakes dropped are the desktop's figures, not a second count made here. */
-    let sizes: { perTeam: number; spots: number; open: number; fakesDropped: number; refusal: string | null }[] | undefined;
-    let sizeReason: string | null = null;
-    if (path === "reduce-2") {
-      const real = before.players.filter((p) => !p.fake).length;
-      const offer = reduceSizes(real);
-      sizeReason = offer.reason;
-      sizes = [];
-      for (const n of offer.sizes) {
-        const res = await reduceGet(new Request(`${origin}/api/matchday/${env}/matches/${id}/reduce-2?perTeam=${n}`, { headers }), params);
+    /* EVERY TEAM COUNT CHANGE ASKS FOR A SIZE FIRST, 6 TO 12 A SIDE (Ryan, 2026-10-31 for Reduce to 2,
+     * 2026-11-05 for every path): the sizes teamChangeSizes offers this roster, each described at that
+     * size. Reduce to 2 and Convert to 4 are planned by the desktop's own GET at that size (it writes
+     * nothing), so the spots and the refusal are the desktop's figures, not a second count made here;
+     * the picker has no desktop plan, so its spots are target x size. The fakes after are what
+     * followSpotsLeft will bring the roster to at that capacity, the stored spots left kept. */
+    const real = realCount(before);
+    const offer = teamChangeSizes(path, target, real, teamReals(before));
+    const fakesAt = (cap: number) => fakesFollowingSpotsLeft({ ...before.match, maxPlayerCount: cap }, real, Date.now()).target;
+    const sizes: { perTeam: number; spots: number; open: number; fakesAfter: number; refusal: string | null }[] = [];
+    for (const n of offer.sizes) {
+      let spots = target * n, why: string | null = null;
+      if (path === "picker") {
+        why = teamShapeError(spots, target);
+      } else {
+        const get = path === "reduce-2" ? reduceGet : convertGet;
+        const res = await get(new Request(`${origin}/api/matchday/${env}/matches/${id}/${path}?perTeam=${n}`, { headers }), params);
         const j = (await res.json().catch(() => null)) as Row | null;
-        const why = !res.ok ? String(j?.error ?? `HTTP ${res.status}`) : ((j?.refusal ?? j?.capacityRefusal ?? j?.shapeError ?? null) as string | null);
-        const total = Number(j?.total ?? 2 * n), realCount = Number(j?.realCount ?? real), kept = Number(j?.fakeKeepCount ?? 0);
-        sizes.push({ perTeam: n, spots: total, open: Math.max(0, total - realCount - kept), fakesDropped: Number(j?.fakeRemoveCount ?? 0), refusal: why });
+        why = !res.ok ? String(j?.error ?? `HTTP ${res.status}`) : ((j?.refusal ?? j?.capacityRefusal ?? j?.shapeError ?? j?.sizeRefusal ?? null) as string | null);
+        spots = Number(j?.total ?? j?.spotsAfter ?? spots) || spots;
       }
-      const first = sizes.find((x) => !x.refusal);
-      spotsAfter = first?.spots ?? null;
-      refusal = first ? null : (sizeReason ?? sizes[0]?.refusal ?? "No 2-team size fits the real players.");
-    } else if (path === "picker") {
-      const w = pickerCapacityWrites(before.match, before.teamCount, target);
-      spotsAfter = w.maxPlayerCount ?? before.capacity;
-    } else {
-      const res = await convertGet(new Request(`${origin}/api/matchday/${env}/matches/${id}/${path}`, { headers }), params);
-      const j = (await res.json().catch(() => null)) as Row | null;
-      if (!res.ok) refusal = String(j?.error ?? `HTTP ${res.status}`);
-      else {
-        refusal = (j?.refusal as string | null) ?? (j?.capacityRefusal as string | null) ?? (j?.shapeError as string | null) ?? null;
-        spotsAfter = Number(j?.spotsAfter);
-      }
+      const fakesAfter = fakesAt(spots);
+      sizes.push({ perTeam: n, spots, open: Math.max(0, spots - real - fakesAfter), fakesAfter, refusal: why });
     }
+    const first = sizes.find((x) => !x.refusal);
+    const spotsAfter = first?.spots ?? null;
+    const refusal = first ? null : (offer.reason ?? sizes[0]?.refusal ?? `No ${target}-team size fits the real players.`);
     return Response.json({
       path, teamsBefore: before.teamCount, teamsAfter: target, spotsBefore: before.capacity,
-      spotsAfter: Number.isFinite(spotsAfter) ? spotsAfter : null, players: before.players.length, refusal,
-      real: before.players.filter((p) => !p.fake).length, fakes: before.players.filter((p) => p.fake).length, sizes,
+      spotsAfter, players: before.players.length, refusal,
+      real, fakes: before.players.filter((p) => p.fake).length, sizes, sizeReason: offer.reason,
     });
   } catch (e) { return fail(e); }
 }
@@ -180,6 +181,15 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
       const s: Step = { what, label, status: res.status, outcome: String(j?.outcome ?? (res.ok ? "unknown" : "failed")).toLowerCase(), error: (j?.error as string) ?? null };
       steps.push(s);
       return res.ok && s.outcome === "landed";
+    };
+    /* THE FAKES FOLLOW THE NEW CAPACITY, through the same route and rule the desktop Save uses
+     * (followSpotsLeft): the stored spots left stays, the fake count follows. Returns the target it
+     * brought the roster to, for the read-back check. */
+    const followSpotsLeft = async (): Promise<number | null> => {
+      const res = await desktopFakesPost(new Request(`${origin}/api/matchday/${env}/matches/${id}/fakes`, { method: "POST", headers, body: JSON.stringify({ followSpotsLeft: true, matchName: before.match.name ?? null, source: SOURCE, saveId }) }), params);
+      const j = (await res.json().catch(() => null)) as Row | null;
+      if (!j?.noop) steps.push({ what: "fakes", label: `Fakes ${j?.fakesBefore ?? "?"} to ${j?.target ?? "?"} (spots left ${j?.spotsLeft ?? "?"})`, status: res.status, outcome: String(j?.outcome ?? (res.ok ? "unknown" : "failed")).toLowerCase(), error: (j?.error as string) ?? null });
+      return Number.isFinite(Number(j?.target)) ? Number(j?.target) : null;
     };
     const teamName = (n: number) => before.teams.find((t) => t.teamNumber === n)?.name ?? `Team ${n}`;
     const nameOf = (um: number) => before.players.find((p) => p.userMatchId === um)?.name ?? `user-match ${um}`;
@@ -227,26 +237,26 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
       const target = Number(body?.target);
       const path = teamsPath(before.teamCount, target);
       if (!path) return Response.json({ error: `This match already has ${before.teamCount} teams.` }, { status: 400 });
-      let expectCap: number | null = null;
+      /* THE SIZE CHOSEN ON THE CONFIRM SHEET, 6 TO 12 A SIDE, one the rule offers this roster; the
+       * capacity after is target x perTeam. Reduce to 2 has always needed one. Absent on the other
+       * paths (an app build from before 2026-11-05), the current size carries over as it did. */
+      const offer = teamChangeSizes(path, target, realCount(before), teamReals(before));
+      const perTeam = body?.perTeam == null ? null : Number(body.perTeam);
+      if (perTeam != null && !offer.sizes.includes(perTeam)) {
+        return Response.json({ error: offer.reason ?? `Choose a team size of ${offer.sizes.join(", ")}.` }, { status: 400 });
+      }
+      if (path === "reduce-2" && perTeam == null) return Response.json({ error: "perTeam required: the team size to reduce to." }, { status: 400 });
+      let expectCap: number | null = perTeam != null ? target * perTeam : null;
+      let targetFakes: number | null = null;
       if (path === "picker") {
-        const w = pickerCapacityWrites(before.match, before.teamCount, target);
-        if (await roster("shape", `Set ${target} teams`, { kind: "shape", fields: { teamNumbers: target } }) && Object.keys(w).length > 0) {
-          await matchPut("capacity", `Spots ${before.capacity} to ${w.maxPlayerCount ?? before.capacity}`, w);
-        }
-        expectCap = w.maxPlayerCount ?? before.capacity;
+        const w = perTeam != null ? sizeWrites(before.match, target, perTeam) : pickerCapacityWrites(before.match, before.teamCount, target);
+        let ok = await roster("shape", `Set ${target} teams`, { kind: "shape", fields: { teamNumbers: target } });
+        if (ok && Object.keys(w).length > 0) ok = await matchPut("capacity", `Spots ${before.capacity} to ${w.maxPlayerCount ?? before.capacity}`, w);
+        if (expectCap == null) expectCap = w.maxPlayerCount ?? before.capacity;
+        // THE FAKES FOLLOW THE NEW CAPACITY, as after a size write.
+        if (ok) targetFakes = await followSpotsLeft();
       } else {
-        // Reduce to 2 runs at the size chosen on the confirm sheet, and must be one the rule offers.
-        let q = "";
-        if (path === "reduce-2") {
-          const real = before.players.filter((p) => !p.fake).length;
-          const offer = reduceSizes(real);
-          const perTeam = Number(body?.perTeam);
-          if (!offer.sizes.includes(perTeam)) {
-            return Response.json({ error: offer.reason ?? `Choose a team size of ${offer.sizes.join(", ")}.` }, { status: 400 });
-          }
-          q = `?perTeam=${perTeam}`;
-          expectCap = 2 * perTeam;
-        }
+        const q = perTeam != null ? `?perTeam=${perTeam}` : "";
         const handler = path === "convert-4" ? convertPost : reducePost;
         const res = await handler(new Request(`${origin}/api/matchday/${env}/matches/${id}/${path}${q}`, { method: "POST", headers, body: "{}" }), params);
         const j = (await res.json().catch(() => null)) as Row | null;
@@ -257,10 +267,21 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
         }
         if (results.length === 0) steps.push({ what: path, label: path === "convert-4" ? "Convert to 4 teams" : "Reduce to 2 teams", status: res.status, outcome: "failed", error: String(j?.error ?? `HTTP ${res.status}`) });
         extra = { message: j?.message ?? j?.error ?? null };
+        if (expectCap == null && Number.isFinite(Number(j?.spotsAfter))) expectCap = Number(j?.spotsAfter);
+        if (path === "convert-4") {
+          // Convert to 4 brings the fakes to the spots left itself; its target is the read-back check's.
+          const t = Number((j?.fakes as Row | undefined)?.target);
+          targetFakes = Number.isFinite(t) ? t : null;
+        } else if (res.ok) {
+          // Reduce to 2 keeps the fakes its ladder rung calls for but never adds; the follow does.
+          targetFakes = await followSpotsLeft();
+        }
       }
       check = (after) => {
         if (after.teamCount !== target) disagreements.push(`The match reads back with ${after.teamCount} teams, not ${target}.`);
         if (expectCap != null && after.capacity !== expectCap) disagreements.push(`Spots read back as ${after.capacity}, not ${expectCap}.`);
+        const fakes = after.players.filter((p) => p.fake).length;
+        if (targetFakes != null && steps.every((s) => s.outcome === "landed") && fakes !== targetFakes) disagreements.push(`The roster holds ${fakes} fake players, not ${targetFakes}.`);
       };
     } else if (op === "size") {
       const perTeam = Number(body?.perTeam);
@@ -281,12 +302,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
       if (ok) ok = await matchPut("size", `Team size ${before.teamCount} x ${perTeam}`, w);
       // THE FAKES FOLLOW THE NEW CAPACITY, through the same route and rule the desktop Save uses.
       let targetFakes: number | null = null;
-      if (ok) {
-        const res = await desktopFakesPost(new Request(`${origin}/api/matchday/${env}/matches/${id}/fakes`, { method: "POST", headers, body: JSON.stringify({ followSpotsLeft: true, matchName: before.match.name ?? null, source: SOURCE, saveId }) }), params);
-        const j = (await res.json().catch(() => null)) as Row | null;
-        targetFakes = Number.isFinite(Number(j?.target)) ? Number(j?.target) : null;
-        if (!j?.noop) steps.push({ what: "fakes", label: `Fakes ${j?.fakesBefore ?? "?"} to ${j?.target ?? "?"} (spots left ${j?.spotsLeft ?? "?"})`, status: res.status, outcome: String(j?.outcome ?? (res.ok ? "unknown" : "failed")).toLowerCase(), error: (j?.error as string) ?? null });
-      }
+      if (ok) targetFakes = await followSpotsLeft();
       check = (after) => {
         if (after.capacity !== cap) disagreements.push(`Spots read back as ${after.capacity}, not ${cap}.`);
         const fakes = after.players.filter((p) => p.fake).length;

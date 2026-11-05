@@ -29,7 +29,7 @@
  * converted match converges on a second run instead of reshuffling people who were already placed.
  */
 
-import { teamCountWrites, teamShapeError } from "./rosterEditModel";
+import { teamCountWrites, teamShapeError, teamSizes } from "./rosterEditModel";
 
 export type ConvertPlayer = {
   userMatchId: number;
@@ -51,9 +51,22 @@ export type ConvertMove = {
   body: { userMatchId: number; team: number; playerNumber: number };
 };
 
+/** A fake row that comes off before the shape is written. Padding, not a person: nobody is told. */
+export type ConvertRemove = { userMatchId: number; team: number | null; playerNumber: number | null };
+
 export type ConvertPlan = {
+  /** The chosen size, 6 to 12 a side; the capacity after is 4 x this. */
+  perTeam: number;
+  /** The sizes teamSizes offers this roster, and why none when empty. */
+  sizes: number[];
+  sizeReason: string | null;
+  /** Set when perTeam is not one of `sizes`: the POST refuses before any write. */
+  sizeRefusal: string | null;
   /** maxPlayerCount + maxTeamSize4Team, from teamCountWrites. */
   shape: Record<string, number>;
+  /** EVERY FAKE, FIRST. See buildConvertPlan. */
+  removes: ConvertRemove[];
+  fakeCount: number;
   moves: ConvertMove[];
   /** Every live player's position BEFORE anything is written — the only way back. */
   beforeMap: { userMatchId: number; team: number | null; playerNumber: number | null; name: string }[];
@@ -142,21 +155,39 @@ export function buildConvertPlan(
    * deliberate one. Optional: absent means unknown, and teamCountWrites then writes it. */
   match: { maxPlayerCount?: unknown; maxTeamSize4Team?: unknown; teamCount: number },
   players: ConvertPlayer[],
+  /* THE SIZE IS CHOSEN, 6 TO 12 A SIDE (Ryan, 2026-11-05). Absent (a caller from before, or the
+   * confirmation opening), the current per-side figure carries over as it always did, when
+   * teamSizes offers it; otherwise the smallest size that holds the real players. */
+  perTeamAsked?: number | null,
 ): ConvertPlan {
   const live = dealtPlayers(players);
+  const fakes = players.filter((p) => p.isCancelled !== true && p.isFake === true).sort((a, b) => a.userMatchId - b.userMatchId);
   const spotsBefore = Number(match.maxPlayerCount) || 0;
   /* THE SHAPE IS teamCountWrites — teams x spots per team, the same helper the TEAMS control uses,
    * so a conversion and a manual team-count change cannot disagree about what 4 teams means. The
-   * per-team figure comes from the CURRENT shape: 22 across 2 teams is 11 a side, so 4 teams is 44.
-   * Not auto-bump's 28, which nothing derives. */
-  const perTeam = match.teamCount > 0 && spotsBefore % match.teamCount === 0 ? spotsBefore / match.teamCount : 0;
+   * per-team figure is the chosen one: 22 across 2 teams was always 4 x 11 until 2026-11-05, and
+   * is now whichever of 6 to 12 the operator picked. Not auto-bump's 28, which nothing derives. */
+  const current = match.teamCount > 0 && spotsBefore % match.teamCount === 0 ? spotsBefore / match.teamCount : 0;
+  const offer = teamSizes(4, live.length);
+  const perTeam = perTeamAsked ?? (offer.sizes.includes(current) ? current : offer.sizes[0] ?? current);
+  const sizeRefusal = offer.sizes.includes(perTeam) ? null
+    : offer.reason ?? `${perTeam} a side is not offered for this roster: pick ${offer.sizes[0]} to ${offer.sizes[offer.sizes.length - 1]}.`;
   /* THE 4-TEAM RUNG IS RAISED, NEVER LOWERED. A conversion sets the shape the operator confirmed;
    * it has no business discarding a ceiling somebody set for the format it is converting INTO. */
   const shape = teamCountWrites(4, perTeam, rungOf(match.maxTeamSize4Team));
   const spotsAfter = Number(shape.maxPlayerCount) || 0;
   const moves = dealFourTeams(players);
   return {
+    perTeam, sizes: offer.sizes, sizeReason: offer.reason, sizeRefusal,
     shape,
+    /* EVERY FAKE COMES OFF FIRST (Ryan, 2026-11-05: "fakes removed first"). The deal numbers the
+     * real players from #1 on every team; a fake left standing on #1 would be in a dealt player's
+     * way, and a fake left on a bib above the new size would sit outside a 6-a-side team. Taking
+     * them all off keeps every move's destination empty, and the fakes the stored spots left call
+     * for go back on after the deal through the fakes route's followSpotsLeft, the one rule every
+     * capacity change shares. */
+    removes: fakes.map((p) => ({ userMatchId: p.userMatchId, team: p.team, playerNumber: p.playerNumber })),
+    fakeCount: fakes.length,
     moves,
     beforeMap: live.slice().sort(bySignup)
       .map((p) => ({ userMatchId: p.userMatchId, team: p.team, playerNumber: p.playerNumber, name: p.name })),
@@ -171,5 +202,5 @@ export function buildConvertPlan(
 
 /** The sentence on the button, from the plan's own numbers. */
 export const convertSummary = (p: ConvertPlan): string =>
-  `${p.spotsBefore} spots becomes ${p.spotsAfter}. ${p.playerCount} player${p.playerCount === 1 ? "" : "s"} get dealt into 4 teams` +
+  `${p.spotsBefore} spots becomes ${p.spotsAfter} (4 teams of ${p.perTeam}). ${p.playerCount} player${p.playerCount === 1 ? "" : "s"} get dealt into 4 teams` +
   (p.keptCount > 0 ? `, ${p.keptCount} already on teams 3 or 4 keep their place` : "") + ".";

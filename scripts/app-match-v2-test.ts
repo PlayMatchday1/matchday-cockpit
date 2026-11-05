@@ -1,7 +1,7 @@
 /* STAFF APP MATCH v2: which desktop path a team count takes, what the size stepper offers, how an
  * add's money is worded, and how a search term is read (src/lib/appMatchV2.ts). Ryan, 2026-10-30.
  * Pure rules, asserted offline; every refusal has a presence control beside it. */
-import { detailsMatch, overflowFakes, reduceSizes, moneyLine, phoneLast4, pickerCapacityWrites, searchTerm, sizeBounds, sizeRefusal, sizeWrites, teamsPath } from "../src/lib/appMatchV2";
+import { detailsMatch, overflowFakes, reduceSizes, moneyLine, phoneLast4, pickerCapacityWrites, searchTerm, sizeBounds, sizeRefusal, sizeWrites, teamChangeSizes, teamsPath } from "../src/lib/appMatchV2";
 
 let pass = 0, fail = 0;
 const ok = (m: string) => { pass++; console.log(`  ok  ${m}`); };
@@ -71,6 +71,24 @@ is("presence control: 24 real fit 2 x 12 exactly", reduceSizes(24).sizes, [12]);
 is("25 real: nothing fits, and it says why", reduceSizes(25).sizes, []);
 is("…with a reason", typeof reduceSizes(25).reason, "string");
 is("13 a side is never offered", reduceSizes(1).sizes.includes(13), false);
+
+console.log("\nevery team count change: 6 to 12 a side (Ryan, 2026-11-05)");
+{
+  const T = (...reals: number[]) => reals.map((real, i) => ({ teamNumber: i + 1, real }));
+  // THE BUG: a 2-team match at 11 going to 4 was offered 11 and nothing else.
+  is("2 -> 4 with 3 real players: every size from 6 to 12", teamChangeSizes("convert-4", 4, 3, T(2, 1)).sizes, [6, 7, 8, 9, 10, 11, 12]);
+  is("2 -> 4 with 22 real players: still every size, 4 x 6 holds 22", teamChangeSizes("convert-4", 4, 22, T(11, 11)).sizes, [6, 7, 8, 9, 10, 11, 12]);
+  is("2 -> 4 with 26 real: never below what holds them, so from 7", teamChangeSizes("convert-4", 4, 26, T(13, 13)).sizes, [7, 8, 9, 10, 11, 12]);
+  is("convert-4 deals every team again, so a full team of 11 does not block 6 a side", teamChangeSizes("convert-4", 4, 11, T(11, 0)).sizes[0], 6);
+  is("2 -> 3 (the picker): nobody moves, so never below the fullest team that stays", teamChangeSizes("picker", 3, 12, T(9, 3)).sizes, [9, 10, 11, 12]);
+  is("4 -> 3 (the picker): team 4 goes, teams 1 to 3 keep their players", teamChangeSizes("picker", 3, 14, T(4, 4, 4, 2)).sizes, [6, 7, 8, 9, 10, 11, 12]);
+  is("…and the team that goes still has to fit somewhere: 25 real over 3 teams is 9 a side", teamChangeSizes("picker", 3, 25, T(6, 6, 6, 7)).sizes[0], 9);
+  is("3 -> 4 (the picker): the new team is empty, the others keep theirs", teamChangeSizes("picker", 4, 21, T(7, 7, 7)).sizes, [7, 8, 9, 10, 11, 12]);
+  is("4 -> 2 is the reduce rule: 15 real from 8 a side", teamChangeSizes("reduce-2", 2, 15, T(4, 4, 4, 3)).sizes, [8, 9, 10, 11, 12]);
+  is("a team fuller than 12 that stays: nothing, with the reason", [teamChangeSizes("picker", 3, 13, T(13, 0)).sizes, typeof teamChangeSizes("picker", 3, 13, T(13, 0)).reason], [[], "string"]);
+  is("49 real over 4 teams: nothing, with the reason", typeof teamChangeSizes("convert-4", 4, 49, T(25, 24)).reason, "string");
+  is("presence control: the reason is null when something is offered", teamChangeSizes("convert-4", 4, 3, T(2, 1)).reason, null);
+}
 
 console.log("\nAdjust payload: the match's people, for every account");
 {

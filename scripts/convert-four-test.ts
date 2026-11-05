@@ -73,6 +73,11 @@ console.log("\ncancelled rows and fake padding are neither dealt nor counted");
   const plan = buildConvertPlan({ maxPlayerCount: 22, teamCount: 2 }, roster);
   is("…and only those are counted", plan.playerCount, 2);
   is("…and the before-map holds only them", plan.beforeMap.map((b) => b.userMatchId), [1,4]);
+  /* EVERY FAKE COMES OFF FIRST (Ryan, 2026-11-05): a fake on #1 is in a dealt player's way, and the
+   * fakes the spots left call for go back on after the deal. A cancelled row is not touched. */
+  is("the live fake is on the removal list, the cancelled row is not", plan.removes, [{ userMatchId: 3, team: 2, playerNumber: 1 }]);
+  is("…and counted", plan.fakeCount, 1);
+  is("control: a roster with no fakes removes nothing", buildConvertPlan({ maxPlayerCount: 22, teamCount: 2 }, [p(1,1,1,1), p(4,2,2,4)]).removes, []);
 }
 
 console.log("\nsignup order, including the awkward cases");
@@ -88,8 +93,24 @@ console.log("\nthe shape is teamCountWrites — derivable, not auto-bump's 28");
 {
   const roster = Array.from({ length: 22 }, (_, i) => p(i + 1, (i % 2) + 1, Math.floor(i / 2) + 1, i));
   const plan = buildConvertPlan({ maxPlayerCount: 22, teamCount: 2 }, roster);
-  is("22 across 2 teams is 11 a side, so 4 teams is 44", [plan.spotsBefore, plan.spotsAfter], [22, 44]);
+  is("22 across 2 teams is 11 a side, so 4 teams is 44 when no size is chosen", [plan.spotsBefore, plan.spotsAfter], [22, 44]);
   is("…and the write carries both keys", plan.shape, { maxPlayerCount: 44, maxTeamSize4Team: 44 });
+  /* THE SIZE IS CHOSEN, 6 TO 12 A SIDE (Ryan, 2026-11-05). 22 real players fit 4 x 6 = 24, so every
+   * size from 6 is offered, and the capacity is 4 x the chosen size. */
+  is("the sizes offered run 6 to 12", plan.sizes, [6, 7, 8, 9, 10, 11, 12]);
+  is("4 teams at 6 a side is 24 spots", buildConvertPlan({ maxPlayerCount: 22, teamCount: 2 }, roster, 6).spotsAfter, 24);
+  is("4 teams at 8 a side is 32 spots", buildConvertPlan({ maxPlayerCount: 22, teamCount: 2 }, roster, 8).spotsAfter, 32);
+  is("4 teams at 12 a side is 48 spots, and the rung is raised with it", buildConvertPlan({ maxPlayerCount: 22, maxTeamSize4Team: 44, teamCount: 2 }, roster, 12).shape, { maxPlayerCount: 48, maxTeamSize4Team: 48 });
+  is("a higher saved 4-team rung is not lowered by a smaller size", buildConvertPlan({ maxPlayerCount: 22, maxTeamSize4Team: 44, teamCount: 2 }, roster, 6).shape, { maxPlayerCount: 24 });
+  is("the chosen size is on the plan", buildConvertPlan({ maxPlayerCount: 22, teamCount: 2 }, roster, 7).perTeam, 7);
+  // NEVER BELOW WHAT HOLDS THE REAL PLAYERS: 26 real need 7 a side over 4 teams, so 6 is not offered.
+  const r26 = Array.from({ length: 26 }, (_, i) => p(i + 1, (i % 2) + 1, Math.floor(i / 2) + 1, i));
+  is("26 real players: 6 a side is not offered", buildConvertPlan({ maxPlayerCount: 26, teamCount: 2 }, r26).sizes, [7, 8, 9, 10, 11, 12]);
+  is("…and asking for it is refused before any write", typeof buildConvertPlan({ maxPlayerCount: 26, teamCount: 2 }, r26, 6).sizeRefusal, "string");
+  is("presence control: an offered size has no refusal", buildConvertPlan({ maxPlayerCount: 26, teamCount: 2 }, r26, 7).sizeRefusal, null);
+  is("13 across 2 teams is not a size 6 to 12 offers, so the smallest that holds 22 real players: 4 x 6", buildConvertPlan({ maxPlayerCount: 26, teamCount: 2 }, roster).perTeam, 6);
+  const r49 = Array.from({ length: 49 }, (_, i) => p(i + 1, (i % 2) + 1, Math.floor(i / 2) + 1, i));
+  is("49 real players fit no 4-team size, with the reason", [buildConvertPlan({ maxPlayerCount: 22, teamCount: 2 }, r49).sizes, typeof buildConvertPlan({ maxPlayerCount: 22, teamCount: 2 }, r49).sizeReason], [[], "string"]);
   /* THE ONE THAT STOPS SOMEONE MATCHING THE SERVER. 28 is what auto-bump produced in both staging
    * runs from different inputs, and nothing derives it. */
   is("control: it is NOT 28", plan.spotsAfter === 28, false);
@@ -100,8 +121,8 @@ console.log("\nthe shape is teamCountWrites — derivable, not auto-bump's 28");
   const odd = buildConvertPlan({ maxPlayerCount: 22, teamCount: 4 }, roster);
   is("control: a shape that would not divide is reported", typeof odd.shapeError === "string" || odd.shapeError === null, true);
   const halfOdd = buildConvertPlan({ maxPlayerCount: 11, teamCount: 2 }, roster);
-  is("11 across 2 teams does not divide, so no per-team figure and the total is 4",
-    halfOdd.spotsAfter, 4);
+  is("11 across 2 teams does not divide, so no per-team figure carries: the smallest size that holds 22 real players, 4 x 6",
+    [halfOdd.perTeam, halfOdd.spotsAfter], [6, 24]);
 }
 
 console.log("\nthe refusal — wall clock as text, and no Date");
@@ -124,9 +145,12 @@ console.log("\nthe refusal — wall clock as text, and no Date");
 console.log("\nthe sentence carries the real figures");
 {
   const roster = Array.from({ length: 22 }, (_, i) => p(i + 1, (i % 2) + 1, Math.floor(i / 2) + 1, i));
-  is("it states before, after and the headcount",
+  is("it states before, after, the size and the headcount",
     convertSummary(buildConvertPlan({ maxPlayerCount: 22, teamCount: 2 }, roster)),
-    "22 spots becomes 44. 22 players get dealt into 4 teams.");
+    "22 spots becomes 44 (4 teams of 11). 22 players get dealt into 4 teams.");
+  is("…at the chosen size",
+    convertSummary(buildConvertPlan({ maxPlayerCount: 22, teamCount: 2 }, roster, 8)),
+    "22 spots becomes 32 (4 teams of 8). 22 players get dealt into 4 teams.");
   const kept = buildConvertPlan({ maxPlayerCount: 22, teamCount: 2 }, [p(1,1,1,1), p(2,3,1,2)]);
   is("…and says when someone keeps their place", convertSummary(kept).includes("1 already on teams 3 or 4 keep their place"), true);
 }
@@ -140,16 +164,23 @@ console.log("\nthe write path: order, logging, and one mover");
     ok("control: the route and the model were read");
   else bad("control: the route and the model were read", "THE CHECKS BELOW WOULD PASS ON EMPTY STRINGS");
 
-  // THE SHAPE FIRST, AND NOTHING AFTER IT IF IT FAILS.
+  // THE FAKES FIRST, THEN THE SHAPE, AND NOTHING AFTER THE SHAPE IF IT FAILS.
+  if (route.indexOf("for (const rm of plan.removes)") < route.indexOf("shapeWrite")) ok("the fake removals are ordered before the shape");
+  else bad("the fake removals are ordered before the shape", "A FAKE ON #1 IS IN A DEALT PLAYER'S WAY");
+  if (/stoppedAt: "remove"/.test(route)) ok("…and a fake that will not come off stops before the shape");
+  else bad("a fake that will not come off stops before the shape");
   if (/if \(!shapeOk\) \{[\s\S]{0,400}?stoppedAt: "shape"/.test(route)) ok("a failed shape stops before any move");
   else bad("a failed shape stops before any move", "A HALF-DEALT MATCH IS WORSE THAN EITHER END STATE");
-  if (route.indexOf("shapeWrite") < route.indexOf("for (const mv of plan.moves)")) ok("…and the shape write is ordered first");
-  else bad("the shape write is ordered first");
+  if (route.indexOf("shapeWrite") < route.indexOf("for (const mv of plan.moves)")) ok("…and the shape write is ordered before the moves");
+  else bad("the shape write is ordered before the moves");
+  // THE FAKES FOLLOW THE SPOTS LEFT, LAST, through the fakes route (the one rule every capacity change shares).
+  if (route.indexOf("for (const mv of plan.moves)") < route.indexOf("followSpotsLeft: true")) ok("the fakes follow the spots left after the deal");
+  else bad("the fakes follow the spots left after the deal", "FAKES FOLLOW THE STORED SPOTS LEFT AFTER THE CHANGE");
 
   // EVERY WRITE LOGGED. write-routes-logged-test caught a bare apiWrite here in the first draft.
-  is("every apiWrite sits inside a recordWrite", (route.match(/recordWrite\(/g) ?? []).length >= 2, true);
-  // CONTROL: the route really does write — two apiWrite call sites, the shape and the move.
-  is("control: the route does make writes at all", (route.match(/apiWrite\(env,/g) ?? []).length, 2);
+  is("every apiWrite sits inside a recordWrite", (route.match(/recordWrite\(/g) ?? []).length >= 3, true);
+  // CONTROL: the route really does write — three apiWrite call sites: the fake removal, the shape and the move.
+  is("control: the route does make writes at all", (route.match(/apiWrite\(env,/g) ?? []).length, 3);
   if (/applied: \(_b, a\) => \(a as \{ team: number \| null \}\)\.team === mv\.toTeam/.test(route))
     ok("a move's verdict is a read-back of that player's team");
   else bad("a move's verdict is a read-back", "'DID NOT THROW' IS NOT 'LANDED'");

@@ -506,6 +506,31 @@ export function teamShapeError(total: number, teamCount: number): string | null 
   return null;
 }
 
+/* ── TEAM SIZES: 6 TO 12 A SIDE, FOR EVERY TEAM COUNT (Ryan, 2026-11-02 and 2026-11-05) ────────
+ * THE ONE LIST every size control draws from: the Match panel's Max spots selects, Convert to 4,
+ * Reduce to 2, the staged team count picker, the staff app's chips, stepper and team count sheet.
+ * A 2-team match going to 4 used to be offered only its own per-side figure carried over (22 spots
+ * meant 4 x 11 and nothing else); the operator now picks the size, and the capacity is teams x size.
+ *
+ * NEVER BELOW WHAT HOLDS THE REAL PLAYERS: all of them across the new count, and on each team that
+ * keeps its players through the change, that team's real count. Fakes never block a size: they come
+ * off first and follow the stored spots left afterwards. Empty, with the reason, when nothing fits. */
+export const TEAM_SIZE_MIN = 6;
+export const TEAM_SIZE_MAX = 12;
+export const TEAM_SIZES = [6, 7, 8, 9, 10, 11, 12] as const;
+export function teamSizes(target: number, real: number, keptReals: readonly number[] = []): { sizes: number[]; reason: string | null } {
+  const teams = Math.max(1, Math.round(target));
+  const fit = Math.max(1, Math.ceil(Math.max(0, real) / teams));
+  const kept = Math.max(0, ...keptReals);
+  const lo = Math.max(fit, kept, TEAM_SIZE_MIN);
+  const sizes: number[] = [];
+  for (let s = lo; s <= TEAM_SIZE_MAX; s++) if (teamShapeError(teams * s, teams) == null) sizes.push(s);
+  if (sizes.length > 0) return { sizes, reason: null };
+  if (kept > TEAM_SIZE_MAX) return { sizes, reason: `A team has ${kept} real players, more than ${TEAM_SIZE_MAX} a side, the largest allowed.` };
+  if (fit > TEAM_SIZE_MAX) return { sizes, reason: `${real} real players do not fit ${teams} teams of ${TEAM_SIZE_MAX}, the largest allowed.` };
+  return { sizes, reason: `No ${teams}-team size fits ${real} real players.` };
+}
+
 /* THE REDUCE-2 BRANCH. `Reduce to 2 teams` moves every real player itself before it touches the
  * shape, so unlike the staged team-count change below it CAN say where everyone goes — and its
  * numbers must come from that plan, not from a second count taken here. Passing these facts is the

@@ -45,7 +45,7 @@ import {
   pickerOptions, offeredCounts, confirmLines, normalizeManagerId, managerNameIn,
   CAN_UNASSIGN_MANAGER_FROM_MATCH, UNASSIGN_PROOF,
 } from "@/lib/managerAssign";
-import {
+import { TEAM_SIZES,
   emptyPending, normalizePending, pendingCount, sortedTeam, spotsOfTeam, planMove, effectiveRow,
   savePlan, clearApplied, rungKeyFor, teamCountWrites, teamShapeError,
   playerKinds, teamMemberCount, textsForSelection, moneyKinds, teamMoney, sumMoney, rosterCounts,
@@ -65,7 +65,8 @@ const MARKS = [36, 24, 12, 6, 3] as const;
 // the surrounding whitespace only, not a fuzzy match.
 // 6 to 12 a side, the range every team size control offers (Ryan, 2026-11-02). A stored value off
 // this list still draws, through RungOption.
-const SIZES = [6, 7, 8, 9, 10, 11, 12] as const;
+// 6 to 12 a side, the one list every team size control draws from (rosterEditModel.teamSizes).
+const SIZES = TEAM_SIZES;
 
 /* THE SAME SEVEN THE FULL EDITOR OFFERS, in the same order and with the same labels. FEMINE is the
  * API's spelling, not a typo here — the stored value must match what the platform stores. */
@@ -674,17 +675,25 @@ export default function MatchPanel({ matchId, env = DRAWER_ENV, onDirtyChange, o
    * many players get dealt — because a control that changes a match's capacity should not be
    * asking anyone to trust a number that was rendered when the drawer opened. */
   const [cv, setCv] = useState<{ summary: string; spotsBefore: number; spotsAfter: number; playerCount: number;
-    moveCount: number; keptCount: number; refusal: string | null; shapeError: string | null } | null>(null);
+    moveCount: number; keptCount: number; refusal: string | null; shapeError: string | null;
+    /* THE SIZE (Ryan, 2026-11-05): 6 to 12 a side, the ones this roster may run at, and the fakes:
+     * every one comes off first, and the stored spots left bring fakesAfter back on. */
+    perTeam: number; sizes: number[]; sizeReason: string | null; sizeRefusal: string | null;
+    fakeCount: number; removeCount: number; fakesAfter: number; spotsLeft: number | null } | null>(null);
   const [cvBusy, setCvBusy] = useState(false);
   const [cvResults, setCvResults] = useState<{ kind: string; label: string; verdict: string; detail?: string }[] | null>(null);
   const [cvMsg, setCvMsg] = useState<{ text: string; bad: boolean } | null>(null);
 
-  const openConvert = async () => {
+  /* ONE MATCH READ PER SIZE, as Reduce to 2: opening fetches the plan at the match's own size (its
+   * current per-side figure when 6 to 12 offers it), picking another size fetches it again at that
+   * size, so the sentence always describes the plan the POST will run. */
+  const openConvert = async (perTeam?: number) => {
     if (cvBusy) return;
     const h = await authHeaders(); if (!h) { setCvMsg({ text: "No active session: sign in again.", bad: true }); return; }
     setCvBusy(true); setCvMsg(null); setCvResults(null);
     try {
-      const r = await fetch(`/api/matchday/${env}/matches/${matchId}/convert-4`, { headers: h, cache: "no-store" });
+      const q = perTeam == null ? "" : `?perTeam=${perTeam}`;
+      const r = await fetch(`/api/matchday/${env}/matches/${matchId}/convert-4${q}`, { headers: h, cache: "no-store" });
       const j = await r.json();
       if (!r.ok) { setCvMsg({ text: j.error ?? `HTTP ${r.status}`, bad: true }); return; }
       setCv(j);
@@ -699,7 +708,8 @@ export default function MatchPanel({ matchId, env = DRAWER_ENV, onDirtyChange, o
     const h = await authHeaders(); if (!h) { setCvMsg({ text: "No active session: sign in again.", bad: true }); return; }
     setCvBusy(true); setCvMsg(null);
     try {
-      const r = await fetch(`/api/matchday/${env}/matches/${matchId}/convert-4`, {
+      // The size sent is the size the sentence on screen was computed for.
+      const r = await fetch(`/api/matchday/${env}/matches/${matchId}/convert-4?perTeam=${cv.perTeam}`, {
         method: "POST", headers: { ...h, "Content-Type": "application/json" }, body: JSON.stringify({}),
       });
       const j = await r.json();
@@ -1685,18 +1695,37 @@ export default function MatchPanel({ matchId, env = DRAWER_ENV, onDirtyChange, o
                     <button type="button" className="mp-btn" data-testid="mp-convert-open" disabled={cvBusy || !mayWrite}
                       onClick={() => void openConvert()}>{cvBusy ? "Reading…" : "Convert to 4 teams"}</button>
                   </>
-                ) : cv.refusal || cv.shapeError ? (
+                ) : cv.refusal || cv.shapeError || cv.sizeRefusal ? (
                   <div className="mp-note warn" data-testid="mp-convert-refusal">
-                    {cv.refusal ?? cv.shapeError}
+                    {cv.refusal ?? cv.shapeError ?? cv.sizeRefusal}
                     <button type="button" className="mp-btn" style={{ marginLeft: 10 }} onClick={() => setCv(null)}>Close</button>
                   </div>
                 ) : (
                   <div className="mp-cvconfirm" data-testid="mp-convert-confirm">
+                    {/* THE SIZE, 6 TO 12 A SIDE (Ryan, 2026-11-05): the sizes teamSizes offers this roster,
+                        never below what holds the real players. It used to be the current per-side
+                        figure and nothing else, so a 22-spot match could only become 4 x 11. */}
+                    <label className="mp-f" style={{ marginBottom: 6 }}><span className="mp-lb">TEAM SIZE</span>
+                      <select data-testid="mp-convert-size" value={cv.perTeam} disabled={cvBusy}
+                        onChange={(e) => void openConvert(Number(e.target.value))}>
+                        {cv.sizes.map((n) => (
+                          <option key={n} value={n}>{n} each · {n * 4} spots</option>
+                        ))}
+                      </select></label>
                     {/* THE NUMBERS, computed at click time from the match in front of you. */}
                     <b data-testid="mp-convert-summary">{cv.summary}</b>
+                    <div className="mp-cvsub" data-testid="mp-convert-roster">
+                      {cv.fakeCount === 0
+                        ? "No fake players on this match."
+                        : `${cv.fakeCount} fake player${cv.fakeCount === 1 ? "" : "s"} come${cv.fakeCount === 1 ? "s" : ""} off first.`}
+                      {" "}{cv.fakesAfter > 0
+                        ? `${cv.fakesAfter} go back on afterwards for the spots left (${cv.spotsLeft ?? "?"}).`
+                        : `None go back on: the spots left (${cv.spotsLeft ?? "?"}) need no fakes at ${cv.spotsAfter} spots.`}
+                    </div>
                     <div className="mp-cvnote">
-                      {cv.moveCount} write{cv.moveCount === 1 ? "" : "s"} after the shape, one per player, sent one at a
-                      time. Each reports its own result. Nothing retries.
+                      {cv.removeCount} fake removal{cv.removeCount === 1 ? "" : "s"} first, then the shape, then{" "}
+                      {cv.moveCount} move{cv.moveCount === 1 ? "" : "s"}, one per player, then the fakes for the spots left,
+                      sent one at a time. Each reports its own result. Nothing retries.
                     </div>
                     <div className="mp-cv-acts">
                       <button type="button" className="mp-btn mp-nowrap" data-testid="mp-convert-cancel" onClick={() => setCv(null)}>Keep 2 teams</button>

@@ -3,9 +3,9 @@
 // the app may offer, and how a read-back is worded. No I/O, so scripts/app-match-v2-test.ts can
 // assert every rule offline.
 
-import { teamCountWrites, teamShapeError } from "./rosterEditModel";
-import { REDUCE_MAX_PER_TEAM, REDUCE_MIN_PER_TEAM } from "./reduceTwoTeams";
-export { REDUCE_MAX_PER_TEAM as SIZE_MAX, REDUCE_MIN_PER_TEAM as SIZE_MIN };
+import { TEAM_SIZE_MAX, TEAM_SIZE_MIN, teamCountWrites, teamShapeError, teamSizes } from "./rosterEditModel";
+export { TEAM_SIZE_MAX as SIZE_MAX, TEAM_SIZE_MIN as SIZE_MIN };
+const REDUCE_MIN_PER_TEAM = TEAM_SIZE_MIN, REDUCE_MAX_PER_TEAM = TEAM_SIZE_MAX;
 
 /* WHICH DESKTOP PATH A TEAM COUNT CHANGE TAKES. Ryan: "use the desktop's exact paths (the
  * teamNumbers picker, Convert to 4, Reduce to 2), no custom spreading."
@@ -20,11 +20,12 @@ export function teamsPath(current: number, target: number): TeamsPath | null {
   return "picker";
 }
 
-/* THE PICKER'S CAPACITY WRITE, exactly what the desktop stages (MatchPanel stageTeamCount): the
- * current per-team figure carried into the new count, through teamCountWrites, which writes the
- * new mode's rung for 2 and 4 and only maxPlayerCount for 3. A capacity that does not divide by the
- * current count has no honest per-team figure, so nothing is written beside the count, as on the
- * desktop. Only keys whose value changes are returned: the desktop PUT sends the diff. */
+/* THE PICKER'S CAPACITY WRITE WHEN NO SIZE WAS CHOSEN (an app build from before 2026-11-05), exactly
+ * what the desktop stages (MatchPanel stageTeamCount): the current per-team figure carried into the
+ * new count, through teamCountWrites, which writes the new mode's rung for 2 and 4 and only
+ * maxPlayerCount for 3. A capacity that does not divide by the current count has no honest per-team
+ * figure, so nothing is written beside the count, as on the desktop. Only keys whose value changes
+ * are returned: the desktop PUT sends the diff. With a chosen size the write is sizeWrites. */
 export function pickerCapacityWrites(match: Record<string, unknown>, current: number, target: number): Record<string, number> {
   const cap = Number(match.maxPlayerCount) || 0;
   if (current <= 0 || cap % current !== 0) return {};
@@ -83,19 +84,22 @@ export function sizeWrites(match: Record<string, unknown>, teamCount: number, pe
   return Object.fromEntries(Object.entries(w).filter(([k, v]) => Number(match[k]) !== v));
 }
 
-/* THE SIZES A REDUCE TO 2 MAY OFFER (Ryan, 2026-10-31): every size where 2 x size holds all the real
- * players and teamShapeError accepts 2 x size, inside the desktop Reduce to 2's own range (6 to 12
- * a side). NOT CAPPED AT THE CURRENT SIZE (Ryan, 2026-11-02): it was, so a 4-team match of 8 going
- * to 2 hid 9v9 to 11v11; the desktop picker never capped it. Empty, with the reason, when nothing fits. */
-export function reduceSizes(real: number): { sizes: number[]; reason: string | null } {
-  const fit = Math.max(1, Math.ceil(real / 2));
-  const lo = Math.max(fit, REDUCE_MIN_PER_TEAM);
-  const sizes: number[] = [];
-  for (let s = lo; s <= REDUCE_MAX_PER_TEAM; s++) if (teamShapeError(2 * s, 2) == null) sizes.push(s);
-  if (sizes.length > 0) return { sizes, reason: null };
-  if (fit > REDUCE_MAX_PER_TEAM) return { sizes, reason: `${real} real players do not fit 2 teams of ${REDUCE_MAX_PER_TEAM}, the largest Reduce to 2 allows.` };
-  return { sizes, reason: `No 2-team size fits ${real} real players.` };
+/* THE SIZES A TEAM COUNT CHANGE MAY OFFER: 6 TO 12 A SIDE ON EVERY PATH (Ryan, 2026-11-05). Reduce
+ * to 2 had the rule since 2026-10-31 (never capped at the current size since 2026-11-02); Convert
+ * to 4 and the 3-team picker carried the current per-side figure instead, so a 22-spot match could
+ * only become 4 x 11. One rule now, rosterEditModel's teamSizes: every size where target x size
+ * holds all the real players, never below the team with the most real players among the teams that
+ * keep their players through the change. Which teams those are depends on the path:
+ *   convert-4   the desktop deals every real player over 4 teams again, so none;
+ *   reduce-2    the desktop plan moves whoever must move, so none;
+ *   picker      nobody moves: the teams that survive (1 to target) keep everyone on them.
+ * Fakes never block a size: they come off first and follow the stored spots left afterwards. */
+export function teamChangeSizes(path: TeamsPath, target: number, real: number, teamReals: readonly { teamNumber: number; real: number }[]): { sizes: number[]; reason: string | null } {
+  const kept = path === "picker" ? teamReals.filter((t) => t.teamNumber <= target).map((t) => t.real) : [];
+  return teamSizes(target, real, kept);
 }
+/** Reduce to 2's own list: the shared rule at 2 teams. */
+export const reduceSizes = (real: number): { sizes: number[]; reason: string | null } => teamSizes(2, real);
 
 /* WHAT AN ADD COST, read off the roster row AFTER the add. Clubhouse sends no price and no credit;
  * MatchDay decides. Cents on the wire. Never a prediction: Ryan, "After the add, read the roster row

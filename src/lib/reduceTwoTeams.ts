@@ -50,7 +50,7 @@
  * behaviour to the dangerous one's.
  */
 
-import { teamCountWrites, teamShapeError } from "./rosterEditModel";
+import { TEAM_SIZE_MAX, TEAM_SIZE_MIN, teamCountWrites, teamShapeError } from "./rosterEditModel";
 
 /** A stored rung as a number, or null when it is absent or unreadable. */
 const rungOf = (v: unknown): number | null => {
@@ -62,10 +62,11 @@ const rungOf = (v: unknown): number | null => {
 /** The fallback size when the match's own 2-team total does not name one. 2 x 11 = 22. */
 export const REDUCE_PER_TEAM = 11;
 export const REDUCE_TARGET_TEAMS = 2;
-/** The picker's range, the same 6 to 12 every team size control offers. 12 a side is the most a
- *  2-team match is ever set to (Ryan, 2026-11-02: "12v12 is sometimes the right format"). */
-export const REDUCE_MIN_PER_TEAM = 6;
-export const REDUCE_MAX_PER_TEAM = 12;
+/** The picker's range, the same 6 to 12 every team size control offers (rosterEditModel's
+ *  TEAM_SIZES). 12 a side is the most a 2-team match is ever set to (Ryan, 2026-11-02: "12v12 is
+ *  sometimes the right format"). */
+export const REDUCE_MIN_PER_TEAM: number = TEAM_SIZE_MIN;
+export const REDUCE_MAX_PER_TEAM: number = TEAM_SIZE_MAX;
 
 /** The size the picker opens on: the match's own "Max spots, 2 teams" halved, when that is a whole
  *  number inside the picker's range. Otherwise 11. maxTeamSize2Team is a TOTAL, so 18 means 9. */
