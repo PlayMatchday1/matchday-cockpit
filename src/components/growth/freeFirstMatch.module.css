@@ -1,0 +1,94 @@
+/* FREE FIRST MATCH — only what growth.module.css and playerActivity.module.css do not already have:
+   the dark KPI card, the horizontal funnel bars, the two highlighted rows, the name chips and the
+   log rows. Cards, the KPI grid, tables, the segmented toggle and the tooltip come from those two. */
+
+/* ── CONTROLS, right-aligned under the title as the design places them ─────────────────────── */
+.controls {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 10px;
+}
+.rangeLabel {
+  font-size: 9.5px; font-weight: 800; letter-spacing: .13em; text-transform: uppercase;
+  color: var(--mut, #93a49b);
+}
+.to { font-size: 11.5px; color: var(--mut, #5b6b63); }
+.select {
+  border: 1px solid var(--line, #e3e9e5); border-radius: 999px; padding: 7px 12px;
+  font-size: 12.5px; font-weight: 700; color: var(--forest, #0f3d2e); background: #fff;
+}
+.date {
+  border: 1px solid var(--line, #e3e9e5); border-radius: 8px; padding: 6px 10px;
+  font-size: 12.5px; font-weight: 600; color: var(--forest, #0f3d2e); background: #fff;
+}
+.date:focus-visible, .select:focus-visible { outline: 2px solid #35c77f; outline-offset: 1px; }
+
+/* ── KPI: the highlighted card ─────────────────────────────────────────────────────────────── */
+.kpiDark { background: var(--forest, #0d3b2e); border-color: var(--forest, #0d3b2e); }
+.kpiDark .kpiLabelDark { color: rgba(255, 255, 255, .72); }
+.kpiDark .kpiValueDark { color: #fff; }
+.kpiDark .kpiFootDark { color: rgba(255, 255, 255, .78); }
+
+/* ── FUNNEL BARS ───────────────────────────────────────────────────────────────────────────── */
+.funnel { display: flex; flex-direction: column; gap: 10px; }
+.funnelRow { display: grid; grid-template-columns: 150px minmax(0, 1fr) 90px; align-items: center; gap: 14px; }
+@media (max-width: 560px) { .funnelRow { grid-template-columns: 110px minmax(0, 1fr) 80px; gap: 8px; } }
+.funnelLabel { font-size: 13px; font-weight: 600; color: var(--forest, #0f3d2e); }
+.funnelTrack { height: 24px; border-radius: 6px; background: var(--hair, #eff3f1); overflow: hidden; }
+.funnelBar { height: 100%; border-radius: 6px; min-width: 2px; transition: width .2s; }
+.funnelNum { font-size: 14px; font-weight: 800; color: var(--forest, #0f3d2e); white-space: nowrap; }
+.funnelPct { margin-left: 6px; font-size: 11.5px; font-weight: 600; color: var(--mut, #5b6b63); }
+.cardMeta { font-size: 12px; font-weight: 600; color: var(--mut, #5b6b63); }
+
+/* ── BEFORE VS AFTER ───────────────────────────────────────────────────────────────────────── */
+.rowTitle { font-weight: 700; color: var(--forest, #0f3d2e); }
+.rowSub { display: block; font-size: 11px; font-weight: 500; color: var(--mut, #5b6b63); margin-top: 2px; }
+.hiGreen td { background: #e8f5ee; }
+.hiGreen td:first-child { border-radius: 8px 0 0 8px; }
+.hiGreen td:last-child { border-radius: 0 8px 8px 0; }
+
+/* ── PAID SPOTS TAKEN ──────────────────────────────────────────────────────────────────────── */
+.stat {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 12px; border-radius: 8px; background: var(--hair, #f3f6f4); margin-bottom: 8px;
+  font-size: 13px; color: var(--forest, #0f3d2e);
+}
+.stat b { font-size: 14px; font-weight: 800; }
+.statGold { background: #fbf1d8; color: var(--gold-ink, #8a6300); }
+.statGold b { color: var(--gold-ink, #8a6300); }
+.subhead {
+  margin: 16px 0 6px; font-size: 9.5px; font-weight: 800; letter-spacing: .13em; text-transform: uppercase;
+  color: var(--mut, #93a49b);
+}
+.fillRow { display: flex; justify-content: space-between; padding: 6px 0; font-size: 13px; color: var(--forest, #0f3d2e); }
+.fillRow b { font-weight: 800; }
+
+/* ── THE LOG ───────────────────────────────────────────────────────────────────────────────── */
+.logTable { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.logTable th {
+  text-align: left; padding: 6px 8px; font-size: 9.5px; font-weight: 800; letter-spacing: .09em;
+  text-transform: uppercase; color: var(--mut, #93a49b); border-bottom: 1px solid var(--line, #e3e9e5);
+}
+.logTable td { padding: 11px 8px; border-bottom: 1px solid rgba(7, 42, 32, .06); vertical-align: middle; }
+.logTable th:last-child, .logTable td:last-child { text-align: right; white-space: nowrap; }
+.logTable th.num, .logTable td.num { text-align: right; white-space: nowrap; }
+.matchName { font-weight: 700; color: var(--forest, #0f3d2e); }
+.matchWhen { display: block; font-size: 11.5px; color: var(--mut, #5b6b63); margin-top: 2px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  display: inline-block; padding: 3px 10px; border-radius: 999px; background: #e8f5ee;
+  color: var(--forest, #0f3d2e); font-size: 12px; font-weight: 600; white-space: nowrap;
+}
+.soldOut {
+  display: inline-block; margin-right: 8px; padding: 2px 8px; border-radius: 999px;
+  background: #fbf1d8; color: var(--gold-ink, #8a6300); font-size: 10.5px; font-weight: 800;
+}
+.booked { font-weight: 800; color: var(--forest, #0f3d2e); }
+.more {
+  display: block; margin: 12px auto 0; border: 0; background: transparent; cursor: pointer;
+  font-size: 12.5px; font-weight: 700; color: var(--forest, #0f3d2e);
+}
+.more:hover { text-decoration: underline; }
+.empty { padding: 18px 0 6px; font-size: 12.5px; color: var(--mut, #5b6b63); }
+.note { margin-top: 10px; font-size: 11.5px; color: var(--mut, #5b6b63); }
+
+/* Title tooltip content */
+.tipTitle { display: block; font-weight: 800; margin-bottom: 2px; }

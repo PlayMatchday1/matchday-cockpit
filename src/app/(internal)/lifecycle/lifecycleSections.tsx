@@ -64,6 +64,14 @@ export const LIFECYCLE_SECTIONS: RailItem[] = [
     desc: "Where downloads and new players come from: ads, website, shares, App Store",
     icon: <I><path d="M3.5 9.5h4l7-4.5v14l-7-4.5h-4z" /><path d="M18 9.2a4 4 0 0 1 0 5.6" /></I>,
   },
+  /* FREE FIRST MATCH (2026-11-05): one method, its own page. Between Acquisition and the Data Room
+     because it reads as the next question after "where do players come from": what the free first
+     match they arrive on turns into. */
+  {
+    key: "growth-free-first-match", group: "Reports", label: "Free First Match", href: "/lifecycle/free-first-match",
+    desc: "Whether the automatic free first match turns into paying players",
+    icon: <I><circle cx="12" cy="12" r="8.5" /><path d="M9 12.5l2 2 4-4.5" /></I>,
+  },
   {
     key: "growth-dataroom", group: "Reports", label: "Player Data Room", href: "/lifecycle/data-room",
     desc: "The rows behind every number on the other five",

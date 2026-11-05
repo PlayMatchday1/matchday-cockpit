@@ -8401,3 +8401,39 @@ their `fin_venues.city`; the other 2 are Warsaw (code WAW). El Paso (ELP, Galatz
 in 2026, both cancelled, so it never produced a row. San Diego existed only as a new field "TBD"
 (deleted with 0253). Seeded goals = each city's counted December field targets as the page summed them
 (28.9 before, 27.9 after removing San Diego's 1.0).
+## FREE FIRST MATCH (app 1.89, 2026-11-05): what the booking carries, and what the Clubhouse cannot see (probed 2026-11-05)
+
+Full write-up: `docs/free-first-match/DISCOVERY.md`. The load-bearing facts:
+
+- **The automatic free first match is promo `FIRST-MATCH-AUTO`, id 23482** (PERCENT 100, NEW_USERS,
+  ALL_MATCHES, cap 1, `startDateUtc 2026-11-05T06:22Z`, `endDateUtc 9999-12-31`). The backend writes
+  that `promocodeId` onto the new player's OWN spot at join (`~/Code/backend-189
+  apps/api/src/core/matches/matches.service.ts:926-940`); guest spots on the same join are charged.
+  `GET /admin/promocodes/23482` reported `usageCount 1` at 2026-11-05 ~19:10Z while the mirror held
+  0 rows with `promocode_id 23482` (newest mirrored booking created 11:55Z). **The mirror is a day
+  behind**: `/api/sync/cron` runs at 11:00 UTC (`vercel.json`), window now−14d … now+60d.
+- **`is_first_match` is not the signal.** It marks any first booking, paid or free
+  (`matches.service.ts:2088, 2203`). Since Nov 4: 29 first-match rows with `amount > 0`.
+- **Every NEW_USERS promo is a first-match code by construction**: valid only for an account with no
+  match (`promocodes.service isUserValidForPromocode`), and the backend's own "has had its free
+  match" check is `promocode.targetUserType = NEW_USERS` (`device-integrity.service.ts
+  accountHasFreeMatch`). 4,801 such promos; most are per-player referral codes `<id>ref`.
+- **Guest spots on member-free matches land as `PAID` with `amount 0` and no promo**: 3,067 rows
+  since Aug 7, all `user_type GUEST`, 294 of 300 sampled on `is_free_member` matches.
+- **The match payload carries `firstMatchFreeEnabled`** (per-match switch, default true); it is in
+  `mdapi_matches.raw` only, not a column.
+- **No platform anywhere the Clubhouse reads.** `mdapi_users.raw` and the booking payload carry
+  none. The backend holds it in `users.device_check_platform`, `user_devices.platform`,
+  `device_integrity_logs.platform`, `free_match_used_devices.platform`, and in the
+  `X-App-Platform` / `X-App-Version` headers; no admin endpoint exposes any of it.
+- **Blocked repeat claims are logged only on the backend**: `device_integrity_logs` rows with
+  `operation 'auto_gate'` and outcome `bit0_set` (iPhone) / `device_used` (Android) / `flagged` /
+  `stale_sync` / `no_sync` …, written by `claim()` at JOIN only; a quote that showed the full price
+  and was never booked leaves no row. `free_match_used_devices` records Android devices that USED a
+  free match (unique on platform + HMAC of the Android ID), not refusals; iOS "used" lives in
+  Apple's DeviceCheck bits. Play Integrity device recall is not approved by Google
+  (`GOOGLE_PLAY_INTEGRITY_DEVICE_RECALL_ENABLED` off).
+- **`growth_participation.user_id` is a COALESCE and no index serves it.** `.in("user_id", …)` over
+  a few thousand ids scanned the whole roster and hit the statement timeout (2026-11-05). Filter on
+  `account_id` (the raw `mdapi_match_players.user_id`, indexed) or `player_api_id` / `match_api_id`,
+  and widen a person to their accounts through `growth_person_link`.
