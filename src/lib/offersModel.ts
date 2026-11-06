@@ -580,6 +580,64 @@ export function uploadTiles(uploaded: UploadedPhoto[], stored: string | null, co
   return out;
 }
 
+// THE PHOTO PICKER (Figma 20826:49) and the Photo row in the Popup card (20825:213). Every photo an offer can use, as
+// one list: the app's own default first, then every field's covers (the Default, then each named extra cover),
+// then this offer's uploads and its saved photo. The picker opens on `suggestedPhotoTiles`: for a specific match
+// or a field offer that field's covers lead, then the default, then the covers of the fields in the offer's cities
+// (every field when it has no cities and points at no field), then the uploads.
+export type PhotoTile = { key: string; url: string | null; title: string; sub: string; fieldId: number | null; cityId: number | null; kind: "default" | "cover" | "upload" };
+export function photoTiles(fields: FieldOpt[], cities: City[], uploaded: UploadedPhoto[], stored: string | null): PhotoTile[] {
+  const covers = coverTiles(fields, []);
+  const cityOf = (id: number | null) => cities.find((c) => c.id === id)?.name ?? "";
+  return [
+    { key: "default", url: null, title: "MatchDay photo", sub: "Default", fieldId: null, cityId: null, kind: "default" },
+    ...covers.map((t) => { const cityId = fields.find((x) => x.id === t.fieldId)?.cityId ?? null; return { key: t.key, url: t.url, title: t.title, sub: cityOf(cityId), fieldId: t.fieldId, cityId, kind: "cover" as const }; }),
+    ...uploadTiles(uploaded, stored, covers.map((x) => x.url)).map((p, i) => ({ key: `upload-${i}`, url: p.url, title: p.name, sub: "Uploaded", fieldId: null, cityId: null, kind: "upload" as const })),
+  ];
+}
+// The tile the offer's photo is right now; a saved URL that no tile holds still gets a row.
+export const photoTileOf = (tiles: PhotoTile[], url: string | null): PhotoTile =>
+  tiles.find((t) => t.url === url) ?? { key: "custom", url, title: "Custom photo", sub: "", fieldId: null, cityId: null, kind: "upload" };
+// The fields an offer points at, most specific first: the deal's match's field, then where it applies, then Played at.
+export function offerFieldIds(f: Pick<Form, "scope" | "matchId" | "appliesFieldIds" | "fieldIds">, matches: MatchOpt[]): number[] {
+  const m = pickedMatch(f, matches);
+  const out: number[] = [];
+  for (const id of [m?.fieldId ?? null, ...f.appliesFieldIds, ...f.fieldIds]) if (id !== null && !out.includes(id)) out.push(id);
+  return out;
+}
+export function suggestedPhotoTiles(tiles: PhotoTile[], f: Pick<Form, "scope" | "matchId" | "appliesFieldIds" | "fieldIds" | "cityIds">, matches: MatchOpt[]): PhotoTile[] {
+  const chosen = offerFieldIds(f, matches);
+  const first = chosen.flatMap((id) => tiles.filter((t) => t.kind === "cover" && t.fieldId === id));
+  const inCities = (t: PhotoTile) => (f.cityIds.length === 0 ? chosen.length === 0 : t.cityId !== null && f.cityIds.includes(t.cityId));
+  const rest = tiles.filter((t) => !first.includes(t) && (t.kind !== "cover" || inCities(t)));
+  return [...first, ...rest];
+}
+// The picker's section label over the suggested tiles: "Suggested for this offer · Austin".
+export function suggestedPhotoLabel(f: Pick<Form, "scope" | "matchId" | "appliesFieldIds" | "cityIds">, matches: MatchOpt[], cities: City[], fields: FieldOpt[]): string {
+  const m = pickedMatch(f, matches);
+  const at = f.appliesFieldIds.map((id) => fields.find((x) => x.id === id)?.title).filter((x): x is string => !!x);
+  const where = m?.fieldTitle ? [m.fieldTitle] : at.length ? at : cityNames(f.cityIds, cities);
+  const shown = where.length > 2 ? `${where.slice(0, 2).join(", ")} and ${where.length - 2} more` : where.join(", ");
+  return shown ? `Suggested for this offer · ${shown}` : "Suggested for this offer";
+}
+// The line under the photo's name in the Popup card: why this is the photo.
+export function photoReason(t: PhotoTile, f: Pick<Form, "scope" | "matchId" | "appliesFieldIds" | "fieldIds" | "cityIds">, matches: MatchOpt[], cities: City[]): string {
+  if (t.kind === "default") return "The app's own photo";
+  if (t.kind === "upload") return t.key === "custom" ? "Saved with this offer" : "Uploaded for this offer";
+  const m = pickedMatch(f, matches);
+  if (m && t.fieldId === m.fieldId) return "The field this match is at";
+  if (t.fieldId !== null && f.appliesFieldIds.includes(t.fieldId)) return "Where the offer can be used";
+  if (t.fieldId !== null && f.fieldIds.includes(t.fieldId)) return "Players who have played here get it";
+  if (t.cityId !== null && f.cityIds.includes(t.cityId)) return `Suggested because the offer targets ${cityNames([t.cityId], cities)[0]}`;
+  return "Chosen for this offer";
+}
+export const photoRowName = (t: PhotoTile) => (t.kind === "cover" && t.sub ? `${t.title} · ${t.sub}` : t.title);
+// "Friday, November 6" for the lock-screen preview, from the Chicago wall clock (a date alone, never re-shifted).
+export function lockScreenDate(nowWall: string): string {
+  const [y, mo, d] = nowWall.slice(0, 10).split("-").map(Number);
+  return new Date(y, mo - 1, d).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+}
+
 // HIDING AN UPLOAD (the × on its tile): off this offer's tiles in this browser, nothing more. The file
 // stays on the server. The photo the offer is saved with has no ×: the offer is still using it. A
 // hidden photo that was selected but not saved stops being selected and the offer goes back to its

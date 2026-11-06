@@ -12,7 +12,7 @@ import {
   type CampaignPush, type PushForm, type PushResults, type Reach,
 } from "@/lib/offersPush";
 import { wallLabel, type MatchOpt } from "@/lib/offersModel";
-import { Btn, Chip, O, VerdictLine, authed, inputCls, inputStyle, outcomeOf, type WriteOutcome } from "./offersUi";
+import { Btn, Chip, O, Toggle, VerdictLine, authed, inputCls, inputStyle, outcomeOf, type WriteOutcome } from "./offersUi";
 
 const n = (x: number) => x.toLocaleString("en-US");
 const toInput = (s: string) => s.replace(" ", "T");
@@ -39,38 +39,35 @@ export function PushSection({ pf, setPf, sugg, scope, match, campaignId, campaig
     } finally { setTesting(false); }
   }
   return (
-    <div data-testid="offers-push" className="flex flex-col gap-2.5">
-      <label className="flex items-center gap-2 text-[13px] font-medium" style={{ color: O.ink }}>
-        <input data-testid="offers-push-on" type="checkbox" checked={pf.enabled} disabled={off} onChange={(e) => setPf({ ...pf, enabled: e.target.checked })} />
-        Also send as a push
-      </label>
+    <div data-testid="offers-push" className="flex flex-col gap-3.5">
+      {/* The switch row (Figma 20825:226). The phone itself is the Push tab of the preview column (PushLockScreen). */}
+      <div className="flex items-center gap-3">
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <div className="text-[13px] font-semibold" style={{ color: O.ink }}>Also send as a push</div>
+          <div className="text-[12px]" style={{ color: O.muted }}>Goes to the players this offer reaches who allow pushes. {campaignStatus === "LAUNCHED" ? "Sends when you save." : "Sends when it launches."}</div>
+        </div>
+        <Toggle testId="offers-push-on" on={pf.enabled} disabled={off} label="Also send as a push" onChange={(v) => setPf({ ...pf, enabled: v })} />
+      </div>
       {stored && stored.status !== "OFF" && <div data-testid="offers-push-status" className="text-[12px]" style={{ color: O.muted }}><b className="font-semibold">Push</b> · {pushStatusText(stored)}{locked && stored.status !== "NOT_SENT" ? ". It can't change now." : ""}</div>}
       {pf.enabled && (
         <div className="flex flex-col gap-3">
-          <div className="flex items-start gap-3.5">
-            <div className="flex w-[180px] shrink-0 flex-col gap-1.5">
-              <PhonePreview title={fillPush(t.title, match)} body={fillPush(t.body, match)} />
-              {(t.title.includes(FIRST_NAME) || t.body.includes(FIRST_NAME)) && (
-                <div data-testid="offers-push-preview-noname" className="text-[11px] leading-[14px]" style={{ color: O.muted }}>
-                  With no first name: <span style={{ color: O.ink }}>{[t.title, t.body].filter((x) => x.includes(FIRST_NAME)).map((x) => fillPush(x, match, null)).join(" / ")}</span>
-                </div>
-              )}
+          <Field label="Title" value={t.title} max={PUSH_TITLE_MAX} long={mayCutOff(t.title, PUSH_TITLE_SOFT, PUSH_TITLE_MAX, match)} testId="offers-push-title" disabled={off}
+            typed={pf.title !== undefined} onReset={() => { const x = { ...pf }; delete x.title; setPf(x); }}
+            onChange={(v) => setPf(pushAfterType(pf, "title", v, sugg))} />
+          <Field label="Body" value={t.body} max={PUSH_BODY_MAX} long={mayCutOff(t.body, PUSH_BODY_SOFT, PUSH_BODY_MAX, match)} rows={3} testId="offers-push-body" disabled={off}
+            typed={pf.body !== undefined} onReset={() => { const x = { ...pf }; delete x.body; setPf(x); }}
+            onChange={(v) => setPf(pushAfterType(pf, "body", v, sugg))} />
+          {(t.title.includes(FIRST_NAME) || t.body.includes(FIRST_NAME)) && (
+            <div data-testid="offers-push-preview-noname" className="text-[11.5px] leading-[15px]" style={{ color: O.muted }}>
+              With no first name: <span style={{ color: O.ink }}>{[t.title, t.body].filter((x) => x.includes(FIRST_NAME)).map((x) => fillPush(x, match, null)).join(" / ")}</span>
             </div>
-            <div className="flex min-w-0 flex-1 flex-col gap-2.5">
-              <Field label="Title" value={t.title} max={PUSH_TITLE_MAX} long={mayCutOff(t.title, PUSH_TITLE_SOFT, PUSH_TITLE_MAX, match)} testId="offers-push-title" disabled={off}
-                typed={pf.title !== undefined} onReset={() => { const x = { ...pf }; delete x.title; setPf(x); }}
-                onChange={(v) => setPf(pushAfterType(pf, "title", v, sugg))} />
-              <Field label="Body" value={t.body} max={PUSH_BODY_MAX} long={mayCutOff(t.body, PUSH_BODY_SOFT, PUSH_BODY_MAX, match)} rows={4} testId="offers-push-body" disabled={off}
-                typed={pf.body !== undefined} onReset={() => { const x = { ...pf }; delete x.body; setPf(x); }}
-                onChange={(v) => setPf(pushAfterType(pf, "body", v, sugg))} />
-            </div>
-          </div>
+          )}
           <div data-testid="offers-push-hint" className="text-[11.5px] leading-[17px]" style={{ color: O.muted }}>
             <Token>{FIRST_NAME}</Token> becomes the player&apos;s first name, left out with its comma if they have none.{" "}
             <Token>{MATCH_TOKEN}</Token> becomes the match&apos;s name, day and time{scope === "MATCH" ? "" : " (on an offer for a specific match only)"}.
           </div>
           <div className="flex flex-col gap-1.5">
-            <div className="text-[12px] font-medium" style={{ color: O.ink }}>Sends</div>
+            <div className="text-[12px] font-semibold" style={{ color: O.ink }}>Sends</div>
             <div className="flex flex-nowrap gap-1.5">
               <Chip testId="offers-push-now" on={!pf.at} disabled={off} onClick={() => setPf({ ...pf, at: false })}>{campaignStatus === "LAUNCHED" ? "Now" : "When it launches"}</Chip>
               <Chip testId="offers-push-at" on={pf.at} disabled={off} onClick={() => setPf({ ...pf, at: true })}>At a time</Chip>
@@ -109,7 +106,7 @@ function Field({ label, value, max, long, rows, testId, disabled, typed, onReset
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex items-baseline justify-between gap-2">
-        <span className="text-[12px] font-medium" style={{ color: O.ink }}>{label}</span>
+        <span className="text-[12px] font-semibold" style={{ color: O.ink }}>{label}</span>
         <span className="text-[11px]" style={{ color: value.length > max ? O.critInk : long ? O.warnInk : O.label }}>{value.length}/{max}</span>
       </div>
       {rows
@@ -121,21 +118,30 @@ function Field({ label, value, max, long, rows, testId, disabled, typed, onReset
   );
 }
 
-// A lock-screen notification, at about the size a phone draws one. Production pushes carry no "[STAGE SERVER]".
-function PhonePreview({ title, body }: { title: string; body: string }) {
+// THE PUSH TAB OF THE PREVIEW (Figma 20826:121): a lock screen over the offer's photo, the date and 9:41, and the
+// notification as a phone draws it, inside the preview column's phone frame. Production pushes carry no "[STAGE SERVER]".
+export function PushLockScreen({ title, body, photoUrl, dateLine }: { title: string; body: string; photoUrl: string | null; dateLine: string }) {
   return (
-    <div data-testid="offers-push-preview" className="flex w-[180px] shrink-0 flex-col gap-2 rounded-[22px] p-2.5" style={{ background: "linear-gradient(180deg,#2b3a35,#16211d)" }}>
-      <div className="text-center text-[22px] font-light text-white">9:41</div>
-      <div className="flex flex-col gap-0.5 rounded-[12px] px-2.5 py-2" style={{ background: "rgba(255,255,255,0.88)" }}>
-        <div className="flex items-center justify-between text-[9px] font-semibold" style={{ color: "#555" }}>
-          <span className="flex items-center gap-1">
-            {/* The app's own icon (frontend ios AppIcon.appiconset/Icon-120.png), copied here. */}
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img data-testid="offers-push-preview-icon" alt="" src="/offers/app-icon.png" width={12} height={12} className="block rounded-[3px]" />MATCHDAY
-          </span><span>now</span>
+    <div data-testid="offers-push-preview" className="absolute inset-0 overflow-hidden">
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img alt="" src={photoUrl ?? "/offers/offer-popup-photo.jpg"} className="absolute inset-0 size-full object-cover" />
+      <div className="absolute inset-0" style={{ background: "rgba(0,0,0,0.35)" }} />
+      <div className="absolute inset-x-0 top-[9%] flex flex-col items-center text-white">
+        <span className="text-[16px] font-medium">{dateLine}</span>
+        <span className="text-[64px] font-semibold leading-[1.05]">9:41</span>
+      </div>
+      <div className="absolute left-3 right-3 top-[34%] flex items-start gap-2.5 rounded-[18px] px-3.5 py-3" style={{ background: "rgba(245,245,245,0.92)" }}>
+        {/* The app's own icon (frontend ios AppIcon.appiconset/Icon-120.png), copied here. */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img data-testid="offers-push-preview-icon" alt="" src="/offers/app-icon.png" width={38} height={38} className="block shrink-0 rounded-[9px]" />
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="text-[13px] font-semibold" style={{ color: O.ink }}>MatchDay</span>
+            <span className="text-[12px]" style={{ color: O.muted }}>now</span>
+          </div>
+          <div data-testid="offers-push-preview-title" className="break-words text-[14px] font-semibold leading-[18px]" style={{ color: O.ink }}>{title}</div>
+          <div data-testid="offers-push-preview-body" className="break-words text-[13px] leading-[17px]" style={{ color: O.ink }}>{body}</div>
         </div>
-        <div data-testid="offers-push-preview-title" className="text-[11px] font-semibold leading-[14px]" style={{ color: "#111" }}>{title}</div>
-        <div data-testid="offers-push-preview-body" className="text-[10.5px] leading-[13px]" style={{ color: "#222" }}>{body}</div>
       </div>
     </div>
   );

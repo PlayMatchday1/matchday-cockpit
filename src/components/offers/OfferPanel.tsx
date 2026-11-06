@@ -1,28 +1,35 @@
 "use client";
 
-// ONE OFFER, top to bottom (Figma 20571:334; the specific-match state is 20581:54): Name, The deal,
-// Who gets it (with the live count), Popup (live preview, text written from the deal and editable
-// behind Edit text), Runs, More options (holdout), the summary with the most it can cost,
-// then Launch. After launch the deal, the audience and the dates are locked (the backend refuses
-// them); the name, the popup text and the total limit can still change, and Pause and End appear.
+// ONE OFFER, the editor (Figma 20825:45; the photo picker is 20826:49 and the Push tab 20826:121). It takes the
+// whole page in place of the list: ← Back to offers and the title, with Save draft, Send test and Launch top right;
+// the live preview pinned on the left (a real-size phone with the popup, or the push as a lock screen); the form
+// on the right as white cards: The deal, Applies to, Who gets it, Popup, Push notification, Runs, then the green
+// summary bar with Launch. Every edit redraws the preview at once. Under 1100px wide the preview sits on top and
+// the form under it. After launch the deal, the audience and the dates are locked (the backend refuses them); the
+// name, the popup text and the total limit can still change, and Pause and End appear in the summary bar.
 //
 // SEND TEST (backend POST .../send-preview): the popup on up to 20 players' phones on their next app
 // open, or on your own with Use my email. Needs a saved offer (any status, drafts included). Reported
 // as "Sent to N", never as arrived. The last ids are remembered in this browser as a convenience.
+//
+// NOT HERE YET, on purpose: the "Show popup on app open" switch at the top of the Popup card and push access beyond
+// OFFERS_PUSH_ACCOUNTS. Both wait on backend work; the Popup card leaves the switch's row open (see SHOW POPUP below).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  FIRST_NAME_TOKEN, isAdminAccount, MAX_TEST_IDS, SECTION_ADD, addSection, autoCopy, canReset, copyAfterType, isRemovable, staleLines, staleSections, writtenForOnLoad, removeSection, resetCopy, sectionCollapsed, canHidePhoto, copyAfterHide, hideUpload, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, uploadTiles, MAX_USES_PER_PLAYER, notFoundLine, parsePlayerIds, playerLine, PREVIEW_FIRST_NAME, amountText, limitLine, stepLimit, stepUses, usesLine, audienceBody, buttonMatchNote, buttonOf, opensText, chicagoWallNow, copyOf, createBody, defaultRun, endsTicket, formOf, formProblem, fromInput, matchInfo,
-  newForm, coverTiles, on188Line, heldBackLine, playersHoldoutOn, PLAYERS_HOLDOUT_MIN, patchBody, playedAtSuggestions, mergeMatches, withCovers, endNote, pauseNote, ranUntil, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, countWanted, lockedSummary, endHasPassed, launchProblem, offerWallNow, offerZones, setPriceAnyWarning, setPriceProblem, pickedMatch, startLabel, STEPPER, summary, toInput, wallLabel,
+  FIRST_NAME_TOKEN, isAdminAccount, MAX_TEST_IDS, SECTION_ADD, addSection, autoCopy, canReset, copyAfterType, isRemovable, staleLines, staleSections, writtenForOnLoad, removeSection, resetCopy, sectionCollapsed, copyAfterHide, hideUpload, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, MAX_USES_PER_PLAYER, notFoundLine, parsePlayerIds, playerLine, PREVIEW_FIRST_NAME, amountText, limitLine, stepLimit, stepUses, usesLine, audienceBody, buttonMatchNote, buttonOf, opensText, chicagoWallNow, copyOf, createBody, defaultRun, endsTicket, formOf, formProblem, fromInput, matchInfo,
+  newForm, on188Line, heldBackLine, playersHoldoutOn, PLAYERS_HOLDOUT_MIN, patchBody, playedAtSuggestions, mergeMatches, withCovers, endNote, pauseNote, ranUntil, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, countWanted, lockedSummary, endHasPassed, launchProblem, offerWallNow, offerZones, setPriceAnyWarning, setPriceProblem, pickedMatch, startLabel, STEPPER, summary, toInput, wallLabel,
+  photoTiles, photoTileOf, suggestedPhotoTiles, suggestedPhotoLabel, photoReason, photoRowName, lockScreenDate,
   type Campaign, type City, type Count, type FieldOpt, type Lookup, type UploadedPhoto, type CopyKey, type ListChange, type DealType, type Form, type MatchOpt, type WrittenFor,
 } from "@/lib/offersModel";
 import MatchPicker from "./MatchPicker";
+import PhotoPicker from "./PhotoPicker";
+import OfferPreview, { type PreviewTab } from "./OfferPreview";
 import { PushReach, PushSection, SendsTo } from "./OfferPush";
-import { defaultSendLocal, pushBodyOf, pushDirty, pushFormOf, pushLocked, pushProblem, pushSuggestion, pushText, type PushForm } from "@/lib/offersPush";
-import OfferPopupPreview from "./OfferPopupPreview";
+import { defaultSendLocal, fillPush, pushBodyOf, pushDirty, pushFormOf, pushLocked, pushProblem, pushSuggestion, pushText, type PushForm } from "@/lib/offersPush";
 import { lookupInBatches, MAX_OFFER_PLAYER_IDS, pastedLine, playerLookupBlock } from "@/lib/offersModel";
 import {
-  Btn, Chip, ConfirmDialog, Labeled, O, PanelSection, VerdictLine, authed, inputCls, inputStyle, outcomeOf, settled, type WriteOutcome,
+  Btn, Card, Chip, ConfirmDialog, Labeled, O, VerdictLine, authed, inputCls, inputStyle, outcomeOf, settled, type WriteOutcome,
 } from "./offersUi";
 
 // Whether the matches this offer names are in hand. Until they are, what the form would work out from
@@ -32,6 +39,11 @@ export type MatchRead = "ok" | "loading" | "failed";
 type Data = { campaigns: Campaign[]; cities: City[]; fields: FieldOpt[]; matches: MatchOpt[]; matchesComplete: boolean; matchesError: string | null; pushes?: boolean };
 const DEALS: { type: DealType; label: string }[] = [
   { type: "PERCENT_OFF", label: "% off" }, { type: "AMOUNT_OFF", label: "$ off" }, { type: "SET_PRICE", label: "Set price" }, { type: "FREE_MATCH", label: "Free match" },
+];
+// The popup's text, in the order the card shows them (two to a row on a wide form; the body takes a whole row).
+const COPY_FIELDS: readonly (readonly [CopyKey, string, number])[] = [
+  ["eyebrow", "Tag on the photo", 64], ["caption", "Line on the photo", 64], ["headline", "Headline (last word in green)", 64], ["line", "Line", 64],
+  ["body", "Body", 300], ["buttonLabel", "Button label", 64], ["dismissLabel", "Dismiss link", 64],
 ];
 const uploadsKey = (id: number) => `offers:uploaded-photos:${id}`;
 function readUploads(id: number): UploadedPhoto[] {
@@ -58,8 +70,10 @@ const TEST_IDS_KEY = "offers:last-test-ids";
 const readTestIds = () => { try { return window.localStorage.getItem(TEST_IDS_KEY) ?? ""; } catch { return ""; } };
 const keepTestIds = (text: string) => { try { window.localStorage.setItem(TEST_IDS_KEY, text); } catch { /* private mode */ } };
 
-export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, onClose, onLanded }: {
+export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, onClose, onLanded, results }: {
   c: Campaign | null; data: Data; matchRead: MatchRead; onRetryMatch: () => void; onClose: () => void; onLanded: (o: WriteOutcome, selectId?: number, change?: ListChange) => void;
+  // The results card for a launched offer, drawn by the page; sits at the top of the form column.
+  results?: React.ReactNode;
 }) {
   const nowWall = useMemo(() => chicagoWallNow(), []);
   // THE PICKER'S LIST. The page's load holds one page of it. Only if that wasn't all of them (or it
@@ -295,6 +309,7 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
   const otherScopeFields = fieldsInCities.filter((x) => !f.appliesFieldIds.includes(x.id));
   const strayScopeFields = f.appliesFieldIds.filter((id) => !fieldsInCities.some((x) => x.id === id));
   const fieldTitle = (id: number) => data.fields.find((x) => x.id === id)?.title ?? `Field ${id}`;
+  const cityName = (id: number | null) => data.cities.find((x) => x.id === id)?.name ?? "";
   const players = f.audienceMode === "PLAYERS";
   // A Specific players list of 200 or more has a holdout (offersModel holdoutFor); a shorter one doesn't.
   const holdoutOn = playersHoldoutOn(f);
@@ -334,7 +349,6 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
   }, [idsKey, lookup]);
 
   // ── popup text ──
-  const [editText, setEditText] = useState(false);
   const suggested = autoCopy(f, data.matches, data.cities, data.fields);
   const setCopy = (k: CopyKey, v: string) => {
     setF((x) => ({ ...x, copy: copyAfterType(x.copy, k, v, suggested[k]) }));
@@ -346,31 +360,26 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
   const [typedBefore, setTypedBefore] = useState<Partial<Record<CopyKey, string>>>({});
   const [more, setMore] = useState(false);
   const ends = endsTicket(f.endsLocal, offerWall());
+  const [tab, setTab] = useState<PreviewTab>("popup");
   // ── Button opens (Figma 20612:47 / 92 / 142). Editable after launch like the rest of the text;
   // forced and locked to the deal's match when the offer is for a specific match.
-  const photoName = (url: string | null) => {
-    if (!url) return "MatchDay photo";
-    const tile = coverTiles(data.fields, []).find((x) => x.url === url);
-    return tile ? `${tile.title} cover` : "Custom photo";
-  };
   const btn = buttonOf(f, data.matches);
   const btnMatch = data.matches.find((x) => x.id === btn.matchId) ?? null;
-  // ── Photo (no mock): every cover of the fields in the offer's cities (the Default, then each named extra cover),
-  // name and city under each. Picking one stores its URL as the photo; MatchDay photo is the app's default.
-  // A specific match's own cover (its chosen cover, else the field's Default) is the default for that offer.
-  // Editable after launch.
-  const tiles = coverTiles(data.fields, f.cityIds);
-  const fieldCity = (fieldId: number) => data.fields.find((x) => x.id === fieldId)?.cityId ?? null;
-  const cityName = (id: number | null) => data.cities.find((x) => x.id === id)?.name ?? "";
-  // UPLOAD: the tile after the covers (click or drop). The file goes straight from this browser to the
-  // backend's link, with progress, then is registered and selected. The backend keeps no list of an
-  // offer's uploads, so they are remembered per offer in this browser (a convenience); the offer's
-  // saved photo always shows as a tile whatever this browser remembers.
+  // ── Photo (Figma 20825:213 and the picker 20826:49): the row shows the photo the popup has right now and why; Change
+  // opens the picker over every field's covers and this offer's uploads; None is the app's own default. Editable after launch.
+  // UPLOAD: the file goes straight from this browser to the backend's link, with progress, then is registered and
+  // picked. The backend keeps no list of an offer's uploads, so they are remembered per offer in this browser (a
+  // convenience); the offer's saved photo always shows as a tile whatever this browser remembers.
   const [uploaded, setUploaded] = useState<UploadedPhoto[]>(() => (c ? readUploads(c.id) : []));
   const [upPct, setUpPct] = useState<number | null>(null);
   const [upErr, setUpErr] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [picking, setPicking] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
+  const tiles = useMemo(() => photoTiles(data.fields, data.cities, uploaded, c?.photoUrl ?? null), [data.fields, data.cities, uploaded, c?.photoUrl]);
+  const suggestedTiles = useMemo(() => suggestedPhotoTiles(tiles, f, data.matches), [tiles, f, data.matches]);
+  const photoNow = photoTileOf(tiles, copy.photoUrl ?? null);
+  const pickPhoto = (url: string | null) => setF((v) => ({ ...v, copy: { ...v.copy, photoUrl: url } }));
   async function uploadPhoto(file: File | undefined) {
     if (!file || upPct !== null) return;
     setUpErr(null);
@@ -391,10 +400,9 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
       const next = [...uploaded, { url, name: file.name }];
       setUploaded(next);
       if (c) keepUploads(c.id, next);
-      setF((v) => ({ ...v, copy: { ...v.copy, photoUrl: url } }));
+      pickPhoto(url);
     } finally { setUpPct(null); }
   }
-  const coverUrls = tiles.map((x) => x.url);
   // The × hides an upload from this offer's tiles in this browser. The file itself is not deleted.
   function hidePhoto(url: string) {
     const next = hideUpload(uploaded, url);
@@ -402,52 +410,40 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
     if (c) keepUploads(c.id, next);
     setF((v) => ({ ...v, copy: copyAfterHide(v.copy, url, c?.photoUrl ?? (c ? null : undefined), copyOf({ ...v, copy: {} }, data.matches, data.cities, data.fields).photoUrl) }));
   }
-  const photoTile = (key: string | number, url: string | null, title: string, sub: string, onHide?: () => void) => {
-    const on = (copy.photoUrl ?? null) === url;
-    return (
-      <div key={key} className="relative flex">
-      <button type="button" data-testid={`offers-photo-${key}`} data-on={on ? "1" : "0"} disabled={frozen}
-        onClick={() => setF((v) => ({ ...v, copy: { ...v.copy, photoUrl: url } }))}
-        className="flex w-full flex-col overflow-hidden rounded-[8px] border-2 text-left" style={{ borderColor: on ? O.chipOn : O.line }}>
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img alt="" src={url ?? "/offers/offer-popup-photo.jpg"} className="h-[48px] w-full object-cover" />
-        <span className="truncate px-1.5 pt-1 text-[11px] font-medium" style={{ color: O.ink }}>{title}</span>
-        <span className="truncate px-1.5 pb-1 text-[10.5px]" style={{ color: O.muted }}>{sub}</span>
-      </button>
-      {onHide && !frozen && (
-        <button type="button" data-testid={`offers-hide-${key}`} aria-label={`Hide ${title}`} title="Hide this photo" onClick={onHide}
-          className="absolute right-1 top-1 flex h-[18px] w-[18px] items-center justify-center rounded-full text-[12px] leading-none text-white" style={{ background: "rgba(6,61,44,.85)" }}>×</button>
-      )}
-      </div>
-    );
-  };
-  const photoPicker = () => (
+  const photoRow = () => (
     <div data-testid="offers-photo" className="flex flex-col gap-1.5">
-      <div className="text-[12px] font-medium" style={{ color: O.ink }}>Photo</div>
-      <div className="grid grid-cols-2 gap-2">
-        {photoTile("default", null, "MatchDay photo", "Default")}
-        {tiles.map((x) => photoTile(x.key, x.url, x.title, cityName(fieldCity(x.fieldId))))}
-        {uploadTiles(uploaded, c?.photoUrl ?? null, coverUrls).map((p, i) => photoTile(`upload-${i}`, p.url, p.name, "Uploaded", canHidePhoto(p.url, c?.photoUrl ?? null) ? () => hidePhoto(p.url) : undefined))}
-        {!ended && (
-          <button type="button" data-testid="offers-photo-upload" disabled={upPct !== null}
-            onClick={() => fileInput.current?.click()}
-            onDragOver={(e) => { e.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)}
-            onDrop={(e) => { e.preventDefault(); setDragging(false); uploadPhoto(e.dataTransfer.files[0]); }}
-            className="flex min-h-[82px] flex-col items-center justify-center gap-1 rounded-[8px] border-2 border-dashed px-1.5 text-center"
-            style={{ borderColor: dragging ? O.chipOn : O.line, background: dragging ? O.mint : O.surface }}>
-            {upPct === null
-              ? <><span className="text-[12px] font-semibold" style={{ color: O.ink }}>Upload</span><span className="text-[10.5px]" style={{ color: O.muted }}>Click or drop an image</span></>
-              : <>
-                  <span data-testid="offers-upload-pct" className="text-[11px] font-medium" style={{ color: O.ink }}>{upPct >= 1 ? "Finishing…" : `Uploading ${Math.round(upPct * 100)}%`}</span>
-                  <span className="h-1 w-4/5 overflow-hidden rounded-full" style={{ background: O.line }}><span className="block h-full" style={{ width: `${Math.round(upPct * 100)}%`, background: O.chipOn }} /></span>
-                </>}
-          </button>
+      <div className="text-[12px] font-semibold" style={{ color: O.ink }}>Photo</div>
+      <div data-testid="offers-photo-row" className="flex flex-wrap items-center gap-3.5 rounded-[10px] border p-2.5"
+        style={{ borderColor: dragging ? O.chipOn : O.line, background: dragging ? O.mint : O.surface }}
+        onDragOver={(e) => { if (!frozen) { e.preventDefault(); setDragging(true); } }} onDragLeave={() => setDragging(false)}
+        onDrop={(e) => { e.preventDefault(); setDragging(false); if (!frozen) uploadPhoto(e.dataTransfer.files[0]); }}>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img alt="" src={photoNow.url ?? "/offers/offer-popup-photo.jpg"} className="h-[60px] w-[96px] shrink-0 rounded-[6px] object-cover" />
+        <div className="flex min-w-[140px] flex-1 flex-col gap-0.5">
+          <div data-testid="offers-photo-name" className="truncate text-[13px] font-semibold" style={{ color: O.ink }}>{photoRowName(photoNow)}</div>
+          <div data-testid="offers-photo-reason" className="text-[12px]" style={{ color: O.muted }}>{photoReason(photoNow, f, data.matches, data.cities)}</div>
+        </div>
+        {!frozen && (
+          <div className="flex flex-wrap items-center gap-2">
+            <Btn testId="offers-photo-change" onClick={() => setPicking(true)}>Change</Btn>
+            <Btn testId="offers-photo-upload" disabled={upPct !== null} onClick={() => fileInput.current?.click()}>
+              {upPct === null ? "Upload" : upPct >= 1 ? "Finishing…" : `Uploading ${Math.round(upPct * 100)}%`}
+            </Btn>
+            <button type="button" data-testid="offers-photo-none" disabled={photoNow.kind === "default"} onClick={() => pickPhoto(null)}
+              className="px-1 text-[13px] font-semibold disabled:cursor-not-allowed disabled:opacity-50" style={{ color: O.muted }}>None</button>
+          </div>
         )}
       </div>
-      <input ref={fileInput} data-testid="offers-photo-file" type="file" accept="image/jpeg,image/png,image/webp" className="hidden"
+      <input ref={fileInput} id="offers-photo-file" data-testid="offers-photo-file" type="file" accept="image/jpeg,image/png,image/webp" className="hidden"
         onChange={(e) => { uploadPhoto(e.target.files?.[0]); e.target.value = ""; }} />
-      {upErr && <div data-testid="offers-upload-error" className="text-[11.5px] font-medium" style={{ color: O.critInk }}>{upErr}</div>}
-      <div className="text-[11.5px] leading-[16px]" style={{ color: O.muted }}>Best at 1200 × 650, landscape. Text on the image may be covered by the tag and line.</div>
+      {upPct !== null && !picking && (
+        <div className="flex items-center gap-2">
+          <span data-testid="offers-upload-pct" className="text-[11.5px] font-medium" style={{ color: O.ink }}>{upPct >= 1 ? "Finishing…" : `Uploading ${Math.round(upPct * 100)}%`}</span>
+          <span className="h-1 w-[160px] overflow-hidden rounded-full" style={{ background: O.line }}><span className="block h-full" style={{ width: `${Math.round(upPct * 100)}%`, background: O.chipOn }} /></span>
+        </div>
+      )}
+      {upErr && !picking && <div data-testid="offers-upload-error" className="text-[11.5px] font-medium" style={{ color: O.critInk }}>{upErr}</div>}
+      <div className="text-[11.5px] leading-[16px]" style={{ color: O.muted }}>Best at 1200 × 650, landscape. Text on the image may be covered by the tag and line. Drop an image on the row to upload it.</div>
     </div>
   );
   const buttonOpens = () => {
@@ -457,11 +453,11 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
       : undefined;
     return (
       <div data-testid="offers-button-opens" data-locked={btn.locked ? "1" : "0"} className="flex flex-col gap-2">
-        <div className="text-[12px] font-medium" style={{ color: O.ink }}>Button opens</div>
-        <div className="flex flex-wrap gap-1.5">
+        <div className="text-[12px] font-semibold" style={{ color: O.ink }}>Button opens</div>
+        <div className="flex flex-wrap gap-2">
           {([["FIND_MATCH", "Find a match"], ["MATCH", "A specific match"]] as const).map(([t, label]) => (
             btn.locked
-              ? <span key={t} data-testid={`offers-btn-${t}`} data-on={btn.target === t ? "1" : "0"} className="inline-flex items-center rounded-full border px-3 py-[6px] text-[12px] font-medium" style={chip(btn.target === t)}>{label}</span>
+              ? <span key={t} data-testid={`offers-btn-${t}`} data-on={btn.target === t ? "1" : "0"} className="inline-flex items-center rounded-full border px-3.5 py-[7px] text-[13px] font-medium" style={chip(btn.target === t)}>{label}</span>
               : <Chip key={t} testId={`offers-btn-${t}`} on={btn.target === t} disabled={off} onClick={() => set(t === "MATCH" ? { buttonTarget: "MATCH" } : { buttonTarget: "FIND_MATCH", buttonMatchId: null })}>{label}</Chip>
           ))}
         </div>
@@ -477,436 +473,453 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
       </div>
     );
   };
+  // One popup text field, or its + Add link while the section is removed.
+  const copyField = (k: CopyKey, label: string, max: number) => {
+    const auto = suggested[k];
+    if (isRemovable(k) && sectionCollapsed(f.copy, k, auto)) {
+      return frozen
+        ? <div key={k} className="self-start text-[12px]" style={{ color: O.muted }}>{label}: none</div>
+        : <button key={k} type="button" data-testid={`offers-add-${k}`} className="self-start py-1 text-[12px] font-semibold" style={{ color: O.ok }}
+            onClick={() => setF((x) => ({ ...x, copy: addSection(x.copy, k, typedBefore[k], auto) }))}>{SECTION_ADD[k]}</button>;
+    }
+    const value = f.copy[k] ?? auto ?? "";
+    return (
+      <div key={k} className={`flex min-w-0 flex-col gap-1.5 ${k === "body" ? "sm:col-span-2" : ""}`}>
+        <div className="flex items-baseline justify-between gap-2">
+          <label htmlFor={`offers-copy-${k}`} className="text-[12px] font-semibold" style={{ color: O.ink }}>{label}</label>
+          {isRemovable(k) && !frozen && (
+            <button type="button" data-testid={`offers-remove-${k}`} className="text-[11.5px] font-medium" style={{ color: O.muted }}
+              onClick={() => {
+                const typed = f.copy[k];
+                setTypedBefore((x) => { const n = { ...x }; if (typeof typed === "string") n[k] = typed; else delete n[k]; return n; });
+                setF((x) => ({ ...x, copy: removeSection(x.copy, k) }));
+              }}>Remove</button>
+          )}
+        </div>
+        {k === "body"
+          ? <textarea id={`offers-copy-${k}`} data-testid={`offers-copy-${k}`} rows={2} maxLength={max} disabled={frozen} className={inputCls} style={inputStyle} value={value} onChange={(e) => setCopy(k, e.target.value)} />
+          : <input id={`offers-copy-${k}`} data-testid={`offers-copy-${k}`} maxLength={max} disabled={frozen} className={inputCls} style={inputStyle} value={value} onChange={(e) => setCopy(k, e.target.value)} />}
+        {(stale.includes(k) || (!frozen && canReset(f.copy, k, auto))) && (
+          <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+            {stale.includes(k) && <span data-testid={`offers-stale-${k}`} className="text-[11.5px] font-medium" style={{ color: O.warnInk }}>Written for the old deal</span>}
+            {!frozen && canReset(f.copy, k, auto) && (
+              <button type="button" data-testid={`offers-reset-${k}`} className="text-[11.5px] font-medium" style={{ color: O.ok }}
+                onClick={() => setF((x) => ({ ...x, copy: resetCopy(x.copy, k) }))}>Reset to suggested</button>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
   const dl = locked || frozen; // deal, audience and run locked
   const passed = endHasPassed(f.endsLocal, offerWall());
   const idsWhy = playerLookupBlock({ players, typed: parsed.ids, answeredFor: lookupFor, lookup, failed: lookupErr !== null, sending: f.playerIds });
   const launchWhy = matchUnread ? matchUnreadText(matchRead) : problem ?? pushProb ?? idsWhy ?? launchProblem(f, offerWall()) ?? COUNT_BLOCK[countNow];
   const dealWarn = setPriceProblem(f, m);
   const anyWarn = setPriceAnyWarning(f, data.matches);
+  const pushShown = pushOn && pf.enabled ? (() => { const t = pushText(pf, pushSugg); return { title: fillPush(t.title, m), body: fillPush(t.body, m) }; })() : null;
+  const opens = matchUnread ? "↳ Opens a match" : opensText(f, data.matches);
 
   const title = c ? c.name || "Untitled offer" : f.name.trim() || "New offer";
+  const canLaunch = c === null || c.status === "DRAFT";
+  const launchBtn = (testId: string) => (
+    <Btn kind="primary" testId={testId} disabled={busy || !!launchWhy} title={launchWhy ?? undefined} onClick={() => setConfirm("launch")}>Launch</Btn>
+  );
+  const resumeBtn = (testId: string) => (
+    <Btn kind="primary" testId={testId} disabled={busy || dirty || passed} title={passed ? "The end time has already passed." : dirty ? "Save or undo your changes first" : undefined} onClick={() => setConfirm("launch")}>Resume</Btn>
+  );
+  const saveBtn = (c === null || dirty) && (
+    <Btn testId="offers-save" disabled={busy || !!problem || !!pushProb || !!idsWhy || (c !== null && settled(outcome) && !dirty)} title={idsWhy ?? undefined} onClick={onSave}>{c === null ? "Save draft" : "Save changes"}</Btn>
+  );
+  const testBtn = (
+    <Btn testId="offers-test" disabled={busy || c === null || (c.status === "DRAFT" && dirty)} title={c === null ? "Save it as a draft first" : c.status === "DRAFT" && dirty ? "Save your changes first, so the phone shows what you see" : undefined}
+      onClick={() => { if (!testOpen) setTestText(readTestIds()); setTestOpen((v) => !v); }}>Send test</Btn>
+  );
+  const summaryText = matchUnread ? matchUnreadText(matchRead) : wantCount ? summary(f, count, data.matches, data.cities, offerWall(), data.fields) : lockedSummary(f, data.matches, data.cities, offerWall(), data.fields, c ? ranUntil(c) : null);
+
   return (
-    <div data-testid="offers-panel" data-status={c?.status ?? "NEW"} className="overflow-hidden rounded-[12px] shadow-[0_4px_16px_rgba(0,51,38,0.08)]" style={{ background: O.surface }}>
-      {/* HEAD */}
-      <div className="flex flex-col gap-2.5 p-4">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0 truncate text-[20px] font-bold" style={{ color: O.ink }}>{title}</div>
-          <button type="button" aria-label="Close" onClick={onClose} className="text-[16px] leading-none" style={{ color: O.muted }}>✕</button>
+    <div data-testid="offers-panel" data-status={c?.status ?? "NEW"} className="flex flex-col gap-5">
+      {/* HEADER (Figma 20825:76) */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          <button type="button" data-testid="offers-back" onClick={onClose} className="self-start whitespace-nowrap text-[13px] font-semibold hover:underline" style={{ color: O.muted }}>← Back to offers</button>
+          <h1 className="m-0 truncate text-[26px] font-bold leading-[32px]" style={{ color: O.ink }}>{title}</h1>
         </div>
-        <Labeled label="Name">
-          <input data-testid="offers-name" className={inputCls} style={inputStyle} value={f.name} disabled={frozen} placeholder="Austin win-back"
-            onChange={(e) => set({ name: e.target.value })} />
-        </Labeled>
-        {locked && !ended && (
-          <div data-testid="offers-locked-note" className="rounded-[8px] px-3 py-2 text-[12px]" style={{ background: O.subtle, color: O.muted }}>
-            Launched, so the deal, who gets it and when it runs are locked. The name, the popup text and the total limit can still change.
-          </div>
-        )}
-        {ended && <div className="rounded-[8px] px-3 py-2 text-[12px]" style={{ background: O.subtle, color: O.muted }}>Ended. Nothing about it can change.</div>}
-        {matchUnread && (
-          <div data-testid="offers-match-unread" data-read={matchRead} className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-[8px] px-3 py-2 text-[12px] font-medium" style={matchRead === "failed" ? { background: O.critBg, color: O.critInk } : { background: O.subtle, color: O.muted }}>
-            <span>{matchUnreadText(matchRead)}</span>
-            {matchRead === "failed" && <button type="button" data-testid="offers-match-retry" className="font-semibold underline" onClick={onRetryMatch}>Retry</button>}
+        {!ended && (
+          <div className="flex flex-wrap items-center gap-2 sm:shrink-0">
+            {saveBtn}
+            {testBtn}
+            {canLaunch && launchBtn("offers-launch")}
+            {c?.status === "PAUSED" && resumeBtn("offers-resume")}
           </div>
         )}
       </div>
-
-      {/* THE DEAL */}
-      <PanelSection title="The deal" testId="offers-deal">
-        <div className="flex flex-wrap gap-1.5">
-          {DEALS.map((d) => <Chip key={d.type} testId={`offers-deal-${d.type}`} on={f.dealType === d.type} disabled={dl} onClick={() => pickDeal(d.type)}>{d.label}</Chip>)}
+      {locked && !ended && (
+        <div data-testid="offers-locked-note" className="rounded-[8px] px-3 py-2 text-[12px]" style={{ background: O.subtle, color: O.muted }}>
+          Launched, so the deal, who gets it and when it runs are locked. The name, the popup text and the total limit can still change.
         </div>
-        {STEPPER[f.dealType] && (
-          <div className="flex flex-wrap items-center gap-2.5">
-            {(
-              <>
-                <div className="flex items-center gap-[18px] rounded-[8px] border px-2.5 py-[7px] text-[14px]" style={{ borderColor: O.line, opacity: dl ? 0.6 : 1 }}>
-                  <button type="button" data-testid="offers-minus" disabled={dl} onClick={() => step(-1)} className="font-medium disabled:cursor-not-allowed" style={{ color: O.muted }}>–</button>
-                  <span data-testid="offers-amount" className="min-w-[34px] text-center font-bold" style={{ color: O.ink }}>{amountText(f.dealType, f.dealAmount)}</span>
-                  <button type="button" data-testid="offers-plus" disabled={dl} onClick={() => step(1)} className="font-medium disabled:cursor-not-allowed" style={{ color: O.muted }}>+</button>
-                </div>
-                <span className="text-[13px]" style={{ color: O.ink }}>{f.dealType === "SET_PRICE" ? "for their spot" : "off"}</span>
-              </>
-            )}
-          </div>
-        )}
-        {/* USES (Figma 20620:46): how many matches each player can use it on. A specific match is one. */}
-        {!m && !matchUnread && (
-          <div data-testid="offers-uses" className="flex flex-col gap-1.5">
-            <div className="text-[12px] font-medium" style={{ color: O.ink }}>Uses</div>
-            <div className="flex items-center gap-2.5">
-              <Stepper testId="offers-uses-n" value={String(f.usesPerPlayer)} disabled={dl}
-                minus={() => set({ usesPerPlayer: stepUses(f.usesPerPlayer, -1) })} plus={() => set({ usesPerPlayer: stepUses(f.usesPerPlayer, 1) })}
-                atMin={f.usesPerPlayer <= 1} atMax={f.usesPerPlayer >= MAX_USES_PER_PLAYER} />
-              <span className="text-[13px]" style={{ color: O.ink }}>matches per player</span>
-            </div>
-            <div data-testid="offers-uses-line" className="text-[12px]" style={{ color: O.muted }}>{usesLine(f.usesPerPlayer)}</div>
-          </div>
-        )}
-        {/* TOTAL LIMIT (maxRedemptions): no mock; same grammar as Uses. Editable after launch. */}
-        <div data-testid="offers-limit" className="flex flex-col gap-1.5">
-          <div className="text-[12px] font-medium" style={{ color: O.ink }}>Total limit</div>
-          <div className="flex flex-wrap items-center gap-1.5">
-            <Chip testId="offers-limit-none" on={f.maxRedemptions === null} disabled={frozen} onClick={() => set({ maxRedemptions: null })}>No limit</Chip>
-            {f.maxRedemptions === null
-              ? <Chip testId="offers-limit-set" on={false} disabled={frozen} onClick={() => set({ maxRedemptions: 50 })}>Set a limit</Chip>
-              : (
-                <div className="flex items-center gap-2.5">
-                  <Stepper testId="offers-limit-n" value={f.maxRedemptions} disabled={frozen} atMin={f.maxRedemptions <= 1}
-                    minus={() => set({ maxRedemptions: stepLimit(f.maxRedemptions, -1) })} plus={() => set({ maxRedemptions: stepLimit(f.maxRedemptions, 1) })}
-                    onType={(n) => set({ maxRedemptions: n })} />
-                  <span className="text-[13px]" style={{ color: O.ink }}>uses in total</span>
-                </div>
-              )}
-          </div>
-          {f.maxRedemptions !== null && <div data-testid="offers-limit-line" className="text-[12px]" style={{ color: O.muted }}>{limitLine(f.maxRedemptions)}</div>}
+      )}
+      {ended && <div className="rounded-[8px] px-3 py-2 text-[12px]" style={{ background: O.subtle, color: O.muted }}>Ended. Nothing about it can change.</div>}
+      {matchUnread && (
+        <div data-testid="offers-match-unread" data-read={matchRead} className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-[8px] px-3 py-2 text-[12px] font-medium" style={matchRead === "failed" ? { background: O.critBg, color: O.critInk } : { background: O.subtle, color: O.muted }}>
+          <span>{matchUnreadText(matchRead)}</span>
+          {matchRead === "failed" && <button type="button" data-testid="offers-match-retry" className="font-semibold underline" onClick={onRetryMatch}>Retry</button>}
         </div>
-        {!dl && dealWarn && <div data-testid="offers-setprice-block" className="text-[12px] font-medium" style={{ color: O.critInk }}>{dealWarn}</div>}
-        {!dl && !dealWarn && m && f.dealType === "SET_PRICE" && f.dealAmount === m.price && (
-          <div className="text-[12px]" style={{ color: O.warnInk }}>That is the same as its normal {amountText("SET_PRICE", m.price)}, so nobody saves anything.</div>
-        )}
-        {!dl && !dealWarn && anyWarn && <div data-testid="offers-setprice-warn" className="text-[12px]" style={{ color: O.warnInk }}>{anyWarn}</div>}
-        <Labeled label="Applies to">
-          <div className="flex flex-wrap gap-1.5">
-            <Chip testId="offers-scope-ANY" on={f.scope === "ANY"} disabled={dl} onClick={() => pickScope("ANY")}>Any match</Chip>
-            <Chip testId="offers-scope-FIELD" on={f.scope === "FIELD"} disabled={dl} onClick={() => pickScope("FIELD")}>A field</Chip>
-            <Chip testId="offers-scope-MATCH" on={f.scope === "MATCH"} disabled={dl} onClick={() => pickScope("MATCH")}>A specific match</Chip>
+      )}
+      {outcome && <VerdictLine outcome={outcome} />}
+      {problem && !ended && dirty && <div data-testid="offers-problem" className="text-[12px] font-medium" style={{ color: O.warnInk }}>{problem}</div>}
+      {!ended && c === null && <div data-testid="offers-phone-note" className="text-[11.5px]" style={{ color: O.muted }}>Save it as a draft to send a test.</div>}
+      {testOpen && c !== null && !ended && (
+        <div data-testid="offers-test-pop" className="flex w-full max-w-[520px] flex-col gap-2 self-end rounded-[12px] border p-3.5 shadow-[0_6px_20px_rgba(0,51,38,0.10)]" style={{ borderColor: O.line, background: O.surface }}>
+          <div className="flex items-center gap-1.5">
+            <span className="text-[12px] font-semibold" style={{ color: O.ink }}>Player IDs</span>
+            <span className="text-[11px]" style={{ color: O.label }}>up to {MAX_TEST_IDS} · commas, spaces or one per line</span>
           </div>
-        </Labeled>
-        {f.scope === "FIELD" && (
-          <div data-testid="offers-scope-fields" className="flex flex-col gap-1.5">
-            <div className="flex items-center gap-1.5">
-              <span className="text-[12px] font-medium" style={{ color: O.ink }}>Fields</span>
-              <span className="text-[11px]" style={{ color: O.label }}>the offer only works at these</span>
-            </div>
-            <div className="flex flex-wrap gap-1.5">
-              {f.appliesFieldIds.map((id) => <Chip key={id} on testId={`offers-sf-${id}`} disabled={dl} title={dl ? undefined : "Remove"} onClick={() => removeScopeField(id)}>{`${fieldTitle(id)}  ×`}</Chip>)}
-              {!dl && otherScopeFields.length > 0 && <Chip testId="offers-add-scope-field" on={false} onClick={() => setAddingScopeField((v) => !v)}>+ Field</Chip>}
-            </div>
-            {addingScopeField && !dl && (
-              <div className="grid grid-cols-2 gap-2 rounded-[8px] p-2" style={{ background: O.subtle }}>
-                {otherScopeFields.map((x) => (
-                  <button key={x.id} type="button" data-testid={`offers-scope-field-${x.id}`} onClick={() => { addScopeField(x.id); setAddingScopeField(false); }}
-                    className="flex flex-col overflow-hidden rounded-[8px] border text-left" style={{ borderColor: O.line, background: O.surface }}>
-                    {x.cover
-                      // eslint-disable-next-line @next/next/no-img-element
-                      ? <img alt="" src={x.cover} className="h-[48px] w-full object-cover" />
-                      : <span className="h-[48px] w-full" style={{ background: O.subtle }} />}
-                    <span className="truncate px-1.5 pt-1 text-[11px] font-medium" style={{ color: O.ink }}>{x.title}</span>
-                    <span className="truncate px-1.5 pb-1 text-[10.5px]" style={{ color: O.muted }}>{cityName(x.cityId)}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-            {!dl && strayScopeFields.length > 0 && <div data-testid="offers-scope-stray" className="text-[12px]" style={{ color: O.warnInk }}>{strayScopeFields.map(fieldTitle).join(", ")} {strayScopeFields.length === 1 ? "isn't" : "aren't"} in this offer&apos;s cities, so nobody could use it there.</div>}
-          </div>
-        )}
-        {f.scope === "MATCH" && (
-          <>
-            <Labeled label="Match">
-              <MatchPicker {...pickerProps} testId="offers-match" selected={m}
-                disabled={dl} empty={matchUnread ? matchUnreadText(matchRead) : undefined} onPick={pickMatch} />
-            </Labeled>
-            {m && <div data-testid="offers-match-info" className="rounded-[8px] px-3 py-[9px] text-[12px]" style={{ background: O.subtle, color: O.muted }}>{matchInfo(m)}</div>}
-          </>
-        )}
-      </PanelSection>
-
-      {/* WHO GETS IT */}
-      <PanelSection title="Who gets it" testId="offers-who">
-        {/* Figma 20620:75 (filters + fields) and 20620:128 (specific players). */}
-        <div className="flex flex-wrap gap-1.5">
-          <Chip testId="offers-mode-FILTERS" on={!players} disabled={dl} onClick={() => set({ audienceMode: "FILTERS" })}>Filters</Chip>
-          <Chip testId="offers-mode-PLAYERS" on={players} disabled={dl} onClick={() => set({ audienceMode: "PLAYERS" })}>Specific players</Chip>
-        </div>
-        {players ? (
-          <>
-            <div className="flex flex-col gap-1.5">
-              <div className="flex items-center gap-1.5">
-                <span className="text-[12px] font-medium" style={{ color: O.ink }}>Player IDs</span>
-                <span className="text-[11px]" style={{ color: O.label }}>commas, spaces or one per line</span>
-              </div>
-              <textarea data-testid="offers-player-ids" rows={4} disabled={dl} className={`${inputCls} leading-[19px]`} style={inputStyle}
-                value={f.playerIdsText} onChange={(e) => set({ playerIdsText: e.target.value })} placeholder="10482, 10511, 9877" />
-            </div>
-            {parsed.bad.length > 0 && <div data-testid="offers-ids-bad" className="self-start rounded-[8px] px-2.5 py-1.5 text-[12px] font-medium" style={{ background: O.warnBg, color: O.warnInk }}>Not an ID: {parsed.bad.slice(0, 5).join(", ")}{parsed.bad.length > 5 ? "…" : ""}. It will be skipped.</div>}
-            {/* Past the backend's own limit, not a 2,000 note: one offer takes MAX_OFFER_PLAYER_IDS, and more would be refused. */}
-            {parsed.tooMany && <div data-testid="offers-ids-too-many" className="self-start rounded-[8px] px-2.5 py-1.5 text-[12px] font-medium" style={{ background: O.warnBg, color: O.warnInk }}>One offer takes up to {MAX_OFFER_PLAYER_IDS.toLocaleString("en-US")} IDs. Only the first {MAX_OFFER_PLAYER_IDS.toLocaleString("en-US")} are used.</div>}
-            {lookupErr && <div className="self-start rounded-[8px] px-2.5 py-1.5 text-[12px]" style={{ background: O.critBg, color: O.critInk }}>Couldn&apos;t look them up: {lookupErr}</div>}
-            {lookupDone !== null && parsed.ids.length > 0 && (
-              <div data-testid="offers-lookup-progress" className="self-start text-[12px]" style={{ color: O.muted }}>
-                Looking up {lookupDone.toLocaleString("en-US")} of {parsed.ids.length.toLocaleString("en-US")} IDs…
-              </div>
-            )}
-            {lookup && (
-              <>
-                <div data-testid="offers-found" className="flex gap-1.5 self-start rounded-[8px] px-2.5 py-1.5 text-[12px]" style={{ background: O.mint, color: O.ok }}>
-                  <b>{pastedLine(parsed.ids.length, lookup)}</b>
-                </div>
-                {lookup.notFound.length > 0 && (
-                  <details data-testid="offers-not-found" className="self-start rounded-[8px] px-2.5 py-1.5 text-[12px] font-medium" style={{ background: O.warnBg, color: O.warnInk }}>
-                    <summary className="cursor-pointer">{lookup.notFound.length.toLocaleString("en-US")} not found. {lookup.notFound.length === 1 ? "It" : "They"} will be skipped. Show {lookup.notFound.length === 1 ? "it" : "them"}</summary>
-                    <div data-testid="offers-not-found-ids" className="mt-1.5 max-h-[120px] overflow-y-auto break-all font-mono text-[11px] font-normal">{lookup.notFound.join(", ")}</div>
-                  </details>
-                )}
-                {lookup.players.length > 0 && (
-                  <div data-testid="offers-found-list" className="flex flex-col gap-1 rounded-[8px] px-3 py-2.5 text-[12px]" style={{ background: O.subtle }}>
-                    {lookup.players.slice(0, 3).map((p) => <PlayerRow key={p.id} p={p} />)}
-                    {lookup.players.length > 3 && <div style={{ color: O.ok }}>+ {(lookup.players.length - 3).toLocaleString("en-US")} more</div>}
-                  </div>
-                )}
-              </>
-            )}
-            {holdoutOn ? (
-              <>
-                <div className="text-[12px] leading-[17px]" style={{ color: O.muted }}>Only these players get it. City and other filters don&apos;t apply. With {PLAYERS_HOLDOUT_MIN} or more, some are held back to measure (More options).</div>
-                {f.holdoutPercent > 0 && wantCount && countNow !== "error" && count && <div data-testid="offers-players-held-back" className="self-start text-[12px] font-medium" style={{ color: O.ink }}>{heldBackLine(count.heldBack)}</div>}
-              </>
-            ) : <div data-testid="offers-players-nobody-held" className="text-[12px] leading-[17px]" style={{ color: O.muted }}>Only these players get it. City and other filters don&apos;t apply, and nobody is held back.</div>}
-          </>
-        ) : (
-          <>
-            <Labeled label="City">
-              <div className="flex flex-wrap gap-1.5">
-                {f.cityIds.map((id) => (
-                  <Chip key={id} on disabled={dl} title={dl ? undefined : "Remove"} onClick={() => set({ cityIds: f.cityIds.filter((x) => x !== id) })}>
-                    {`${data.cities.find((x) => x.id === id)?.name ?? `City ${id}`}  ×`}
-                  </Chip>
-                ))}
-                {f.cityIds.length === 0 && <span className="self-center text-[12px]" style={{ color: O.muted }}>All cities</span>}
-                {!dl && otherCities.length > 0 && <Chip testId="offers-add-city" on={false} onClick={() => setAddingCity((v) => !v)}>+ City</Chip>}
-              </div>
-              {addingCity && !dl && (
-                <div className="flex flex-wrap gap-1.5 rounded-[8px] p-2" style={{ background: O.subtle }}>
-                  {otherCities.map((x) => <Chip key={x.id} testId={`offers-city-${x.id}`} on={false} onClick={() => { set({ cityIds: [...f.cityIds, x.id] }); setAddingCity(false); }}>{x.name}</Chip>)}
-                </div>
-              )}
-            </Labeled>
-            <div data-testid="offers-played-at" className="flex flex-col gap-1.5">
-              <div className="flex items-center gap-1.5">
-                <span className="text-[12px] font-medium" style={{ color: O.ink }}>Played at</span>
-                <span className="text-[11px]" style={{ color: O.label }}>any of these fields · leave empty for all</span>
-              </div>
-              <div className="flex flex-wrap gap-1.5">
-                {f.fieldIds.map((id) => (
-                  <Chip key={id} on testId={`offers-pf-${id}`} disabled={dl} title={dl ? undefined : "Remove"} onClick={() => set({ fieldIds: f.fieldIds.filter((x) => x !== id) })}>{`${fieldTitle(id)}  ×`}</Chip>
-                ))}
-                {!dl && otherFields.length > 0 && <Chip testId="offers-add-field" on={false} onClick={() => setAddingField((v) => !v)}>+ Field</Chip>}
-                {f.fieldIds.length === 0 && (dl || otherFields.length === 0) && <span className="self-center text-[12px]" style={{ color: O.muted }}>Any field</span>}
-              </div>
-              {!dl && playedAtSuggestions(f, data.fields, data.matches).map((x) => (
-                <button key={x.id} type="button" data-testid={`offers-pf-suggest-${x.id}`} onClick={() => set({ fieldIds: [...f.fieldIds, x.id] })}
-                  className="self-start text-left text-[12px] font-semibold" style={{ color: O.ok }}>Only players who&apos;ve played at {x.title}?</button>
-              ))}
-              {addingField && !dl && (
-                <div className="flex flex-wrap gap-1.5 rounded-[8px] p-2" style={{ background: O.subtle }}>
-                  {otherFields.map((x) => <Chip key={x.id} testId={`offers-field-${x.id}`} on={false} onClick={() => { set({ fieldIds: [...f.fieldIds, x.id] }); setAddingField(false); }}>{x.title}</Chip>)}
-                </div>
-              )}
-            </div>
-            <Labeled label="Last played">
-              <div className="flex flex-wrap gap-1.5">
-                <Chip testId="offers-lp-any" on={lastPlayedOn("ANY", null)} disabled={dl} onClick={() => set({ lastPlayed: "ANY", lastPlayedDays: null })}>Any time</Chip>
-                <Chip testId="offers-lp-30" on={lastPlayedOn("LAPSED", 30)} disabled={dl} onClick={() => set({ lastPlayed: "LAPSED", lastPlayedDays: 30 })}>30+ days ago</Chip>
-                <Chip testId="offers-lp-60" on={lastPlayedOn("LAPSED", 60)} disabled={dl} onClick={() => set({ lastPlayed: "LAPSED", lastPlayedDays: 60 })}>60+ days ago</Chip>
-                {oddLapse && <Chip on>{`${f.lastPlayedDays}+ days ago`}</Chip>}
-                <Chip testId="offers-lp-never" on={lastPlayedOn("NEVER", null)} disabled={dl} onClick={() => set({ lastPlayed: "NEVER", lastPlayedDays: null })}>Never</Chip>
-              </div>
-            </Labeled>
-            <Labeled label="Membership">
-              <div className="flex flex-wrap gap-1.5">
-                <Chip testId="offers-mem-ANYONE" on={f.membership === "ANYONE"} disabled={dl} onClick={() => set({ membership: "ANYONE" })}>Anyone</Chip>
-                <Chip testId="offers-mem-MEMBERS" on={f.membership === "MEMBERS"} disabled={dl} onClick={() => set({ membership: "MEMBERS" })}>Members</Chip>
-                <Chip testId="offers-mem-NON_MEMBERS" on={f.membership === "NON_MEMBERS"} disabled={dl} onClick={() => set({ membership: "NON_MEMBERS" })}>Not members</Chip>
-              </div>
-            </Labeled>
-            {(f.minMatches > 0 || f.maxMatches !== null) && (
-              <div className="text-[12px]" style={{ color: O.muted }}>Also: {f.maxMatches === f.minMatches ? `played exactly ${f.minMatches}` : f.maxMatches !== null ? `played ${f.minMatches} to ${f.maxMatches}` : `played ${f.minMatches}+`} matches (set outside this page).</div>
-            )}
-          </>
-        )}
-        {!players && !matchUnread && wantCount && <div data-testid="offers-count" data-state={countNow} className="flex flex-wrap gap-1.5 self-start rounded-[8px] px-2.5 py-1.5 text-[12px]" style={{ background: countNow === "error" ? O.critBg : O.mint, color: countNow === "error" ? O.critInk : O.ok }}>
-          {countNow === "error" ? <><span>Couldn&apos;t count: {countErr}</span><button type="button" data-testid="offers-count-retry" className="font-semibold underline" onClick={retryCount}>Retry</button></>
-            : count ? <><b>≈ {count.count.toLocaleString("en-US")} {count.count === 1 ? "player" : "players"}</b><span>match right now</span></>
-            : <span>Counting…</span>}
-        </div>}
-        {!players && !matchUnread && wantCount && countNow !== "error" && count && on188Line(count) && <div data-testid="offers-count-on188" className="self-start text-[12px]" style={{ color: O.muted }}>{on188Line(count)}</div>}
-        {pushOn && pf.enabled && !players && !matchUnread && <PushReach campaignId={c?.id ?? null} refreshKey={String(c?.id ?? "")} />}
-      </PanelSection>
-
-      {/* POPUP */}
-      <PanelSection title={editText && !frozen ? "Popup · Edit text" : "Popup"} testId="offers-popup">
-        {/* Figma 20612:47: with Edit text open the fields take the summary's place beside the preview. */}
-        <div className="flex items-start gap-3.5">
-          <div className="flex shrink-0 flex-col gap-2">
-            <OfferPopupPreview copy={copy} ends={ends} showTicket={f.showTicket} />
-            <div data-testid="offers-opens" className="max-w-[156px] text-[11px] font-medium" style={{ color: O.muted }}>{matchUnread ? "↳ Opens a match" : opensText(f, data.matches)}</div>
-          </div>
-          {editText && !frozen ? (
-            <div data-testid="offers-text-fields" className="flex min-w-0 flex-1 flex-col gap-3">
-              {([["buttonLabel", "Button label", 64], ["eyebrow", "Tag on the photo", 64], ["caption", "Line on the photo", 64], ["headline", "Headline (last word in green)", 64], ["line", "Line", 64], ["body", "Body", 300], ["dismissLabel", "Dismiss link", 64]] as const).map(([k, label, max]) => {
-                const auto = suggested[k];
-                if (isRemovable(k) && sectionCollapsed(f.copy, k, auto)) {
-                  return (
-                    <button key={k} type="button" data-testid={`offers-add-${k}`} className="self-start text-[12px] font-semibold" style={{ color: O.ok }}
-                      onClick={() => setF((x) => ({ ...x, copy: addSection(x.copy, k, typedBefore[k], auto) }))}>{SECTION_ADD[k]}</button>
-                  );
-                }
-                const value = f.copy[k] ?? auto ?? "";
-                return (
-                  <div key={k} className="flex flex-col gap-3">
-                    <div className="flex flex-col gap-1.5">
-                      <div className="flex items-baseline justify-between gap-2">
-                        <label htmlFor={`offers-copy-${k}`} className="text-[12px] font-medium" style={{ color: O.ink }}>{label}</label>
-                        {isRemovable(k) && (
-                          <button type="button" data-testid={`offers-remove-${k}`} className="text-[11.5px] font-medium" style={{ color: O.muted }}
-                            onClick={() => {
-                              const typed = f.copy[k];
-                              setTypedBefore((x) => { const n = { ...x }; if (typeof typed === "string") n[k] = typed; else delete n[k]; return n; });
-                              setF((x) => ({ ...x, copy: removeSection(x.copy, k) }));
-                            }}>Remove</button>
-                        )}
-                      </div>
-                      {k === "body"
-                        ? <textarea id={`offers-copy-${k}`} data-testid={`offers-copy-${k}`} rows={3} maxLength={max} className={inputCls} style={inputStyle} value={value} onChange={(e) => setCopy(k, e.target.value)} />
-                        : <input id={`offers-copy-${k}`} data-testid={`offers-copy-${k}`} maxLength={max} className={inputCls} style={inputStyle} value={value} onChange={(e) => setCopy(k, e.target.value)} />}
-                      {(stale.includes(k) || canReset(f.copy, k, auto)) && (
-                        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-                          {stale.includes(k) && <span data-testid={`offers-stale-${k}`} className="text-[11.5px] font-medium" style={{ color: O.warnInk }}>Written for the old deal</span>}
-                          {canReset(f.copy, k, auto) && (
-                            <button type="button" data-testid={`offers-reset-${k}`} className="text-[11.5px] font-medium" style={{ color: O.ok }}
-                              onClick={() => setF((x) => ({ ...x, copy: resetCopy(x.copy, k) }))}>Reset to suggested</button>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                    {k === "buttonLabel" && buttonOpens()}
-                    {k === "buttonLabel" && photoPicker()}
-                    {k === "body" && (f.showTicket ? (
-                      <div data-testid="offers-ticket" className="flex flex-col gap-1.5">
-                        <div className="flex items-baseline justify-between gap-2">
-                          <span className="text-[12px] font-medium" style={{ color: O.ink }}>Ticket</span>
-                          <button type="button" data-testid="offers-remove-ticket" className="text-[11.5px] font-medium" style={{ color: O.muted }} onClick={() => set({ showTicket: false })}>Remove</button>
-                        </div>
-                        <div className="text-[12px]" style={{ color: O.muted }}>{ends ?? "No end date"} · Auto-applied</div>
-                      </div>
-                    ) : (
-                      <button type="button" data-testid="offers-add-ticket" className="self-start text-[12px] font-semibold" style={{ color: O.ok }} onClick={() => set({ showTicket: true })}>+ Add ticket</button>
-                    ))}
-                  </div>
-                );
-              })}
-              <div data-testid="offers-firstname-hint" className="text-[11.5px]" style={{ color: O.muted }}>
-                <code className="rounded px-1" style={{ background: O.subtle, color: O.ink }}>{FIRST_NAME_TOKEN}</code> becomes the player&apos;s first name (shown here as {PREVIEW_FIRST_NAME}). With no first name on file it is left out.
-              </div>
-              <button type="button" data-testid="offers-edit-text" onClick={() => setEditText(false)} className="self-start text-[12px] font-semibold" style={{ color: O.ok }}>Done ‹</button>
-            </div>
-          ) : (
-            <div className="flex min-w-0 flex-1 flex-col gap-2">
-              <div className="text-[12px] leading-[17px]" style={{ color: O.muted }}>Written for you from the deal. Change any line if you want.</div>
-              {([["Headline", copy.headline], ["Line", copy.line], ["Photo", photoName(copy.photoUrl)], ["Button", copy.buttonLabel]] as const).map(([k, v]) => (
-                <div key={k} className="flex flex-col gap-[3px] font-medium">
-                  <div className="text-[11px]" style={{ color: O.label }}>{k}</div>
-                  <div className="break-words text-[13px]" style={{ color: O.ink }}>{v || "None"}</div>
-                </div>
-              ))}
-              {stale.length > 0 && <div data-testid="offers-stale-note" className="text-[12px] font-medium" style={{ color: O.warnInk }}>Written for the old deal: {stale.length} {stale.length === 1 ? "section" : "sections"}. See Edit text.</div>}
-              {!frozen && (
-                <button type="button" data-testid="offers-edit-text" onClick={() => setEditText(true)} className="self-start text-[12px] font-semibold" style={{ color: O.ok }}>Edit text ›</button>
-              )}
+          <textarea data-testid="offers-test-ids" rows={2} className={inputCls} style={inputStyle} value={testText} onChange={(e) => setTestText(e.target.value)} placeholder="10482, 10511" />
+          {testParsed.ids.length > MAX_TEST_IDS && <div className="text-[12px] font-medium" style={{ color: O.warnInk }}>A test goes to {MAX_TEST_IDS} players at most ({testParsed.ids.length} here).</div>}
+          {testLookup && (
+            <div data-testid="offers-test-found" className="flex flex-col gap-1 rounded-[8px] px-3 py-2 text-[12px]" style={{ background: O.subtle }}>
+              {testLookup.players.map((p) => <PlayerRow key={p.id} p={p} />)}
+              {testLookup.notFound.length > 0 && <div style={{ color: O.warnInk }}>{notFoundLine(testLookup.notFound)}</div>}
+              {testLookup.players.length === 0 && <div style={{ color: O.muted }}>No players found.</div>}
             </div>
           )}
+          <div className="flex flex-wrap gap-2">
+            <Btn kind="primary" testId="offers-test-send" disabled={busy || testIds.length === 0 || testParsed.ids.length > MAX_TEST_IDS || !testLookup}
+              onClick={() => sendTest(false)}>{testIds.length ? `Send to ${testIds.length}` : "Send"}</Btn>
+            <Btn testId="offers-test-me" disabled={busy} onClick={() => sendTest(true)}>Use my email</Btn>
+          </div>
+          <div className="text-[11.5px] leading-[16px]" style={{ color: O.muted }}>Test popups don&apos;t apply at checkout. Only send them to people who know it&apos;s a test.</div>
         </div>
-      </PanelSection>
-
-      {/* PUSH */}
-      {pushOn && (
-        <PanelSection title="Push" testId="offers-push-section">
-          <PushSection pf={pf} setPf={setPf} sugg={pushSugg} scope={f.scope} match={m} campaignId={c?.id ?? null} campaignStatus={c?.status ?? null}
-            stored={c?.push} startsLocal={f.startsLocal} endsLocal={f.endsLocal} disabled={matchUnread} problem={pushProb} />
-          {players && pf.enabled && <PushReach campaignId={c?.id ?? null} refreshKey={String(c?.id ?? "")} />}
-        </PanelSection>
       )}
 
-      {/* RUNS */}
-      <PanelSection title="Runs" testId="offers-runs">
-        <div className="flex items-center gap-2">
-          <WallInput testId="offers-starts" label={startLabel(f.startsLocal, nowWall)} value={f.startsLocal} disabled={dl} onChange={(v) => set({ startsLocal: v })} />
-          {f.endsLocal !== null && <span className="text-[13px]" style={{ color: O.muted }}>to</span>}
-          {f.endsLocal !== null && <WallInput testId="offers-ends" label={m && f.endsLocal === m.startLocal ? `Kickoff · ${wallLabel(f.endsLocal)}` : wallLabel(f.endsLocal)} value={f.endsLocal} disabled={dl} onChange={(v) => set({ endsLocal: v })} />}
+      {/* COLUMNS (Figma 20825:86): the preview pinned on the left above 1100px, on top below it. */}
+      <div className="grid items-start gap-7 min-[1100px]:grid-cols-[430px_minmax(0,1fr)]">
+        <div className="min-w-0 min-[1100px]:sticky min-[1100px]:top-[calc(var(--nav-h)+16px)]">
+          <OfferPreview tab={tab} setTab={setTab} copy={copy} ends={ends} showTicket={f.showTicket} opens={opens} push={pushShown} dateLine={lockScreenDate(nowWall)} />
         </div>
-        {f.scope !== "MATCH" && !matchUnread && <div className="flex justify-end"><Chip testId="offers-no-end" on={f.endsLocal === null} disabled={dl} onClick={() => set({ endsLocal: f.endsLocal === null ? defaultRun(nowWall).endsLocal : null })}>No end date</Chip></div>}
-        <div className="text-[11.5px]" style={{ color: O.muted }}>Times are each player&apos;s own city time.</div>
-        {passed && !dl && <div data-testid="offers-end-passed" className="text-[12px] font-medium" style={{ color: O.critInk }}>That end time has already passed, so it can&apos;t launch.</div>}
-        {(!players || holdoutOn) && <button type="button" data-testid="offers-more" onClick={() => setMore((v) => !v)} className="flex w-full items-center justify-between gap-2 rounded-[8px] px-3 py-[9px] text-left text-[12px]" style={{ background: O.subtle }}>
-          <span className="font-medium" style={{ color: O.ink }}>More options</span>
-          <span style={{ color: O.muted }}>{f.holdoutPercent > 0 ? `${f.holdoutPercent}% held back to measure` : "Nobody held back"} {more ? "‹" : "›"}</span>
-        </button>}
-        {more && (!players || holdoutOn) && (
-          <div data-testid="offers-more-fields" className="flex flex-col gap-3 rounded-[8px] border p-3" style={{ borderColor: O.line }}>
-            <Labeled label="Held back to measure">
-              <div className="flex items-center gap-2.5">
-                <div className="flex items-center gap-[18px] rounded-[8px] border px-2.5 py-[7px] text-[14px]" style={{ borderColor: O.line, opacity: dl ? 0.6 : 1 }}>
-                  <button type="button" disabled={dl} onClick={() => set({ holdoutPercent: Math.max(0, f.holdoutPercent - 5) })} className="font-medium disabled:cursor-not-allowed" style={{ color: O.muted }}>–</button>
-                  <span data-testid="offers-holdout" className="min-w-[34px] text-center font-bold" style={{ color: O.ink }}>{f.holdoutPercent}%</span>
-                  <button type="button" disabled={dl} onClick={() => set({ holdoutPercent: Math.min(50, f.holdoutPercent + 5) })} className="font-medium disabled:cursor-not-allowed" style={{ color: O.muted }}>+</button>
-                </div>
-              </div>
-              <div className="text-[11.5px]" style={{ color: O.muted }}>These players get no offer and no popup, so their bookings show what the offer changed.</div>
+        <div className="flex min-w-0 flex-col gap-4">
+          {results}
+
+          {/* THE DEAL */}
+          <Card title="The deal" testId="offers-deal">
+            <Labeled label="Name">
+              <input data-testid="offers-name" className={inputCls} style={inputStyle} value={f.name} disabled={frozen} placeholder="Austin win-back"
+                onChange={(e) => set({ name: e.target.value })} />
             </Labeled>
-          </div>
-        )}
-      </PanelSection>
-
-      {/* LAUNCH */}
-      <section className="flex flex-col gap-2.5 border-t p-4" style={{ borderColor: O.line }}>
-        <p data-testid="offers-summary" className="text-[13px] font-medium leading-[19px]" style={{ color: O.ink }}>
-          {matchUnread ? matchUnreadText(matchRead) : wantCount ? summary(f, count, data.matches, data.cities, offerWall(), data.fields) : lockedSummary(f, data.matches, data.cities, offerWall(), data.fields, c ? ranUntil(c) : null)}
-        </p>
-        {outcome && <VerdictLine outcome={outcome} />}
-        {problem && !ended && dirty && <div data-testid="offers-problem" className="text-[12px]" style={{ color: O.warnInk }}>{problem}</div>}
-        {!ended && (
-          <div className="flex flex-wrap gap-2">
-            {(c === null || c.status === "DRAFT") && (
-              <Btn kind="primary" testId="offers-launch" disabled={busy || !!launchWhy} title={launchWhy ?? undefined} onClick={() => setConfirm("launch")}>Launch</Btn>
-            )}
-            {c?.status === "PAUSED" && <Btn kind="primary" testId="offers-resume" disabled={busy || dirty || passed} title={passed ? "The end time has already passed." : dirty ? "Save or undo your changes first" : undefined} onClick={() => setConfirm("launch")}>Resume</Btn>}
-            {(c === null || dirty) && (
-              <Btn testId="offers-save" disabled={busy || !!problem || !!pushProb || !!idsWhy || (c !== null && settled(outcome) && !dirty)} title={idsWhy ?? undefined} onClick={onSave}>{c === null ? "Save draft" : "Save changes"}</Btn>
-            )}
-            {c?.status === "LAUNCHED" && <Btn testId="offers-pause" disabled={busy} onClick={() => setConfirm("pause")}>Pause</Btn>}
-            {(c?.status === "LAUNCHED" || c?.status === "PAUSED") && <Btn kind="danger" testId="offers-end" disabled={busy} onClick={() => setConfirm("end")}>End</Btn>}
-            {c?.status === "DRAFT" && <Btn kind="danger" testId="offers-delete" disabled={busy} onClick={() => setConfirm("delete")}>Delete</Btn>}
-            <Btn testId="offers-test" disabled={busy || c === null || (c.status === "DRAFT" && dirty)} title={c === null ? "Save it as a draft first" : c.status === "DRAFT" && dirty ? "Save your changes first, so the phone shows what you see" : undefined}
-              onClick={() => { if (!testOpen) setTestText(readTestIds()); setTestOpen((v) => !v); }}>Send test</Btn>
-          </div>
-        )}
-        {testOpen && c !== null && !ended && (
-          <div data-testid="offers-test-pop" className="flex flex-col gap-2 rounded-[10px] border p-3 shadow-[0_6px_20px_rgba(0,51,38,0.10)]" style={{ borderColor: O.line, background: O.surface }}>
-            <div className="flex items-center gap-1.5">
-              <span className="text-[12px] font-medium" style={{ color: O.ink }}>Player IDs</span>
-              <span className="text-[11px]" style={{ color: O.label }}>up to {MAX_TEST_IDS} · commas, spaces or one per line</span>
+            <div className="flex flex-wrap gap-2">
+              {DEALS.map((d) => <Chip key={d.type} testId={`offers-deal-${d.type}`} on={f.dealType === d.type} disabled={dl} onClick={() => pickDeal(d.type)}>{d.label}</Chip>)}
             </div>
-            <textarea data-testid="offers-test-ids" rows={2} className={inputCls} style={inputStyle} value={testText} onChange={(e) => setTestText(e.target.value)} placeholder="10482, 10511" />
-            {testParsed.ids.length > MAX_TEST_IDS && <div className="text-[12px] font-medium" style={{ color: O.warnInk }}>A test goes to {MAX_TEST_IDS} players at most ({testParsed.ids.length} here).</div>}
-            {testLookup && (
-              <div data-testid="offers-test-found" className="flex flex-col gap-1 rounded-[8px] px-3 py-2 text-[12px]" style={{ background: O.subtle }}>
-                {testLookup.players.map((p) => <PlayerRow key={p.id} p={p} />)}
-                {testLookup.notFound.length > 0 && <div style={{ color: O.warnInk }}>{notFoundLine(testLookup.notFound)}</div>}
-                {testLookup.players.length === 0 && <div style={{ color: O.muted }}>No players found.</div>}
+            <div className="grid gap-3 sm:grid-cols-3">
+              {STEPPER[f.dealType] && (
+                <Labeled label="Amount">
+                  <div className="flex flex-wrap items-center gap-2.5">
+                    <div className="flex items-center gap-[18px] rounded-[8px] border px-2.5 py-[7px] text-[14px]" style={{ borderColor: O.line, opacity: dl ? 0.6 : 1 }}>
+                      <button type="button" data-testid="offers-minus" disabled={dl} onClick={() => step(-1)} className="font-medium disabled:cursor-not-allowed" style={{ color: O.muted }}>–</button>
+                      <span data-testid="offers-amount" className="min-w-[34px] text-center font-bold" style={{ color: O.ink }}>{amountText(f.dealType, f.dealAmount)}</span>
+                      <button type="button" data-testid="offers-plus" disabled={dl} onClick={() => step(1)} className="font-medium disabled:cursor-not-allowed" style={{ color: O.muted }}>+</button>
+                    </div>
+                    <span className="text-[13px]" style={{ color: O.ink }}>{f.dealType === "SET_PRICE" ? "for their spot" : "off"}</span>
+                  </div>
+                </Labeled>
+              )}
+              {/* USES (Figma 20620:46): how many matches each player can use it on. A specific match is one. */}
+              {!m && !matchUnread && (
+                <div data-testid="offers-uses" className="flex flex-col gap-1.5">
+                  <div className="text-[12px] font-semibold" style={{ color: O.ink }}>Uses per player</div>
+                  <div className="flex items-center gap-2.5">
+                    <Stepper testId="offers-uses-n" value={String(f.usesPerPlayer)} disabled={dl}
+                      minus={() => set({ usesPerPlayer: stepUses(f.usesPerPlayer, -1) })} plus={() => set({ usesPerPlayer: stepUses(f.usesPerPlayer, 1) })}
+                      atMin={f.usesPerPlayer <= 1} atMax={f.usesPerPlayer >= MAX_USES_PER_PLAYER} />
+                    <span className="text-[13px]" style={{ color: O.ink }}>{f.usesPerPlayer === 1 ? "match" : "matches"}</span>
+                  </div>
+                  <div data-testid="offers-uses-line" className="text-[12px]" style={{ color: O.muted }}>{usesLine(f.usesPerPlayer)}</div>
+                </div>
+              )}
+              {/* TOTAL CAP (maxRedemptions). Editable after launch. */}
+              <div data-testid="offers-limit" className="flex flex-col gap-1.5">
+                <div className="text-[12px] font-semibold" style={{ color: O.ink }}>Total cap (optional)</div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Chip testId="offers-limit-none" on={f.maxRedemptions === null} disabled={frozen} onClick={() => set({ maxRedemptions: null })}>No cap</Chip>
+                  {f.maxRedemptions === null
+                    ? <Chip testId="offers-limit-set" on={false} disabled={frozen} onClick={() => set({ maxRedemptions: 50 })}>Set a cap</Chip>
+                    : (
+                      <div className="flex items-center gap-2.5">
+                        <Stepper testId="offers-limit-n" value={f.maxRedemptions} disabled={frozen} atMin={f.maxRedemptions <= 1}
+                          minus={() => set({ maxRedemptions: stepLimit(f.maxRedemptions, -1) })} plus={() => set({ maxRedemptions: stepLimit(f.maxRedemptions, 1) })}
+                          onType={(n) => set({ maxRedemptions: n })} />
+                        <span className="text-[13px]" style={{ color: O.ink }}>uses</span>
+                      </div>
+                    )}
+                </div>
+                {f.maxRedemptions !== null && <div data-testid="offers-limit-line" className="text-[12px]" style={{ color: O.muted }}>{limitLine(f.maxRedemptions)}</div>}
+              </div>
+            </div>
+            {!dl && dealWarn && <div data-testid="offers-setprice-block" className="text-[12px] font-medium" style={{ color: O.critInk }}>{dealWarn}</div>}
+            {!dl && !dealWarn && m && f.dealType === "SET_PRICE" && f.dealAmount === m.price && (
+              <div className="text-[12px]" style={{ color: O.warnInk }}>That is the same as its normal {amountText("SET_PRICE", m.price)}, so nobody saves anything.</div>
+            )}
+            {!dl && !dealWarn && anyWarn && <div data-testid="offers-setprice-warn" className="text-[12px]" style={{ color: O.warnInk }}>{anyWarn}</div>}
+          </Card>
+
+          {/* APPLIES TO */}
+          <Card title="Applies to" testId="offers-applies">
+            <div className="flex flex-wrap gap-2">
+              <Chip testId="offers-scope-ANY" on={f.scope === "ANY"} disabled={dl} onClick={() => pickScope("ANY")}>Any match</Chip>
+              <Chip testId="offers-scope-FIELD" on={f.scope === "FIELD"} disabled={dl} onClick={() => pickScope("FIELD")}>A field</Chip>
+              <Chip testId="offers-scope-MATCH" on={f.scope === "MATCH"} disabled={dl} onClick={() => pickScope("MATCH")}>One match</Chip>
+            </div>
+            {f.scope === "FIELD" && (
+              <div data-testid="offers-scope-fields" className="flex flex-col gap-1.5">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[12px] font-semibold" style={{ color: O.ink }}>Fields</span>
+                  <span className="text-[11px]" style={{ color: O.label }}>the offer only works at these</span>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {f.appliesFieldIds.map((id) => <Chip key={id} on testId={`offers-sf-${id}`} disabled={dl} title={dl ? undefined : "Remove"} onClick={() => removeScopeField(id)}>{`${fieldTitle(id)}  ×`}</Chip>)}
+                  {!dl && otherScopeFields.length > 0 && <Chip testId="offers-add-scope-field" on={false} onClick={() => setAddingScopeField((v) => !v)}>+ Field</Chip>}
+                </div>
+                {addingScopeField && !dl && (
+                  <div className="grid grid-cols-2 gap-2 rounded-[8px] p-2 sm:grid-cols-3" style={{ background: O.subtle }}>
+                    {otherScopeFields.map((x) => (
+                      <button key={x.id} type="button" data-testid={`offers-scope-field-${x.id}`} onClick={() => { addScopeField(x.id); setAddingScopeField(false); }}
+                        className="flex flex-col overflow-hidden rounded-[8px] border text-left" style={{ borderColor: O.line, background: O.surface }}>
+                        {x.cover
+                          // eslint-disable-next-line @next/next/no-img-element
+                          ? <img alt="" src={x.cover} className="h-[56px] w-full object-cover" />
+                          : <span className="h-[56px] w-full" style={{ background: O.subtle }} />}
+                        <span className="truncate px-2 pt-1 text-[12px] font-medium" style={{ color: O.ink }}>{x.title}</span>
+                        <span className="truncate px-2 pb-1.5 text-[11px]" style={{ color: O.muted }}>{cityName(x.cityId)}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {!dl && strayScopeFields.length > 0 && <div data-testid="offers-scope-stray" className="text-[12px]" style={{ color: O.warnInk }}>{strayScopeFields.map(fieldTitle).join(", ")} {strayScopeFields.length === 1 ? "isn't" : "aren't"} in this offer&apos;s cities, so nobody could use it there.</div>}
               </div>
             )}
-            <div className="flex flex-wrap gap-2">
-              <Btn kind="primary" testId="offers-test-send" disabled={busy || testIds.length === 0 || testParsed.ids.length > MAX_TEST_IDS || !testLookup}
-                onClick={() => sendTest(false)}>{testIds.length ? `Send to ${testIds.length}` : "Send"}</Btn>
-              <Btn testId="offers-test-me" disabled={busy} onClick={() => sendTest(true)}>Use my email</Btn>
-            </div>
-            <div className="text-[11.5px] leading-[16px]" style={{ color: O.muted }}>Test popups don&apos;t apply at checkout. Only send them to people who know it&apos;s a test.</div>
-          </div>
-        )}
-        {!ended && c === null && <div data-testid="offers-phone-note" className="text-[11.5px]" style={{ color: O.muted }}>Save it as a draft to send a test.</div>}
-      </section>
+            {f.scope === "MATCH" && (
+              <>
+                <Labeled label="Match">
+                  <MatchPicker {...pickerProps} testId="offers-match" selected={m}
+                    disabled={dl} empty={matchUnread ? matchUnreadText(matchRead) : undefined} onPick={pickMatch} />
+                </Labeled>
+                {m && <div data-testid="offers-match-info" className="rounded-[8px] px-3 py-[9px] text-[12px]" style={{ background: O.subtle, color: O.muted }}>{matchInfo(m)}</div>}
+              </>
+            )}
+          </Card>
 
+          {/* WHO GETS IT (Figma 20620:75 filters + fields; 20620:128 specific players) */}
+          <Card title="Who gets it" sub="City, fields played at, last played, membership, or exact player IDs" testId="offers-who">
+            <div className="flex flex-wrap gap-2">
+              <Chip testId="offers-mode-FILTERS" on={!players} disabled={dl} onClick={() => set({ audienceMode: "FILTERS" })}>Filters</Chip>
+              <Chip testId="offers-mode-PLAYERS" on={players} disabled={dl} onClick={() => set({ audienceMode: "PLAYERS" })}>Specific players</Chip>
+            </div>
+            {players ? (
+              <>
+                <Labeled label="Player IDs" hint="commas, spaces or one per line">
+                  <textarea data-testid="offers-player-ids" rows={4} disabled={dl} className={`${inputCls} leading-[19px]`} style={inputStyle}
+                    value={f.playerIdsText} onChange={(e) => set({ playerIdsText: e.target.value })} placeholder="10482, 10511, 9877" />
+                </Labeled>
+                {parsed.bad.length > 0 && <div data-testid="offers-ids-bad" className="self-start rounded-[8px] px-2.5 py-1.5 text-[12px] font-medium" style={{ background: O.warnBg, color: O.warnInk }}>Not an ID: {parsed.bad.slice(0, 5).join(", ")}{parsed.bad.length > 5 ? "…" : ""}. It will be skipped.</div>}
+                {/* Past the backend's own limit, not a 2,000 note: one offer takes MAX_OFFER_PLAYER_IDS, and more would be refused. */}
+                {parsed.tooMany && <div data-testid="offers-ids-too-many" className="self-start rounded-[8px] px-2.5 py-1.5 text-[12px] font-medium" style={{ background: O.warnBg, color: O.warnInk }}>One offer takes up to {MAX_OFFER_PLAYER_IDS.toLocaleString("en-US")} IDs. Only the first {MAX_OFFER_PLAYER_IDS.toLocaleString("en-US")} are used.</div>}
+                {lookupErr && <div className="self-start rounded-[8px] px-2.5 py-1.5 text-[12px]" style={{ background: O.critBg, color: O.critInk }}>Couldn&apos;t look them up: {lookupErr}</div>}
+                {lookupDone !== null && parsed.ids.length > 0 && (
+                  <div data-testid="offers-lookup-progress" className="self-start text-[12px]" style={{ color: O.muted }}>
+                    Looking up {lookupDone.toLocaleString("en-US")} of {parsed.ids.length.toLocaleString("en-US")} IDs…
+                  </div>
+                )}
+                {lookup && (
+                  <>
+                    <div data-testid="offers-found" className="flex gap-1.5 self-start rounded-[8px] px-2.5 py-1.5 text-[12px]" style={{ background: O.mint, color: O.ok }}>
+                      <b>{pastedLine(parsed.ids.length, lookup)}</b>
+                    </div>
+                    {lookup.notFound.length > 0 && (
+                      <details data-testid="offers-not-found" className="self-start rounded-[8px] px-2.5 py-1.5 text-[12px] font-medium" style={{ background: O.warnBg, color: O.warnInk }}>
+                        <summary className="cursor-pointer">{lookup.notFound.length.toLocaleString("en-US")} not found. {lookup.notFound.length === 1 ? "It" : "They"} will be skipped. Show {lookup.notFound.length === 1 ? "it" : "them"}</summary>
+                        <div data-testid="offers-not-found-ids" className="mt-1.5 max-h-[120px] overflow-y-auto break-all font-mono text-[11px] font-normal">{lookup.notFound.join(", ")}</div>
+                      </details>
+                    )}
+                    {lookup.players.length > 0 && (
+                      <div data-testid="offers-found-list" className="flex flex-col gap-1 rounded-[8px] px-3 py-2.5 text-[12px]" style={{ background: O.subtle }}>
+                        {lookup.players.slice(0, 3).map((p) => <PlayerRow key={p.id} p={p} />)}
+                        {lookup.players.length > 3 && <div style={{ color: O.ok }}>+ {(lookup.players.length - 3).toLocaleString("en-US")} more</div>}
+                      </div>
+                    )}
+                  </>
+                )}
+                {holdoutOn ? (
+                  <>
+                    <div className="text-[12px] leading-[17px]" style={{ color: O.muted }}>Only these players get it. City and other filters don&apos;t apply. With {PLAYERS_HOLDOUT_MIN} or more, some are held back to measure (More options, under Runs).</div>
+                    {f.holdoutPercent > 0 && wantCount && countNow !== "error" && count && <div data-testid="offers-players-held-back" className="self-start text-[12px] font-medium" style={{ color: O.ink }}>{heldBackLine(count.heldBack)}</div>}
+                  </>
+                ) : <div data-testid="offers-players-nobody-held" className="text-[12px] leading-[17px]" style={{ color: O.muted }}>Only these players get it. City and other filters don&apos;t apply, and nobody is held back.</div>}
+              </>
+            ) : (
+              <>
+                <div className="grid gap-3.5 sm:grid-cols-2">
+                  <Labeled label="City">
+                    <div className="flex flex-wrap gap-2">
+                      {f.cityIds.map((id) => (
+                        <Chip key={id} on disabled={dl} title={dl ? undefined : "Remove"} onClick={() => set({ cityIds: f.cityIds.filter((x) => x !== id) })}>
+                          {`${data.cities.find((x) => x.id === id)?.name ?? `City ${id}`}  ×`}
+                        </Chip>
+                      ))}
+                      {f.cityIds.length === 0 && <span className="self-center text-[12px]" style={{ color: O.muted }}>All cities</span>}
+                      {!dl && otherCities.length > 0 && <Chip testId="offers-add-city" on={false} onClick={() => setAddingCity((v) => !v)}>+ City</Chip>}
+                    </div>
+                    {addingCity && !dl && (
+                      <div className="flex flex-wrap gap-2 rounded-[8px] p-2" style={{ background: O.subtle }}>
+                        {otherCities.map((x) => <Chip key={x.id} testId={`offers-city-${x.id}`} on={false} onClick={() => { set({ cityIds: [...f.cityIds, x.id] }); setAddingCity(false); }}>{x.name}</Chip>)}
+                      </div>
+                    )}
+                  </Labeled>
+                  <Labeled label="Last played">
+                    <div className="flex flex-wrap gap-2">
+                      <Chip testId="offers-lp-any" on={lastPlayedOn("ANY", null)} disabled={dl} onClick={() => set({ lastPlayed: "ANY", lastPlayedDays: null })}>Any time</Chip>
+                      <Chip testId="offers-lp-30" on={lastPlayedOn("LAPSED", 30)} disabled={dl} onClick={() => set({ lastPlayed: "LAPSED", lastPlayedDays: 30 })}>30+ days ago</Chip>
+                      <Chip testId="offers-lp-60" on={lastPlayedOn("LAPSED", 60)} disabled={dl} onClick={() => set({ lastPlayed: "LAPSED", lastPlayedDays: 60 })}>60+ days ago</Chip>
+                      {oddLapse && <Chip on>{`${f.lastPlayedDays}+ days ago`}</Chip>}
+                      <Chip testId="offers-lp-never" on={lastPlayedOn("NEVER", null)} disabled={dl} onClick={() => set({ lastPlayed: "NEVER", lastPlayedDays: null })}>Never</Chip>
+                    </div>
+                  </Labeled>
+                </div>
+                <div data-testid="offers-played-at" className="flex flex-col gap-1.5">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[12px] font-semibold" style={{ color: O.ink }}>Played at</span>
+                    <span className="text-[11px]" style={{ color: O.label }}>any of these fields · leave empty for all</span>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {f.fieldIds.map((id) => (
+                      <Chip key={id} on testId={`offers-pf-${id}`} disabled={dl} title={dl ? undefined : "Remove"} onClick={() => set({ fieldIds: f.fieldIds.filter((x) => x !== id) })}>{`${fieldTitle(id)}  ×`}</Chip>
+                    ))}
+                    {!dl && otherFields.length > 0 && <Chip testId="offers-add-field" on={false} onClick={() => setAddingField((v) => !v)}>+ Field</Chip>}
+                    {f.fieldIds.length === 0 && (dl || otherFields.length === 0) && <span className="self-center text-[12px]" style={{ color: O.muted }}>Any field</span>}
+                  </div>
+                  {!dl && playedAtSuggestions(f, data.fields, data.matches).map((x) => (
+                    <button key={x.id} type="button" data-testid={`offers-pf-suggest-${x.id}`} onClick={() => set({ fieldIds: [...f.fieldIds, x.id] })}
+                      className="self-start text-left text-[12px] font-semibold" style={{ color: O.ok }}>Only players who&apos;ve played at {x.title}?</button>
+                  ))}
+                  {addingField && !dl && (
+                    <div className="flex flex-wrap gap-2 rounded-[8px] p-2" style={{ background: O.subtle }}>
+                      {otherFields.map((x) => <Chip key={x.id} testId={`offers-field-${x.id}`} on={false} onClick={() => { set({ fieldIds: [...f.fieldIds, x.id] }); setAddingField(false); }}>{x.title}</Chip>)}
+                    </div>
+                  )}
+                </div>
+                <Labeled label="Membership">
+                  <div className="flex flex-wrap gap-2">
+                    <Chip testId="offers-mem-ANYONE" on={f.membership === "ANYONE"} disabled={dl} onClick={() => set({ membership: "ANYONE" })}>Anyone</Chip>
+                    <Chip testId="offers-mem-MEMBERS" on={f.membership === "MEMBERS"} disabled={dl} onClick={() => set({ membership: "MEMBERS" })}>Members</Chip>
+                    <Chip testId="offers-mem-NON_MEMBERS" on={f.membership === "NON_MEMBERS"} disabled={dl} onClick={() => set({ membership: "NON_MEMBERS" })}>Not members</Chip>
+                  </div>
+                </Labeled>
+                {(f.minMatches > 0 || f.maxMatches !== null) && (
+                  <div className="text-[12px]" style={{ color: O.muted }}>Also: {f.maxMatches === f.minMatches ? `played exactly ${f.minMatches}` : f.maxMatches !== null ? `played ${f.minMatches} to ${f.maxMatches}` : `played ${f.minMatches}+`} matches (set outside this page).</div>
+                )}
+              </>
+            )}
+            {!players && !matchUnread && wantCount && <div data-testid="offers-count" data-state={countNow} className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-[13px] font-semibold" style={{ color: countNow === "error" ? O.critInk : O.chipOn }}>
+              {countNow === "error" ? <><span>Couldn&apos;t count: {countErr}</span><button type="button" data-testid="offers-count-retry" className="font-semibold underline" onClick={retryCount}>Retry</button></>
+                : count ? <><span>≈ {count.count.toLocaleString("en-US")} {count.count === 1 ? "player matches" : "players match"} right now</span>{f.holdoutPercent > 0 && <span className="whitespace-nowrap font-medium" style={{ color: O.muted }}>{f.holdoutPercent}% held back to measure</span>}</>
+                : <span className="font-medium" style={{ color: O.muted }}>Counting…</span>}
+            </div>}
+            {!players && !matchUnread && wantCount && countNow !== "error" && count && on188Line(count) && <div data-testid="offers-count-on188" className="self-start text-[12px]" style={{ color: O.muted }}>{on188Line(count)}</div>}
+          </Card>
+
+          {/* POPUP (Figma 20825:181). Every line is written from the deal and editable here; the preview on the left redraws as you type. */}
+          <Card title="Popup" sub="Written for you from the deal. Change any line if you want." testId="offers-popup">
+            {/* SHOW POPUP ON APP OPEN (Figma 20825:184) goes here, first in the card: "Off = push only. The discount still
+                auto-applies at checkout." It waits on the backend's field for it; nothing is drawn until that lands. */}
+            <div className="grid gap-3.5 sm:grid-cols-2">
+              {COPY_FIELDS.map(([k, label, max]) => copyField(k, label, max))}
+            </div>
+            {f.showTicket ? (
+              <div data-testid="offers-ticket" className="flex flex-col gap-1">
+                <div className="flex items-baseline gap-2">
+                  <span className="text-[12px] font-semibold" style={{ color: O.ink }}>Ticket</span>
+                  {!frozen && <button type="button" data-testid="offers-remove-ticket" className="text-[11.5px] font-medium" style={{ color: O.muted }} onClick={() => set({ showTicket: false })}>Remove</button>}
+                </div>
+                <div className="text-[12px]" style={{ color: O.muted }}>{ends ?? "No end date"} · Auto-applied</div>
+              </div>
+            ) : !frozen && (
+              <button type="button" data-testid="offers-add-ticket" className="self-start text-[12px] font-semibold" style={{ color: O.ok }} onClick={() => set({ showTicket: true })}>+ Add ticket</button>
+            )}
+            {buttonOpens()}
+            {photoRow()}
+            <div data-testid="offers-firstname-hint" className="text-[11.5px]" style={{ color: O.muted }}>
+              <code className="rounded px-1" style={{ background: O.subtle, color: O.ink }}>{FIRST_NAME_TOKEN}</code> becomes the player&apos;s first name (shown here as {PREVIEW_FIRST_NAME}). With no first name on file it is left out.
+              {stale.length > 0 && <span data-testid="offers-stale-note" className="ml-1 font-medium" style={{ color: O.warnInk }}>Written for the old deal: {stale.length} {stale.length === 1 ? "section" : "sections"}.</span>}
+            </div>
+          </Card>
+
+          {/* PUSH NOTIFICATION (Figma 20825:223). Only where the server lets this account see pushes (OFFERS_PUSH_ACCOUNTS on production). */}
+          {pushOn && (
+            <Card title="Push notification" testId="offers-push-section">
+              <PushSection pf={pf} setPf={setPf} sugg={pushSugg} scope={f.scope} match={m} campaignId={c?.id ?? null} campaignStatus={c?.status ?? null}
+                stored={c?.push} startsLocal={f.startsLocal} endsLocal={f.endsLocal} disabled={matchUnread} problem={pushProb} />
+              {pf.enabled && !matchUnread && <PushReach campaignId={c?.id ?? null} refreshKey={String(c?.id ?? "")} />}
+            </Card>
+          )}
+
+          {/* RUNS (Figma 20825:241) */}
+          <Card title="Runs" testId="offers-runs">
+            <div className="grid gap-3.5 sm:grid-cols-2">
+              <Labeled label="Starts">
+                <WallInput testId="offers-starts" label={startLabel(f.startsLocal, nowWall)} value={f.startsLocal} disabled={dl} onChange={(v) => set({ startsLocal: v })} />
+              </Labeled>
+              <Labeled label="Ends">
+                {f.endsLocal !== null
+                  ? <WallInput testId="offers-ends" label={m && f.endsLocal === m.startLocal ? `Kickoff · ${wallLabel(f.endsLocal)}` : wallLabel(f.endsLocal)} value={f.endsLocal} disabled={dl} onChange={(v) => set({ endsLocal: v })} />
+                  : <div data-testid="offers-ends-none" className="rounded-[8px] border px-3 py-[9px] text-[13px]" style={{ borderColor: O.line, color: O.muted, background: O.subtle }}>Runs until someone ends it</div>}
+              </Labeled>
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              {f.scope !== "MATCH" && !matchUnread && <Chip testId="offers-no-end" on={f.endsLocal === null} disabled={dl} onClick={() => set({ endsLocal: f.endsLocal === null ? defaultRun(nowWall).endsLocal : null })}>No end date</Chip>}
+              <div className="text-[12px]" style={{ color: O.muted }}>Times are each player&apos;s own city time.</div>
+            </div>
+            {passed && !dl && <div data-testid="offers-end-passed" className="text-[12px] font-medium" style={{ color: O.critInk }}>That end time has already passed, so it can&apos;t launch.</div>}
+            {(!players || holdoutOn) && <button type="button" data-testid="offers-more" onClick={() => setMore((v) => !v)} className="flex w-full items-center justify-between gap-2 rounded-[8px] px-3 py-[9px] text-left text-[12px]" style={{ background: O.subtle }}>
+              <span className="font-medium" style={{ color: O.ink }}>More options</span>
+              <span style={{ color: O.muted }}>{f.holdoutPercent > 0 ? `${f.holdoutPercent}% held back to measure` : "Nobody held back"} {more ? "‹" : "›"}</span>
+            </button>}
+            {more && (!players || holdoutOn) && (
+              <div data-testid="offers-more-fields" className="flex flex-col gap-3 rounded-[8px] border p-3" style={{ borderColor: O.line }}>
+                <Labeled label="Held back to measure">
+                  <div className="flex items-center gap-2.5">
+                    <div className="flex items-center gap-[18px] rounded-[8px] border px-2.5 py-[7px] text-[14px]" style={{ borderColor: O.line, opacity: dl ? 0.6 : 1 }}>
+                      <button type="button" disabled={dl} onClick={() => set({ holdoutPercent: Math.max(0, f.holdoutPercent - 5) })} className="font-medium disabled:cursor-not-allowed" style={{ color: O.muted }}>–</button>
+                      <span data-testid="offers-holdout" className="min-w-[34px] text-center font-bold" style={{ color: O.ink }}>{f.holdoutPercent}%</span>
+                      <button type="button" disabled={dl} onClick={() => set({ holdoutPercent: Math.min(50, f.holdoutPercent + 5) })} className="font-medium disabled:cursor-not-allowed" style={{ color: O.muted }}>+</button>
+                    </div>
+                  </div>
+                  <div className="text-[11.5px]" style={{ color: O.muted }}>These players get no offer and no popup, so their bookings show what the offer changed.</div>
+                </Labeled>
+              </div>
+            )}
+          </Card>
+
+          {/* SUMMARY BAR (Figma 20825:254): what it does, the most it can cost, and the one-way actions. */}
+          <div data-testid="offers-summary-bar" className="flex flex-wrap items-center gap-4 rounded-[14px] px-5 py-4" style={{ background: O.mint }}>
+            <p data-testid="offers-summary" className="m-0 min-w-[200px] flex-1 text-[13px] font-semibold leading-[19px]" style={{ color: O.chipOn }}>{summaryText}</p>
+            {!ended && (
+              <div className="flex flex-wrap items-center gap-2">
+                {c?.status === "DRAFT" && <Btn kind="danger" testId="offers-delete" disabled={busy} onClick={() => setConfirm("delete")}>Delete</Btn>}
+                {c?.status === "LAUNCHED" && <Btn testId="offers-pause" disabled={busy} onClick={() => setConfirm("pause")}>Pause</Btn>}
+                {(c?.status === "LAUNCHED" || c?.status === "PAUSED") && <Btn kind="danger" testId="offers-end" disabled={busy} onClick={() => setConfirm("end")}>End</Btn>}
+                {canLaunch && launchBtn("offers-launch-bar")}
+                {c?.status === "PAUSED" && resumeBtn("offers-resume-bar")}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {picking && (
+        <PhotoPicker tiles={tiles} suggested={suggestedTiles} suggestedLabel={suggestedPhotoLabel(f, data.matches, data.cities, data.fields)} cities={data.cities}
+          selected={copy.photoUrl ?? null} stored={c?.photoUrl ?? null} frozen={frozen}
+          upload={{ pct: upPct, err: upErr, allowed: !ended, onFile: uploadPhoto }}
+          onHide={hidePhoto} onCancel={() => setPicking(false)} onUse={(url) => { pickPhoto(url); setPicking(false); }} />
+      )}
       {confirm === "launch" && (
         <ConfirmDialog title={c?.status === "PAUSED" ? `Resume ${f.name.trim()}?` : `Launch ${f.name.trim()}?`}
           note={c?.status === "PAUSED" ? "Players who match start getting it again the next time they open the app." : `${summary(f, count, data.matches, data.cities, offerWall(), data.fields)} After launch the deal, who gets it and when it runs can't change.${pushOn && pf.enabled ? ` Also sends a push, "${pushText(pf, pushSugg).title}", ${pf.at ? `at ${pf.sendLocal} in each player's city` : "as soon as it launches"}.` : ""}`}
@@ -952,7 +965,7 @@ function PlayerRow({ p }: { p: Lookup["players"][number] }) {
 
 const matchUnreadText = (read: MatchRead) => (read === "failed" ? "Couldn't load the match" : "Loading the match…");
 
-// A wall-clock time that reads like the mock ("Today", "Sun, Nov 2 · 11:59 PM") and opens the
+// A wall-clock time that reads like the mock ("Today · 9:00 AM", "Sun, Nov 8 · 11:59 PM") and opens the
 // browser's own picker. The value stays wall-clock text end to end; no Date is built from it.
 function WallInput({ label, value, onChange, disabled, testId }: { label: string; value: string; onChange: (v: string) => void; disabled?: boolean; testId: string }) {
   return (

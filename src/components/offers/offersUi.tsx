@@ -1,16 +1,16 @@
 "use client";
 
-// MATCH OPS › OFFERS, the shared parts: the mock's palette (Figma 20571:44), the authed fetch, the write
-// outcome, and the small pieces the page and the panel draw. Same grammar as the Match Manager
-// Recruiting page (list on the left, one panel on the right), in the Offers mock's colours.
+// MATCH OPS › OFFERS, the shared parts: the editor mock's palette (Figma 20825:45), the authed fetch, the write
+// outcome, and the small pieces the page and the editor draw. The list keeps Recruiting's grammar; the editor is
+// the two-column screen in the mock (preview pinned on the left, white cards on the right).
 
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import type { CampaignState } from "@/lib/offersModel";
 
 export const O = {
-  ink: "#0b2e22", muted: "#5d7a6f", label: "#7d948a", line: "#e0e0db", subtle: "#f4f7f5", mint: "#e0f7eb", ok: "#16794a",
-  chipOn: "#063d2c", accent: "#2cdb87", accentInk: "#003326", surface: "#ffffff",
+  ink: "#13241d", muted: "#5e6b66", label: "#7d948a", line: "#e3e3db", subtle: "#f4f7f5", mint: "#e3f7ed", ok: "#16794a",
+  chipOn: "#0e3b2c", accent: "#2cdb87", accentInk: "#003326", surface: "#ffffff", page: "#f3f3ef",
   warnBg: "#fcf2d9", warnInk: "#8a6b12", critBg: "#fdeae4", critInk: "#a8391a", critLine: "#f0bda9",
 };
 
@@ -75,16 +75,17 @@ export function Banner({ outcome, onDismiss }: { outcome: WriteOutcome; onDismis
   );
 }
 
+// Pills (Figma 20825:80 / 84): white with a hairline, or the dark green primary with white text.
 export function Btn({ children, onClick, kind = "plain", disabled, title, testId }: {
   children: React.ReactNode; onClick?: () => void; kind?: "plain" | "primary" | "danger" | "dangerSolid"; disabled?: boolean; title?: string; testId?: string;
 }) {
-  const s = kind === "primary" ? { background: O.accent, borderColor: O.accent, color: O.accentInk }
+  const s = kind === "primary" ? { background: O.chipOn, borderColor: O.chipOn, color: "#fff" }
     : kind === "danger" ? { background: O.surface, borderColor: O.line, color: O.critInk }
     : kind === "dangerSolid" ? { background: O.critInk, borderColor: O.critInk, color: "#fff" }
     : { background: O.surface, borderColor: O.line, color: O.ink };
   return (
     <button type="button" data-testid={testId} onClick={onClick} disabled={disabled} title={title}
-      className="inline-flex cursor-pointer items-center whitespace-nowrap rounded-[8px] border px-4 py-[8px] text-[13px] font-semibold enabled:hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-50" style={s}>
+      className="inline-flex cursor-pointer items-center whitespace-nowrap rounded-full border px-4 py-[8px] text-[13px] font-semibold enabled:hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-50" style={s}>
       {children}
     </button>
   );
@@ -93,9 +94,19 @@ export function Btn({ children, onClick, kind = "plain", disabled, title, testId
 export function Chip({ on, onClick, children, testId, disabled, title }: { on: boolean; onClick?: () => void; children: React.ReactNode; testId?: string; disabled?: boolean; title?: string }) {
   return (
     <button type="button" onClick={onClick} data-testid={testId} data-on={on ? "1" : "0"} disabled={disabled} title={title}
-      className={`inline-flex items-center whitespace-pre rounded-full border px-3 py-[6px] text-[12px] ${on ? "font-semibold" : "font-medium"} disabled:cursor-not-allowed ${disabled && !on ? "opacity-50" : ""}`}
+      className={`inline-flex items-center whitespace-pre rounded-full border px-3.5 py-[7px] text-[13px] ${on ? "font-semibold" : "font-medium"} disabled:cursor-not-allowed ${disabled && !on ? "opacity-50" : ""}`}
       style={on ? { background: O.chipOn, borderColor: O.chipOn, color: "#fff" } : { background: O.surface, borderColor: O.line, color: O.ink }}>
       {children}
+    </button>
+  );
+}
+
+// A switch (Figma 20825:188 / 230): 36 × 20, green when on.
+export function Toggle({ on, onChange, disabled, testId, label }: { on: boolean; onChange: (on: boolean) => void; disabled?: boolean; testId?: string; label: string }) {
+  return (
+    <button type="button" role="switch" aria-checked={on} aria-label={label} data-testid={testId} disabled={disabled} onClick={() => onChange(!on)}
+      className="relative h-5 w-9 shrink-0 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-50" style={{ background: on ? O.accent : "#d4d8d2" }}>
+      <span className="absolute top-[2px] h-4 w-4 rounded-full bg-white shadow-[0_1px_2px_rgba(0,0,0,0.25)] transition-[left]" style={{ left: on ? 18 : 2 }} />
     </button>
   );
 }
@@ -113,36 +124,36 @@ export function StateChip({ state, label }: { state: CampaignState; label: strin
 }
 
 export function SectionLabel({ children }: { children: React.ReactNode }) {
-  return <div className="text-[10px] font-semibold tracking-[0.6px]" style={{ color: O.label }}>{children}</div>;
+  return <div className="text-[11px] font-bold tracking-[0.6px]" style={{ color: O.muted }}>{children}</div>;
 }
-export function PanelSection({ title, children, testId }: { title: string; children: React.ReactNode; testId?: string }) {
+// One white card in the editor's form column (Figma 20825:132): a bold title, an optional line under it, then the controls.
+export function Card({ title, sub, children, testId }: { title: string; sub?: string | null; children: React.ReactNode; testId?: string }) {
   return (
-    <section data-testid={testId} className="flex flex-col gap-2.5 border-t p-4" style={{ borderColor: O.line }}>
-      <SectionLabel>{title.toUpperCase()}</SectionLabel>
+    <section data-testid={testId} className="flex flex-col gap-3.5 rounded-[14px] border px-5 pb-5 pt-[18px]" style={{ background: O.surface, borderColor: O.line }}>
+      <div className="flex flex-col gap-0.5">
+        <h2 className="m-0 text-[15px] font-bold" style={{ color: O.ink }}>{title}</h2>
+        {sub ? <div className="text-[12px]" style={{ color: O.muted }}>{sub}</div> : null}
+      </div>
       {children}
     </section>
   );
 }
-export function Labeled({ label, children }: { label: string; children: React.ReactNode }) {
+export function Labeled({ label, children, hint, action }: { label: string; children: React.ReactNode; hint?: string; action?: React.ReactNode }) {
   return (
-    <div className="flex flex-col gap-1.5">
-      <div className="text-[12px] font-medium" style={{ color: O.ink }}>{label}</div>
+    <div className="flex min-w-0 flex-col gap-1.5">
+      <div className="flex items-baseline justify-between gap-2">
+        <div className="flex items-baseline gap-1.5">
+          <div className="text-[12px] font-semibold" style={{ color: O.ink }}>{label}</div>
+          {hint ? <span className="text-[11px]" style={{ color: O.label }}>{hint}</span> : null}
+        </div>
+        {action}
+      </div>
       {children}
     </div>
   );
 }
 export const inputCls = "w-full rounded-[8px] border px-3 py-[9px] text-[13px] outline-none disabled:cursor-not-allowed disabled:opacity-60";
 export const inputStyle = { borderColor: O.line, color: O.ink, background: O.surface } as const;
-
-// List on the left, one panel on the right; on narrow screens the panel drops under the list.
-export function Split({ main, panel }: { main: React.ReactNode; panel: React.ReactNode | null }) {
-  return (
-    <div className={`grid items-start gap-5 ${panel ? "xl:grid-cols-[minmax(0,1fr)_430px]" : ""}`}>
-      <div className="min-w-0">{main}</div>
-      {panel ? <aside className="min-w-0 xl:sticky xl:top-[72px] xl:max-h-[calc(100vh-88px)] xl:overflow-y-auto xl:rounded-[12px]">{panel}</aside> : null}
-    </div>
-  );
-}
 
 // For big one-way actions: launch, pause, end. LANDED closes it (the caller reports it); anything else
 // stays open with its verdict, and the action stays locked once settled (never a double write).

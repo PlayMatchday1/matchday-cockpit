@@ -2,11 +2,11 @@
 
 // MATCH OPS › OFFERS (Figma 20571:44; backend feature/offers on the LOCAL backend, Match Ops access).
 //
-// Recruiting's layout: the list on the left, one panel on the right. Picking an offer opens its panel
-// and, once it has launched, its results card under the list: saw, used, discount given, came back
-// at full price, and the one line comparing the players who got it with the ones held back. The
-// panel is src/components/offers/OfferPanel.tsx; every rule and every string is in
-// src/lib/offersModel.ts.
+// The list, then the editor in its place (Figma 20825:45): + New offer or a row hides the list and shows the
+// offer full width, ← Back to offers brings the list back. A launched offer's results card (saw, used,
+// discount given, came back at full price, and the one line comparing the players who got it with the ones
+// held back) sits at the top of the editor's form column. The editor is src/components/offers/OfferPanel.tsx;
+// every rule and every string is in src/lib/offersModel.ts.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
@@ -17,7 +17,7 @@ import {
 } from "@/lib/offersModel";
 import OfferPanel, { type MatchRead } from "./OfferPanel";
 import { PushResultsRow, PushSettingsCard } from "./OfferPush";
-import { Banner, Btn, NotFound, O, Split, StateChip, authed, type WriteOutcome } from "./offersUi";
+import { Banner, Btn, NotFound, O, StateChip, authed, type WriteOutcome } from "./offersUi";
 import { useOffersAccessState } from "./useOffersAccess";
 
 type Data = { campaigns: Campaign[]; cities: City[]; fields: FieldOpt[]; matches: MatchOpt[]; matchesComplete: boolean; matchesError: string | null; pushes?: boolean };
@@ -93,71 +93,70 @@ export default function OffersView() {
   if (access !== true) return <NotFound />;
 
   const nowWall = chicagoWallNow();
+  const editing = !!view && open !== null && (open === "new" || !!current);
 
   return (
     <div className="min-w-0 px-1 pb-16" style={{ color: O.ink }}>
-      <div className="mb-5 flex flex-wrap items-center gap-3">
-        <h1 className="m-0 text-[25px] font-bold" style={{ color: O.ink }}>Offers</h1>
-        <div className="ml-auto" />
-        {/* Drawn at once, disabled until the page says whether pushes may be seen, so a click during the load
-            never lands on nothing; hidden once it says no, or the load failed. */}
-        {(data ? data.pushes : !err) && <Btn testId="offers-push-limit" disabled={!data} title={!data ? "Loading…" : undefined} onClick={() => setPushLimit((v) => !v)}>{data ? "Push limit" : "Push limit…"}</Btn>}
-        {refreshedLine(reading, readAt) && <span data-testid="offers-refreshed" className="text-[12px]" style={{ color: O.muted }}>{refreshedLine(reading, readAt)}</span>}
-        <Btn testId="offers-refresh" disabled={reading} onClick={() => setKey((k) => k + 1)}>Refresh</Btn>
-      </div>
+      {!editing && (
+        <div className="mb-5 flex flex-wrap items-center gap-3">
+          <h1 className="m-0 text-[25px] font-bold" style={{ color: O.ink }}>Offers</h1>
+          <div className="ml-auto" />
+          {/* Drawn at once, disabled until the page says whether pushes may be seen, so a click during the load
+              never lands on nothing; hidden once it says no, or the load failed. */}
+          {(data ? data.pushes : !err) && <Btn testId="offers-push-limit" disabled={!data} title={!data ? "Loading…" : undefined} onClick={() => setPushLimit((v) => !v)}>{data ? "Push limit" : "Push limit…"}</Btn>}
+          {refreshedLine(reading, readAt) && <span data-testid="offers-refreshed" className="text-[12px]" style={{ color: O.muted }}>{refreshedLine(reading, readAt)}</span>}
+          <Btn testId="offers-refresh" disabled={reading} onClick={() => setKey((k) => k + 1)}>Refresh</Btn>
+        </div>
+      )}
       {banner && <Banner outcome={banner} onDismiss={() => setBanner(null)} />}
-      {data?.pushes && pushLimit && <PushSettingsCard onClose={() => setPushLimit(false)} />}
+      {!editing && data?.pushes && pushLimit && <PushSettingsCard onClose={() => setPushLimit(false)} />}
       {err ? (
         <div data-testid="offers-error" className="rounded-[10px] border px-3 py-2.5 text-[12.5px]" style={{ background: O.critBg, borderColor: O.critLine, color: O.critInk }}>Could not load: {err}</div>
-      ) : !view ? <div className="py-6 text-[13px]" style={{ color: O.muted }}>Loading…</div> : (
-        <Split
-          panel={open !== null && (open === "new" || current) ? (
-            <OfferPanel key={`${open}:${ver}:${open === "new" ? newN : ""}:${matchRead === "ok"}`} c={current} data={view} matchRead={matchRead} onRetryMatch={() => setMatchRetry((n) => n + 1)} onClose={() => setOpen(null)} onLanded={landed} />
-          ) : null}
-          main={
-            <div className="flex flex-col gap-5">
-              <div data-testid="offers-list" className="overflow-hidden rounded-[12px] border" style={{ background: O.surface, borderColor: O.line }}>
-                <div className="flex items-center justify-between px-4 py-3.5">
-                  <div className="text-[16px] font-bold" style={{ color: O.ink }}>Offers</div>
-                  <Btn kind="primary" testId="offers-new" onClick={() => { setOpen("new"); setNewN((n) => n + 1); }}>+ New offer</Btn>
-                </div>
-                <div className={`${COLS} border-y px-4 py-[9px] text-[10px] font-semibold tracking-[0.6px]`} style={{ borderColor: O.line, background: O.subtle, color: O.label }}>
-                  <div>OFFER</div><div>DEAL</div><div>RESULTS</div><div />
-                </div>
-                {view.campaigns.length === 0 ? (
-                  <div data-testid="offers-empty" className="border-b px-4 py-6 text-center" style={{ borderColor: O.line }}>
-                    <div className="text-[14px] font-semibold" style={{ color: O.ink }}>No offers yet</div>
-                    <div className="mt-1 text-[12px]" style={{ color: O.muted }}>Make one with + New offer. It shows as a popup when players open the app.</div>
-                  </div>
-                ) : view.campaigns.map((c) => {
-                  const [r1, r2] = resultsLines(c);
-                  const m = c.matchIds[0] ? view.matches.find((x) => x.id === c.matchIds[0]) : null;
-                  return (
-                    <div key={c.id} data-testid="offers-row" data-id={c.id} onClick={() => setOpen(c.id)} className={`${COLS} cursor-pointer border-b px-4 py-3`}
-                      style={{ borderColor: O.line, background: open === c.id ? O.mint : O.surface }}>
-                      <div className="flex min-w-0 flex-col gap-0.5">
-                        <div className="truncate text-[14px] font-semibold" style={{ color: O.ink }}>{c.name || "Untitled offer"}</div>
-                        <div data-testid="offers-row-who" className="truncate text-[12px]" style={{ color: O.muted }}>{audienceText(c, view.cities, view.fields)}</div>
-                      </div>
-                      <div className="flex min-w-0 flex-col gap-0.5">
-                        <div data-testid="offers-row-deal" className="truncate text-[13px] font-medium" style={{ color: O.ink }}>{dealText(c.dealType, c.dealAmount)}</div>
-                        <div className="truncate text-[12px]" style={{ color: O.muted }} title={m ? wallLabel(m.startLocal) : undefined}>{c.matchScoped ? (m ? <><span className="font-semibold" style={{ color: O.ink }}>{matchTitle(m)}</span>{matchWhere(m, view.cities) ? ` · ${matchWhere(m, view.cities)}` : ""}</> : `Match ${c.matchIds[0]}`) : c.appliesFieldIds?.length ? scopeFieldsLine(c, view.fields) : usesText(c.usesPerPlayer)}</div>
-                      </div>
-                      <div className="flex min-w-0 flex-col gap-0.5">
-                        <div data-testid="offers-row-results" className="truncate text-[13px] font-medium" style={{ color: O.ink }}>{r1}</div>
-                        {r2 && <div className="truncate text-[12px]" style={{ color: O.muted }}>{r2}</div>}
-                      </div>
-                      <div className="flex justify-end"><StateChip state={c.state} label={STATE_LABEL[c.state]} /></div>
-                    </div>
-                  );
-                })}
-                <div className="px-4 py-3 text-[12px] leading-[17px]" style={{ color: O.muted }}>
-                  Shows on app open. One popup per open, never right after another popup. Used = booked with the offer. Came back = booked again at full price within 30 days.
-                </div>
-              </div>
-              {current && current.state !== "DRAFT" && <ResultsCard c={current} nowWall={nowWall} pushes={!!view.pushes} />}
+      ) : !view ? <div className="py-6 text-[13px]" style={{ color: O.muted }}>Loading…</div> : editing ? (
+        <OfferPanel key={`${open}:${ver}:${open === "new" ? newN : ""}:${matchRead === "ok"}`} c={current} data={view} matchRead={matchRead} onRetryMatch={() => setMatchRetry((n) => n + 1)} onClose={() => setOpen(null)} onLanded={landed}
+          results={current && current.state !== "DRAFT" ? <ResultsCard c={current} nowWall={nowWall} pushes={!!view.pushes} /> : null} />
+      ) : (
+        <div className="flex flex-col gap-5">
+          <div data-testid="offers-list" className="overflow-hidden rounded-[12px] border" style={{ background: O.surface, borderColor: O.line }}>
+            <div className="flex items-center justify-between px-4 py-3.5">
+              <div className="text-[16px] font-bold" style={{ color: O.ink }}>Offers</div>
+              <Btn kind="primary" testId="offers-new" onClick={() => { setOpen("new"); setNewN((n) => n + 1); }}>+ New offer</Btn>
             </div>
-          } />
+            <div className={`${COLS} border-y px-4 py-[9px] text-[10px] font-semibold tracking-[0.6px]`} style={{ borderColor: O.line, background: O.subtle, color: O.label }}>
+              <div>OFFER</div><div>DEAL</div><div>RESULTS</div><div />
+            </div>
+            {view.campaigns.length === 0 ? (
+              <div data-testid="offers-empty" className="border-b px-4 py-6 text-center" style={{ borderColor: O.line }}>
+                <div className="text-[14px] font-semibold" style={{ color: O.ink }}>No offers yet</div>
+                <div className="mt-1 text-[12px]" style={{ color: O.muted }}>Make one with + New offer. It shows as a popup when players open the app.</div>
+              </div>
+            ) : view.campaigns.map((c) => {
+              const [r1, r2] = resultsLines(c);
+              const m = c.matchIds[0] ? view.matches.find((x) => x.id === c.matchIds[0]) : null;
+              return (
+                <div key={c.id} data-testid="offers-row" data-id={c.id} onClick={() => setOpen(c.id)} className={`${COLS} cursor-pointer border-b px-4 py-3 hover:brightness-[0.98]`}
+                  style={{ borderColor: O.line, background: O.surface }}>
+                  <div className="flex min-w-0 flex-col gap-0.5">
+                    <div className="truncate text-[14px] font-semibold" style={{ color: O.ink }}>{c.name || "Untitled offer"}</div>
+                    <div data-testid="offers-row-who" className="truncate text-[12px]" style={{ color: O.muted }}>{audienceText(c, view.cities, view.fields)}</div>
+                  </div>
+                  <div className="flex min-w-0 flex-col gap-0.5">
+                    <div data-testid="offers-row-deal" className="truncate text-[13px] font-medium" style={{ color: O.ink }}>{dealText(c.dealType, c.dealAmount)}</div>
+                    <div className="truncate text-[12px]" style={{ color: O.muted }} title={m ? wallLabel(m.startLocal) : undefined}>{c.matchScoped ? (m ? <><span className="font-semibold" style={{ color: O.ink }}>{matchTitle(m)}</span>{matchWhere(m, view.cities) ? ` · ${matchWhere(m, view.cities)}` : ""}</> : `Match ${c.matchIds[0]}`) : c.appliesFieldIds?.length ? scopeFieldsLine(c, view.fields) : usesText(c.usesPerPlayer)}</div>
+                  </div>
+                  <div className="flex min-w-0 flex-col gap-0.5">
+                    <div data-testid="offers-row-results" className="truncate text-[13px] font-medium" style={{ color: O.ink }}>{r1}</div>
+                    {r2 && <div className="truncate text-[12px]" style={{ color: O.muted }}>{r2}</div>}
+                  </div>
+                  <div className="flex justify-end"><StateChip state={c.state} label={STATE_LABEL[c.state]} /></div>
+                </div>
+              );
+            })}
+            <div className="px-4 py-3 text-[12px] leading-[17px]" style={{ color: O.muted }}>
+              Shows on app open. One popup per open, never right after another popup. Used = booked with the offer. Came back = booked again at full price within 30 days.
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

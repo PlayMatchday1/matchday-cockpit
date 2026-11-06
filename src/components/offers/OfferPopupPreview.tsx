@@ -1,11 +1,13 @@
 "use client";
 
-// THE POPUP AS A PLAYER SEES IT, at half size (Figma 20571:400; the border from section 14 · Targeted Offer Popup,
-// 20568:20243: 3px #2CDB87 inside the edge, radius 15, photo clipped by the card, so 1.5px and 7.5 here). It draws exactly what the app's
+// THE POPUP AS A PLAYER SEES IT (Figma 20825:102 at full size, 320 wide; the border from section 14 · Targeted Offer Popup,
+// 20568:20243: 3px #2CDB87 inside the edge, radius 15, photo clipped by the card). It draws exactly what the app's
 // OfferPopup.tsx draws (frontend feature/offers): photo with the eyebrow pill, headline with its last
 // word in green italic, the spaced line, the body, the dashed ticket (end time, Auto-applied), the
 // button (upper-cased by the app) and the dismiss link, with the caption on the photo. {firstName}
 // shows as "Luis"; the backend fills in each player's own. No photoUrl: the app's own bundled offer-popup-photo.jpg (frontend feature/offers), copied here.
+//
+// `width` sets the size; every measure is the half-size mock (156 wide) scaled, so 320 is the mock's full size to the pixel.
 
 import Image from "next/image";
 import { Heebo, Titillium_Web } from "next/font/google";
@@ -21,55 +23,61 @@ function splitHeadline(headline: string) {
   return { lead: words.slice(0, -1).join(" "), accent: words[words.length - 1] };
 }
 
-export default function OfferPopupPreview({ copy: raw, ends, showTicket }: { copy: Copy; ends: string | null; showTicket: boolean }) {
+export const POPUP_BASE_WIDTH = 156;
+
+export default function OfferPopupPreview({ copy: raw, ends, showTicket, width = POPUP_BASE_WIDTH }: { copy: Copy; ends: string | null; showTicket: boolean; width?: number }) {
   const copy = Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, k === "photoUrl" ? v : withPreviewName(v as string | null)])) as Copy;
   const { lead, accent } = splitHeadline(copy.headline);
+  const s = width / POPUP_BASE_WIDTH;
+  const px = (n: number) => `${Math.round(n * s * 100) / 100}px`;
   return (
-    <div data-testid="offers-popup-preview" className="flex w-[156px] shrink-0 flex-col overflow-hidden rounded-[7.5px] border-[1.5px] border-solid" style={{ background: "#f4eee1", borderColor: "#2cdb87" }}>
-      <div className="relative h-[84px] w-full shrink-0 overflow-hidden">
+    <div data-testid="offers-popup-preview" className="flex shrink-0 flex-col overflow-hidden border-solid"
+      style={{ width: px(156), background: "#f4eee1", borderColor: "#2cdb87", borderWidth: px(1.5), borderRadius: px(7.5), boxShadow: s > 1 ? `0 ${px(6)} ${px(16)} rgba(0,51,38,0.35)` : undefined }}>
+      <div className="relative w-full shrink-0 overflow-hidden" style={{ height: px(84) }}>
         {copy.photoUrl
           // eslint-disable-next-line @next/next/no-img-element
           ? <img alt="" src={copy.photoUrl} className="absolute inset-0 size-full object-cover" />
-          : <Image alt="" src="/offers/offer-popup-photo.jpg" fill sizes="156px" className="object-cover" />}
+          : <Image alt="" src="/offers/offer-popup-photo.jpg" fill sizes={`${Math.round(width)}px`} className="object-cover" />}
         <div className="absolute inset-0" style={{ background: "linear-gradient(180deg, rgba(0,51,38,0) 30%, rgba(0,51,38,0.85) 100%)" }} />
         {copy.caption ? (
-          <p data-testid="offers-preview-caption" className={`${heebo.className} absolute bottom-[8px] left-[8px] right-[8px] text-[7.5px] font-bold leading-[9.5px] text-white`}>{copy.caption}</p>
+          <p data-testid="offers-preview-caption" className={`${heebo.className} absolute font-bold text-white`} style={{ bottom: px(8), left: px(8), right: px(8), fontSize: px(7.5), lineHeight: px(9.5) }}>{copy.caption}</p>
         ) : null}
         {copy.eyebrow ? (
-          <div className="absolute left-[7px] top-[7px] rounded-full px-[5px] py-[2.5px]" style={{ background: "#003326" }}>
-            <p className={`${titillium.className} whitespace-nowrap text-[6px] font-bold tracking-[0.75px]`} style={{ color: "#2cdb87" }}>{copy.eyebrow}</p>
+          <div className="absolute rounded-full" style={{ left: px(7), top: px(7), padding: `${px(2.5)} ${px(5)}`, background: "#003326" }}>
+            <p className={`${titillium.className} whitespace-nowrap font-bold`} style={{ color: "#2cdb87", fontSize: px(6), letterSpacing: px(0.75) }}>{copy.eyebrow}</p>
           </div>
         ) : null}
       </div>
-      <div className="flex w-full flex-col items-center gap-[7px] px-[10px] py-[9px]">
+      <div className="flex w-full flex-col items-center" style={{ gap: px(7), padding: `${px(9)} ${px(10)}` }}>
         <div className="flex flex-col items-center">
-          <p data-testid="offers-preview-headline" className={`${titillium.className} whitespace-nowrap text-[24px] font-bold leading-[26px]`} style={{ color: "#0b4031" }}>
+          <p data-testid="offers-preview-headline" className={`${titillium.className} whitespace-nowrap font-bold`} style={{ color: "#0b4031", fontSize: px(24), lineHeight: px(26) }}>
             {lead}{accent ? " " : ""}{accent ? <span className="italic" style={{ color: "#1fa866" }}>{accent}</span> : null}
           </p>
-          {copy.line ? <p className={`${titillium.className} text-center text-[8px] font-bold tracking-[1.25px]`} style={{ color: "#5d7a6f" }}>{copy.line}</p> : null}
+          {copy.line ? <p className={`${titillium.className} text-center font-bold`} style={{ color: "#5d7a6f", fontSize: px(8), letterSpacing: px(1.25) }}>{copy.line}</p> : null}
         </div>
-        {copy.body ? <p className={`${heebo.className} w-full text-center text-[7.5px] leading-[10.5px]`} style={{ color: "#637973" }}>{copy.body}</p> : null}
+        {copy.body ? <p className={`${heebo.className} w-full text-center`} style={{ color: "#637973", fontSize: px(7.5), lineHeight: px(10.5) }}>{copy.body}</p> : null}
         {showTicket && (
-          <div data-testid="offers-preview-ticket" className={`flex w-full items-center rounded-[5px] border-[0.5px] border-dashed bg-white px-[6px] py-[5.5px] ${ends ? "justify-between" : "justify-center"}`} style={{ borderColor: "#bac7c3" }}>
+          <div data-testid="offers-preview-ticket" className={`flex w-full items-center border-dashed bg-white ${ends ? "justify-between" : "justify-center"}`}
+            style={{ borderColor: "#bac7c3", borderWidth: px(0.5), borderRadius: px(5), padding: `${px(5.5)} ${px(6)}` }}>
             {ends ? (
-              <div className="flex items-center gap-[2.5px]">
+              <div className="flex items-center" style={{ gap: px(2.5) }}>
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img alt="" src="/offers/icon-clock.svg" width={7} height={7} className="block" />
-                <p className={`${heebo.className} whitespace-nowrap text-[6.5px] font-medium`} style={{ color: "#0b4031" }}>{ends}</p>
+                <img alt="" src="/offers/icon-clock.svg" className="block" style={{ width: px(7), height: px(7) }} />
+                <p className={`${heebo.className} whitespace-nowrap font-medium`} style={{ color: "#0b4031", fontSize: px(6.5) }}>{ends}</p>
               </div>
             ) : null}
-            <div className="flex items-center gap-[3px]">
+            <div className="flex items-center" style={{ gap: px(3) }}>
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img alt="" src="/offers/icon-tag.svg" width={8} height={8} className="block" />
-              <p className={`${heebo.className} whitespace-nowrap text-[6.5px] font-medium`} style={{ color: "#1fa866" }}>Auto-applied</p>
+              <img alt="" src="/offers/icon-tag.svg" className="block" style={{ width: px(8), height: px(8) }} />
+              <p className={`${heebo.className} whitespace-nowrap font-medium`} style={{ color: "#1fa866", fontSize: px(6.5) }}>Auto-applied</p>
             </div>
           </div>
         )}
-        <div className="flex w-full flex-col items-center gap-[6px]">
-          <div className="flex h-[26px] w-full items-center justify-center rounded-[5px]" style={{ background: "#2cdb87" }}>
-            <p className={`${titillium.className} whitespace-nowrap text-[9px] font-bold uppercase`} style={{ color: "#003326" }}>{copy.buttonLabel}</p>
+        <div className="flex w-full flex-col items-center" style={{ gap: px(6) }}>
+          <div className="flex w-full items-center justify-center" style={{ height: px(26), borderRadius: px(5), background: "#2cdb87" }}>
+            <p className={`${titillium.className} whitespace-nowrap font-bold uppercase`} style={{ color: "#003326", fontSize: px(9) }}>{copy.buttonLabel}</p>
           </div>
-          <p className={`${heebo.className} whitespace-nowrap text-[8px] underline`} style={{ color: "#637973" }}>{copy.dismissLabel || "Not now"}</p>
+          <p className={`${heebo.className} whitespace-nowrap underline`} style={{ color: "#637973", fontSize: px(8) }}>{copy.dismissLabel || "Not now"}</p>
         </div>
       </div>
     </div>
