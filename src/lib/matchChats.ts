@@ -62,12 +62,12 @@ export type FirestoreMessage = {
   _id: string;
   text: string | null;
   messageType: string;
-  media?: { fileName: string; type: string; url: string } | null;
+  media?: { fileName?: string; type: string; url: string; thumbnailUrl?: string | null; duration?: number | null } | null;
   image?: string | null;
   sentBy: string;
   sentTo: string;
   user?: {
-    _id?: string;
+    _id?: string | number;
     name?: string;
     avatar?: string | null;
     email?: string;
@@ -76,7 +76,25 @@ export type FirestoreMessage = {
   // Either a Firestore Timestamp (server) or {seconds, nanoseconds}
   // (wire) — call createdAtToIso() to normalize.
   createdAt?: unknown;
+  /* THE PLAYER APP'S CHAT ACTIONS (MatchDay 1.87, src/components/chat): a reply carries a snapshot
+   * of the message it answers, reactions are lists of user ids per key, an edit replaces the text,
+   * a delete blanks the message and hides it. Each carries an "...Of: <document id>" marker because
+   * older app versions copy every field of the newest message into the next photo or video they
+   * send: a copied field whose marker is another document's id belongs to that other document and
+   * is ignored. messageOut() below honours the markers exactly as the player app does. */
+  replyTo?: ReplyQuote | null;
+  replyOf?: string | null;
+  reactions?: Partial<Record<string, unknown[]>> | null;
+  reactionsOf?: string | null;
+  editedAt?: unknown;
+  editedOf?: string | null;
+  deletedAt?: unknown;
+  deletedBy?: string | null;
+  deletedOf?: string | null;
 };
+
+/** The snapshot a reply carries of the message it answers (the player app's replies.ts). */
+export type ReplyQuote = { docId: string; userId: string | number | null; name: string; preview: string; messageType: string };
 
 // ============================================================
 // Helpers
@@ -185,6 +203,92 @@ export const MATCHDAY_SENDER_NAME = "MatchDay";
 // clipping persisted on the consumer app. Moved to "" to match real
 // player payloads exactly.
 export const MATCHDAY_SENDER_USER_ID = 9999999999;
+
+// Public URL the MatchDay player app fetches as the avatar for Clubhouse-authored messages: the
+// branded icon behind playmatchday.com's apple-touch-icon, uploaded 2023-06 and stable since, and
+// hosted outside this deployment so a Clubhouse change can never break a stored message. Earlier
+// values ("" and a Vercel-hosted PWA icon) clipped the bubble or 404'd (PRs #75, #76).
+export const MATCHDAY_AVATAR_URL = "https://www.playmatchday.com/wp-content/uploads/2023/06/icon2-300x300.jpg";
+
+/* STAGING AND PRODUCTION SHARE ONE FIREBASE PROJECT, and staging match ids are also production
+ * match ids. The player app keeps a staging build's chats under a "staging_" prefix
+ * (frontend src/config.ts, firestoreChatId) so a test post never lands in a real match's chat. The
+ * staff app's chat routes take the environment they are called for and use the same prefix. */
+export type ChatEnv = "staging" | "production";
+export const firestoreChatId = (env: ChatEnv, chatId: string): string => (env === "staging" ? `staging_${chatId}` : chatId);
+
+/* ── A MESSAGE AS THE STAFF APP SEES IT ──────────────────────────────────────────────────────────
+ * One shape for every reader: the desktop's own list route and the app's per-environment route.
+ * The player app's rules, line for line (messageEdits.ts, reactions.ts, replies.ts): a marker
+ * counts only when it names this document; a deleted message is hidden; the quote's preview is
+ * the stored snapshot. Phone numbers and emails on the user block are never passed on. */
+
+export const DELETED_TEXT = "This message was deleted";
+export const REACTION_KEYS = ["md", "ball", "thumbs", "fire", "joy", "heart", "eyes"] as const;
+
+export type MessageOut = {
+  id: string;
+  messageId: string | null;
+  text: string | null;
+  kind: string;
+  sentBy: string | null;
+  isMatchDay: boolean;
+  user: { id: string | number | null; name: string | null; avatar: string | null };
+  imageUrl: string | null;
+  media: { url: string; type: string; thumbnailUrl: string | null; fileName: string | null; duration: number | null } | null;
+  sentAt: string | null;
+  replyTo: ReplyQuote | null;
+  reactions: { key: string; count: number }[];
+  edited: boolean;
+  deleted: boolean;
+};
+
+export const isDeletedDoc = (docId: string, m: FirestoreMessage): boolean => m.deletedAt != null && m.deletedOf === docId;
+export const isEditedDoc = (docId: string, m: FirestoreMessage): boolean => m.editedAt != null && m.editedOf === docId;
+
+/** The one line a reply quotes (the player app's replyPreviewFor): 90 characters of the text, or Photo / Video. */
+export function replyPreviewFor(m: Pick<FirestoreMessage, "text" | "messageType">): string {
+  const text = typeof m.text === "string" ? m.text.trim() : "";
+  if (text) {
+    const oneLine = text.replace(/\s+/g, " ");
+    return oneLine.length > 90 ? `${oneLine.slice(0, 89)}…` : oneLine;
+  }
+  const type = m.messageType ?? "";
+  if (type.includes("image")) return "Photo";
+  if (type.includes("video")) return "Video";
+  return "";
+}
+
+export function messageOut(docId: string, m: FirestoreMessage): MessageOut {
+  const kind = m.messageType ?? "Text";
+  const mediaType = m.media?.type ?? "";
+  const media = m.media?.url
+    ? { url: m.media.url, type: mediaType || kind, thumbnailUrl: m.media.thumbnailUrl ?? null, fileName: m.media.fileName ?? null, duration: typeof m.media.duration === "number" ? m.media.duration : null }
+    : null;
+  const imageUrl = /^image\//i.test(kind) ? (media?.url ?? m.image ?? null) : (m.image && !/^video\//i.test(kind) ? m.image : null);
+  const reactions = m.reactionsOf === docId && m.reactions
+    ? REACTION_KEYS.filter((k) => Array.isArray(m.reactions?.[k]) && (m.reactions?.[k] as unknown[]).length > 0).map((k) => ({ key: k, count: (m.reactions?.[k] as unknown[]).length }))
+    : [];
+  const replyTo = m.replyOf === docId && m.replyTo && typeof m.replyTo.docId === "string"
+    ? { docId: m.replyTo.docId, userId: m.replyTo.userId ?? null, name: m.replyTo.name || "A player", preview: typeof m.replyTo.preview === "string" ? m.replyTo.preview : "", messageType: m.replyTo.messageType || "Text" }
+    : null;
+  return {
+    id: docId,
+    messageId: typeof m._id === "string" || typeof m._id === "number" ? String(m._id) : null,
+    text: m.text ?? null,
+    kind,
+    sentBy: m.sentBy || m.user?.name || null,
+    isMatchDay: m.sentBy === MATCHDAY_SENDER_NAME,
+    user: { id: m.user?._id ?? null, name: m.user?.name ?? null, avatar: m.user?.avatar && !/Placeholder\.png/.test(m.user.avatar) ? m.user.avatar : null },
+    imageUrl,
+    media,
+    sentAt: createdAtToIso(m.createdAt),
+    replyTo,
+    reactions,
+    edited: isEditedDoc(docId, m),
+    deleted: isDeletedDoc(docId, m),
+  };
+}
 
 // Active section: messages newer than this many days.
 export const ACTIVE_WINDOW_DAYS = 7;

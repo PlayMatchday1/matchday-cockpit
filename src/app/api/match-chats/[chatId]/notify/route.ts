@@ -23,11 +23,32 @@ import { isValidChatId } from "@/lib/matchChats";
 import { resolveMatchNotifyRecipients } from "@/lib/matchNotifyRecipients";
 import {
   NOTIFY_TEMPLATE_IDS,
+  TEMPLATE_LABELS,
+  buildTemplateBody,
   personalize,
   unfilledTokens,
   maskPhone,
+  type MatchMergeValues,
   type NotifyTemplateId,
 } from "@/lib/matchNotify";
+import { formatMatchTitle } from "@/lib/cityTimezones";
+import type { SupabaseClient } from "@supabase/supabase-js";
+
+/* THE TEMPLATES, FILLED IN, FOR THE STAFF APP. The desktop drawer builds the four template bodies
+ * in the browser from the match's own date, time and field (NotifyPlayersDrawer merge). The staff
+ * app cannot import that code, so the preview carries the same bodies, built by the same
+ * buildTemplateBody from the same mirror row, so both compose from one text. */
+export async function notifyTemplates(supabase: SupabaseClient, matchApiId: number) {
+  const r = await supabase.from("mdapi_matches").select("city_identifier, start_date_utc, field_title").eq("api_id", matchApiId).maybeSingle();
+  const match = (r.data ?? null) as { city_identifier: string | null; start_date_utc: string | null; field_title: string | null } | null;
+  const t = formatMatchTitle({ cityCode: match?.city_identifier, startDateIso: match?.start_date_utc, fieldTitle: match?.field_title });
+  const merge: MatchMergeValues = {
+    date: t.date && t.date !== "—" ? t.date : "the scheduled date",
+    time: t.time || "the scheduled time",
+    field: match?.field_title?.trim() || t.venue,
+  };
+  return NOTIFY_TEMPLATE_IDS.map((id) => ({ id, label: TEMPLATE_LABELS[id], body: buildTemplateBody(id, merge) }));
+}
 import { reviewMasked } from "@/lib/reviewAccount";
 
 export const runtime = "nodejs";
@@ -79,11 +100,14 @@ async function getRoute(req: Request, ctx: RouteCtx) {
     return Response.json({ error: "Could not load recipients" }, { status: 500 });
   }
 
+  const templates = await notifyTemplates(auth.supabase, matchApiId).catch((e) => { console.error("[match-notify:preview] templates failed", e); return []; });
+
   return Response.json(
     {
       recipient_count: resolution.recipients.length,
       no_phone_count: resolution.noPhoneCount,
       total_registered: resolution.totalRegistered,
+      templates,
       recipients: resolution.recipients.map((r) => ({
         user_id: r.userId,
         first_name: r.firstName,

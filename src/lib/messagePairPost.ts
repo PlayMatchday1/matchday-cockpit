@@ -7,16 +7,8 @@
 import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import admin from "firebase-admin";
 import { firestore } from "@/lib/firebaseAdmin";
-import { MATCHDAY_SENDER_NAME, MATCHDAY_SENDER_USER_ID } from "@/lib/matchChats";
-
-// Same branded avatar the /reply route uses so Cockpit-authored messages
-// render with the unified "MatchDay" identity in the consumer app. Hosted
-// outside the cockpit deployment so cockpit changes can't break historical
-// Firestore messages. (Kept in sync with the copy in the reply route.)
-const MATCHDAY_AVATAR_URL =
-  "https://www.playmatchday.com/wp-content/uploads/2023/06/icon2-300x300.jpg";
+import { insertChatAudit, matchDayMessageDoc } from "@/lib/matchChatWrite";
 
 // Firestore ALREADY_EXISTS gRPC status — a batched create() fails with this
 // when the target doc is already there. That's the idempotency signal: the
@@ -26,44 +18,10 @@ function isAlreadyExists(err: unknown): boolean {
   return e?.code === 6 || e?.code === "6" || /already exists/i.test(e?.message ?? "");
 }
 
-function messageDoc(docId: string, text: string) {
-  return {
-    _id: docId,
-    text,
-    messageType: "Text",
-    sentBy: MATCHDAY_SENDER_NAME,
-    sentTo: "Group",
-    user: {
-      _id: MATCHDAY_SENDER_USER_ID,
-      name: MATCHDAY_SENDER_NAME,
-      avatar: MATCHDAY_AVATAR_URL,
-      email: "",
-      phoneNumber: "",
-    },
-    createdAt: admin.firestore.FieldValue.serverTimestamp(),
-  };
-}
-
-async function insertAudit(
-  supabase: SupabaseClient,
-  tag: string,
-  chatId: string,
-  docId: string,
-  text: string,
-  sentByUserId: string | null,
-): Promise<void> {
-  const ins = await supabase.from("match_chat_audit_log").insert({
-    firestore_chat_id: chatId,
-    firestore_message_id: docId,
-    sent_by_user_id: sentByUserId,
-    body: text,
-  });
-  if (ins.error) {
-    console.error(
-      `[${tag}] AUDIT GAP message_id=${docId} chat=${chatId} — ${ins.error.code} ${ins.error.message}`,
-    );
-  }
-}
+// The document shape and the audit row are matchChatWrite.ts's — the same ones the reply box and
+// the staff app write — so an auto-post is indistinguishable from a typed MatchDay message.
+const messageDoc = matchDayMessageDoc;
+const insertAudit = insertChatAudit;
 
 export type MessagePairResult = {
   copyMessageId: string;

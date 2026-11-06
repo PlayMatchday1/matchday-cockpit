@@ -52,10 +52,26 @@ console.log("\nevery send path requires can_send_messages before it sends");
 for (const p of ["src/app/api/crm/send/route.ts", "src/app/api/crm/send-media/route.ts", "src/app/api/crm/send-template/route.ts", "src/app/api/match-chats/[chatId]/reply/route.ts"]) {
   const s = src(p);
   const gate = s.indexOf("if (!auth.canSendMessages)");
-  const send = s.slice(s.indexOf("export async function POST")).search(/messages\.send\(|sendWhatsApp\w*\(|\.collection\("Chats"\)/);
+  // The match chat's Firestore write lives in matchChatWrite.ts (postMatchDayText), the one writer
+  // the desktop reply box and the staff app share; the call is the send.
+  const send = s.slice(s.indexOf("export async function POST")).search(/messages\.send\(|sendWhatsApp\w*\(|\.collection\("Chats"\)|postMatchDayText\(/);
   const at = send < 0 ? -1 : s.indexOf("export async function POST") + send;
   yes(`${p} refuses without can_send_messages`, gate > 0 && /reason: "no_send_permission"/.test(s.slice(gate, gate + 300)));
   yes(`…before it sends`, gate > 0 && at > gate, `gate ${gate} send ${at}`);
+}
+/* THE STAFF APP'S CHAT ROUTE sends and deletes through the app's own auth (authenticateApp, the
+ * sendMessages capability — the same can() the me route reports), so its gate is spelled
+ * differently and is checked here on its own: before the first write, on every op. */
+{
+  const p = "src/app/api/app/[env]/matches/[id]/chat/route.ts";
+  const s = src(p);
+  const post = s.indexOf("async function postRoute");
+  const gate = s.indexOf("if (!g.canSend)", post);
+  const write = s.slice(post).search(/postMatchDayText\(|deleteMatchChatMessage\(/);
+  const at = write < 0 ? -1 : post + write;
+  yes(`${p} refuses without can_send_messages`, gate > 0 && /reason: "no_send_permission"/.test(s.slice(gate, gate + 300)));
+  yes(`…before it writes`, gate > 0 && at > gate, `gate ${gate} write ${at}`);
+  yes(`…and the send right is the capability function, not a flag`, /canSend: can\(auth\.row, "sendMessages", auth\.email\)/.test(s));
 }
 
 console.log("\ncounts count only the caller's scope");

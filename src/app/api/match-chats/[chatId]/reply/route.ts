@@ -1,59 +1,25 @@
-// POST /api/match-chats/[chatId]/reply — Cockpit-side reply to a
-// match chat. The Firestore doc is written as "MatchDay" (system
-// identity) so players see a unified voice; the actual operator who
-// pressed Send is recorded in match_chat_audit_log for internal
-// accountability.
+// POST /api/match-chats/[chatId]/reply — the desktop's reply to a match chat.
+//
+// The Firestore document is written as "MatchDay" (the shared system identity) so players see one
+// voice; the operator who pressed Send is recorded in match_chat_audit_log. The write itself is
+// src/lib/matchChatWrite.ts postMatchDayText, the ONE writer the staff app's chat route and the
+// auto-posters share, so every Clubhouse message has the same document shape and the same audit row.
 //
 // Body: { body: string }
+// Auth: authenticateCrm (Chats), the match's city through assertMatchInScope, and SENDING IS ITS
+// OWN RIGHT (can_send_messages), on every send path (Ryan, 2026-10-30).
 //
-// Auth: admin-only via src/lib/crmAuth.
-//
-// Order of operations:
-//   1. Generate a UUID for the message `_id` field. Done before any
-//      writes so the audit row has a traceable handle even if the
-//      Firestore write fails.
-//   2. Write to Firestore: Chats/{chatId}/messages/{firestoreDocId}
-//      with our generated _id, sentBy=MatchDay, serverTimestamp().
-//   3. Audit-log to match_chat_audit_log with sent_by_user_id +
-//      firestore_chat_id + firestore_message_id (the _id) + body.
-//   4. If the audit insert fails after the Firestore write succeeds,
-//      log AUDIT GAP loudly — same pattern as the CRM assign route.
-//
-// Logging: every reply logged for the first week per the same
-// observability stance as Phase 0.
+// Production only: the desktop reads the production mirror, so this chat is the production chat.
+// The staff app's per-environment route (/api/app/{env}/matches/{id}/chat) takes the staging prefix.
 
 import { localModeRefusal } from "@/lib/localMode";
-import { randomUUID } from "node:crypto";
 import { authenticateCrm } from "@/lib/crmAuth";
 import { assertMatchInScope } from "@/lib/matchOpsAuth";
-import { firestore } from "@/lib/firebaseAdmin";
-import admin from "firebase-admin";
-import {
-  MATCHDAY_SENDER_NAME,
-  MATCHDAY_SENDER_USER_ID,
-  isValidChatId,
-} from "@/lib/matchChats";
+import { isValidChatId } from "@/lib/matchChats";
+import { MAX_BODY_LEN, postMatchDayText } from "@/lib/matchChatWrite";
 
 export const runtime = "nodejs";
 export const maxDuration = 15;
-
-const MAX_BODY_LEN = 4000; // long enough for any reasonable reply
-
-// Public URL the MatchDay consumer React Native app fetches as the
-// avatar for Cockpit-authored messages. This is the same branded
-// icon that powers the playmatchday.com marketing site's apple-
-// touch-icon and 192x192 favicon, uploaded 2023-06 and stable
-// since. Hosted outside the cockpit deployment so future cockpit
-// changes can't silently break historical Firestore messages.
-//
-// Previous values tried:
-//   - "" (PR #75): falsy, consumer app's bubble renderer collapsed
-//     the avatar slot and clipped the bubble.
-//   - https://matchday-clubhouse.vercel.app/web-app-manifest-
-//     512x512.png (PR #75 followup): 404, the PWA icons were
-//     never committed to git so they don't deploy.
-const MATCHDAY_AVATAR_URL =
-  "https://www.playmatchday.com/wp-content/uploads/2023/06/icon2-300x300.jpg";
 
 type ReplyBody = { body?: unknown };
 
@@ -118,77 +84,15 @@ export async function POST(req: Request, ctx: RouteCtx) {
     );
   }
 
-  const messageId = randomUUID();
+  const r = await postMatchDayText({ supabase, chatDocId: chatId, body, appUserId, tag: "match-chats:reply" });
+  if (!r.ok) return Response.json({ error: r.error }, { status: r.status });
 
-  console.log(
-    `[match-chats:reply] start chat=${chatId} message_id=${messageId} user=${appUserId} bytes=${body.length}`,
-  );
-
-  // ---------- 1. Firestore write ----------
-  const db = firestore();
-  let firestoreDocId: string;
-  try {
-    const ref = await db
-      .collection("Chats")
-      .doc(chatId)
-      .collection("messages")
-      .add({
-        _id: messageId,
-        text: body,
-        messageType: "Text",
-        sentBy: MATCHDAY_SENDER_NAME,
-        sentTo: "Group",
-        user: {
-          // Full parity with player-sent shape. Real player rows
-          // always carry _id (number), name, avatar (URL), email,
-          // and phoneNumber. Setting empty strings for email and
-          // phoneNumber matches key presence even though we have
-          // no system-identity values to populate them with — the
-          // consumer app's bubble renderer appears to branch on
-          // key presence somewhere, and previous fixes that only
-          // adjusted _id type and avatar value did not resolve
-          // the clipping symptom.
-          _id: MATCHDAY_SENDER_USER_ID,
-          name: MATCHDAY_SENDER_NAME,
-          avatar: MATCHDAY_AVATAR_URL,
-          email: "",
-          phoneNumber: "",
-        },
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
-    firestoreDocId = ref.id;
-  } catch (err) {
-    console.error("[match-chats:reply] firestore write failed", err);
-    return Response.json(
-      { error: "Firestore write failed" },
-      { status: 502 },
-    );
-  }
-
-  // ---------- 2. Audit row ----------
-  const auditIns = await supabase.from("match_chat_audit_log").insert({
-    firestore_chat_id: chatId,
-    firestore_message_id: messageId,
-    sent_by_user_id: appUserId,
-    body,
-  });
-  if (auditIns.error) {
-    // Firestore message already landed. Loud log; recoverable.
-    console.error(
-      `[match-chats:reply] AUDIT GAP firestore_doc=${firestoreDocId} message_id=${messageId} chat=${chatId} user=${appUserId} — ${auditIns.error.code} ${auditIns.error.message}`,
-    );
-  }
-
-  const elapsed = Date.now() - startedAt;
-  console.log(
-    `[match-chats:reply] done chat=${chatId} firestore_doc=${firestoreDocId} message_id=${messageId} elapsed=${elapsed}ms`,
-  );
-
+  console.log(`[match-chats:reply] elapsed=${Date.now() - startedAt}ms`);
   return Response.json(
     {
       ok: true,
-      firestore_doc_id: firestoreDocId,
-      message_id: messageId,
+      firestore_doc_id: r.firestoreDocId,
+      message_id: r.messageId,
     },
     { status: 200 },
   );
