@@ -715,19 +715,24 @@ export async function fetchPartnerRows(
   //     dashboard's primary revenue source). Including them here would
   //     double-count every match payment. Only non-match revenue types
   //     (Private Rental, Strike, etc.) should be added.
+  /* NON-MATCH ROWS FROM fin_txn_daily (0255), BY VENUE ID (Ryan, 2026-11-05) — the same rows
+   * Finance > Revenue sums, instead of a name-substring match on fin_revenue. A Venmo private rental
+   * is entered in the Revenue admin, mirrored into fin_txn, and lands here the next sync; checked
+   * before this switch: Hattrick Mar–Sep 2026 and PAC Global Apr 2026 read the same month by month
+   * in both tables, and no other live venue has any. gross is tax-in, as fin_revenue's was. */
   const { data: rev, error: revErr } = await supabase
-    .from("fin_revenue")
-    .select("date, type, gross, source, notes")
-    .ilike("venue", `%${venue.venue_name}%`)
-    .neq("source", "PROJECTION")
-    .not("type", "in", '("DPP","Membership")');
+    .from("fin_txn_daily")
+    .select("day, type, gross_cents, source")
+    .eq("fin_venue_id", venueId)
+    .not("type", "in", '("DPP","Membership")')
+    .order("day");
   if (revErr) throw new Error(`Revenue fetch failed: ${revErr.message}`);
-  const extra: PartnerExtraRevRow[] = (rev ?? []).map((r) => ({
-    date: String(r.date ?? "").slice(0, 10),
+  const extra: PartnerExtraRevRow[] = (rev ?? []).filter((r) => Number(r.gross_cents ?? 0) !== 0).map((r) => ({
+    date: String(r.day ?? "").slice(0, 10),
     type: String(r.type ?? ""),
-    gross: Number(r.gross ?? 0),
+    gross: Number(r.gross_cents ?? 0) / 100,
     source: String(r.source ?? ""),
-    notes: r.notes ?? null,
+    notes: null,
   }));
 
   return {
