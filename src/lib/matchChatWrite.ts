@@ -19,9 +19,11 @@ import admin from "firebase-admin";
 import { randomUUID } from "node:crypto";
 import { firestore } from "@/lib/firebaseAdmin";
 import {
-  DELETED_TEXT, MATCHDAY_AVATAR_URL, MATCHDAY_SENDER_NAME, MATCHDAY_SENDER_USER_ID,
-  isDeletedDoc, messageOut, replyPreviewFor, type FirestoreMessage, type MessageOut, type ReplyQuote,
+  CHAT_MEDIA_BUCKET, DELETED_TEXT, MATCHDAY_AVATAR_URL, MATCHDAY_SENDER_NAME, MATCHDAY_SENDER_USER_ID,
+  downloadUrl, editRefusal, isDeletedDoc, isReactionKey, mediaFields, mediaFileName, mediaRoot, messageOut, replyPreviewFor, toggledReactions,
+  type ChatEnv, type FirestoreMessage, type MediaExtra, type MessageOut, type PushKind, type Reactions, type ReplyQuote, type Typer,
 } from "@/lib/matchChats";
+import { pushMatchDayPost, type PushContext, type PushOutcome } from "@/lib/matchChatPush";
 
 export const MAX_BODY_LEN = 4000;
 
@@ -57,7 +59,7 @@ export async function insertChatAudit(supabase: SupabaseClient, tag: string, cha
 export type Refusal = { ok: false; status: number; error: string };
 
 export type PostResult =
-  | { ok: true; firestoreDocId: string; messageId: string; replyTo: ReplyQuote | null; audited: boolean }
+  | { ok: true; firestoreDocId: string; messageId: string; replyTo: ReplyQuote | null; audited: boolean; push: PushOutcome | null }
   | Refusal;
 
 /** Post one text as MatchDay, optionally as a reply to a message in the same chat. */
@@ -69,6 +71,8 @@ export async function postMatchDayText(args: {
   appUserId: string | null;
   replyToDocId?: string | null;
   tag?: string;
+  /** With a context, the players get the "New message" push after the write (matchChatPush.ts). */
+  push?: PushContext | null;
 }): Promise<PostResult> {
   const { supabase, chatDocId, body, appUserId } = args;
   const tag = args.tag ?? "match-chats:reply";
@@ -102,9 +106,149 @@ export async function postMatchDayText(args: {
     return { ok: false, status: 502, error: "Firestore write failed" };
   }
   const audited = await insertChatAudit(supabase, tag, chatDocId, messageId, body, appUserId);
-  console.log(`[${tag}] done chat=${chatDocId} firestore_doc=${ref.id} message_id=${messageId}`);
-  return { ok: true, firestoreDocId: ref.id, messageId, replyTo: quote, audited };
+  const push = args.push ? await pushMatchDayPost(args.push, chatDocId, "TEXT", body, `${tag}:push`) : null;
+  console.log(`[${tag}] done chat=${chatDocId} firestore_doc=${ref.id} message_id=${messageId}${push ? ` push=${push.outcome}` : ""}`);
+  return { ok: true, firestoreDocId: ref.id, messageId, replyTo: quote, audited, push };
 }
+
+/* ── THE PLAYER APP'S CHAT TOOLS, AS MATCHDAY ──────────────────────────────────────────────────
+ * Each writes exactly the fields the player app (MatchDay 1.87) writes, and each leaves an audit
+ * row naming the staff member, with a bracketed verb so "what did X do" reads in one column. */
+
+export type ReactResult = { ok: true; docId: string; key: string; on: boolean; reactions: MessageOut["reactions"]; audited: boolean } | Refusal;
+
+/** The player app's saveReaction: a transaction toggling MatchDay's id under the key, reactionsOf = this document. */
+export async function toggleMatchDayReaction(args: { supabase: SupabaseClient; chatDocId: string; docId: string; key: string; appUserId: string | null; tag?: string }): Promise<ReactResult> {
+  const { supabase, chatDocId, docId, key, appUserId } = args;
+  const tag = args.tag ?? "match-chats:react";
+  if (!isReactionKey(key)) return { ok: false, status: 400, error: `unknown reaction ${JSON.stringify(key)}` };
+  const db = firestore();
+  const ref = db.collection("Chats").doc(chatDocId).collection("messages").doc(docId);
+  let on = false;
+  let after: FirestoreMessage | null = null;
+  try {
+    const result = await db.runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists) return null;
+      const m = snap.data() as FirestoreMessage;
+      if (isDeletedDoc(docId, m)) return { gone: true as const };
+      const current: Reactions | undefined = m.reactionsOf === docId ? (m.reactions ?? undefined) : undefined;
+      const next = toggledReactions(current, MATCHDAY_SENDER_USER_ID, key);
+      tx.update(ref, { reactions: next, reactionsOf: docId });
+      return { m, next };
+    });
+    if (!result) return { ok: false, status: 404, error: "That message is not in the chat." };
+    if ("gone" in result) return { ok: false, status: 409, error: "That message was deleted." };
+    on = (result.next[key] ?? []).some((id) => String(id) === String(MATCHDAY_SENDER_USER_ID));
+    after = { ...result.m, reactions: result.next, reactionsOf: docId };
+  } catch (err) {
+    console.error(`[${tag}] transaction failed`, err);
+    return { ok: false, status: 502, error: "Firestore write failed" };
+  }
+  const messageId = typeof after._id === "string" || typeof after._id === "number" ? String(after._id) : docId;
+  const audited = await insertChatAudit(supabase, tag, chatDocId, messageId, `[reaction ${key} ${on ? "on" : "off"}] ${replyPreviewFor(after)}`.slice(0, MAX_BODY_LEN), appUserId);
+  console.log(`[${tag}] done chat=${chatDocId} doc=${docId} key=${key} on=${on}`);
+  return { ok: true, docId, key, on, reactions: messageOut(docId, after).reactions, audited };
+}
+
+export type EditResult = { ok: true; docId: string; messageId: string; audited: boolean } | Refusal;
+
+/** The player app's editMessageText, allowed only on a MatchDay text: text replaced, editedAt + editedOf set. */
+export async function editMatchDayMessage(args: { supabase: SupabaseClient; chatDocId: string; docId: string; text: string; appUserId: string | null; tag?: string }): Promise<EditResult> {
+  const { supabase, chatDocId, docId, appUserId } = args;
+  const tag = args.tag ?? "match-chats:edit";
+  const text = args.text.trim();
+  if (!text) return { ok: false, status: 400, error: "body required" };
+  if (text.length > MAX_BODY_LEN) return { ok: false, status: 400, error: `body exceeds ${MAX_BODY_LEN} chars` };
+  const ref = firestore().collection("Chats").doc(chatDocId).collection("messages").doc(docId);
+  let snap: FirebaseFirestore.DocumentSnapshot;
+  try { snap = await ref.get(); } catch (err) { console.error(`[${tag}] read failed`, err); return { ok: false, status: 502, error: "Firestore read failed" }; }
+  if (!snap.exists) return { ok: false, status: 404, error: "That message is not in the chat." };
+  const m = snap.data() as FirestoreMessage;
+  const refusal = editRefusal(docId, m);
+  if (refusal) return { ok: false, status: 409, error: refusal };
+  try {
+    await ref.update({ text, editedAt: admin.firestore.FieldValue.serverTimestamp(), editedOf: docId });
+  } catch (err) {
+    console.error(`[${tag}] update failed`, err);
+    return { ok: false, status: 502, error: "Firestore write failed" };
+  }
+  const messageId = typeof m._id === "string" || typeof m._id === "number" ? String(m._id) : docId;
+  const audited = await insertChatAudit(supabase, tag, chatDocId, messageId, `[edited] ${text}`.slice(0, MAX_BODY_LEN), appUserId);
+  console.log(`[${tag}] done chat=${chatDocId} doc=${docId}`);
+  return { ok: true, docId, messageId, audited };
+}
+
+export type MediaResult = { ok: true; firestoreDocId: string; messageId: string; url: string; thumbnailUrl: string | null; fileName: string; audited: boolean; push: PushOutcome | null } | Refusal;
+
+/** A photo or video as MatchDay: the file (and a video's thumbnail) into the player app's bucket paths, then its message. */
+export async function postMatchDayMedia(args: {
+  supabase: SupabaseClient; env: ChatEnv; chatDocId: string; appUserId: string | null;
+  file: Buffer; contentType: string; thumbnail?: { file: Buffer; contentType: string } | null; extra?: MediaExtra; tag?: string; push?: PushContext | null;
+}): Promise<MediaResult> {
+  const { supabase, env, chatDocId, appUserId, file, contentType } = args;
+  const tag = args.tag ?? "match-chats:media";
+  const isVideo = /^video\//.test(contentType);
+  if (!isVideo && !/^image\//.test(contentType)) return { ok: false, status: 400, error: "Only a photo or a video can be sent." };
+  if (file.length === 0) return { ok: false, status: 400, error: "The file is empty." };
+  const bucket = admin.storage().bucket(CHAT_MEDIA_BUCKET);
+  const root = mediaRoot(env);
+  const fileName = mediaFileName(contentType);
+  const base = fileName.replace(/\.[^.]+$/, "");
+  const path = `${root}/${isVideo ? "videos" : "images"}/${fileName}`;
+  const token = randomUUID();
+  let url: string;
+  try {
+    await bucket.file(path).save(file, { contentType, resumable: false, metadata: { metadata: { firebaseStorageDownloadTokens: token } } });
+    url = downloadUrl(CHAT_MEDIA_BUCKET, path, token);
+  } catch (err) {
+    console.error(`[${tag}] upload failed`, err);
+    return { ok: false, status: 502, error: "The file could not be stored." };
+  }
+  let thumbnailUrl: string | null = null;
+  if (isVideo && args.thumbnail && args.thumbnail.file.length > 0) {
+    const tpath = `${root}/thumbnails/${base}.jpg`;
+    const ttoken = randomUUID();
+    try {
+      await bucket.file(tpath).save(args.thumbnail.file, { contentType: args.thumbnail.contentType || "image/jpeg", resumable: false, metadata: { metadata: { firebaseStorageDownloadTokens: ttoken } } });
+      thumbnailUrl = downloadUrl(CHAT_MEDIA_BUCKET, tpath, ttoken);
+    } catch (err) {
+      console.error(`[${tag}] thumbnail upload failed, sending without`, err);
+    }
+  }
+  const messageId = randomUUID();
+  const messages = firestore().collection("Chats").doc(chatDocId).collection("messages");
+  const ref = messages.doc();
+  const doc = { ...matchDayMessageDoc(messageId, ""), ...mediaFields(contentType, url, fileName, { ...(args.extra ?? {}), ...(thumbnailUrl ? { thumbnailUrl } : {}), size: file.length }) };
+  try {
+    await ref.set(doc);
+  } catch (err) {
+    console.error(`[${tag}] firestore write failed`, err);
+    return { ok: false, status: 502, error: "Firestore write failed" };
+  }
+  const audited = await insertChatAudit(supabase, tag, chatDocId, messageId, `[${isVideo ? "video" : "photo"}] ${fileName}`, appUserId);
+  const push = args.push ? await pushMatchDayPost(args.push, chatDocId, isVideo ? "VIDEO" : "IMAGE", null, `${tag}:push`) : null;
+  console.log(`[${tag}] done chat=${chatDocId} firestore_doc=${ref.id} file=${path}${push ? ` push=${push.outcome}` : ""}`);
+  return { ok: true, firestoreDocId: ref.id, messageId, url, thumbnailUrl, fileName, audited, push };
+}
+
+/** The player app's typing entry, as MatchDay: Chats/{chat}/typing/{MatchDay id}, written while composing, removed when done. */
+export async function setMatchDayTyping(chatDocId: string, typing: boolean): Promise<void> {
+  const ref = firestore().collection("Chats").doc(chatDocId).collection("typing").doc(String(MATCHDAY_SENDER_USER_ID));
+  if (typing) await ref.set({ userId: MATCHDAY_SENDER_USER_ID, name: MATCHDAY_SENDER_NAME, avatar: MATCHDAY_AVATAR_URL, at: admin.firestore.FieldValue.serverTimestamp() });
+  else await ref.delete();
+}
+
+/** Every typing entry of the chat, as stored (the app keeps the live ones with activeTypers). */
+export async function readTypers(chatDocId: string): Promise<Typer[]> {
+  const snap = await firestore().collection("Chats").doc(chatDocId).collection("typing").get();
+  return snap.docs.map((d) => {
+    const x = d.data() as { userId?: string | number; name?: string; at?: admin.firestore.Timestamp | null };
+    return { userId: x.userId ?? d.id, name: x.name ?? "", at: x.at && typeof x.at.toDate === "function" ? x.at.toDate().toISOString() : null };
+  });
+}
+
+export type { PushKind };
 
 export type DeleteResult =
   | { ok: true; docId: string; messageId: string; already: boolean; quotesBlanked: number; audited: boolean }

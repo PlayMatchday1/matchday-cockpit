@@ -127,7 +127,7 @@ export class NotAuthorizedError extends Error {
 // Who is performing a write, and whether they may. Derived server-side from the
 // authenticated user's app_users row (can_edit_matches AND can_access_matchops) — never
 // from client state. Reads (apiGet) need no actor; only writes do.
-export type WriteActor = { canEditMatches: boolean; isAdmin?: boolean; canUseOffers?: boolean; canManagePlayers?: boolean; canManagePromos?: boolean; canEditCredits?: boolean; canEditMemberships?: boolean; email?: string; userId?: string;
+export type WriteActor = { canEditMatches: boolean; isAdmin?: boolean; canUseOffers?: boolean; canManagePlayers?: boolean; canManagePromos?: boolean; canEditCredits?: boolean; canEditMemberships?: boolean; canSendMessages?: boolean; email?: string; userId?: string;
   // Phase 25 — a CITY MANAGER's scope. A FOURTH authority, not a variant of EDIT MATCHES: it
   // permits exactly one field (managerId) on matches the route has already proven are in this
   // city. Set only by the city-manager route, from the DB row, never from client state.
@@ -136,6 +136,17 @@ export type WriteActor = { canEditMatches: boolean; isAdmin?: boolean; canUseOff
 // The EDIT MATCHES check. Independent of PRODUCTION_WRITES_ENABLED: this is a per-USER
 // database grant; the bolt is a global deploy-time constant. Neither can satisfy the
 // other. Never references or logs any credential.
+/* SEND MESSAGES is the right behind a match chat's "New message" push (POST chats/matches/{id}/
+ * notifications), the one MatchDay API write a chat post makes: whoever may post as MatchDay may
+ * ask the players' phones to show it. The same can_send_messages box every send path checks. */
+export function assertCanSendMessages(actor: WriteActor | undefined): void {
+  if (!actor || actor.canSendMessages !== true) {
+    throw new NotAuthorizedError(
+      `Refusing write: the caller does not hold SEND MESSAGES. No request was sent to MatchDay. ` +
+      `(actor: ${actor?.email ? JSON.stringify(actor.email) : "none"})`,
+    );
+  }
+}
 export function assertCanEditMatches(actor: WriteActor | undefined): void {
   if (!actor || actor.canEditMatches !== true) {
     throw new NotAuthorizedError(
@@ -489,7 +500,7 @@ export async function apiGet<T = unknown>(env: ClientEnv, path: string, query?: 
 // WRITES — env-explicit, single-shot, host-allowlisted, deny-listed, prod-bolted.
 // `actingStaffEmail`: X-Acting-Staff-Email (src/lib/staffIdentity.ts), the signed-in person behind the
 // shared service account. Only the Offers proxy (offersApiWrite) passes it.
-export async function apiWrite<T = unknown>(env: ClientEnv, method: "POST" | "PUT" | "PATCH" | "DELETE", path: string, body?: unknown, actor?: WriteActor, requires: "edit" | "manage" | "promos" | "city" | "credits" | "memberships" | "admin" | "offers" = "edit", unlock?: WriteUnlock, actingStaffEmail?: string, base?: string): Promise<T> {
+export async function apiWrite<T = unknown>(env: ClientEnv, method: "POST" | "PUT" | "PATCH" | "DELETE", path: string, body?: unknown, actor?: WriteActor, requires: "edit" | "manage" | "promos" | "city" | "credits" | "memberships" | "admin" | "offers" | "chats" = "edit", unlock?: WriteUnlock, actingStaffEmail?: string, base?: string): Promise<T> {
   // STEP 2 in the write pipeline (authenticated is step 1, in the route): does the caller
   // hold the required authority — EDIT MATCHES for match/roster writes, MANAGE PLAYERS for
   // ban writes, MANAGE PROMOS for promo writes? These are INDEPENDENT grants; each path names
@@ -498,7 +509,7 @@ export async function apiWrite<T = unknown>(env: ClientEnv, method: "POST" | "PU
   // unbypassable chokepoint; a route that forgets its own early check is still stopped here.
   (requires === "promos" ? promoGuard : requires === "manage" ? manageGuard : requires === "city" ? cityGuard
     : requires === "credits" ? creditsGuard : requires === "memberships" ? membershipsGuard
-    : requires === "admin" ? adminGuard : requires === "offers" ? assertCanUseOffers : editGuard)(actor);
+    : requires === "admin" ? adminGuard : requires === "offers" ? assertCanUseOffers : requires === "chats" ? assertCanSendMessages : editGuard)(actor);
   // The bolt fires next, before creds are even loaded — production is refused
   // regardless of whether prod credentials happen to be configured. Nothing about
   // a production write can proceed while the bolt is engaged.

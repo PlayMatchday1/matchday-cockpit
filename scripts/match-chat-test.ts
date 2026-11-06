@@ -51,9 +51,9 @@ is("a photo quotes as Photo, a video as Video", [replyPreviewFor({ text: null, m
 
 console.log("\nreactions (reactions.ts): counts per key, picker order, own marker only");
 const rx = { fire: [1, 2, 3], md: [9999999999], eyes: [], joy: [4] };
-is("counts in picker order", messageOut("m1", player({ reactions: rx, reactionsOf: "m1" })).reactions, [{ key: "md", count: 1 }, { key: "fire", count: 3 }, { key: "joy", count: 1 }]);
+is("counts in picker order", messageOut("m1", player({ reactions: rx, reactionsOf: "m1" })).reactions, [{ key: "md", count: 1, mine: true }, { key: "fire", count: 3, mine: false }, { key: "joy", count: 1, mine: false }]);
 is("copied reactions are not this message's", messageOut("m2", player({ reactions: rx, reactionsOf: "m1" })).reactions, []);
-is("an unknown key from a newer app is left out, the known ones stay", messageOut("m3", player({ reactions: { zzz: [1], ball: [2] }, reactionsOf: "m3" })).reactions, [{ key: "ball", count: 1 }]);
+is("an unknown key from a newer app is left out, the known ones stay", messageOut("m3", player({ reactions: { zzz: [1], ball: [2] }, reactionsOf: "m3" })).reactions, [{ key: "ball", count: 1, mine: false }]);
 
 console.log("\nedits and deletes (messageEdits.ts)");
 is("edited with its own marker", messageOut("e1", player({ editedAt: at, editedOf: "e1" })).edited, true);
@@ -62,6 +62,54 @@ const del = messageOut("x1", player({ text: DELETED_TEXT, deletedAt: at, deleted
 is("deleted with its own marker", del.deleted, true);
 is("the deleted text is the 1.85 line", del.text, "This message was deleted");
 is("a copied deletedAt is a normal message", messageOut("x2", player({ deletedAt: at, deletedOf: "x1" })).deleted, false);
+
+
+/* ── THE PLAYER APP'S TOOLS, AS MATCHDAY (Ryan, 2026-11-06) ─────────────────────────────────── */
+import { activeTypers, editRefusal, mediaFields, mediaFileName, pushBody, pushDecision, PUSH_WINDOW_MS, toggledReactions, typingLabel, downloadUrl } from "../src/lib/matchChats";
+
+console.log("\nreactions as MatchDay (reactions.ts toggledReactions)");
+const MD = 9999999999;
+is("a first reaction adds MatchDay under the key", toggledReactions(undefined, MD, "fire"), { fire: [MD] });
+is("tapping again takes it away and drops the empty key", toggledReactions({ fire: [MD] }, MD, "fire"), {});
+is("other players' reactions stay", toggledReactions({ fire: [7, MD], joy: [4] }, MD, "fire"), { fire: [7], joy: [4] });
+is("a string id of the same user counts as the same", toggledReactions({ fire: ["9999999999"] }, MD, "fire"), {});
+is("empty lists from older writes are dropped", toggledReactions({ eyes: [], fire: [7] }, MD, "md"), { fire: [7], md: [MD] });
+is("the mine flag names MatchDay's own reactions", messageOut("m9", player({ reactions: { fire: [7, MD], joy: [4] }, reactionsOf: "m9" })).reactions, [{ key: "fire", count: 2, mine: true }, { key: "joy", count: 1, mine: false }]);
+
+console.log("\nedits: only a MatchDay text");
+is("a MatchDay text may be edited", editRefusal("e1", staff()), null);
+is("a player's message may not", typeof editRefusal("e2", player()), "string");
+is("a MatchDay message with a player id may not (the name is not the proof)", typeof editRefusal("e3", player({ sentBy: "MatchDay" })), "string");
+is("a deleted MatchDay message may not", typeof editRefusal("e4", staff({ deletedAt: at, deletedOf: "e4" })), "string");
+is("a MatchDay photo may not", typeof editRefusal("e5", staff({ messageType: "image/jpeg" })), "string");
+
+console.log("\ntyping (typing.ts): live within 5 s, MatchDay's own entry left out");
+const now = Date.parse("2026-11-06T02:00:10.000Z");
+const typer = (id: number | string, name: string, secondsAgo: number) => ({ userId: id, name, at: new Date(now - secondsAgo * 1000).toISOString() });
+is("a 2 s old entry shows", activeTypers([typer(7, "ryan", 2)], now).map((t) => t.name), ["ryan"]);
+is("a 6 s old entry is stale", activeTypers([typer(7, "ryan", 6)], now), []);
+is("MatchDay's own entry is not shown to MatchDay", activeTypers([typer(MD, "MatchDay", 1)], now), []);
+is("ordered oldest first, no time means not typing", activeTypers([typer(63, "jones", 1), typer(7, "ryan", 3), { userId: 9, name: "x", at: null }], now).map((t) => t.name), ["ryan", "jones"]);
+is("one name", typingLabel(["Marvin Jones"]), "Marvin is typing…");
+is("two names", typingLabel(["marvin", "ryan"]), "marvin and ryan are typing…");
+is("three or more", typingLabel(["a", "b", "c"]), "a and 2 others are typing…");
+is("nobody", typingLabel([]), "");
+
+console.log("\nthe New message push: body names MatchDay, one per burst");
+is("a text push carries the text", pushBody("TEXT", "Gates open at 6:45"), "MatchDay: Gates open at 6:45");
+is("a long text is cut at 180", pushBody("TEXT", "x".repeat(300)).length, "MatchDay: ".length + 180);
+is("a photo or video is New message", [pushBody("IMAGE", null), pushBody("VIDEO", "")], ["MatchDay: New message", "MatchDay: New message"]);
+is("the first post pushes", pushDecision(null, now).send, true);
+is("a second post 20 s later is held", pushDecision(now - 20_000, now).send, false);
+is("a post after the window pushes again", pushDecision(now - PUSH_WINDOW_MS, now).send, true);
+
+console.log("\nmedia: the player app's paths and message fields");
+is("a jpeg file name is {ms}_{random}.jpg", mediaFileName("image/jpeg", 1762400000000, "abc123"), "1762400000000_abc123.jpg");
+is("an mp4 keeps mp4, a mov keeps mov", [mediaFileName("video/mp4", 1, "r"), mediaFileName("video/quicktime", 1, "r")], ["1_r.mp4", "1_r.mov"]);
+is("the download url is Firebase's tokened form", downloadUrl("matchday-sc.appspot.com", "chat_media/staging/images/a.jpg", "tok"), "https://firebasestorage.googleapis.com/v0/b/matchday-sc.appspot.com/o/chat_media%2Fstaging%2Fimages%2Fa.jpg?alt=media&token=tok");
+is("a photo message: text null, image, messageType the mime, media {type,url,fileName}", mediaFields("image/jpeg", "https://x/a.jpg", "a.jpg"), { text: null, image: "https://x/a.jpg", messageType: "image/jpeg", media: { type: "image/jpeg", url: "https://x/a.jpg", fileName: "a.jpg" } });
+is("a video message adds thumbnailUrl, width, height, duration, size; nothing undefined", mediaFields("video/mp4", "https://x/v.mp4", "v.mp4", { thumbnailUrl: "https://x/t.jpg", width: 1280, height: 720, duration: 10, size: 5, }).media, { type: "video/mp4", url: "https://x/v.mp4", fileName: "v.mp4", thumbnailUrl: "https://x/t.jpg", width: 1280, height: 720, duration: 10, size: 5 });
+is("a missing thumbnail leaves no key", Object.keys(mediaFields("video/mp4", "u", "f", { thumbnailUrl: undefined, duration: 3 }).media), ["type", "url", "fileName", "duration"]);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

@@ -238,7 +238,7 @@ export type MessageOut = {
   media: { url: string; type: string; thumbnailUrl: string | null; fileName: string | null; duration: number | null } | null;
   sentAt: string | null;
   replyTo: ReplyQuote | null;
-  reactions: { key: string; count: number }[];
+  reactions: { key: string; count: number; mine: boolean }[];
   edited: boolean;
   deleted: boolean;
 };
@@ -267,7 +267,7 @@ export function messageOut(docId: string, m: FirestoreMessage): MessageOut {
     : null;
   const imageUrl = /^image\//i.test(kind) ? (media?.url ?? m.image ?? null) : (m.image && !/^video\//i.test(kind) ? m.image : null);
   const reactions = m.reactionsOf === docId && m.reactions
-    ? REACTION_KEYS.filter((k) => Array.isArray(m.reactions?.[k]) && (m.reactions?.[k] as unknown[]).length > 0).map((k) => ({ key: k, count: (m.reactions?.[k] as unknown[]).length }))
+    ? REACTION_KEYS.filter((k) => Array.isArray(m.reactions?.[k]) && (m.reactions?.[k] as unknown[]).length > 0).map((k) => ({ key: k, count: (m.reactions?.[k] as unknown[]).length, mine: (m.reactions?.[k] as unknown[]).some((id) => sameUser(id, MATCHDAY_SENDER_USER_ID)) }))
     : [];
   const replyTo = m.replyOf === docId && m.replyTo && typeof m.replyTo.docId === "string"
     ? { docId: m.replyTo.docId, userId: m.replyTo.userId ?? null, name: m.replyTo.name || "A player", preview: typeof m.replyTo.preview === "string" ? m.replyTo.preview : "", messageType: m.replyTo.messageType || "Text" }
@@ -304,3 +304,98 @@ export const PAST_WINDOW_DAYS = 7;
 
 // Detail-view pagination.
 export const MESSAGE_PAGE_SIZE = 50;
+
+/* ── THE PLAYER APP'S CHAT TOOLS, AS MATCHDAY (MatchDay 1.87 reactions.ts, messageEdits.ts,
+ * typing.ts), pure. The writer in matchChatWrite.ts applies these to Firestore. ─────────────── */
+
+export const sameUser = (a: unknown, b: unknown) => a != null && b != null && String(a) === String(b);
+
+export type Reactions = Partial<Record<string, unknown[]>>;
+
+/** The player app's toggledReactions, line for line: add the key for this user, or take it away; other keys stay. */
+export function toggledReactions(reactions: Reactions | undefined, userId: unknown, key: string): Reactions {
+  const next: Reactions = {};
+  for (const [k, ids] of Object.entries(reactions ?? {})) {
+    const list = Array.isArray(ids) ? ids : [];
+    if (list.length) next[k] = list;
+  }
+  const ids = next[key] ?? [];
+  if (ids.some((id) => sameUser(id, userId))) {
+    const others = ids.filter((id) => !sameUser(id, userId));
+    if (others.length) next[key] = others; else delete next[key];
+  } else {
+    next[key] = [...ids, userId];
+  }
+  return next;
+}
+export const isReactionKey = (k: unknown): k is (typeof REACTION_KEYS)[number] => typeof k === "string" && (REACTION_KEYS as readonly string[]).includes(k);
+
+/** Only a Clubhouse-authored message (the MatchDay sender) may be edited by staff, never a player's, never a deleted one. */
+export function editRefusal(docId: string, m: FirestoreMessage): string | null {
+  if (isDeletedDoc(docId, m)) return "That message was deleted.";
+  if (m.sentBy !== MATCHDAY_SENDER_NAME || !sameUser(m.user?._id, MATCHDAY_SENDER_USER_ID)) return "Only a message sent as MatchDay can be edited, never a player's.";
+  if (!/^text$/i.test(m.messageType ?? "")) return "Only a text message can be edited.";
+  return null;
+}
+
+/** Typing entries live in Chats/{chat}/typing/{userId}: {userId, name, avatar, at}. Shown for 5 s from `at`, written every 3 s. */
+export const TYPING_MAX_AGE_MS = 5_000;
+export const TYPING_WRITE_INTERVAL_MS = 3_000;
+export type Typer = { userId: string | number | null; name: string; at: string | null };
+export function activeTypers(entries: readonly Typer[], nowMs: number, exceptUserId: unknown = MATCHDAY_SENDER_USER_ID): Typer[] {
+  return entries
+    .filter((e) => !sameUser(e.userId, exceptUserId))
+    .filter((e) => { const at = e.at ? Date.parse(e.at) : NaN; return Number.isFinite(at) && nowMs - at >= -TYPING_MAX_AGE_MS && nowMs - at < TYPING_MAX_AGE_MS; })
+    .sort((a, b) => Date.parse(a.at ?? "") - Date.parse(b.at ?? ""));
+}
+/** The player app's typingLabel: first names, "X is typing…", "X and Y are typing…", "X and N others are typing…". */
+export function typingLabel(names: readonly string[]): string {
+  const people = names.map((n) => (n || "Someone").trim().split(/\s+/)[0]).filter(Boolean);
+  if (people.length === 0) return "";
+  if (people.length === 1) return `${people[0]} is typing…`;
+  if (people.length === 2) return `${people[0]} and ${people[1]} are typing…`;
+  return `${people[0]} and ${people.length - 1} others are typing…`;
+}
+
+/* ── THE "NEW MESSAGE" PUSH. The player app asks the MatchDay API (POST chats/matches/{id}/
+ * notifications {message, type}) after every post it writes; the API fans out to the match's
+ * registered players' devices (user_devices), minus the sender, anyone who muted the chat and
+ * anyone who turned pushes off, with the match name as the title and the message as the body.
+ * A MatchDay post asks the same endpoint, as MatchDay: the body names the sender because the push
+ * has no other sender slot. A burst of staff messages sends one push: the second within the
+ * window is held back (the players already have a push to open the chat with). */
+export const PUSH_WINDOW_MS = 60_000;
+export type PushKind = "TEXT" | "IMAGE" | "VIDEO";
+export function pushBody(kind: PushKind, text: string | null): string {
+  const t = (text ?? "").replace(/\s+/g, " ").trim();
+  if (kind === "TEXT" && t) return `MatchDay: ${t.length > 180 ? `${t.slice(0, 179)}…` : t}`;
+  return "MatchDay: New message";
+}
+export function pushDecision(lastPushedAtMs: number | null, nowMs: number): { send: boolean; reason: string } {
+  if (lastPushedAtMs != null && nowMs - lastPushedAtMs < PUSH_WINDOW_MS) return { send: false, reason: `held: a push went ${Math.round((nowMs - lastPushedAtMs) / 1000)}s ago, under the ${PUSH_WINDOW_MS / 1000}s window` };
+  return { send: true, reason: "sent" };
+}
+
+/* ── MEDIA. The player app uploads a picked photo as it is (picker quality 0.8) to
+ * chat_media/images/{Date.now()}_{random}.{ext} in the matchday-sc.appspot.com bucket, a video
+ * compressed to 1280 px / 2 Mbps H.264 mp4 to chat_media/videos/{base}.mp4 with its thumbnail at
+ * chat_media/thumbnails/{base}.jpg (jpeg 0.7), and a staging build keeps everything under
+ * chat_media/staging/. The URL is the Firebase download URL (alt=media&token=…). The message is
+ * text null, image = the file's url, messageType = the file's mime, media = {type, url, fileName}
+ * plus, for a video, thumbnailUrl, width, height, duration, size. */
+export const CHAT_MEDIA_BUCKET = "matchday-sc.appspot.com";
+export const CHAT_VIDEO_MAX_BYTES = 50 * 1024 * 1024;
+export const CHAT_VIDEO_MAX_SECONDS = 120;
+export const mediaRoot = (env: ChatEnv) => (env === "staging" ? "chat_media/staging" : "chat_media");
+export function mediaFileName(contentType: string, nowMs = Date.now(), random = Math.random().toString(36).slice(2)): string {
+  const ext = contentType === "image/jpeg" ? "jpg" : contentType === "image/png" ? "png" : contentType === "image/heic" ? "heic" : contentType === "image/gif" ? "gif" : contentType === "image/webp" ? "webp" : contentType === "video/mp4" ? "mp4" : contentType === "video/quicktime" ? "mov" : contentType.split("/")[1] || "bin";
+  return `${nowMs}_${random}.${ext}`;
+}
+export const downloadUrl = (bucket: string, path: string, token: string) => `https://firebasestorage.googleapis.com/v0/b/${bucket}/o/${encodeURIComponent(path)}?alt=media&token=${token}`;
+export type MediaExtra = { thumbnailUrl?: string; width?: number; height?: number; duration?: number; size?: number };
+/** The media fields of a photo or video message, exactly as the player app's sendMedia writes them (no undefined field). */
+export function mediaFields(contentType: string, url: string, fileName: string, extra: MediaExtra = {}) {
+  const media: Record<string, unknown> = { type: contentType, url, fileName };
+  for (const [k, v] of Object.entries(extra)) if (v !== undefined && v !== null) media[k] = v;
+  return { text: null, image: url, messageType: contentType, media };
+}

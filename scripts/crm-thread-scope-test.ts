@@ -71,7 +71,14 @@ for (const p of ["src/app/api/crm/send/route.ts", "src/app/api/crm/send-media/ro
   const at = write < 0 ? -1 : post + write;
   yes(`${p} refuses without can_send_messages`, gate > 0 && /reason: "no_send_permission"/.test(s.slice(gate, gate + 300)));
   yes(`…before it writes`, gate > 0 && at > gate, `gate ${gate} write ${at}`);
-  yes(`…and the send right is the capability function, not a flag`, /canSend: can\(auth\.row, "sendMessages", auth\.email\)/.test(s));
+  yes(`…and the send right is the capability function, not a flag`, /const canSend = can\(auth\.row, "sendMessages", auth\.email\)/.test(s));
+  /* THE MEDIA ROUTE shares the gate (chatGate) and checks the same right before its upload. */
+  const mp = "src/app/api/app/[env]/matches/[id]/chat/media/route.ts";
+  const ms = src(mp);
+  const mgate = ms.indexOf("if (!g.canSend)");
+  const mwrite = ms.indexOf("postMatchDayMedia(");
+  yes(`${mp} refuses without can_send_messages`, mgate > 0 && /reason: "no_send_permission"/.test(ms.slice(mgate, mgate + 300)));
+  yes(`…before it stores or writes`, mgate > 0 && mwrite > mgate, `gate ${mgate} write ${mwrite}`);
 }
 
 console.log("\ncounts count only the caller's scope");

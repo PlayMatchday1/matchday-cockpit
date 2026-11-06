@@ -4,6 +4,16 @@
 //                                                          caller's rights; ?before=<doc id> pages back
 //   POST /api/app/{env}/matches/{id}/chat  { op: "send", body, replyTo? }   post as MatchDay, or reply
 //                                          { op: "delete", docId }           the player app's soft delete
+//                                          { op: "react", docId, key }       toggle a reaction as MatchDay
+//                                          { op: "edit", docId, body }       edit a MatchDay text
+//                                          { op: "typing", typing }          MatchDay's typing entry
+//   GET  …/chat?typing=1                                            only who is typing (polled)
+//   POST …/chat/media (multipart)                                    a photo or video as MatchDay
+//
+// THE PLAYER APP'S TOOLS, AS MATCHDAY (Ryan, 2026-11-06): each op writes exactly the fields the
+// player app (MatchDay 1.87) writes, through matchChatWrite.ts, and leaves an audit row naming the
+// staff member. A post (text or media) then asks the MatchDay API for the players' "New message"
+// push, one per burst (matchChatPush.ts).
 //
 // THE SAME CHAT THE DESKTOP SHOWS, THROUGH THE SAME WRITER. A message posted here is the document the
 // desktop reply box writes (matchChatWrite.ts postMatchDayText): sentBy MatchDay, the all-nines
@@ -35,7 +45,8 @@ import { can } from "@/lib/capabilities";
 import { cityAllowed } from "@/lib/appModel";
 import { CONFINED_CITY_ERROR } from "@/lib/cityConfinement";
 import { firestoreChatId, isValidChatId, MESSAGE_PAGE_SIZE } from "@/lib/matchChats";
-import { deleteMatchChatMessage, MAX_BODY_LEN, postMatchDayText, readMessage, readMessages } from "@/lib/matchChatWrite";
+import { deleteMatchChatMessage, editMatchDayMessage, MAX_BODY_LEN, postMatchDayText, readMessage, readMessages, readTypers, setMatchDayTyping, toggleMatchDayReaction } from "@/lib/matchChatWrite";
+import type { PushContext } from "@/lib/matchChatPush";
 import { isEnv } from "@/lib/appLive";
 import { apiGet, StageConfigError, StageHostGuardError } from "@/lib/matchdayStageApi";
 import { reviewMasked } from "@/lib/reviewAccount";
@@ -97,20 +108,36 @@ async function gate(req: Request, ctx: Ctx) {
   if (!cityAllowed(auth, auth.scopeCityName, match.city_name)) {
     return { refused: Response.json({ error: CONFINED_CITY_ERROR }, { status: 403 }) } as const;
   }
-  return { auth, env, id, match, canSend: can(auth.row, "sendMessages", auth.email), chatDocId: firestoreChatId(env, id) } as const;
+  const canSend = can(auth.row, "sendMessages", auth.email);
+  /* THE PUSH ACTOR: the same rights the caller holds, so the MatchDay API write behind the push is
+   * guarded by SEND MESSAGES exactly as the post itself is. */
+  const push: PushContext = { env, matchId: id, actor: { canEditMatches: can(auth.row, "editMatches", auth.email), canSendMessages: canSend, email: auth.email, userId: auth.appUserId } };
+  return { auth, env, id, match, canSend, push, chatDocId: firestoreChatId(env, id) } as const;
 }
+
+export async function chatGate(req: Request, ctx: Ctx) { return gate(req, ctx); }
 
 async function getRoute(req: Request, ctx: Ctx) {
   { const local = localModeRefusal("Match chat"); if (local) return local; }
   const g = await gate(req, ctx);
   if ("refused" in g) return g.refused;
   const url = new URL(req.url);
+  if (url.searchParams.get("typing") === "1") {
+    try {
+      return Response.json({ chat_id: g.id, typers: await readTypers(g.chatDocId), now: new Date().toISOString() });
+    } catch (err) {
+      console.error("[app:match-chat] typing read failed", err);
+      return Response.json({ error: "Firestore read failed" }, { status: 502 });
+    }
+  }
   const before = url.searchParams.get("before");
   const cursor = before && /^[A-Za-z0-9_-]{1,64}$/.test(before) ? before : null;
 
   try {
-    const page = await readMessages(g.chatDocId, MESSAGE_PAGE_SIZE, cursor);
+    const [page, typers] = await Promise.all([readMessages(g.chatDocId, MESSAGE_PAGE_SIZE, cursor), readTypers(g.chatDocId).catch(() => [])]);
     return Response.json({
+      typers,
+      now: new Date().toISOString(),
       chat_id: g.id,
       env: g.env,
       chat_doc_id: g.chatDocId,
@@ -129,7 +156,7 @@ async function getRoute(req: Request, ctx: Ctx) {
   }
 }
 
-type Body = { op?: unknown; body?: unknown; replyTo?: unknown; docId?: unknown };
+type Body = { op?: unknown; body?: unknown; replyTo?: unknown; docId?: unknown; key?: unknown; typing?: unknown };
 
 async function postRoute(req: Request, ctx: Ctx) {
   { const local = localModeRefusal("Match chat"); if (local) return local; }
@@ -147,11 +174,11 @@ async function postRoute(req: Request, ctx: Ctx) {
     if (!body.trim()) return Response.json({ error: "body required" }, { status: 400 });
     if (body.length > MAX_BODY_LEN) return Response.json({ error: `body exceeds ${MAX_BODY_LEN} chars` }, { status: 400 });
     if (b.replyTo != null && !docIdOk(b.replyTo)) return Response.json({ error: "replyTo must be a message document id" }, { status: 400 });
-    const r = await postMatchDayText({ supabase: g.auth.supabase, chatDocId: g.chatDocId, body, appUserId: g.auth.appUserId, replyToDocId: docIdOk(b.replyTo) ? b.replyTo : null, tag: `app:match-chat:${g.env}` });
+    const r = await postMatchDayText({ supabase: g.auth.supabase, chatDocId: g.chatDocId, body, appUserId: g.auth.appUserId, replyToDocId: docIdOk(b.replyTo) ? b.replyTo : null, tag: `app:match-chat:${g.env}`, push: g.push });
     if (!r.ok) return Response.json({ error: r.error }, { status: r.status });
     const back = await readMessage(g.chatDocId, r.firestoreDocId).catch(() => null);
     return Response.json({
-      ok: true, op: "send", firestore_doc_id: r.firestoreDocId, message_id: r.messageId, reply_to: r.replyTo, audited: r.audited,
+      ok: true, op: "send", firestore_doc_id: r.firestoreDocId, message_id: r.messageId, reply_to: r.replyTo, audited: r.audited, push: r.push,
       message: back,
       readBack: back ? (back.isMatchDay && back.text === body ? "confirmed" : "disagrees") : "missing",
     });
@@ -165,6 +192,32 @@ async function postRoute(req: Request, ctx: Ctx) {
       ok: true, op: "delete", doc_id: r.docId, message_id: r.messageId, already: r.already, quotes_blanked: r.quotesBlanked, audited: r.audited,
       readBack: back ? (back.deleted ? "confirmed" : "disagrees") : "missing",
     });
+  }
+  if (b.op === "react") {
+    if (!docIdOk(b.docId)) return Response.json({ error: "docId must be a message document id" }, { status: 400 });
+    if (typeof b.key !== "string") return Response.json({ error: "key required" }, { status: 400 });
+    const r = await toggleMatchDayReaction({ supabase: g.auth.supabase, chatDocId: g.chatDocId, docId: b.docId, key: b.key, appUserId: g.auth.appUserId, tag: `app:match-chat:${g.env}:react` });
+    if (!r.ok) return Response.json({ error: r.error }, { status: r.status });
+    const back = await readMessage(g.chatDocId, b.docId).catch(() => null);
+    const mine = back?.reactions.find((x) => x.key === b.key)?.mine ?? false;
+    return Response.json({ ok: true, op: "react", doc_id: r.docId, key: r.key, on: r.on, reactions: back?.reactions ?? r.reactions, audited: r.audited, readBack: back ? (mine === r.on ? "confirmed" : "disagrees") : "missing" });
+  }
+  if (b.op === "edit") {
+    if (!docIdOk(b.docId)) return Response.json({ error: "docId must be a message document id" }, { status: 400 });
+    const body = typeof b.body === "string" ? b.body : "";
+    const r = await editMatchDayMessage({ supabase: g.auth.supabase, chatDocId: g.chatDocId, docId: b.docId, text: body, appUserId: g.auth.appUserId, tag: `app:match-chat:${g.env}:edit` });
+    if (!r.ok) return Response.json({ error: r.error }, { status: r.status });
+    const back = await readMessage(g.chatDocId, b.docId).catch(() => null);
+    return Response.json({ ok: true, op: "edit", doc_id: r.docId, message_id: r.messageId, audited: r.audited, message: back, readBack: back ? (back.edited && back.text === body.trim() ? "confirmed" : "disagrees") : "missing" });
+  }
+  if (b.op === "typing") {
+    try {
+      await setMatchDayTyping(g.chatDocId, b.typing === true);
+      return Response.json({ ok: true, op: "typing", typing: b.typing === true });
+    } catch (err) {
+      console.error("[app:match-chat] typing write failed", err);
+      return Response.json({ error: "Firestore write failed" }, { status: 502 });
+    }
   }
   return Response.json({ error: `unknown op ${JSON.stringify(b.op)}` }, { status: 400 });
 }

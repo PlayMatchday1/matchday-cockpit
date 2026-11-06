@@ -84,7 +84,12 @@ export async function POST(req: Request, ctx: RouteCtx) {
     );
   }
 
-  const r = await postMatchDayText({ supabase, chatDocId: chatId, body, appUserId, tag: "match-chats:reply" });
+  /* THE PLAYERS' "NEW MESSAGE" PUSH (Ryan, 2026-11-06), the one the player app asks for after a
+   * player posts, asked for here after a MatchDay post, one per burst (matchChatPush.ts). The
+   * desktop reads the production mirror, so the chat and the push are production's. A held or
+   * failed push never fails the reply; the outcome is in the response. */
+  const push = { env: "production" as const, matchId: chatId, actor: { canEditMatches: false, canSendMessages: auth.canSendMessages, email: auth.email ?? undefined, userId: appUserId } };
+  const r = await postMatchDayText({ supabase, chatDocId: chatId, body, appUserId, tag: "match-chats:reply", push });
   if (!r.ok) return Response.json({ error: r.error }, { status: r.status });
 
   console.log(`[match-chats:reply] elapsed=${Date.now() - startedAt}ms`);
@@ -93,6 +98,7 @@ export async function POST(req: Request, ctx: RouteCtx) {
       ok: true,
       firestore_doc_id: r.firestoreDocId,
       message_id: r.messageId,
+      push: r.push,
     },
     { status: 200 },
   );
