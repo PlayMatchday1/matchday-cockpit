@@ -624,7 +624,7 @@ function Breakdown({ totals, scope, byCity, byField }: {
   );
 }
 
-/** One tile per month — what a member actually paid per spot. */
+/** One tile per month — net membership revenue per spot played (Finance's net, since 2026-11-05). */
 function PriceTiles({ totals, revenueByMonth }: { totals: MonthTotals[]; revenueByMonth: Record<string, number> }) {
   return (
     <div className="mscard">
@@ -638,7 +638,7 @@ function PriceTiles({ totals, revenueByMonth }: { totals: MonthTotals[]; revenue
             Somebody compared the two and lost an afternoon; saying which is which is what stops
             that happening again. */}
         <div className="mssub">
-          What a member paid per spot they played · gross membership revenue ÷ spots played, this month
+          Net membership revenue ÷ spots played, this month · net as Finance › Revenue counts it: after refunds and sales tax, Stripe fees left in
         </div>
         <div className="mssub" style={{ marginTop: 2, opacity: 0.75 }}>
           Not the same as the partner rate, which is pre-tax and uses the prior month.

@@ -911,7 +911,10 @@ export async function readGrowthFromViews(
   timing?: { fetchMs?: number; computeMs?: number },
 ): Promise<GrowthData> {
   const tFetch = Date.now();
-  const [profiles, playDims, registrations, subscriptions, revenue, downloadsMonth, rowCounts, finRevenue] = await Promise.all([
+  /* NO fin_revenue READ ON THIS ROUTE ANY MORE (Ryan, 2026-11-05): every revenue figure the Lifecycle
+   * payload carries — the ARPP card, the arppOverall / arppByCity series, the revenue floor and the
+   * diagnostics — comes from readFinTxnAsRevenue, Finance > Revenue's own definition. */
+  const [profiles, playDims, registrations, subscriptions, downloadsMonth, rowCounts, revenue] = await Promise.all([
     selectAll<ProfileRow>(
       sb,
       "growth_player_profile",
@@ -921,7 +924,6 @@ export async function readGrowthFromViews(
     selectAll<PlayDimRow>(sb, "growth_play_dims", "match_month, city_identifier, field_title, field_id, spots, amount", "match_month"),
     selectAll<RegistrationRow>(sb, "growth_registration", "user_id, completed, signup_month, declared_city_raw, lifetime_matches", "user_id"),
     selectAll<RawSubscription>(sb, "mdapi_subscriptions", "user_id, city_identifier, activation_date, canceled_at, price, status, member_email", "membership_id"),
-    selectAll<RawRevenue>(sb, "fin_revenue", "month, city, type, net, venue", "id"),
     selectAll<DownloadMonthRow>(sb, "growth_downloads_month", "month, count", "month"),
     readRowCounts(sb),
     readFinTxnAsRevenue(sb, now),
@@ -939,7 +941,7 @@ export async function readGrowthFromViews(
   if (timing) timing.fetchMs = Date.now() - tFetch;
   const tCompute = Date.now();
   const out = computeGrowthFromViews({ profiles, playDims, registrations, subscriptions, revenue, downloadsMonth, iosDownloadsMonth, playSync, appleSync, now, rowCounts });
-  out.arppCard = computeArppCard(profiles, subscriptions, finRevenue, now);
+  out.arppCard = computeArppCard(profiles, subscriptions, revenue, now);
   if (timing) timing.computeMs = Date.now() - tCompute;
   return out;
 }

@@ -8490,3 +8490,31 @@ calls the page fires on load; under load that crossed the 8 s statement timeout.
 reads only the From / To range (one page, ~0.4 s for four months) and the first revenue month from
 one indexed `fin_txn` row. No DDL. `fin_txn_sums` itself is unchanged; if a timeout recurs, the next
 step is resolving the per-city rate once (a CTE over `p_rates`) instead of a per-row jsonb lookup.
+
+## One revenue definition across Lifecycle: every Lifecycle figure reads fin_txn (2026-11-05)
+
+Ryan: every page that shows revenue uses Finance > Revenue's definition — fin_txn net: gross minus
+refunds, failed payments, disputes and per-charge sales tax, Stripe fees left in. Done this day:
+
+| reader of fin_revenue | what it fed | now | October 2026 before → after |
+|---|---|---|---|
+| `/api/lifecycle` (`readGrowthFromViews`) | the ARPP card (already moved), plus `arppOverall`, `arppByCity`, `floors.revenue`, `arppDiagnostics` (no page reads those three today) | `readFinTxnAsRevenue` only; the route no longer selects `fin_revenue` (its row count footnote still does) | network revenue $89,766.65 → $87,043.26 |
+| `/api/membership` (Membership and Members by City pages) | "Average price per member spot" tiles (membership GROSS ÷ spots played) and the member-share table (membership gross vs total gross) | `fin_txn_sums` month grain, net per row = gross − tax, same `RATES_FOR_SQL`; payload key `membershipGrossByMonth` kept its name, the tile copy says net | membership $17,868.42 → $16,390.33; total $94,369.34 → $87,043.26; Austin membership $7,319.33 → $6,675.70 |
+| Player Data Room "Revenue (pre-tax)" | the PRE-TAX SPOT PRICE of bookings (`growth_participation.amount_cents`), per player and cohort | unchanged, by design: it is a per-player booking value and Finance's net has no per-player grain without a Stripe-customer join. Labelled pre-tax on the page. | n/a |
+
+**Still reading fin_revenue, outside Lifecycle** (not changed): Home (`homeStats` gross revenue tile,
+`HomeGoalsView`), Finance Cities / Cost / field economics / match P&L / period compare / quarters /
+`useFinanceData` and the monthly report generator, partner dashboards (`partnerStats`), the Revenue
+admin editor and Stripe uploader (manual rows), the Venmo migration into fin_txn (`finTxnVenmo`
+reads fin_revenue's Venmo rows), the change log, `/data`, and `audit-stripe-cat`.
+
+**Why fin_revenue runs short of Stripe (October 2026: −$560.84 net on charges).** Measured by UTC day
+× type × city: fin_revenue lacks 28 October charges ($638.27) and holds 8 ($98.05) fin_txn does not.
+The missing ones cluster in two places: deleted-account membership charges (Oct 1 ×3, 7, 9, 13, 21)
+and DPP charges in the first hour after UTC midnight. UTC-vs-Chicago day boundaries net only −$20.62
+for the month, so dating is not the cause. The importer (`stripeSync.syncStripeCharges`) re-reads
+Stripe from its newest stored day, keeps only charges `succeeded` at run time, and aggregates per
+day × city × type × venue, so a single dropped charge is invisible in the row. The exact drop
+mechanism is NOT proven; it was not chased further because nothing in Lifecycle reads the table now.
+Across all 43 months fin_revenue and Stripe charges differ by more than $5 in 40 (24 short, 16 over,
+the "over" months carry Venmo rows fin_txn files as `manual`).

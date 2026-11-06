@@ -23,6 +23,7 @@ import { makeServerClient } from "@/lib/supabaseServer";
 import { fetchLegacyMatchRegistrations, loadMembershipWindowsByUserId } from "@/lib/mdapiMatchesRead";
 import { classify, CHURN_DAYS, type SpotRow, type MonthKey, monthsFrom, buildMemberShare, MONTHS_SHORT } from "@/lib/membershipModel";
 import { selectAll } from "@/lib/supabasePagination";
+import { RATES_FOR_SQL, taxCentsOf, type RollupRow } from "@/lib/revenueTxn";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -104,31 +105,35 @@ export async function GET(req: Request) {
      * 1,000 of 1,829 Membership rows, losing 87% of August (842dac9). Dropping the filter takes the
      * row count from 1,829 to 8,464, so an unpaged version would now lose four fifths of the table.
      * selectAll with .order("id") is what makes that impossible. */
-    const rev = await selectAll<{ month: unknown; city: unknown; net: unknown; gross: unknown; type: unknown }>(
-      () => sb.from("fin_revenue").select("month,city,net,gross,type").order("id"),
-    );
-    /* GROSS, NOT NET, AND THE TILE'S OWN SUBTITLE IS THE ARGUMENT. It says "what a member actually
-     * paid". A member paid the gross; `net` is gross minus what Stripe took from US, which is a
-     * fact about our processing costs and not about what the member handed over. Austin Aug 2026:
-     * gross $8,216.37, net $7,934.43.
-     *
-     * NOT PRE-TAX EITHER, and that is the other half of the split this page got tangled in.
-     * memberSpotRateFor divides PRE-TAX revenue because it joins to roster money that is pre-tax;
-     * this page joins to nothing, so it reports the amount that actually left the member's card. */
+    /* ── FINANCE'S NET, NOT fin_revenue's GROSS (Ryan, 2026-11-05) ─────────────────────────────
+     * This read fin_revenue.gross, "what a member actually paid", tax in, refunds never off. Every
+     * revenue figure in Clubhouse now carries Finance > Revenue's one definition: gross minus
+     * refunds, failed payments, disputes and per-charge sales tax, Stripe fees left in — the same
+     * fin_txn_sums rows the Finance page sums, with the same rates. October 2026: membership
+     * $17,223.01 gross became $16,390.33 net; total $94,369.34 became $87,043.26. Month and city
+     * keep the shapes the page already uses (the month label, the display city). */
+    const rev: RollupRow[] = [];
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await sb.rpc("fin_txn_sums", {
+        p_from: "2020-01-01", p_to: new Date().toISOString().slice(0, 10), p_grain: "month", p_by_venue: false, p_venue_id: null, ...RATES_FOR_SQL,
+      }).range(from, from + 999);
+      if (error) throw new Error(`fin_txn_sums read failed: ${error.message}`);
+      rev.push(...((data ?? []) as RollupRow[]));
+      if ((data ?? []).length < 1000) break;
+    }
+    const MONEY = new Set(["charge", "refund", "failed", "dispute", "manual"]);
     const revByMonth = new Map<string, number>();
-    /* MEMBERSHIP AND EVERYTHING ELSE, per month, for the share table. GROSS on both sides: the
-     * share is membership over total and a ratio of two different bases is not a share. The
-     * MATCHDAY REVENUE card on Finance reads gross too, which is what lets the two tie. */
     const shareRevByMonth = new Map<string, { membership: number; total: number }>();
     for (const r of rev) {
-      if (scopeCity && cityCodeOf(r.city as string) !== scopeCity) continue;
-      const key = String(r.month);
-      const gross = Number(r.gross ?? 0);
+      if (r.excluded || !MONEY.has(r.kind)) continue;
+      if (scopeCity && cityCodeOf(r.city) !== scopeCity) continue;
+      const key = `${MONTHS_SHORT[Number(String(r.period).slice(5, 7)) - 1]} ${String(r.period).slice(0, 4)}`;
+      const net = (r.gross_cents - taxCentsOf(r)) / 100;
       const isMembership = r.type === "Membership";
-      if (isMembership) revByMonth.set(key, (revByMonth.get(key) ?? 0) + gross);
+      if (isMembership) revByMonth.set(key, (revByMonth.get(key) ?? 0) + net);
       const cur = shareRevByMonth.get(key) ?? { membership: 0, total: 0 };
-      cur.total += gross;
-      if (isMembership) cur.membership += gross;
+      cur.total += net;
+      if (isMembership) cur.membership += net;
       shareRevByMonth.set(key, cur);
     }
 
@@ -397,9 +402,8 @@ export async function GET(req: Request) {
       byField: groupBy((r) => (r.fieldId != null ? (fieldName.get(r.fieldId) ?? String(r.fieldId)) : null)),
       activeMembers,
       activeMembersPaid, membersScope, fieldScoped: fieldId != null,
-      /* RENAMED FROM revenueByMonth, deliberately. It changed BASIS from net to gross, and a key
-       * that keeps its name through a change of meaning is how a consumer keeps reading the old
-       * thing. The name now says which of the three bases it is. */
+      /* THE KEY KEEPS ITS NAME (the page reads it) BUT THE BASIS IS NET SINCE 2026-11-05: Finance's
+       * net, gross minus refunds, failed, disputes and sales tax. The tile copy says so. */
       membershipGrossByMonth: Object.fromEntries(revByMonth),
       /* ── THE SHARE TABLE, NEWEST MONTH FIRST ───────────────────────────────────────────────
        * Every month from the derived launch month through the current one, with no gaps: a month
