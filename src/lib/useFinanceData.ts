@@ -578,8 +578,17 @@ async function load(quarter: QuarterInfo): Promise<void> {
       ovRows,
       mdapiRegRows,
     ] = await Promise.all([
+      /* ── REVENUE IS fin_txn_daily (0255), FINANCE > REVENUE'S OWN FIGURES (Ryan, 2026-11-05) ──
+       * fin_revenue is no longer read here. Every consumer of FinanceData.revenue — Cities, Cost,
+       * field economics, period compare, quarters, the monthly report, the venues view, the partner
+       * payout pre-compute — now sums the same rows the Revenue page sums: one row per Central day ×
+       * city × type × venue × source with gross collected (charges and Venmo, tax in), Stripe fees,
+       * and net (after refunds, failed payments, disputes and per-charge sales tax, fees left in).
+       * The rows are mapped into fin_revenue's shape below so no consumer had to change. */
       selectAll<Record<string, unknown>>(() =>
-        supabase.from("fin_revenue").select("*").order("id"),
+        supabase.from("fin_txn_daily")
+          .select("day, city, type, fin_venue_id, source, n_charges, gross_cents, reversal_cents, fee_cents, tax_cents, net_cents")
+          .order("day").order("city").order("type").order("venue_key").order("source"),
       ),
       selectAll<Record<string, unknown>>(() =>
         supabase.from("fin_expenses").select("*").order("id"),
@@ -780,6 +789,40 @@ async function load(quarter: QuarterInfo): Promise<void> {
     return canonicalVenueName(c);
   }
 
+  /* ── fin_txn_daily → fin_revenue's row shape ──────────────────────────────────────────────
+   *   date     the Central day            month   "Oct 2026"
+   *   city     '' becomes the "Deleted Account Revenue" pseudo-city every consumer already handles
+   *   venue    fin_venues.venue_name by id, canonicalised exactly as the old venue string was
+   *   gross    gross collected (charges + Venmo, tax in) — reversals are NOT in it, so a page that
+   *            sums gross still reads Finance's "Gross collected"
+   *   net      Finance's net: gross + reversals − tax, Stripe fees left in
+   *   fees     Stripe fees on those rows
+   *   source   'Stripe' | 'Venmo'; id is synthetic (these rows are not editable; the Revenue admin
+   *            editor reads fin_revenue's manual rows itself). */
+  const venueNameById = new Map<number, string>();
+  for (const v of vnRows) if (v.id != null) venueNameById.set(Number(v.id), cleanText(v.venue_name));
+  const MONTHS_3 = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const monthLabelOfDay = (day: string): string => `${MONTHS_3[Number(day.slice(5, 7)) - 1]} ${day.slice(0, 4)}`;
+  const revenueRowsShaped: Array<Record<string, unknown>> = revenueRows.map((r, i) => {
+    const day = cleanText(r.day);
+    const vid = r.fin_venue_id == null ? null : Number(r.fin_venue_id);
+    const city = cleanText(r.city);
+    return {
+      id: -(i + 1),
+      date: day,
+      month: monthLabelOfDay(day),
+      city: city === "" ? "Deleted Account Revenue" : city,
+      venue: vid == null ? null : venueNameById.get(vid) ?? null,
+      type: cleanText(r.type),
+      gross: asNumber(r.gross_cents) / 100,
+      fees: asNumber(r.fee_cents) / 100,
+      net: asNumber(r.net_cents) / 100,
+      source: cleanText(r.source),
+      notes: null,
+      manual_entry: false,
+    };
+  });
+  revenueRows = revenueRowsShaped;
   const revenue: FinRevenue[] = revenueRows.map((r) => ({
     id: r.id as number,
     date: cleanText(r.date),

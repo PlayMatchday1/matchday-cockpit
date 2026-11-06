@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Lock, Pencil, Plus, Trash2 } from "lucide-react";
 import ConfirmDeleteDialog from "@/components/ConfirmDeleteDialog";
@@ -14,6 +14,7 @@ import {
   type Q2Month,
 } from "@/lib/financeStats";
 import { supabase } from "@/lib/supabase";
+import { selectAll } from "@/lib/supabasePagination";
 import { useAuth } from "@/lib/useAuth";
 import { isCityHidden } from "@/lib/types";
 import {
@@ -103,7 +104,25 @@ export default function RevenueAdminView() {
 
   const [deleteRow, setDeleteRow] = useState<FinRevenue | null>(null);
 
-  const allRows = data?.revenue ?? [];
+  /* THE EDITOR LISTS fin_revenue ITSELF (2026-11-05). FinanceData.revenue is Finance's fin_txn_daily
+   * now — synthetic ids, nothing editable — while this screen is where a Venmo or manual row is
+   * ENTERED, and fin_revenue stays that record (the Venmo mirror copies it into fin_txn). */
+  const [ledgerRows, setLedgerRows] = useState<FinRevenue[]>([]);
+  useEffect(() => {
+    let live = true;
+    void (async () => {
+      const rows = await selectAll<Record<string, unknown>>(() => supabase.from("fin_revenue").select("*").order("id"));
+      if (!live) return;
+      setLedgerRows(rows.map((r) => ({
+        id: Number(r.id), date: String(r.date ?? ""), month: String(r.month ?? ""), city: String(r.city ?? ""),
+        venue: r.venue == null ? null : String(r.venue), type: String(r.type ?? ""), gross: Number(r.gross ?? 0),
+        fees: Number(r.fees ?? 0), net: Number(r.net ?? 0), source: String(r.source ?? ""),
+        notes: r.notes == null ? null : String(r.notes), manual_entry: Boolean(r.manual_entry ?? false),
+      })));
+    })();
+    return () => { live = false; };
+  }, [data]);   // refetchFinanceData() after every write changes `data`, which re-reads the ledger
+  const allRows = ledgerRows;
 
   // DERIVED FROM THE DATA, not a list. Whatever source values exist in fin_revenue appear here —
   // the two sentinels lead, every real source follows, Stripe included so its rows stay auditable.
