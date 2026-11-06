@@ -10,10 +10,11 @@
  *           is in data.arppCard.series and the range selects from it on the client.
  *   Oct 14  "previous year" was unclear: the cards say "vs September" and "vs October 2025".
  *
- * THE ARITHMETIC DID NOT MOVE. Revenue per player for a month is the card's own resolver: clean
- * revenue (deleted accounts' revenue out) over the players who played or held a paying membership
- * that month, counted once at network grain and once per city. October 2026 reads what it read
- * before. The caveat paragraphs became the "How this is counted" panel at the bottom, closed.
+ * THE DENOMINATOR IS "ACTIVE PLAYERS" (Ryan, 2026-11-05): everyone who played or held a paying
+ * membership that month, counted once at network grain and once per city — not paid-only. The
+ * numerator is that month's revenue INCLUDING deleted accounts' revenue, since deleted accounts are
+ * in the denominator (the two sides agree; before 2026-11-05 the revenue was dropped and the people
+ * kept). The caveat paragraphs became the "How this is counted" panel at the bottom, closed.
  *
  * Tables of numbers, not sparklines: Miguel prefers real numbers over small line graphs, so the one
  * chart on the page is the network line with last year dashed, and the city table is money. */
@@ -138,10 +139,10 @@ export default function RevenuePerPlayerPanel({ data }: { data: GrowthData }) {
       {mode === "monthly" ? (
         <>
           <div className={styles.kpiRow} data-testid="rpp-kpis">
-            {kpi(longMonth(to), money(cur?.arpp), "per paying player", undefined, "rpp-kpi-cur")}
+            {kpi(longMonth(to), money(cur?.arpp), "per active player", undefined, "rpp-kpi-cur")}
             {kpi(`vs ${MON_LONG[Number(prevM.slice(5, 7)) - 1]}`, vsPrev ? signedMoney(vsPrev.d) : "—", `was ${money(prev?.arpp)}`, pctChip(vsPrev), "rpp-kpi-prev")}
             {kpi(`vs ${longMonth(pyM)}`, vsPy ? signedMoney(vsPy.d) : "—", `was ${money(py?.arpp)}`, pctChip(vsPy), "rpp-kpi-py")}
-            {kpi("Paying players", fmtInt(cur?.players ?? 0), "counted once across cities", undefined, "rpp-kpi-players")}
+            {kpi("Active players", fmtInt(cur?.players ?? 0), "counted once across cities", undefined, "rpp-kpi-players")}
           </div>
 
           <section className={styles.card} data-testid="rpp-chart">
@@ -204,9 +205,9 @@ export default function RevenuePerPlayerPanel({ data }: { data: GrowthData }) {
           <details className={styles.rppHow} data-testid="rpp-how">
             <summary>How this is counted</summary>
             <dl>
-              <dt>Per player</dt><dd>Revenue from paying players that month, divided by the players who played or held a paying membership that month.</dd>
+              <dt>Per active player</dt><dd>Revenue that month, divided by the active players: everyone who played or held a paying membership that month.</dd>
               <dt>Network vs cities</dt><dd>A player who plays in two cities counts once for MatchDay but once in each city, so cities don&rsquo;t average to the top number.</dd>
-              <dt>Left out</dt><dd>Staff, test and fake accounts. Deleted accounts count neither their revenue nor themselves.</dd>
+              <dt>Left out</dt><dd>Staff, test and fake accounts. Deleted accounts stay in, with their revenue.</dd>
               <dt>&ldquo;—&rdquo;</dt><dd>The {view === "city" ? "city" : "field"} didn&rsquo;t exist yet in that month.</dd>
             </dl>
           </details>
@@ -217,7 +218,7 @@ export default function RevenuePerPlayerPanel({ data }: { data: GrowthData }) {
           <div className={styles.tableWrap}>
             <table className={styles.dataTable}>
               <thead>
-                <tr><th>Year</th><th>Revenue</th><th>Paying players</th><th>Per player</th><th>vs prior year</th></tr>
+                <tr><th>Year</th><th>Revenue</th><th>Active players</th><th>Per active player</th><th>vs prior year</th></tr>
               </thead>
               <tbody>
                 {annual.map((y, i) => {

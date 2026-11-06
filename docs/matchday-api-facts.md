@@ -8437,3 +8437,22 @@ Full write-up: `docs/free-first-match/DISCOVERY.md`. The load-bearing facts:
   a few thousand ids scanned the whole roster and hit the statement timeout (2026-11-05). Filter on
   `account_id` (the raw `mdapi_match_players.user_id`, indexed) or `player_api_id` / `match_api_id`,
   and widen a person to their accounts through `growth_person_link`.
+
+## Revenue per Player: deleted accounts count on both sides, and January 2025 is why (2026-11-05)
+
+Ryan's decision after the redesign: the denominator stays "active players" (played or held a paying
+membership that month, the 0208 rule, deleted accounts kept as people), so the numerator keeps their
+revenue too. `fin_revenue` rows with city `Deleted Account Revenue` had been dropped from the ARPP
+numerator while the same people sat in the denominator (`computeArppCard`, growthFromViews.ts).
+
+- **Effect, measured 2026-11-05:** October 2026 $29.81 → **$29.87**; September $29.66 → $29.71;
+  October 2025 $25.41 → $25.77; 2024 $55.81 → $56.59; 2025 $63.07 → $66.34; 2026 YTD $68.53 → $69.28.
+  City rows do not move: that revenue maps to no city.
+- **January 2025 is 64% deleted-account revenue**: $14,092 of $22,118 (`fin_revenue`, read-only
+  2026-11-05). Every other 2025 month is under $1,400. Excluding it put January 2025 at about $9 per
+  player on the chart; it reads $22.50 with it. UNKNOWN why that month in particular: likely an
+  account-deletion wave or a re-import that relabelled a month, not traced.
+- **fin_revenue is complete for 2025.** Month by month against `fin_txn_sums` (Stripe, 0214) the
+  totals track within a few percent in every month, with fin_revenue consistently a little above
+  Stripe's pre-tax charges, so the gap is definitional (tax and fee treatment), not missing months.
+- Wording on the page is "active players" / "per active player" everywhere, not "paying".

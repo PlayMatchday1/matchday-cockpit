@@ -562,8 +562,12 @@ export function computeGrowthFromViews(input: ViewInput): GrowthData {
 }
 
 // ── ARPP card (v2): selected-month + annual ARPP per entity ──────────────────
-// Deleted-account revenue is dropped from BOTH sides (its rows are gone from the
-// denominator; here we drop its revenue from the numerator too). A period with no
+// DELETED ACCOUNTS COUNT ON BOTH SIDES (Ryan, 2026-11-05). The shared who-counts rule (0208) keeps
+// a deleted account as a real person, so a tombstone that played is in the denominator; its
+// revenue (fin_revenue city "Deleted Account Revenue") therefore belongs in the numerator too.
+// Before this it was dropped while the person stayed, which understated every figure: October
+// 2026 read $29.81 against $29.87 with it. The "Deleted Account Revenue" city still maps to no
+// city, so it reaches the network and annual figures and no city row. A period with no
 // denominator yields null → the card renders an em-dash, never $0.00. Field-level
 // membership = each member's subs.price split evenly across the distinct fields
 // they played that month; zero-match members go to a city-level unallocated bucket.
@@ -630,7 +634,7 @@ export function computeArppCard(
     const k = revMonthToKey(r.month);
     if (!k) continue;
     const net = Number(r.net ?? 0);
-    if ((r.city ?? "").trim() === DELETED_CITY) { inc(deletedM, k, net); continue; } // both sides
+    if ((r.city ?? "").trim() === DELETED_CITY) inc(deletedM, k, net);   // diagnostics only; it stays in netCleanM
     inc(netCleanM, k, net);
     inc2(netMCity, normalizeRevenueCity(r.city), k, net);
     if (r.venue && r.type !== "Membership") inc2(netMFieldNonMember, canonicalVenueName(r.venue) || r.venue, k, net);

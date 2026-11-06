@@ -14,7 +14,7 @@ export default function LifecycleArppPage() {
   return (
     <SectionFrame
       title="Revenue per Player"
-      subtitle="What a paying player is worth each month"
+      subtitle="What an active player is worth each month"
       period={false}
     >
       {g.data && <RevenuePerPlayerPanel data={g.data} />}
