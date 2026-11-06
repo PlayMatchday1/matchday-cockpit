@@ -1355,7 +1355,7 @@ function GoalCells({
 }
 
 /* ── THE DRAWER, LIKEWISE SHARED ──────────────────────────────────────────────────────────────
- * "Do not count this field" and the action list. Same component in both grains, so the city view
+ * The action list. Same component in both grains, so the city view
  * is not a second, quietly diverging copy of the one control that removes a field from every
  * total on the page. */
 function ActionsDrawer({
@@ -1371,13 +1371,8 @@ function ActionsDrawer({
   const out = r.notCounted === true;
   return (
     <div className="flex flex-col gap-1.5 pt-1">
-      {/* REVERSIBLE IN PLACE, from the same panel that holds the actions. */}
-      <button type="button" data-testid="fg-notcounted-toggle" disabled={busy}
-        onClick={() => onNotCounted(r, !out)}
-        className="self-start rounded-md border px-2.5 py-1 text-[11.5px] font-bold"
-        style={{ borderColor: "#D3DCD8", background: "#fff", color: out ? "#12694A" : "#8A5A12" }}>
-        {out ? "Count this field again" : "Do not count this field"}
-      </button>
+      {/* THE "DO NOT COUNT THIS FIELD" BUTTON IS GONE (2026-11-05): hide replaced not counted. The
+          flag itself stays in the database and still renders as a tag where set. */}
       {r.actions.map((a) => (
         <div key={a.id} className="flex items-center gap-2 text-[12.5px]" style={{ color: "#3A4D44" }} data-testid="fg-action">
           <input type="checkbox" checked={a.done} disabled={busy} onChange={() => onToggleAction(a, r.key)}
@@ -1540,8 +1535,10 @@ function AddFieldTr({ city, span, busy, setAdding, onAdd, err }: {
 }
 
 /* ── ONE ••• MENU PER FIELD (v2, 2026-11-05) ───────────────────────────────────────────────────
- * Existing fields: Edit goal, Mark not counted, Hide field. New fields add Delete field, in red,
- * which replaced the separate remove ×. Hide is offered only once field_goal_rows.hidden exists
+ * Existing fields: Edit goal, Hide field. New fields add Delete field, in red, which replaced the
+ * separate remove ×. "Mark not counted" was retired the same day (Ryan): hide replaced it, the nine
+ * not-counted rows were flipped to hidden, and the column stays (Warsaw's Bemowo row keeps it; it
+ * is off the page by city anyway). The flag still renders as a tag where it is set. Hide is offered only once field_goal_rows.hidden exists
  * (hideSupported) — never a live-looking item that cannot save. Delete takes two presses, as the ×
  * did: it removes the field and every goal typed against it. */
 function FieldMenu({ busy, hidden, notCounted, hideSupported, onEditGoal, onNotCounted, onHidden, onDelete }: {
@@ -1572,7 +1569,6 @@ function FieldMenu({ busy, hidden, notCounted, hideSupported, onEditGoal, onNotC
       {open && (
         <span className="absolute right-0 top-full z-20 mt-1 block w-48 rounded-xl border bg-white py-1 text-left shadow-lg" style={{ borderColor: "#D3DCD8" }}>
           {!hidden && item("Edit goal", onEditGoal, "fg-menu-editgoal")}
-          {!hidden && item(notCounted ? "Count this field again" : "Mark not counted", onNotCounted, "fg-menu-notcounted")}
           {hideSupported && item(hidden ? "Unhide" : "Hide field", onHidden, "fg-menu-hide")}
           {onDelete && (
             <button type="button" data-testid="fg-menu-delete" disabled={busy}
