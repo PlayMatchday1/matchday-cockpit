@@ -104,18 +104,18 @@ const R: Record<string, RouteWords> = {
   "POST /v2/device-integrity": { title: "Device check", cat: "account", bg: "device checks" },
 
   // Browsing and everything else
-  "GET /matches/:id": { title: "Opened a match", cat: "other" },
+  "GET /matches/:id": { title: "Opened a match", fail: "Couldn't open a match", cat: "other" },
   "GET /matches": { title: "Loaded matches", cat: "other", bg: "loading screens" },
   "GET /matches/my-matches": { title: "Loaded their matches", cat: "other", bg: "loading screens" },
   "GET /matches/matches-for-review": { title: "Loaded matches to review", cat: "other", bg: "loading screens" },
   "GET /events": { title: "Loaded events", cat: "other", bg: "loading screens" },
   "GET /special-events/events": { title: "Loaded special events", cat: "other", bg: "loading screens" },
-  "GET /special-events/events/:eventId": { title: "Opened a special event", cat: "other" },
+  "GET /special-events/events/:eventId": { title: "Opened a special event", fail: "Couldn't open a special event", cat: "other" },
   "GET /special-events/events/:eventId/divisions": { title: "Loaded event divisions", cat: "other", bg: "loading screens" },
   "GET /special-events/divisions/:divisionId/teams": { title: "Loaded event teams", cat: "other", bg: "loading screens" },
   "GET /special-events/divisions/:divisionId/matches": { title: "Loaded event matches", cat: "other", bg: "loading screens" },
   "GET /fields": { title: "Loaded fields", cat: "other", bg: "loading screens" },
-  "GET /fields/:id": { title: "Opened a field", cat: "other" },
+  "GET /fields/:id": { title: "Opened a field", fail: "Couldn't open a field", cat: "other" },
   "GET /cities": { title: "Loaded cities", cat: "other", bg: "loading screens" },
   "GET /cities/nearby": { title: "Looked up nearby cities", cat: "other", bg: "loading screens" },
   "GET /cities/:id": { title: "Loaded their city", cat: "other", bg: "loading screens" },
@@ -151,7 +151,7 @@ const RECHECK_MS = 120_000;
 // shows raw with GENERIC_CODE.
 export const ERROR_WORDS: Record<string, string> = {
   NO_SPOTS_LEFT: "The match was full, so no spot was booked.",
-  MATCH_ALREADY_STARTED: "The match had already started, so the app wouldn't change the spot.",
+  MATCH_ALREADY_STARTED: "The match had already started.",
   MATCH_ALREADY_PASSED: "The match was already over.",
   MATCH_IS_CANCELLED: "The match is cancelled.",
   MATCH_IS_NOT_STARTED: "The match hadn't started yet.",

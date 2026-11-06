@@ -7,8 +7,9 @@
 // guard trigger refuses it, so this is belt and braces. `ip` is returned to admins only.
 //
 // MATCHES: production from our copy (mdapi_matches, synced daily). Staging has no copy, so up to
-// MAX_STAGING_LOOKUPS single staff lookups of GET /admin/matches/{id}, one at a time, stopping at
-// the first error — never production.
+// MAX_STAGING_LOOKUPS single staff lookups of GET /admin/matches/{id}, one at a time — never
+// production. A 404 is an answer (the match does not exist: the row keeps "Match #id") and the next
+// id is read; any other error stops the lookups.
 
 import { authenticateMatchOpsRead } from "@/lib/matchOpsAuth";
 import { apiGet, type MatchdayEnv } from "@/lib/matchdayStageApi";
@@ -90,7 +91,8 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string }> 
         const city = (field?.city ?? null) as Record<string, unknown> | null;
         matches[mid] = { field: typeof field?.title === "string" ? field.title : null, start: typeof m.startDate === "string" ? m.startDate : null, city: typeof city?.name === "string" ? city.name : null };
       } catch (e) {
-        notes.push(`Staging match lookup stopped at #${mid}: ${(e as Error).message.slice(0, 120)}`);
+        if (/HTTP 404\b/.test((e as Error).message)) continue;
+        notes.push(`Match details stopped at staging match #${mid}; the rest show their number only.`);
         break;
       }
     }

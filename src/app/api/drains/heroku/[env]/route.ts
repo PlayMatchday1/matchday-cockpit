@@ -35,7 +35,9 @@ const DRAIN_TOKENS: Record<Env, readonly string[]> = {
   // matchday-stage, drain created 2026-11-06T21:02:20Z (heroku drains --json, token field only); the same
   // token arrived on the first unpinned batches in app_request_log_batches.
   staging: ["d.e188e63f-7a64-42d5-839d-d9298f7f011d"],
-  production: [],
+  // playmatchday, added by Ryan 2026-11-06 (token from him; the same token arrived on the first
+  // unpinned production batches, 21:16:30Z on).
+  production: ["d.4fda2caa-2724-45a9-bd13-17330ecb07bb"],
 };
 
 const EMPTY = () => new Response(null, { status: 200, headers: { "Content-Length": "0" } });

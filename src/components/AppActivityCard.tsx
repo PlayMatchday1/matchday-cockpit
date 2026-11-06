@@ -165,8 +165,7 @@ export default function AppActivityCard({ env, playerId, city, startOpen }: {
             </div>
           ))}
           <div className="aa-foot">
-            <span>From MatchDay&apos;s own server logs, kept {KEPT_DAYS} days. Match chat messages don&apos;t appear here. Only what the app sent to our servers.
-              {state.data.truncated ? " Showing the newest 3,000 requests in this range." : ""}</span>
+            <span>{`From MatchDay's own server logs, kept ${KEPT_DAYS} days. Match chat messages don't appear here. Only what the app sent to our servers.${state.data.truncated ? " Showing the newest 3,000 requests in this range." : ""}`}</span>
             <button className="aa-btn" data-testid="aa-older" onClick={loadOlder} disabled={spanDays >= KEPT_DAYS}
               title={spanDays >= KEPT_DAYS ? `Nothing older than ${KEPT_DAYS} days is kept` : undefined}>
               {spanDays >= KEPT_DAYS ? `All ${KEPT_DAYS} days shown` : "Load older"}
