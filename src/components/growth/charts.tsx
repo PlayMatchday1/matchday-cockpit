@@ -28,6 +28,7 @@ export function LineChart({
   startMarkers = [],
   yUnit = "",
   formatTick,
+  baseline = "zero",
 }: {
   axis: string[];
   series: Series[];
@@ -39,6 +40,10 @@ export function LineChart({
   yUnit?: string;
   /** The y-axis label for a grid value; defaults to the integer / "k" rule below. */
   formatTick?: (v: number) => string;
+  /** "zero" (default, unchanged for every existing caller) runs the axis from 0. "data" runs it from
+   *  a round figure just under the lowest point, so a series that moves a dollar or two on a $30
+   *  base is not drawn as a flat line along the top of an empty chart. */
+  baseline?: "zero" | "data";
 }) {
   const [hover, setHover] = useState<number | null>(null);
   const plotW = Math.max(1, axis.length - 1) * step;
@@ -47,12 +52,17 @@ export function LineChart({
 
   const allVals = series.flatMap((s) => s.values).filter((v): v is number => v != null);
   const rawMax = allVals.length ? Math.max(...allVals) : 1;
-  const yMax = niceMax(rawMax);
-  const x = (i: number) => PAD_L + i * step;
-  const y = (v: number) => PAD_T + plotH - (v / yMax) * plotH;
-
+  const rawMin = allVals.length ? Math.min(...allVals) : 0;
   const ticks = 4;
-  const gridVals = Array.from({ length: ticks + 1 }, (_, i) => (yMax / ticks) * i);
+  /* A DATA BASELINE: a round step that spans the data in four ticks, floor and ceiling on that step. */
+  const stepOf = (span: number) => { const raw = Math.max(span, 1e-9) / ticks; const p = Math.pow(10, Math.floor(Math.log10(raw))); const f = raw / p; return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * p; };
+  const tick = baseline === "data" ? stepOf((rawMax - rawMin) || rawMax * 0.1 || 1) : 0;
+  const yMin = baseline === "data" ? Math.floor(rawMin / tick) * tick : 0;
+  const yMax = baseline === "data" ? Math.max(yMin + tick * ticks, Math.ceil(rawMax / tick) * tick) : niceMax(rawMax);
+  const x = (i: number) => PAD_L + i * step;
+  const y = (v: number) => PAD_T + plotH - ((v - yMin) / (yMax - yMin || 1)) * plotH;
+
+  const gridVals = Array.from({ length: ticks + 1 }, (_, i) => yMin + ((yMax - yMin) / ticks) * i);
   const labelEvery = Math.max(1, Math.ceil(axis.length / Math.max(1, Math.floor(plotW / 70))));
 
   return (

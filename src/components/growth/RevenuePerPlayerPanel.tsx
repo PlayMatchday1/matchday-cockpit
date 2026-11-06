@@ -89,8 +89,12 @@ export default function RevenuePerPlayerPanel({ data }: { data: GrowthData }) {
 
   const net = series.network;
   const cur = net[to], prev = net[prevM], py = net[pyM];
+  /* THE DOLLAR CHANGE IS BETWEEN THE TWO FIGURES ON SCREEN. $29.81 against "was $29.66" must read
+   * +$0.15, not the +$0.16 the unrounded values give; a card whose parts do not add up is the fault
+   * this estate keeps finding. The percentage stays on the unrounded figures. */
+  const cents = (v: number) => Math.round(v * 100) / 100;
   const delta = (a: ArppMonthPoint | undefined, b: ArppMonthPoint | undefined) =>
-    a?.arpp != null && b?.arpp != null ? { d: a.arpp - b.arpp, pct: b.arpp ? ((a.arpp - b.arpp) / b.arpp) * 100 : null } : null;
+    a?.arpp != null && b?.arpp != null ? { d: cents(a.arpp) - cents(b.arpp), pct: b.arpp ? ((a.arpp - b.arpp) / b.arpp) * 100 : null } : null;
   const vsPrev = delta(cur, prev), vsPy = delta(cur, py);
 
   const seg = (on: boolean, label: string, fn: () => void, testId: string) => (
@@ -152,7 +156,7 @@ export default function RevenuePerPlayerPanel({ data }: { data: GrowthData }) {
                 ))}
               </div>
             </div>
-            <LineChart axis={axis} series={chart} height={260} step={step} formatAxis={shortMonth}
+            <LineChart axis={axis} series={chart} height={260} step={step} formatAxis={shortMonth} baseline="data"
               formatValue={(v) => money(v)} formatTick={(v) => `$${Math.round(v)}`} />
           </section>
 
