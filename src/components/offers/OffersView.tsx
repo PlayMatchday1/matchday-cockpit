@@ -20,7 +20,9 @@ import { PushResultsRow, PushSettingsCard } from "./OfferPush";
 import { Banner, Btn, NotFound, O, StateChip, authed, type WriteOutcome } from "./offersUi";
 import { useOffersAccessState } from "./useOffersAccess";
 
-type Data = { campaigns: Campaign[]; cities: City[]; fields: FieldOpt[]; matches: MatchOpt[]; matchesComplete: boolean; matchesError: string | null; pushes?: boolean };
+// pushes: draw the push controls. pushesAsk: on production the page can't say until the backend's push mode is read
+// (one paced read, GET /api/offers/push-mode), so it names a campaign to ask about and the browser asks after the load.
+type Data = { campaigns: Campaign[]; cities: City[]; fields: FieldOpt[]; matches: MatchOpt[]; matchesComplete: boolean; matchesError: string | null; pushes?: boolean; pushesAsk?: number | null };
 const COLS = "grid grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)_minmax(0,1.3fr)_88px] items-center gap-3";
 
 export default function OffersView() {
@@ -53,6 +55,20 @@ export default function OffersView() {
     })();
     return () => { cancelled = true; };
   }, [access, key]);
+  // THE PUSH MODE on production: asked once per page read, after the list is on screen. Any failure leaves the
+  // controls hidden, which is what an unknown mode means here.
+  const ask = data?.pushesAsk ?? null;
+  useEffect(() => {
+    if (ask === null) return;
+    let cancelled = false;
+    (async () => {
+      const r = await authed(`/api/offers/push-mode?campaignId=${ask}`);
+      if (cancelled) return;
+      if (!r.ok) { console.error(`[offers] push mode: ${String(r.json.error)}`); return; }
+      if (r.json.visible === true) setData((d) => (d ? { ...d, pushes: true, pushesAsk: null } : d));
+    })();
+    return () => { cancelled = true; };
+  }, [ask, key]);
   // MATCHES AN OFFER NAMES that the list doesn't hold: read when that offer is opened, never on page load.
   const [extraMatches, setExtraMatches] = useState<Record<number, MatchOpt>>({});
   const [matchFailed, setMatchFailed] = useState(false);

@@ -84,13 +84,13 @@ A missing credential closes the page like any other variable: the routes answer 
 them. A backend without them refuses in plain words. The app must handle `expiresAt: null` and `showTicket` before an
 offer using either reaches a phone.
 
-**Offer pushes (backend `docs/offer-push.md`) need the backend's push release.** Until then every push route answers
-"This backend doesn't have offer pushes yet, so nothing was sent or saved." On production the push controls are hidden
-from everyone except the emails in `OFFERS_PUSH_ACCOUNTS` (comma-separated, server-only, read in `pushesVisible`,
-`src/lib/offersPush.ts`). Unset means nobody, and every push route answers 404 without reaching the backend. Staging and
-local show them to anyone with Offers. Set it to Ryan's email for the first production check; who reaches a player is
-still the API's `OFFER_PUSH_MODE`, which the Clubhouse never decides. None of it has been checked against a backend that
-has the push routes: no staging run, no test push to a phone.
+**Offer pushes (backend `docs/offer-push.md`).** Since 2026-11-06 (Ryan) the push controls and routes are open to anyone
+with Match Ops access; the `OFFERS_PUSH_ACCOUNTS` allowlist is retired and the variable is read nowhere (it can be
+removed from Production scope; nothing needs it). On production the page draws the controls only while the backend
+reports `OFFER_PUSH_MODE` live, read off one campaign's `push/reachable` through `GET /api/offers/push-mode` after the
+list loads, because the API has no mode route of its own; with no campaign at all the controls stay hidden until one
+exists. Who a push reaches is still the API's mode, which the Clubhouse never decides. A backend without the push
+routes still answers "This backend doesn't have offer pushes yet, so nothing was sent or saved."
 
 Also needed, none of them new variables:
 

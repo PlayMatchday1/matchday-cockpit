@@ -2,14 +2,13 @@
 // out): the push, filled in for the signed-in person, to their own phones only. See sendTestPush.
 
 import { PUSH_BODY_MAX, PUSH_TITLE_MAX } from "@/lib/offersPush";
-import { offersGate, pushNotFound, pushesAllowed, readJson, sendTestPush } from "@/lib/offersServer";
+import { offersGate, pushNotFound, readJson, sendTestPush } from "@/lib/offersServer";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }) {
   const auth = await offersGate(req);
   if (auth instanceof Response) return auth;
-  if (!pushesAllowed(auth)) return pushNotFound();
   const id = Number((await ctx.params).id);
   if (!Number.isInteger(id) || id <= 0) return pushNotFound();
   const raw = await readJson(req);

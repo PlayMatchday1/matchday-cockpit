@@ -216,10 +216,10 @@ export const capLine = (n: number) => (n === 0
   ? "No marketing pushes at all: offer pushes, Spots available and the three come-back pushes all stop. Cancellations and chat still go."
   : `Each player gets at most ${n} marketing ${n === 1 ? "push" : "pushes"} in any 7 days, counting offer pushes, Spots available and the three come-back pushes. Cancellations and chat never count.`);
 
-// WHO SEES THE PUSH CONTROLS: everywhere but production, and on production only the accounts in
-// OFFERS_PUSH_ACCOUNTS (comma-separated emails) until Ryan signs off. Unset on production: nobody.
-export function pushesVisible(env: string, email: string | null | undefined, vars: Record<string, string | undefined>): boolean {
-  if (env !== "production") return true;
-  const list = (vars.OFFERS_PUSH_ACCOUNTS ?? "").split(",").map((s) => s.trim().toLowerCase()).filter((s) => s.includes("@"));
-  return !!email && list.includes(email.trim().toLowerCase());
+// WHO SEES THE PUSH CONTROLS (Ryan, 2026-11-06): anyone with Match Ops access. Everywhere but production they are
+// always drawn; on production only while the backend reports OFFER_PUSH_MODE live (read from a campaign's
+// push/reachable, the one place the API says its mode). The OFFERS_PUSH_ACCOUNTS allowlist is retired. The routes
+// themselves are open to anyone with Match Ops on every environment: who a push reaches is the backend's mode alone.
+export function pushesVisible(env: string, mode: PushMode | null | undefined): boolean {
+  return env !== "production" || mode === "live";
 }

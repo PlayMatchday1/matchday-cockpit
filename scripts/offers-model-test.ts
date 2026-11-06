@@ -853,7 +853,9 @@ eq("an admin account is one; a player or a backend without the type isn't", [isA
     eq("a zero row is 0, never -0 (printed as \"-0\")", reachRows(live).filter(([, v]) => v === 0).every(([, v]) => Object.is(v, 0)) && reachRows(live).some(([, v]) => v === 0), true);
     eq("an older backend (no mode, no notAllowed): no row, no note, the old headline", [reachRows(r0).some(([k]) => k === "Not allowed yet"), reachModeNote(r0), reachHeadline(r0)], [false, null, ["≈ 636", "reachable by push"]]);
   }
-  eq("staging shows the controls to anyone with Offers; production to nobody until listed", [pushesVisible("staging", "a@b.c", {}), pushesVisible("local", null, {}), pushesVisible("production", "rmancuso@playmatchday.com", {}), pushesVisible("production", "RMancuso@PlayMatchday.com", { OFFERS_PUSH_ACCOUNTS: " rmancuso@playmatchday.com " }), pushesVisible("production", "x@y.z", { OFFERS_PUSH_ACCOUNTS: "rmancuso@playmatchday.com" })], [true, true, false, true, false]);
+  // 2026-11-06: the OFFERS_PUSH_ACCOUNTS allowlist is retired. Off production the controls always draw; on production only
+  // while the backend reports its push mode live. Nobody's email comes into it.
+  eq("staging and local draw the controls whatever the mode; production only when the backend says live", [pushesVisible("staging", null), pushesVisible("local", "off"), pushesVisible("production", "live"), pushesVisible("production", "allowlist"), pushesVisible("production", "off"), pushesVisible("production", null)], [true, true, true, false, false, false]);
   eq("the limit's line says what it counts", [capLine(2).includes("at most 2 marketing pushes in any 7 days"), capLine(2).includes("never count"), capLine(0).startsWith("No marketing pushes")], [true, true, true]);
   eq("at a time starts at the next whole hour", [defaultSendLocal("2026-11-02 08:37:57"), defaultSendLocal("2026-11-02 23:10:00")], ["2026-11-02 09:00", "2026-11-03 00:00"]);
   eq("the title as sent follows the form", pushText({ ...on, body: "typed" }, sugg), { title: "50% OFF", body: "typed" });
@@ -1320,16 +1322,33 @@ function routeFiles(dir: string): string[] {
     eq("limit outside 0 to 14: refused, no request", [(await json(await settings.PUT(req("PUT", { weeklyCap: 15 }), {}))).status, (await json(await settings.PUT(req("PUT", { weeklyCap: -1 }), {}))).status, (await json(await settings.PUT(req("PUT", { weeklyCap: 1.5 }), {}))).status, seen.length], [400, 400, 400, 0]);
     answer = () => new Response(JSON.stringify({ weeklyCap: 2 }), { status: 200 });
     eq("limit answered with another number: NOT APPLIED", (await json(await settings.PUT(req("PUT", { weeklyCap: 4 }), {}))).verdict, "NOT APPLIED");
-    // PRODUCTION: hidden, every push route answers as missing and sends nothing.
+    // THE TEST PUSH when the caller's own account has no phone that can take it: said plainly, never silent.
+    answer = () => new Response(JSON.stringify({ errorCode: "INVALID_OFFER_PUSH", message: "Invalid offer push: staff@playmatchday.com has no device on app 1.88 or newer" }), { status: 400 });
+    eq("no phone on 1.88+: says so, nothing sent", (await json(await test.POST(req("POST", {}), ctx))).error, "None of the phones signed in as staff@playmatchday.com has the MatchDay app on 1.88 or newer, so nothing was sent. Update the app on your phone, open it once, then try again.");
+    answer = () => new Response(JSON.stringify({ errorCode: "INVALID_OFFER_PUSH", message: "Invalid offer push: staff@playmatchday.com has no device to send to" }), { status: 400 });
+    eq("no phone at all: says so", (await json(await test.POST(req("POST", {}), ctx))).error, "No phone is signed in to the MatchDay app as staff@playmatchday.com, so nothing was sent. Sign in on your phone, then try again.");
+    answer = () => new Response(JSON.stringify({ errorCode: "OFFER_TEST_PUSH_NOT_ALLOWED", message: "x" }), { status: 403 });
+    eq("test pushes off until the mode is live: says so", (await json(await test.POST(req("POST", {}), ctx))).error, "Test pushes are off on this backend until its push mode is live, so nothing was sent.");
+    // PRODUCTION (2026-11-06): the push routes are open to anyone with Match Ops, no account list, and every write
+    // still names the signed-in person as the acting staff member. Whether the page DRAWS the controls is the
+    // backend's mode, read off one campaign's reachable (GET /api/offers/push-mode).
     _setOffersGateDepsForTest({ sleep: async () => undefined, logStore: store2, authenticate: asStaff, config: prod, now: () => Date.now() + 120_000 });
-    seen.length = 0;
-    const hidden = [await put.PUT(req("PUT", want), ctx), await test.POST(req("POST", {}), ctx), await reach.GET(req("GET"), ctx), await results.GET(req("GET"), ctx), await settings.GET(req("GET"), {}), await settings.PUT(req("PUT", { weeklyCap: 2 }), {})].map((r) => r.status);
-    eq("production: every push route is 404, and nothing reaches the backend", [hidden, seen.length], [[404, 404, 404, 404, 404, 404], 0]);
-    process.env.OFFERS_PUSH_ACCOUNTS = "staff@playmatchday.com";
-    answer = () => new Response(JSON.stringify({ audience: 1, heldBack: 0, noConsent: 0, noDevice: 0, capped: 0, reachable: 1 }), { status: 200 });
     Object.assign(process.env, { MATCHDAY_PROD_BASE_URL: "https://playmatchday.herokuapp.com", MATCHDAY_PROD_API_EMAIL: "p@example.com", MATCHDAY_PROD_API_PASSWORD: "x" });
-    eq("...except for a listed account (the control)", (await reach.GET(req("GET"), ctx)).status, 200);
     delete process.env.OFFERS_PUSH_ACCOUNTS;
+    answer = (_p, m, b) => (m === "PUT" && !("weeklyCap" in (b as object)) ? campaignWith({ ...(b as object), status: "WAITING", queuedAt: null }) : new Response(JSON.stringify(m === "PUT" ? b : { mode: "live", reason: null, audience: 1, notAllowed: 0, heldBack: 0, noConsent: 0, noDevice: 0, capped: 0, reachable: 1, weeklyCap: 2 }), { status: 200 }));
+    seen.length = 0;
+    const open = [await put.PUT(req("PUT", want), ctx), await reach.GET(req("GET"), ctx), await settings.GET(req("GET"), {})].map((r) => r.status);
+    eq("production: push routes open to anyone with Match Ops, no OFFERS_PUSH_ACCOUNTS, and the write carries the staff header", [open, seen.map((x) => `${x.m} ${x.path}`), seen[0].staff], [[200, 200, 200], ["PUT /admin/offers/campaigns/9/push", "GET /admin/offers/campaigns/9/push/reachable", "GET /admin/offers/push-settings"], "staff@playmatchday.com"]);
+    const modeRoute = await mod("src/app/api/offers/push-mode/route.ts");
+    const modeOf = async (q: string) => json(await modeRoute.GET(new Request(`http://localhost/x${q}`, { method: "GET" }), {}));
+    const liveAns = answer;
+    eq("push-mode on production: live draws them, read off the named campaign", [(await modeOf("?campaignId=9")).visible, (await modeOf("?campaignId=9")).mode, seen.at(-1)?.path], [true, "live", "/admin/offers/campaigns/9/push/reachable"]);
+    answer = () => new Response(JSON.stringify({ mode: "off", reason: "Pushes are off", audience: 1, notAllowed: 1, heldBack: 0, noConsent: 0, noDevice: 0, capped: 0, reachable: 0 }), { status: 200 });
+    eq("...off hides them; with no campaign to ask the answer is hidden and nothing is read", [(await modeOf("?campaignId=9")).visible, seen.length, (await modeOf("")).visible, seen.length, (await modeOf("?campaignId=x")).status], [false, 6, false, 6, 400]);
+    answer = liveAns;
+    _setOffersGateDepsForTest({ sleep: async () => undefined, logStore: store2, authenticate: asStaff, config: stage, now: () => Date.now() + 120_000 });
+    seen.length = 0;
+    eq("push-mode off production: visible without a read", [(await modeOf("")).visible, seen.length], [true, 0]);
     globalThis.fetch = realFetch2;
     _setOffersGateDepsForTest(null);
   }

@@ -3,14 +3,13 @@
 // asks first. LANDED means the campaign the backend returns carries the push as sent.
 
 import { pushProblem } from "@/lib/offersPush";
-import { offersGate, pushNotFound, pushesAllowed, readJson, savePush, verdictResponse } from "@/lib/offersServer";
+import { offersGate, pushNotFound, readJson, savePush, verdictResponse } from "@/lib/offersServer";
 
 export const dynamic = "force-dynamic";
 
 export async function PUT(req: Request, ctx: { params: Promise<{ id: string }> }) {
   const auth = await offersGate(req);
   if (auth instanceof Response) return auth;
-  if (!pushesAllowed(auth)) return pushNotFound();
   const id = Number((await ctx.params).id);
   if (!Number.isInteger(id) || id <= 0) return pushNotFound();
   const raw = await readJson(req);

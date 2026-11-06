@@ -8567,3 +8567,22 @@ the Finance period's QUARTER, not all time, and the default is the period month)
 `audit-stripe-cat`, the `/data` page (Stripe uploader hidden, 4ddaf9e), and the row-count footnote in
 `growthFromViews.readRowCounts`. Not dropped: Ryan decides.
 
+
+## Offer pushes: the API has no "push mode" route; Clubhouse access is open to Match Ops (2026-11-06)
+
+**Evidence: backend `apps/api/src/core/offers/admin-offers.controller.ts` at 08145ea (feature/offers, staging v862)**:
+the only place the API says its `OFFER_PUSH_MODE` is `GET /admin/offers/campaigns/:id/push/reachable` (`mode`:
+`off` | `allowlist` | `live`, with `reason` "Pushes are off" when off). There is no campaign-free read of it, and
+`GET /admin/offers/push-settings` answers `{ weeklyCap }` alone. So the Clubhouse reads the mode off one campaign
+(`readPushVisibility`, `src/lib/offersServer.ts`; `GET /api/offers/push-mode?campaignId=`), and on production with no
+campaign the mode is UNKNOWN and the controls stay hidden.
+
+**Every Offers write already carries `X-Acting-Staff-Email`**: `offersApiWrite` passes the session's staff email to
+`apiWrite`, which sets the header (`src/lib/matchdayStageApi.ts:540`); `scripts/offers-model-test.ts` asserts it on the
+push save and the test push. The backend reads it on create, PATCH, delete, launch, pause, end, show-again, push save,
+push test, push-settings and photo register (`actingStaffEmail` / `requiredActingStaffEmail` in the controller).
+
+**The test push's device refusals come as `400 INVALID_OFFER_PUSH` with the problem in the message**
+(`offer-push.service.ts` `test`): "<email> has no device to send to" and "<email> has no device on app 1.88 or
+newer". `403 OFFER_TEST_PUSH_NOT_ALLOWED` is the mode not live and the caller neither allowlisted nor
+`@playmatchday.com`. Mapped to plain words in `testPushErrorText` (`src/lib/offersServer.ts`).

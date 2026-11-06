@@ -19,7 +19,7 @@ import { OFFERS_NOT_FOUND } from "@/lib/offersAccess";
 import { readOffersConfig, type OffersConfig, type OffersConfigResult } from "@/lib/offersConfig";
 import { chicagoWallNow, offerMatchOpt, offersLogBody, photoUrlOk, pickerRange, wallFromMatch, type ApiOfferMatch, type Campaign, type City, type FieldCover, type FieldOpt, type MatchOpt } from "@/lib/offersModel";
 import { OFFERS_READ_PACE_MS, READS_STOPPED, makePacer } from "@/lib/offersPacing";
-import { pushesVisible, type CampaignPush, type PushResults, type Reach } from "@/lib/offersPush";
+import { pushesVisible, type CampaignPush, type PushMode, type PushResults, type Reach } from "@/lib/offersPush";
 import { STAFF_NOT_ALLOWED_PLAIN, WHO_ARE_YOU, staffEmailOf, staffErrorKind } from "@/lib/staffIdentity";
 
 export const CAMPAIGNS = "/admin/offers/campaigns";
@@ -383,10 +383,19 @@ export const readPlayerLookup = (auth: OffersAuth, ids: number[]) => paced(() =>
 });
 
 // ── OFFER PUSHES (backend docs/offer-push.md) ──────────────────────────────────────────────────
-// Hidden on production until sign-off, except for OFFERS_PUSH_ACCOUNTS (src/lib/offersPush.ts pushesVisible). A route
-// asked by someone who may not see them answers as if it did not exist.
-export const pushesAllowed = (auth: OffersAuth) => pushesVisible(cfg().env, auth.email, process.env);
+// Open to anyone with Match Ops access on every environment (the OFFERS_PUSH_ACCOUNTS gate was retired 2026-11-06).
+// Whether the page DRAWS the controls on production follows the backend's push mode (pushesVisible); the backend has
+// no "what is your mode" route, so it is read off one campaign's push/reachable. With no campaign to ask about, the
+// mode is unknown and production draws nothing until there is one.
 export const pushNotFound = () => Response.json(OFFERS_NOT_FOUND, { status: 404 });
+export async function readPushVisibility(campaignId: number | null): Promise<{ visible: boolean; mode: PushMode | null; env: string }> {
+  const env = cfg().env;
+  if (env !== "production") return { visible: true, mode: null, env };
+  if (campaignId === null) return { visible: false, mode: null, env };
+  const reach = await readReach(campaignId);
+  const mode = reach.mode ?? null;
+  return { visible: pushesVisible(env, mode), mode, env };
+}
 
 // Reads, paced like every other: who it would reach now, and how it went.
 // A backend without push routes can answer them 200 with a web page (as staging did for other routes). That
@@ -417,6 +426,17 @@ export const savePush = (auth: OffersAuth, id: number, body: Record<string, unkn
   check: (after) => pushMismatches(body, after),
 });
 
+// Why a test push could not go, in plain words: the backend's INVALID_OFFER_PUSH names the device problem in its
+// message (offer-push.service.ts test: "<email> has no device to send to" / "has no device on app 1.88 or newer").
+export function testPushErrorText(error: unknown, email: string): string {
+  const { code, message } = backendMessage(error);
+  if (code === "NOT_FOUND_PREVIEW_PLAYER") return `No player account in the app uses ${email}. Sign up in the app with that email, then try again.`;
+  if (code === "OFFER_TEST_PUSH_NOT_ALLOWED") return "Test pushes are off on this backend until its push mode is live, so nothing was sent.";
+  if (code === "INVALID_OFFER_PUSH" && /no device on app/i.test(message ?? "")) return `None of the phones signed in as ${email} has the MatchDay app on 1.88 or newer, so nothing was sent. Update the app on your phone, open it once, then try again.`;
+  if (code === "INVALID_OFFER_PUSH" && /no device to send to/i.test(message ?? "")) return `No phone is signed in to the MatchDay app as ${email}, so nothing was sent. Sign in on your phone, then try again.`;
+  return errorText(error);
+}
+
 // THE TEST PUSH (POST .../push/test): the signed-in person's own devices, and nobody else's. The backend
 // takes no ids, emails or tokens, and reads who from X-Acting-Staff-Email. A 2xx is SENT, never "arrived".
 export async function sendTestPush(auth: OffersAuth, id: number, text: { title?: string; body?: string }): Promise<Response> {
@@ -436,8 +456,7 @@ export async function sendTestPush(auth: OffersAuth, id: number, text: { title?:
     gateDeps.logStore(),
   );
   if (error) {
-    const { code } = backendMessage(error);
-    const msg = code === "NOT_FOUND_PREVIEW_PLAYER" ? `No player account in the app uses ${auth.email}. Sign up in the app with that email, then try again.` : errorText(error);
+    const msg = testPushErrorText(error, auth.email);
     return Response.json({ verdict: outcome === "unknown" ? "UNKNOWN" : "FAILED", error: msg }, { status: outcome === "unknown" ? 200 : 502 });
   }
   const a = answer as { pushId?: number; devices?: number; sent?: number; failed?: number } | null;
