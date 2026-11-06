@@ -8456,3 +8456,37 @@ numerator while the same people sat in the denominator (`computeArppCard`, growt
   totals track within a few percent in every month, with fin_revenue consistently a little above
   Stripe's pre-tax charges, so the gap is definitional (tax and fee treatment), not missing months.
 - Wording on the page is "active players" / "per active player" everywhere, not "paying".
+
+## Revenue per Player reads Finance's net now, and why the two disagreed by $2,723 (2026-11-05)
+
+October 2026, measured read-only (`scripts/_rec_oct.mts`, untracked): Revenue per Player summed
+`fin_revenue.net` = **$89,766.65**; Finance > Revenue (fin_txn_sums, 0214, lib/revenueTxn) = **$87,043.26**.
+The bridge closes to the cent:
+
+| | $ |
+|---|---|
+| fin_revenue keeps sales tax in (Finance takes it off, per charge) | +7,294.16 |
+| fin_revenue takes Stripe FEES off (Finance leaves them in) | −4,602.69 |
+| fin_revenue never deducts refunds | +124.50 |
+| … nor failed payments | +353.26 |
+| … nor disputes | +115.00 |
+| charges fin_revenue never imported (its nightly job skips charges not yet succeeded; mostly deleted-account rows: $175 vs $587) | −560.84 |
+| **gap** | **2,723.39** |
+
+`fin_revenue.net` is `gross − fees` per imported charge, by charge date; no tax, no reversals. Both
+tables attribute membership to the charge's month and both are the US Stripe account only (no Warsaw).
+
+**The fix:** `readFinTxnAsRevenue` (growthFromViews.ts) turns `fin_txn_sums` month × venue rows into
+the card's revenue rows with `net = gross − tax_cents`, signed, test/internal rows out, fee rows out,
+the same rates (`RATES_FOR_SQL`) — so a month sums to Finance's net by construction. Only the ARPP
+card reads it; the rest of the Lifecycle payload still reads fin_revenue. Effect: October 2026
+$29.87 → **$28.97** (3,005 active players); 2024 $56.59 → **$53.16**; 2025 $66.34 → **$62.16**;
+2026 YTD $69.28 → **$67.19**. Deleted-account revenue counts on both pages (Finance's "Unassigned").
+
+**Finance > Revenue timed out with November selected** because the By month section read every
+month from 2020, month × venue: 1,042 rows = two PostgREST pages, and `fin_txn_sums` re-aggregates
+all 124k rows per page (1.4 s quiet, measured with the service role) alongside the five other rollup
+calls the page fires on load; under load that crossed the 8 s statement timeout. The section now
+reads only the From / To range (one page, ~0.4 s for four months) and the first revenue month from
+one indexed `fin_txn` row. No DDL. `fin_txn_sums` itself is unchanged; if a timeout recurs, the next
+step is resolving the per-city rate once (a CTE over `p_rates`) instead of a per-row jsonb lookup.

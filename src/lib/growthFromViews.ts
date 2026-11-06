@@ -857,13 +857,61 @@ async function selectAll<T>(sb: SupabaseClient, table: string, cols: string, ord
   return out.filter((r) => r !== undefined);
 }
 
+/* ── REVENUE PER PLAYER'S NUMERATOR IS FINANCE'S NET REVENUE (Ryan, 2026-11-05) ─────────────
+ * The two pages disagreed for October 2026 by $2,723: fin_revenue.net is gross minus Stripe FEES with
+ * sales tax left in and refunds, failed payments and disputes never taken off, while Finance > Revenue
+ * is gross minus refunds, failed, disputes and per-charge sales tax, fees left in (lib/revenueTxn).
+ * fin_revenue was also $561 short on charges it never imported.
+ *
+ * So the card now reads the SAME rows Finance reads — fin_txn_sums (0214), month × venue, with the
+ * same rates (RATES_FOR_SQL), the same test/internal exclusion and the same money kinds — and turns
+ * each into a RawRevenue row whose net is gross − tax, signed like the row. Summed over a month that
+ * is Finance's net to the cent, by construction rather than by reconciliation. A row with no city
+ * keeps "Deleted Account Revenue" so computeArppCard's diagnostics still see it; it reaches the
+ * network figure and no city, exactly as before. The venue name comes from fin_venues so the field
+ * grain keeps canonicalising on a name. Everything else on the Lifecycle payload still reads
+ * fin_revenue; only the card changed its source. US only: fin_txn is the US Stripe account. */
+export async function readFinTxnAsRevenue(sb: SupabaseClient, now: string): Promise<(RawRevenue & { venue?: string | null })[]> {
+  const { RATES_FOR_SQL } = await import("./revenueTxn");
+  const end = new Date(now);
+  const to = `${end.getUTCFullYear()}-${String(end.getUTCMonth() + 1).padStart(2, "0")}-28`;
+  const rows: Record<string, unknown>[] = [];
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await sb.rpc("fin_txn_sums", {
+      p_from: "2020-01-01", p_to: to, p_grain: "month", p_by_venue: true, p_venue_id: null, ...RATES_FOR_SQL,
+    }).range(from, from + PAGE - 1);
+    if (error) throw new Error(`fin_txn_sums: ${error.message}`);
+    rows.push(...((data ?? []) as Record<string, unknown>[]));
+    if ((data ?? []).length < PAGE) break;
+  }
+  const { data: venues, error: vErr } = await sb.from("fin_venues").select("id, venue_name");
+  if (vErr) throw new Error(`fin_venues: ${vErr.message}`);
+  const venueName = new Map((venues ?? []).map((v) => [Number(v.id), String(v.venue_name ?? "")]));
+  const MONEY = new Set(["charge", "refund", "failed", "dispute", "manual"]);
+  const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const out: (RawRevenue & { venue?: string | null })[] = [];
+  for (const r of rows) {
+    if (r.excluded === true || !MONEY.has(String(r.kind))) continue;
+    const period = String(r.period);               // YYYY-MM-DD, the first of the month
+    const month = `${MON[Number(period.slice(5, 7)) - 1]} ${period.slice(0, 4)}`;
+    const city = r.city == null || String(r.city).trim() === "" ? "Deleted Account Revenue" : String(r.city);
+    const vid = r.fin_venue_id == null ? null : Number(r.fin_venue_id);
+    out.push({
+      month, city, type: r.type == null ? null : String(r.type),
+      net: (Number(r.gross_cents) - Number(r.tax_cents ?? 0)) / 100,
+      venue: vid == null ? null : venueName.get(vid) ?? null,
+    });
+  }
+  return out;
+}
+
 export async function readGrowthFromViews(
   sb: SupabaseClient,
   now: string,
   timing?: { fetchMs?: number; computeMs?: number },
 ): Promise<GrowthData> {
   const tFetch = Date.now();
-  const [profiles, playDims, registrations, subscriptions, revenue, downloadsMonth, rowCounts] = await Promise.all([
+  const [profiles, playDims, registrations, subscriptions, revenue, downloadsMonth, rowCounts, finRevenue] = await Promise.all([
     selectAll<ProfileRow>(
       sb,
       "growth_player_profile",
@@ -876,6 +924,7 @@ export async function readGrowthFromViews(
     selectAll<RawRevenue>(sb, "fin_revenue", "month, city, type, net, venue", "id"),
     selectAll<DownloadMonthRow>(sb, "growth_downloads_month", "month, count", "month"),
     readRowCounts(sb),
+    readFinTxnAsRevenue(sb, now),
   ]);
   // iOS view (0105) — defensive: if it doesn't exist yet (pre-migration) the read
   // errors and we treat iOS as having no rows, so nothing breaks.
@@ -890,7 +939,7 @@ export async function readGrowthFromViews(
   if (timing) timing.fetchMs = Date.now() - tFetch;
   const tCompute = Date.now();
   const out = computeGrowthFromViews({ profiles, playDims, registrations, subscriptions, revenue, downloadsMonth, iosDownloadsMonth, playSync, appleSync, now, rowCounts });
-  out.arppCard = computeArppCard(profiles, subscriptions, revenue, now);
+  out.arppCard = computeArppCard(profiles, subscriptions, finRevenue, now);
   if (timing) timing.computeMs = Date.now() - tCompute;
   return out;
 }
