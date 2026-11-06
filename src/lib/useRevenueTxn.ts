@@ -62,6 +62,22 @@ export function loadRollup(uid: string, a: RollupArgs): Promise<RollupRow[]> {
 
 export type MatchMoneyRow = { match_api_id: number; kind: string; type: string; city: string | null; excluded: boolean; n: number; gross_cents: number; tax_cents: number };
 
+/** THE FIRST MONTH WITH REVENUE, as "YYYY-MM" in America/Chicago, from one indexed row — the earliest
+ *  money row that counts (not a fee, not test or internal). It used to be read off the whole-history
+ *  rollup, which aggregated every fin_txn row to answer a one-row question; see RevenueSection. */
+export function loadFirstRevenueMonth(uid: string): Promise<string | null> {
+  return cached(`first|${uid}`, async () => {
+    const { data, error } = await supabase.from("fin_txn").select("created_at_utc")
+      .in("kind", ["charge", "refund", "failed", "dispute", "manual"])
+      .eq("is_test", false).eq("is_internal", false).is("exclude_reason", null)
+      .order("created_at_utc", { ascending: true }).limit(1);
+    if (error) throw new Error(`fin_txn: ${error.message}`);
+    const iso = (data?.[0] as { created_at_utc?: string } | undefined)?.created_at_utc;
+    if (!iso) return null;
+    return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago", year: "numeric", month: "2-digit" }).format(new Date(iso)).slice(0, 7);
+  });
+}
+
 export function loadMatchRollup(uid: string, from: string, to: string): Promise<MatchMoneyRow[]> {
   return cached(`m|${uid}|${from}|${to}`, async () =>
     (await pagedRpc<Record<string, unknown>>("fin_txn_match_sums", { p_from: from, p_to: to, ...RATES_FOR_SQL })).map((r) => ({

@@ -47,7 +47,7 @@ import {
   bucketOf, byCityRows, byFieldRows, cityLabel, fieldKeyOf, filterRows, isRevenueRow, taxCentsOf, totalsOf, money, UNASSIGNED,
   type GroupRow, type MemberShares, type PageFilter, type RollupRow, type Totals,
 } from "@/lib/revenueTxn";
-import { loadMatchRollup, loadMemberSpots, loadRollup, loadVenueLaunches, useAsync, useReaderId } from "@/lib/useRevenueTxn";
+import { loadFirstRevenueMonth, loadMatchRollup, loadMemberSpots, loadRollup, loadVenueLaunches, useAsync, useReaderId } from "@/lib/useRevenueTxn";
 import { downloadCsv } from "@/components/growth/format";
 import MatchView from "./MatchView";
 import DailyRevenuePace from "./DailyRevenuePace";
@@ -62,9 +62,14 @@ import s from "./financeSection.module.css";
 
 type Grain = "city" | "field" | "match";
 
-/** Every month fin_txn holds, fetched once: month × venue over all history is ~700 rows and ~1.2 s
- *  (measured 2026-10-09), summed by the database — the range controls only pick months out of it. */
-const HISTORY_FROM = "2020-01-01";
+/* THE MONTHLY CARD AND THE BY MONTH TABLE READ ONLY THE MONTHS ON SCREEN (2026-11-05). They used to
+ * read every month fin_txn holds, month × venue, from 2020 — by 2026-11 that is 1,042 rows, which is
+ * TWO PostgREST pages, and the rollup function re-aggregates all 124k rows for each page, in a burst
+ * with the five other rollup calls this page fires on load. Quiet, that is 1.4 s; under another
+ * session's load it crossed the 8,000 ms statement timeout and the section read "Revenue did not
+ * load: fin_txn_sums: canceling statement due to statement timeout" (Ryan, November 2026). The only
+ * thing the whole-history read answered that the range does not is the first revenue month, which
+ * is now one indexed row (loadFirstRevenueMonth). A 4-month range is one page in under half a second. */
 const PRESETS: { p: Preset; label: string }[] = [{ p: "4", label: "4M" }, { p: "6", label: "6M" }, { p: "12", label: "12M" }, { p: "since", label: "Since launch" }];
 const covers = (d: FinanceData | null | undefined, ym: Ym) =>
   !!d && d.mdapiMemberSpots.coveredMonths.has(monthLabelOf(periodKeyOfYm(ym)) as Q2Month);
@@ -368,13 +373,8 @@ export default function RevenueSection() {
    * picking a From or To by hand drops the preset and holds the range. Since launch needs a city or a
    * field, and goes back to 4M when the filter returns to All MatchDay. */
   const curYm = ymOfDate(now);
-  const hist = useAsync(uid ? `hist|${uid}|${curYm}` : null,
-    () => loadRollup(uid!, { from: HISTORY_FROM, to: ymdOf(new Date(now.getFullYear(), now.getMonth() + 1, 0)), grain: "month", byVenue: true }));
-  const firstYm = useMemo(() => {
-    let m: Ym | null = null;
-    for (const r of hist.data ?? []) if (isRevenueRow(r)) { const y = ymOfPeriodKey(r.period); if (!m || y < m) m = y; }
-    return m;
-  }, [hist.data]);
+  const first = useAsync(uid ? `first|${uid}` : null, () => loadFirstRevenueMonth(uid!));
+  const firstYm: Ym | null = first.data ?? null;
   const periodEndYm = (() => { const y = ymOfDate(period.end); return y > curYm ? curYm : y; })();
   const [range, setRange] = useState<MonthRange>(() => presetRange("4", periodEndYm, null, null));
   const scopeKey = filter.field ?? filter.city ?? "";
@@ -393,6 +393,10 @@ export default function RevenueSection() {
     return n.from > n.to ? { from: n.to, to: n.from, preset: null } : n;
   });
   const rangeMonths = useMemo(() => monthsBetween(range.from, range.to), [range.from, range.to]);
+  /* ONLY THE RANGE, month × venue. Keyed on the range, so a wider From / To fetches once and a return
+   * to a range already seen costs nothing (loadRollup caches by its arguments). */
+  const hist = useAsync(uid ? `hist|${uid}|${range.from}|${range.to}` : null,
+    () => loadRollup(uid!, { from: `${range.from}-01`, to: ymdOf(new Date(Number(range.to.slice(0, 4)), Number(range.to.slice(5, 7)), 0)), grain: "month", byVenue: true }));
   /* OLDEST TO NEWEST, LEFT TO RIGHT (Ryan, 2026-10-09: as it was before the rework). When the months
    * do not fit, the box is scrolled to its right end so the latest months show, with the row labels
    * pinned on the left — on load, and again whenever the range or the city / field changes. */
