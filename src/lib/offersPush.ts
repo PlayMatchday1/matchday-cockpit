@@ -200,6 +200,27 @@ export const skippedRows = (s: PushResults["skipped"]): [string, number][] => [
 const NOT_SENT_TEXT: Record<NotSentReason, string> = {
   PUSHES_OFF: "Not sent: pushes are off", NO_ONE_REACHED: "Not sent: nobody could be reached", NO_AUDIENCE: "Not sent: no players match", PAUSED_OR_ENDED: "Not sent: offer was paused or ended",
 };
+/**
+ * THE TEST SEND as the panel reports it. The backend answers 2xx with how many of the signed-in person's
+ * phones took it and how many failed; 0 taken is never a success, and a failure beside a success is a warning,
+ * however the backend framed it. "Check your phone" only when a phone was actually sent to.
+ */
+export function testSendOutcome(a: { sent?: unknown; failed?: unknown }): { verdict: "SENT" | "PARTIAL"; text: string } {
+  const sent = typeof a.sent === "number" ? a.sent : 0;
+  const failed = typeof a.failed === "number" ? a.failed : 0;
+  const phones = (k: number) => `${k} ${k === 1 ? "phone" : "phones"}`;
+  if (sent === 0) {
+    return {
+      verdict: "PARTIAL",
+      text: failed > 0
+        ? `Nothing reached you: ${phones(failed)} of yours failed. Open the MatchDay app on your phone once, then try again.`
+        : "Nothing reached you: no phone of yours took it. Open the MatchDay app on your phone once, then try again.",
+    };
+  }
+  if (failed > 0) return { verdict: "PARTIAL", text: `Sent to ${phones(sent)} of yours; ${phones(failed)} failed. Check the phone that got it.` };
+  return { verdict: "SENT", text: `Sent to ${phones(sent)} of yours. Check your phone.` };
+}
+
 export function pushStatusText(p: { status: PushStatus; notSentReason?: NotSentReason | null; sent?: number }): string {
   if (p.status === "NOT_SENT") return (p.notSentReason && NOT_SENT_TEXT[p.notSentReason]) || "Not sent";
   if (p.status === "SENT" && typeof p.sent === "number") return `Sent to ${p.sent.toLocaleString("en-US")} ${p.sent === 1 ? "player" : "players"}`;

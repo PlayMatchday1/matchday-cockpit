@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   CAP_MAX, CAP_MIN, CUT_OFF_NOTE, FIRST_NAME, MATCH_TOKEN, PUSH_BODY_MAX, PUSH_BODY_SOFT, PUSH_TITLE_MAX, PUSH_TITLE_SOFT, capLine, fillPush, mayCutOff, pushAfterType, pushLocked,
-  pushStatusText, pushText, reachHeadline, reachModeNote, reachRows, reachWarns, sendTimeNote, sendsToText, skippedRows, skippedTotal,
+  pushStatusText, pushText, reachHeadline, reachModeNote, reachRows, reachWarns, sendTimeNote, sendsToText, skippedRows, skippedTotal, testSendOutcome,
   type CampaignPush, type PushForm, type PushResults, type Reach,
 } from "@/lib/offersPush";
 import { wallLabel, type MatchOpt } from "@/lib/offersModel";
@@ -34,8 +34,8 @@ export function PushSection({ pf, setPf, sugg, scope, match, campaignId, campaig
     setTesting(true);
     try {
       const r = await authed(`/api/offers/${campaignId}/push/test`, { method: "POST", body: JSON.stringify({ title: t.title, body: t.body }) });
-      const sent = typeof r.json.sent === "number" ? r.json.sent : 0;
-      setTest(outcomeOf(r, `Sent to ${sent} ${sent === 1 ? "phone" : "phones"} of yours${r.json.failed ? `, ${r.json.failed} failed` : ""}. Check your phone.`));
+      // A 2xx says how many of your phones took it: 0, or any failure, is a warning, not the green box.
+      setTest(r.json.verdict === "SENT" ? testSendOutcome(r.json) : outcomeOf(r, ""));
     } finally { setTesting(false); }
   }
   return (

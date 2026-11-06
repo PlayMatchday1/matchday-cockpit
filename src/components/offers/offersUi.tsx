@@ -42,7 +42,8 @@ export async function authed(path: string, init: RequestInit = {}): Promise<ApiR
 
 // One write as the screen reports it. ERROR = the route refused before sending anything.
 // SENT: the backend took it and nothing here can read it back (Send to my phone only).
-export type Verdict = "LANDED" | "SENT" | "FAILED" | "NOT APPLIED" | "UNKNOWN";
+// PARTIAL: a send that reached some phones but not all, or none (the test push). A warning, never green.
+export type Verdict = "LANDED" | "SENT" | "PARTIAL" | "FAILED" | "NOT APPLIED" | "UNKNOWN";
 export type WriteOutcome = { verdict: Verdict | "ERROR"; text: string };
 export function outcomeOf(r: ApiResult, landedText: string): WriteOutcome {
   const verdict = r.json.verdict as Verdict | undefined;
@@ -59,8 +60,8 @@ export function VerdictLine({ outcome }: { outcome: WriteOutcome }) {
   const good = outcome.verdict === "LANDED" || outcome.verdict === "SENT";
   return (
     <div data-testid="offers-verdict" data-verdict={outcome.verdict} className="rounded-[8px] border px-2.5 py-2 text-[12px]"
-      style={good ? { background: O.mint, borderColor: "#bfe2cf", color: O.ok } : outcome.verdict === "UNKNOWN" ? { background: O.warnBg, borderColor: "#e3c369", color: O.warnInk } : { background: O.critBg, borderColor: O.critLine, color: O.critInk }}>
-      {outcome.verdict === "SENT" ? outcome.text : <><b>{outcome.verdict}</b> · {outcome.text}</>}
+      style={good ? { background: O.mint, borderColor: "#bfe2cf", color: O.ok } : outcome.verdict === "UNKNOWN" || outcome.verdict === "PARTIAL" ? { background: O.warnBg, borderColor: "#e3c369", color: O.warnInk } : { background: O.critBg, borderColor: O.critLine, color: O.critInk }}>
+      {outcome.verdict === "SENT" || outcome.verdict === "PARTIAL" ? outcome.text : <><b>{outcome.verdict}</b> · {outcome.text}</>}
     </div>
   );
 }

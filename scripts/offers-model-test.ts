@@ -26,8 +26,7 @@ import { assertAllowedHost, preflightWrite } from "../src/lib/matchdayStageApi";
 import { makePacer, OFFERS_READ_PACE_MS, READS_STOPPED } from "../src/lib/offersPacing";
 import {
   CUT_OFF_NOTE, PUSH_BODY_MAX, PUSH_BODY_SOFT, PUSH_TITLE_MAX, PUSH_TITLE_SOFT, capLine, defaultSendLocal, fillPush, mayCutOff, matchForPush, sendsToLine, pushAfterType, pushBodyOf, pushDirty, pushFormOf, pushLocked, pushProblem, pushSuggestion, pushText,
-  pushesVisible, pushStatusText, reachAddsUp, reachHeadline, reachModeNote, reachRows, reachWarns, sendsToText, sendTimeNote, skippedRows, skippedTotal, type Reach, type CampaignPush,
-} from "../src/lib/offersPush";
+  pushesVisible, pushStatusText, reachAddsUp, reachHeadline, reachModeNote, reachRows, reachWarns, sendsToText, sendTimeNote, skippedRows, skippedTotal, type Reach, type CampaignPush, testSendOutcome } from "../src/lib/offersPush";
 
 let pass = 0, fail = 0;
 const eq = (name: string, got: unknown, want: unknown) => {
@@ -829,6 +828,12 @@ eq("an admin account is one; a player or a backend without the type isn't", [isA
     ["Not sent: pushes are off", "Not sent: nobody could be reached", "Not sent: no players match", "Not sent: offer was paused or ended"]);
   eq("...and with no reason (an older backend), only that it wasn't sent", [pushStatusText({ status: "NOT_SENT" }), pushStatusText({ status: "NOT_SENT", notSentReason: null })], ["Not sent", "Not sent"]);
   eq("sent says how many, when the backend does", [pushStatusText({ status: "SENT", sent: 612 }), pushStatusText({ status: "SENT", sent: 1 }), pushStatusText({ status: "SENT" }), pushStatusText({ status: "WAITING", sent: 0 })], ["Sent to 612 players", "Sent to 1 player", "Sent", "Goes when the offer launches"]);
+    // THE TEST SEND: 0 phones is never green, and "Check your phone" only when one was sent to.
+    eq("test send: all phones took it", testSendOutcome({ sent: 2, failed: 0 }), { verdict: "SENT", text: "Sent to 2 phones of yours. Check your phone." });
+    eq("test send: one phone, singular", testSendOutcome({ sent: 1 }), { verdict: "SENT", text: "Sent to 1 phone of yours. Check your phone." });
+    eq("test send: some failed is a warning that names the phone that got it", testSendOutcome({ sent: 1, failed: 1 }), { verdict: "PARTIAL", text: "Sent to 1 phone of yours; 1 phone failed. Check the phone that got it." });
+    eq("test send: none took it is a warning, not 'Check your phone'", testSendOutcome({ sent: 0, failed: 1 }), { verdict: "PARTIAL", text: "Nothing reached you: 1 phone of yours failed. Open the MatchDay app on your phone once, then try again." });
+    eq("test send: none at all", testSendOutcome({ sent: 0, failed: 0 }), { verdict: "PARTIAL", text: "Nothing reached you: no phone of yours took it. Open the MatchDay app on your phone once, then try again." });
   eq("queued, sent or not sent locks it; ended locks it; waiting doesn't", [pushLocked({ ...stored, status: "SCHEDULED" }, "LAUNCHED"), pushLocked({ ...stored, status: "SENT" }, "LAUNCHED"), pushLocked({ ...stored, status: "NOT_SENT" }, "PAUSED"), pushLocked(stored, "ENDED"), pushLocked(stored, "DRAFT"), pushLocked(null, "LAUNCHED")], [true, true, true, true, false, false]);
   eq("the reach adds up, or says it doesn't", [reachAddsUp({ audience: 1240, heldBack: 118, noConsent: 402, noDevice: 61, capped: 23, reachable: 636 }), reachAddsUp({ audience: 10, heldBack: 1, noConsent: 0, noDevice: 0, capped: 0, reachable: 10 })], [true, false]);
   eq("skipped is every reason", skippedTotal({ heldBack: 118, noConsent: 402, noDevice: 61, capped: 23, notAllowed: 5 }), 609);
