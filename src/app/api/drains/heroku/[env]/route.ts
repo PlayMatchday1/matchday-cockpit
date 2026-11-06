@@ -32,7 +32,9 @@ type Env = "staging" | "production";
 // (drain_token on the unpinned rows) or `heroku drains --json | jq -r '.[].token'` — never print the
 // url field, which may carry the password.
 const DRAIN_TOKENS: Record<Env, readonly string[]> = {
-  staging: [],
+  // matchday-stage, drain created 2026-11-06T21:02:20Z (heroku drains --json, token field only); the same
+  // token arrived on the first unpinned batches in app_request_log_batches.
+  staging: ["d.e188e63f-7a64-42d5-839d-d9298f7f011d"],
   production: [],
 };
 
