@@ -11,7 +11,7 @@
  *      for a past date is caught by the mirror's touched days.
  *   2. The last 90 days again on the nightly catch-up's last part, as a backstop for anything that
  *      re-classifies an older row outside a synced window (a Stripe-people backfill, a venue
- *      re-link). Older than 90 days is rebuilt only by hand (scripts/_daily_backfill.mts).
+ *      re-link). Older than 90 days is rebuilt only by hand (scripts/fin-txn-daily-backfill.mts).
  *
  * A refresh that fails never fails the sync: the ledger is the source and the rollup is a mirror,
  * so the sync logs the warning and the next run (or the nightly backstop) rebuilds it. */

@@ -8502,7 +8502,7 @@ refunds, failed payments, disputes and per-charge sales tax, Stripe fees left in
 | `/api/membership` (Membership and Members by City pages) | "Average price per member spot" tiles (membership GROSS ÷ spots played) and the member-share table (membership gross vs total gross) | `fin_txn_sums` month grain, net per row = gross − tax, same `RATES_FOR_SQL`; payload key `membershipGrossByMonth` kept its name, the tile copy says net | membership $17,868.42 → $16,390.33; total $94,369.34 → $87,043.26; Austin membership $7,319.33 → $6,675.70 |
 | Player Data Room "Revenue (pre-tax)" | the PRE-TAX SPOT PRICE of bookings (`growth_participation.amount_cents`), per player and cohort | unchanged, by design: it is a per-player booking value and Finance's net has no per-player grain without a Stripe-customer join. Labelled pre-tax on the page. | n/a |
 
-**Still reading fin_revenue, outside Lifecycle** (not changed): Home (`homeStats` gross revenue tile,
+**Still reading fin_revenue, outside Lifecycle** (as of this entry; superseded the same day by the next entry, which moved all of these): Home (`homeStats` gross revenue tile,
 `HomeGoalsView`), Finance Cities / Cost / field economics / match P&L / period compare / quarters /
 `useFinanceData` and the monthly report generator, partner dashboards (`partnerStats`), the Revenue
 admin editor and Stripe uploader (manual rows), the Venmo migration into fin_txn (`finTxnVenmo`
@@ -8518,3 +8518,52 @@ day × city × type × venue, so a single dropped charge is invisible in the row
 mechanism is NOT proven; it was not chased further because nothing in Lifecycle reads the table now.
 Across all 43 months fin_revenue and Stripe charges differ by more than $5 in 40 (24 short, 16 over,
 the "over" months carry Venmo rows fin_txn files as `manual`).
+
+## fin_txn_daily (0255, applied 2026-11-05): the one revenue source outside Finance > Revenue
+
+Ryan, 2026-11-05: every revenue figure in the Clubhouse reads Finance > Revenue's definition. Finance >
+Revenue itself still sums `fin_txn` live through `fin_txn_sums`; everything else reads `fin_txn_daily`,
+one row per Central day × city × type × `fin_venue_id` × source (Stripe | Venmo), built by
+`refresh_fin_txn_daily(p_from, p_to, p_rates, p_default_rate)` from the same rows with the same
+per-charge tax rule (`RATES_FOR_SQL`, `src/lib/revenueTxn.ts`). Columns: `gross_cents` = charges +
+Venmo, tax in (gross collected); `reversal_cents` = refunds + failed + disputes, negative, tax in;
+`fee_cents`; `tax_cents` on every money row, signed; `net_cents` = gross + reversals − tax, Stripe
+fees left in (Finance net). `venue_key` = coalesce(fin_venue_id, 0) so the primary key holds with a
+null venue. RLS: select for authenticated; execute on the refresh is service_role only.
+
+**Proven tie (scripts/fin-txn-daily-backfill.mts, 2026-11-05).** First backfill 2023-05-01 → today:
+9,844 rows; all 43 months tie to the cent with `fin_txn_sums` on gross, reversals, fees and net.
+Tax differs by design: the daily table carries tax on reversals too, Finance's "Sales tax" line is
+charges only (October 2026: $49.60 apart). Ryan: leave it, no extra column.
+
+**When it is rebuilt** (`src/lib/finTxnDaily.ts`, `/api/sync/fin-txn`): after every fin_txn sync, the
+window that sync covered plus every Central day the Venmo mirror touched; and the last 90 days again
+on the nightly catch-up's last piece. Older than 90 days only by hand with the script above. A refresh
+failure is logged and never fails the sync (`daily` in the route's response).
+
+**Who reads it now** (commits 45c8047, ff6b8ba, 8a6fcc4): the Home revenue tile (gross collected);
+`useFinanceData` maps it into fin_revenue's row shape (synthetic negative ids, `date` = day, `month` =
+"Oct 2026", city '' → "Deleted Account Revenue", venue = canonical fin_venues name, gross = collected,
+net = Finance net, source) so Cities, Cost, field economics, the cash-flow page (hidden from the rail,
+`/admin/finance/cash-flow`), the monthly report generator and the Finance shell hero moved together;
+partner dashboards' non-match rows by `fin_venue_id` (`partnerStats`). Verified on prod against
+October 2026 after the switch: Cities all cities net $87,043.26 (Austin $36,303, San Antonio $19,803,
+Houston $18,873, Deleted $276); Cost headline $87,043, field grain total $87,043; cash-flow Oct gross
+$94,930 / net $87,043; monthly report Austin $39,387.59; Hattrick rentals Mar–Sep 2026 and PAC Global
+$100 unchanged. Pages that never read fin_revenue and did not move: slate P&L and match P&L (bookings,
+`matchPnL.grossRevenue`), Venues & Fields (DAILY PAID from bookings, `fieldIdAdmin.dppRevenue`).
+`PeriodComparePanel` is not mounted on any page.
+
+**Two labels to know.** Cost page, Field grain: a venue's figure is net DPP plus allocated membership
+(Soccer Central October $16,498), not the DPP slice ($13,162.21) the plan quoted; the total still ties.
+Cash-flow page: the "Stripe Fees" line is the fee column and Gross − Fees ≠ Net now (net also carries
+reversals and tax), so that row no longer reconciles the two lines around it.
+
+**What still reads fin_revenue** (nothing on a report page): the Revenue ledger editor
+(`RevenueAdminView`, lists and writes fin_revenue itself; its "All months" option means the months of
+the Finance period's QUARTER, not all time, and the default is the period month), the Venmo mirror
+(`finTxnVenmo` copies fin_revenue's Venmo rows into fin_txn each sync), the nightly Stripe importer
+(`/api/sync/stripe`, `/api/sync/cron`, `financeImport`) that still writes it, the change log view,
+`audit-stripe-cat`, the `/data` page (Stripe uploader hidden, 4ddaf9e), and the row-count footnote in
+`growthFromViews.readRowCounts`. Not dropped: Ryan decides.
+
