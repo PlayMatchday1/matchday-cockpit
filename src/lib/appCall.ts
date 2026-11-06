@@ -1,4 +1,5 @@
 import "server-only";
+import { forwardedAuth } from "@/lib/viewAs";
 // STAFF APP: CALL A DESKTOP ROUTE HANDLER IN PROCESS, as the caller. The /api/app routes write and
 // read nothing of their own where a desktop route already does it: they hand the desktop handler a
 // request carrying the caller's own Authorization header, at the desktop URL, so its permission
@@ -14,7 +15,7 @@ export async function callDesktop<P>(
   init: { method?: string; body?: unknown } = {}, params?: P,
 ): Promise<Called> {
   const origin = new URL(from.url).origin;
-  const headers: Record<string, string> = { authorization: from.headers.get("authorization") ?? "" };
+  const headers: Record<string, string> = forwardedAuth(from);
   if (init.body !== undefined) headers["content-type"] = "application/json";
   const req = new Request(`${origin}${path}`, { method: init.method ?? "GET", headers, body: init.body === undefined ? undefined : JSON.stringify(init.body) });
   const res = params === undefined ? await (handler as NoParams)(req) : await (handler as Handler<P>)(req, { params: Promise.resolve(params) });

@@ -28,6 +28,7 @@ import { realOccupancyFromRoster, rosterRowCounts, rosterRowIsFake } from "@/lib
 import { RUNG_KEYS, fakesFor, spotsLeftNow, spotsLeftWriteDiff, type Ladder } from "@/lib/fakeLadder";
 import { PUT as desktopMatchPut } from "@/app/api/matchday/[env]/matches/[id]/route";
 import { POST as desktopFakesPost } from "@/app/api/matchday/[env]/matches/[id]/fakes/route";
+import { forwardedAuth } from "@/lib/viewAs";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -89,7 +90,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
     }
 
     const saveId = randomUUID();
-    const headers = { authorization: req.headers.get("authorization") ?? "", "content-type": "application/json" };
+    const headers = { ...forwardedAuth(req), "content-type": "application/json" };
     const origin = new URL(req.url).origin;
     const params = { params: Promise.resolve({ env, id }) };
     const steps: Step[] = [];

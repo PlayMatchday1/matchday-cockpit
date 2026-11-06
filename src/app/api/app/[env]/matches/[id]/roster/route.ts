@@ -47,6 +47,7 @@ import { POST as desktopFakesPost } from "@/app/api/matchday/[env]/matches/[id]/
 import { GET as convertGet, POST as convertPost } from "@/app/api/matchday/[env]/matches/[id]/convert-4/route";
 import { GET as reduceGet, POST as reducePost } from "@/app/api/matchday/[env]/matches/[id]/reduce-2/route";
 import { reviewMasked } from "@/lib/reviewAccount";
+import { forwardedAuth } from "@/lib/viewAs";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -116,7 +117,7 @@ async function getRoute(req: Request, ctx: { params: Promise<{ env: string; id: 
     const target = Number(url.searchParams.get("target"));
     const path = teamsPath(before.teamCount, target);
     if (!path) return Response.json({ error: `This match already has ${before.teamCount} teams.` }, { status: 400 });
-    const headers = { authorization: req.headers.get("authorization") ?? "" };
+    const headers = forwardedAuth(req);
     const origin = url.origin;
     const params = { params: Promise.resolve({ env, id }) };
     /* EVERY TEAM COUNT CHANGE ASKS FOR A SIZE FIRST, 6 TO 12 A SIDE (Ryan, 2026-10-31 for Reduce to 2,
@@ -163,7 +164,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
     const op = body?.op;
 
     const saveId = randomUUID();
-    const headers = { authorization: req.headers.get("authorization") ?? "", "content-type": "application/json" };
+    const headers = { ...forwardedAuth(req), "content-type": "application/json" };
     const origin = new URL(req.url).origin;
     const params = { params: Promise.resolve({ env, id }) };
     const rosterParams = { params: Promise.resolve({ env, matchId: id }) };

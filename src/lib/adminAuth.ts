@@ -15,6 +15,7 @@
 
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { isConfined, CONFINED_ERROR } from "./cityConfinement";
+import { applyViewAs, type ViewAsInfo } from "./viewAs";
 
 export type AdminAuthResult =
   | { ok: true; supabase: SupabaseClient; appUserId: string; email: string; canEditMatches: boolean; canManagePlayers: boolean; canManagePromos: boolean }
@@ -80,8 +81,13 @@ export function adminGate(row: AppUserRow | null): { ok: true } | { ok: false; s
 
 // Verify the bearer session and load the app_users row with the SERVICE role. Shared by
 // authenticateAdmin and authenticateMatchOpsRead — the gate each applies afterward is what differs.
-export async function resolveSessionUser(req: Request):
-  Promise<{ ok: true; supabase: SupabaseClient; row: AppUserRow; email: string } | { ok: false; status: number; error: string }> {
+//
+// VIEW AS (viewAs.ts): with the X-Clubhouse-View-As header, the row and email handed back are the
+// VIEWED user's, after applyViewAs has checked that the real caller is an admin and the method is a
+// read; a bad header is a refusal. `opts.ignoreViewAs` is for /api/app/view-as alone, which must see
+// the real admin to start and stop one. `viewAs` says who is really behind the request.
+export async function resolveSessionUser(req: Request, opts: { ignoreViewAs?: boolean } = {}):
+  Promise<{ ok: true; supabase: SupabaseClient; row: AppUserRow; email: string; viewAs: ViewAsInfo | null } | { ok: false; status: number; error: string }> {
   const auth = req.headers.get("authorization") ?? "";
   if (!auth.startsWith("Bearer ")) return { ok: false, status: 401, error: "Missing Authorization header" };
   const token = auth.slice("Bearer ".length).trim();
@@ -107,7 +113,10 @@ export async function resolveSessionUser(req: Request):
   const sb = createClient(url, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
   const appUser = await sb.from("app_users").select("*").ilike("email", email).maybeSingle();
   if (appUser.error || !appUser.data) return { ok: false, status: 403, error: "Not a cockpit user" };
-  return { ok: true, supabase: sb, row: appUser.data as AppUserRow, email };
+  if (opts.ignoreViewAs) return { ok: true, supabase: sb, row: appUser.data as AppUserRow, email, viewAs: null };
+  const va = await applyViewAs(req, sb, appUser.data as AppUserRow, email);
+  if (!va.ok) return va;
+  return { ok: true, supabase: sb, row: va.row, email: va.email, viewAs: va.viewAs };
 }
 
 export async function authenticateAdmin(req: Request): Promise<AdminAuthResult> {

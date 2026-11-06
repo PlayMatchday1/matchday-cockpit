@@ -20,6 +20,7 @@ import { apiGet, StageConfigError, StageHostGuardError } from "@/lib/matchdaySta
 import { CONFINED_CITY_ERROR } from "@/lib/cityConfinement";
 import { GET as desktopMatchGet, PUT as desktopMatchPut } from "@/app/api/matchday/[env]/matches/[id]/route";
 import { isReviewToken, reviewMasked, reviewMatchDetails } from "@/lib/reviewAccount";
+import { forwardedAuth } from "@/lib/viewAs";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -50,7 +51,7 @@ async function getRoute(req: Request, ctx: { params: Promise<{ env: string; id: 
     if ("error" in g) return g.error;
     const { env, id } = g;
     const url = new URL(req.url);
-    const res = await desktopMatchGet(new Request(`${url.origin}/api/matchday/${env}/matches/${id}`, { headers: { authorization: req.headers.get("authorization") ?? "" } }), { params: Promise.resolve({ env, id }) });
+    const res = await desktopMatchGet(new Request(`${url.origin}/api/matchday/${env}/matches/${id}`, { headers: forwardedAuth(req) }), { params: Promise.resolve({ env, id }) });
     const j = (await res.json().catch(() => null)) as Row | null;
     if (!res.ok) return Response.json({ error: j?.error ?? `HTTP ${res.status}` }, { status: res.status });
     const m = (j?.match as Row) ?? {};
@@ -85,7 +86,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
     const saveId = randomUUID();
     const url = new URL(req.url);
     const res = await desktopMatchPut(new Request(`${url.origin}/api/matchday/${env}/matches/${id}`, {
-      method: "PUT", headers: { authorization: req.headers.get("authorization") ?? "", "content-type": "application/json" },
+      method: "PUT", headers: { ...forwardedAuth(req), "content-type": "application/json" },
       body: JSON.stringify({ changes: diff, source: SOURCE, saveId }),
     }), { params: Promise.resolve({ env, id }) });
     const j = (await res.json().catch(() => null)) as Row | null;

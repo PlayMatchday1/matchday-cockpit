@@ -11,11 +11,12 @@ import { resolveSessionUser, type AppUserRow } from "./adminAuth";
 import { confinedCity } from "./cityConfinement";
 import { cityNameFor } from "./cityScope";
 import { appAccess, type AppAccess } from "./appModel";
+import { type ViewAsInfo } from "./viewAs";
 
 export const SERVICE_EMAIL = "clubhouse-e2e@playmatchday.com";
 
 export type AppAuthResult =
-  | ({ ok: true; supabase: SupabaseClient; row: AppUserRow; email: string; appUserId: string; scopeCityName: string | null } & AppAccess)
+  | ({ ok: true; supabase: SupabaseClient; row: AppUserRow; email: string; appUserId: string; scopeCityName: string | null; /** Set while an admin is viewing as this row (viewAs.ts); row, email and access are the viewed user's. */ viewAs: ViewAsInfo | null } & AppAccess)
   | { ok: false; status: number; error: string };
 
 /** Plain sentences for a phone screen, in place of the desktop's terser refusals. */
@@ -33,7 +34,7 @@ export async function authenticateApp(req: Request): Promise<AppAuthResult> {
   }
   const access = appAccess(r.row, confinedCity(r.row));
   return {
-    ok: true, supabase: r.supabase, row: r.row, email: r.email, appUserId: String(r.row.id),
+    ok: true, supabase: r.supabase, row: r.row, email: r.email, appUserId: String(r.row.id), viewAs: r.viewAs,
     scopeCityName: access.scopeCity ? cityNameFor(access.scopeCity) : null,
     ...access,
   };

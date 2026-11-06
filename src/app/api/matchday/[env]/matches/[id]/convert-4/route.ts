@@ -52,6 +52,7 @@ import { perTeamError } from "@/lib/reduceTwoTeams";
 import { TEAM_SIZE_MAX, TEAM_SIZE_MIN } from "@/lib/rosterEditModel";
 import { fakesFollowingSpotsLeft } from "@/lib/fakeLadder";
 import { POST as fakesPost } from "@/app/api/matchday/[env]/matches/[id]/fakes/route";
+import { forwardedAuth } from "@/lib/viewAs";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -337,7 +338,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
   try {
     const origin = new URL(req.url).origin;
     const fr = await fakesPost(new Request(`${origin}/api/matchday/${env}/matches/${id}/fakes`, {
-      method: "POST", headers: { authorization: req.headers.get("authorization") ?? "", "content-type": "application/json" },
+      method: "POST", headers: { ...forwardedAuth(req), "content-type": "application/json" },
       body: JSON.stringify({ followSpotsLeft: true, matchName: m.name ?? null, source, saveId }),
     }), { params: Promise.resolve({ env, id }) });
     const fj = (await fr.json().catch(() => null)) as Record<string, unknown> | null;

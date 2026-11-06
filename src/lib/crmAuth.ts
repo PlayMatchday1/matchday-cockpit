@@ -15,6 +15,7 @@ import "server-only";
 import { timingSafeEqual } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { confinedCity, assertConfinedRoute } from "./cityConfinement";
+import { applyViewAs, VIEW_AS_HEADER, VIEW_AS_ADMINS_ONLY } from "./viewAs";
 
 export type CrmAuthOk = {
   ok: true;
@@ -75,6 +76,8 @@ export async function authenticateCrm(req: Request): Promise<CrmAuthResult> {
 
   const cronSecret = process.env.CRON_SECRET;
   if (cronSecret && constantTimeMatch(token, cronSecret)) {
+    // Cron is not a person and cannot View as anyone.
+    if (req.headers.get(VIEW_AS_HEADER)) return { ok: false, status: 403, error: VIEW_AS_ADMINS_ONLY };
     const sb = createClient(supabaseUrl, serviceKey, {
       auth: { persistSession: false, autoRefreshToken: false },
     });
@@ -116,16 +119,21 @@ export async function authenticateCrm(req: Request): Promise<CrmAuthResult> {
   if (appUser.error || !appUser.data) {
     return { ok: false, status: 403, error: "Not a cockpit user" };
   }
-  const isAdmin = appUser.data.is_admin === true;
-  const canAccessChats = appUser.data.can_access_chats === true;
+  // VIEW AS (viewAs.ts): from here on, every check below runs on the VIEWED user's fresh row, and
+  // only reads get this far. A bad header is a refusal, never the admin's own access.
+  const va = await applyViewAs(req, sb, appUser.data as Record<string, unknown>, email);
+  if (!va.ok) return { ok: false, status: va.status, error: va.error };
+  const row = va.row;
+  const isAdmin = row.is_admin === true;
+  const canAccessChats = row.can_access_chats === true;
   // Send is its own right (Phase 19 Step 1) — NOT implied by is_admin or can_access_chats. Read
   // fresh here; the send route checks it and 403s early so no send path is reachable without it.
-  const canSendMessages = appUser.data.can_send_messages === true;
+  const canSendMessages = row.can_send_messages === true;
   // THE CITY BOUNDARY. Chats is one of the six a confined account keeps, so this does not refuse —
   // it hands the route the scope it must push into its query.
-  const scopeCity = confinedCity(appUser.data);
+  const scopeCity = confinedCity(row);
   // Chats is one of the six, but /api/crm/* is not the only thing this gate opens.
-  const routeCheck = assertConfinedRoute(appUser.data, req.url);
+  const routeCheck = assertConfinedRoute(row, req.url);
   if (!routeCheck.ok) return { ok: false, status: routeCheck.status, error: routeCheck.error };
   // Chats access gates the CRM API at the application layer. RLS on
   // crm_* tables enforces the same OR-clause underneath so this can't
@@ -137,8 +145,8 @@ export async function authenticateCrm(req: Request): Promise<CrmAuthResult> {
   }
   return {
     ok: true,
-    appUserId: appUser.data.id as string,
-    email,
+    appUserId: row.id as string,
+    email: va.email,
     isAdmin,
     canAccessChats,
     canSendMessages,

@@ -9,6 +9,7 @@
 import { authenticateApp } from "@/lib/appAuth";
 import { cityNameFor } from "@/lib/cityScope";
 import { can } from "@/lib/capabilities";
+import { canViewAs } from "@/lib/viewAs";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -17,12 +18,20 @@ export async function GET(req: Request) {
   const auth = await authenticateApp(req);
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   const row = auth.row;
-  if (new URL(req.url).searchParams.get("signedIn") === "1") {
+  // Never while viewing as: that would stamp the viewed user's last login.
+  if (!auth.viewAs && new URL(req.url).searchParams.get("signedIn") === "1") {
     const u = await auth.supabase.from("app_users").update({ last_login_at: new Date().toISOString() }).eq("id", auth.appUserId);
     if (u.error) console.warn(`[app-me] last_login_at for ${auth.appUserId}: ${u.error.message}`);
   }
+  // VIEW AS: the row above is the viewed user's. Who is really signed in decides the Me row
+  // (shown to admins only); the real row is read only when no View as is on.
+  let realCanViewAs = false;
+  if (!auth.viewAs) realCanViewAs = canViewAs(row);
   return Response.json({
     appUserId: auth.appUserId,
+    // Courtesy for the Me screen's "View as" row; /api/app/view-as re-checks is_admin itself.
+    canViewAs: realCanViewAs,
+    viewingAs: auth.viewAs ? { adminName: auth.viewAs.adminName, adminEmail: auth.viewAs.adminEmail, startedAt: new Date(auth.viewAs.startedAt).toISOString(), expiresAt: new Date(auth.viewAs.expiresAt).toISOString() } : null,
     email: auth.email,
     fullName: typeof row.full_name === "string" ? row.full_name : null,
     tier: auth.tier,
