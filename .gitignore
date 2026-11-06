@@ -69,3 +69,4 @@ public/* [0-9].*
 # Local-only reference for the MatchDay API migration (Phase 6/8). Never commit.
 retool-export-prod.json
 retool-export-stage.json
+tmp/

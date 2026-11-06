@@ -2,14 +2,15 @@
 
 /* LOADERS FOR fin_txn, for Finance › Revenue. Read-only.
  *
- * fin_txn_rollup / fin_txn_match_rollup (migration 0213) sum in the database; these page through
+ * fin_txn_sums / fin_txn_match_sums (migration 0214) sum in the database, with sales tax rounded per
+ * charge from salesTax.ts's rates (passed in, RATES_FOR_SQL); these page through
  * the result (PostgREST caps a response at 1,000 rows) and keep it in a module-level cache keyed on
  * the reader and the arguments, so a section remount or a grain switch back costs no request.
  * A FAILED PAGE IS NOT AN EMPTY RESULT: it throws, nothing is cached, and the caller shows the error. */
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/useAuth";
-import type { RollupRow } from "@/lib/revenueTxn";
+import { RATES_FOR_SQL, type RollupRow } from "@/lib/revenueTxn";
 
 const PAGE = 1000;
 const CACHE = new Map<string, Promise<unknown>>();
@@ -45,6 +46,7 @@ const asRollup = (r: Record<string, unknown>): RollupRow => ({
   n: Number(r.n),
   gross_cents: Number(r.gross_cents),
   fee_cents: Number(r.fee_cents ?? 0),
+  tax_cents: Number(r.tax_cents ?? 0),
 });
 
 export type RollupArgs = { from: string; to: string; grain: "day" | "month"; byVenue: boolean; venueId?: number | null };
@@ -52,18 +54,19 @@ export type RollupArgs = { from: string; to: string; grain: "day" | "month"; byV
 export function loadRollup(uid: string, a: RollupArgs): Promise<RollupRow[]> {
   const key = `r|${uid}|${a.from}|${a.to}|${a.grain}|${a.byVenue}|${a.venueId ?? ""}`;
   return cached(key, async () =>
-    (await pagedRpc<Record<string, unknown>>("fin_txn_rollup", {
-      p_from: a.from, p_to: a.to, p_grain: a.grain, p_by_venue: a.byVenue, p_venue_id: a.venueId ?? null,
+    (await pagedRpc<Record<string, unknown>>("fin_txn_sums", {
+      p_from: a.from, p_to: a.to, p_grain: a.grain, p_by_venue: a.byVenue, p_venue_id: a.venueId ?? null, ...RATES_FOR_SQL,
     })).map(asRollup));
 }
 
-export type MatchMoneyRow = { match_api_id: number; kind: string; type: string; city: string | null; excluded: boolean; n: number; gross_cents: number };
+export type MatchMoneyRow = { match_api_id: number; kind: string; type: string; city: string | null; excluded: boolean; n: number; gross_cents: number; tax_cents: number };
 
 export function loadMatchRollup(uid: string, from: string, to: string): Promise<MatchMoneyRow[]> {
   return cached(`m|${uid}|${from}|${to}`, async () =>
-    (await pagedRpc<Record<string, unknown>>("fin_txn_match_rollup", { p_from: from, p_to: to })).map((r) => ({
+    (await pagedRpc<Record<string, unknown>>("fin_txn_match_sums", { p_from: from, p_to: to, ...RATES_FOR_SQL })).map((r) => ({
       match_api_id: Number(r.match_api_id), kind: String(r.kind), type: String(r.type),
       city: (r.city as string | null) ?? null, excluded: !!r.excluded, n: Number(r.n), gross_cents: Number(r.gross_cents),
+      tax_cents: Number(r.tax_cents ?? 0),
     })));
 }
 

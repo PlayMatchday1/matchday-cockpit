@@ -32,7 +32,7 @@ import MoneyInput from "@/components/MoneyInput";
 import { useAuth } from "@/lib/useAuth";
 import { matchEditAccess } from "@/lib/matchEditAccess";
 import { supabase } from "@/lib/supabase";
-import { diffKeys, pick, MONEY_KEYS, TOGGLE_KEYS, NULLABLE_NUM } from "@/lib/matchEditModel";
+import { diffKeys, pick, MONEY_KEYS, TOGGLE_KEYS, NULLABLE_NUM, FIRST_MATCH_FREE_KEY, hasFirstMatchFree } from "@/lib/matchEditModel";
 import { centsToDollars, dollarsToCents } from "@/lib/matchMoney";
 import {
   parseWall, buildWall, movePair, moveEnd, durationLabel, whenError, wallInputsReady,
@@ -77,6 +77,10 @@ const CATEGORIES: [string, string][] = [
 const STAGED_KEYS = [
   "name", "type", "category", "managerId", "secondManagerId", "fieldId",
   "registrationPrice", "additionalSpotPrice", "guestCount", "isFreeMember",
+  /* ABSENT ON PRODUCTION UNTIL BACKEND 1.89. The route omits it (never null) when the API has no
+   * such field; the seed then holds null against an undefined original, normValue makes those the
+   * same absence, and the control is not rendered — so it can never enter the diff or the body. */
+  "firstMatchFreeEnabled",
   "maxPlayerCount",
   "fakeSpotLeft36h", "fakeSpotLeft24h", "fakeSpotLeft12h", "fakeSpotLeft6h", "fakeSpotLeft3h",
   "autoCanceled", "autoCanceledMinutes", "minPlayerCount", "isAutoBump", "maxTeamSize2Team", "maxTeamSize4Team",
@@ -86,7 +90,7 @@ const STAGED_KEYS = [
 
 const LABELS: Record<string, string> = {
   name: "Match name", type: "Type", category: "Category", managerId: "Manager", secondManagerId: "Second manager", fieldId: "Field",
-  registrationPrice: "Price", additionalSpotPrice: "Spot price", guestCount: "Guest count", isFreeMember: "Free to member",
+  registrationPrice: "Price", additionalSpotPrice: "Spot price", guestCount: "Guest count", isFreeMember: "Free to member", firstMatchFreeEnabled: "Free first match",
   maxPlayerCount: "Max players", fakeSpotLeft36h: "Shown-left 36 H", fakeSpotLeft24h: "Shown-left 24 H",
   fakeSpotLeft12h: "Shown-left 12 H", fakeSpotLeft6h: "Shown-left 6 H", fakeSpotLeft3h: "Shown-left 3 H",
   autoCanceled: "Auto-cancel", autoCanceledMinutes: "Auto-cancel minutes", minPlayerCount: "Min players",
@@ -171,6 +175,10 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange,
   const { appUser } = useAuth();
   const access = matchEditAccess(appUser);
   const mayWrite = access.ok;
+  /* FREE FIRST MATCH IS ADMIN-ONLY (the PUT route refuses anyone else). A city manager sees the
+   * current state, greyed, as courtesy; the rest of their form saves normally because an unchanged
+   * value is never in the diff. */
+  const isAdmin = appUser?.is_admin === true;
   const [orig, setOrig] = useState<MatchData | null>(null);
   const [cur, setCur] = useState<Record<string, unknown>>({});
   const [when, setWhen] = useState<{ date: string; time: string; endDate: string; endTime: string }>(
@@ -1363,7 +1371,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange,
           </Section>
 
           {/* MONEY */}
-          <Section title="MONEY" dirty={secDirty(["registrationPrice", "additionalSpotPrice", "guestCount", "isFreeMember"])}>
+          <Section title="MONEY" dirty={secDirty(["registrationPrice", "additionalSpotPrice", "guestCount", "isFreeMember", FIRST_MATCH_FREE_KEY])}>
             <div className="mp-grid3">
               {/* MoneyInput, shared with the Master Schedule editor: select-all on focus, verbatim
                   while typing, two decimals on blur. The cents conversion is unchanged — onCents
@@ -1396,6 +1404,12 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange,
             </div>
             <Toggle id="mp-free" on={!!cur.isFreeMember} dirty={isDirty("isFreeMember")} onToggle={(v) => setField("isFreeMember", v)}
               title="Free to member" sub="Members join at no charge" />
+            {hasFirstMatchFree(orig) && (
+              <Toggle id="mp-first-free" on={cur[FIRST_MATCH_FREE_KEY] === true} dirty={isDirty(FIRST_MATCH_FREE_KEY)}
+                disabled={!isAdmin} onToggle={(v) => setField(FIRST_MATCH_FREE_KEY, v)}
+                title="Free first match"
+                sub={isAdmin ? "New players on iPhone get this match free" : "New players on iPhone get this match free \u00b7 admins only"} />
+            )}
           </Section>
 
           {/* SPOTS */}
@@ -2544,7 +2558,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange,
 function shownVal(k: string, v: unknown, managers: Manager[]): string {
   if (MONEY_KEYS.has(k)) return v == null || v === "" ? "—" : "$" + centsToDollars(v);
   if (k === "managerId" || k === "secondManagerId") return v == null || v === "" ? "none" : (managers.find((m) => m.id === Number(v))?.name ?? `id ${v}`);
-  if (TOGGLE_KEYS.has(k)) return v ? "on" : "off";
+  if (TOGGLE_KEYS.has(k) || k === FIRST_MATCH_FREE_KEY) return v ? "on" : "off";
   if (k === "maxTeamSize2Team") return `${Number(v) / 2} v ${Number(v) / 2} (${v})`;
   if (k === "maxTeamSize4Team") return `${Number(v) / 4} each (${v})`;
   if (k === "type") return EXPOSED_TYPES[String(v)] ?? String(v);
@@ -2590,12 +2604,12 @@ function Section({ title, dirty, children }: { title: string; dirty?: boolean; c
   );
 }
 
-function Toggle({ id, on, dirty, onToggle, title, sub }: { id: string; on: boolean; dirty?: boolean; onToggle: (v: boolean) => void; title: string; sub: string }) {
+function Toggle({ id, on, dirty, onToggle, title, sub, disabled }: { id: string; on: boolean; dirty?: boolean; onToggle: (v: boolean) => void; title: string; sub: string; disabled?: boolean }) {
   return (
     // NO INLINE marginTop. It was 14 here, 11 on two grids and 12 on MANAGER INTRO — three more
     // values for one gap. .mp-secbd > * + * now sets all of them.
-    <label className={"mp-tog" + (on ? " on" : "")}>
-      <input type="checkbox" data-testid={id} checked={on} onChange={(e) => onToggle(e.target.checked)} />
+    <label className={"mp-tog" + (on ? " on" : "") + (disabled ? " ro" : "")} aria-disabled={disabled || undefined}>
+      <input type="checkbox" data-testid={id} checked={on} disabled={disabled} onChange={(e) => { if (!disabled) onToggle(e.target.checked); }} />
       <span className="mp-knob" />
       <span className="mp-tt"><b>{title}{dirty ? " •" : ""}</b><em>{sub}</em></span>
     </label>
@@ -2739,6 +2753,7 @@ const CSS = `
 .mp-knob::after{content:"";position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.22);transition:left .12s}
 .mp-tog.on .mp-knob{background:#35c07a}
 .mp-tog.on .mp-knob::after{left:21px}
+.mp-tog.ro{cursor:not-allowed;opacity:.6}
 .mp-tog input:focus-visible + .mp-knob{outline:2px solid var(--focus);outline-offset:2px}
 .mp-tt b{display:block;font-size:14px;font-weight:800}
 .mp-tt em{display:block;font-style:normal;font-size:12px;color:var(--ink3);margin-top:1px}

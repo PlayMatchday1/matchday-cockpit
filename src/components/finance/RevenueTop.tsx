@@ -18,7 +18,7 @@ import {
   finalThreshold, money, monthStatus, totalsOf, isRevenueRow, taxCentsOf,
   type RollupRow, type Totals,
 } from "@/lib/revenueTxn";
-import { loadRollup, loadStatusInputs, useAsync, useReaderId } from "@/lib/useRevenueTxn";
+import { loadStatusInputs, useAsync } from "@/lib/useRevenueTxn";
 import { InfoI } from "./RevenueInfo";
 
 const MONTH_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -28,13 +28,16 @@ const centralMidnight = (d: Date) => zonedWallClockToUtcMs(d.getFullYear(), d.ge
 const $c = (cents: number) => money(cents, true);
 const dollars = (cents: number) => (cents / 100).toFixed(2);
 
-export default function RevenueTop({ period, rows, error }: {
+export default function RevenueTop({ period, rows, error, dayRows, filters }: {
   period: FinancePeriod;
-  /** The period's fin_txn rollup (month grain). Null while loading. */
+  /** The period's fin_txn rows (month grain), already narrowed by the page's City / Field filter. */
   rows: RollupRow[] | null;
   error: string | null;
+  /** The current month's DAY rows, narrowed the same way — for Pace to month end. */
+  dayRows?: RollupRow[] | null;
+  /** The page's City and Field selects, drawn in the header bar. */
+  filters?: React.ReactNode;
 }) {
-  const uid = useReaderId();
   const { now, setPeriod } = useFinancePeriod();
   const [open, setOpen] = useState(false);
   const t: Totals | null = useMemo(() => (rows ? totalsOf(rows) : null), [rows]);
@@ -54,13 +57,9 @@ export default function RevenueTop({ period, rows, error }: {
 
   // ── PACE TO MONTH END: the current month only, on net revenue, from the day rollup. ──
   const isCurMonth = period.grain === "month" && period.isCurrent;
-  const day = useAsync(
-    isCurMonth && uid ? `pace|${uid}|${ymdOf(period.start)}` : null,
-    () => loadRollup(uid!, { from: ymdOf(period.start), to: ymdOf(period.end), grain: "day", byVenue: false }),
-  );
   const pace = useMemo(() => {
-    if (!isCurMonth || !day.data || !t) return null;
-    const netOn = (pred: (d: number) => boolean) => day.data!
+    if (!isCurMonth || !dayRows || !t) return null;
+    const netOn = (pred: (d: number) => boolean) => dayRows
       .filter((r) => isRevenueRow(r) && pred(Number(r.period.slice(8, 10))))
       .reduce((a, r) => a + r.gross_cents - taxCentsOf(r), 0);
     const day1 = netOn((d) => d <= 1), today = netOn((d) => d === period.elapsedDays);
@@ -69,7 +68,7 @@ export default function RevenueTop({ period, rows, error }: {
       daysElapsed: period.elapsedDays, daysInMonth: period.totalDays, excludedDays: 1, isCurrentMonth: true,
     });
     return p.ok ? { ...p, day1, today } : null;
-  }, [isCurMonth, day.data, t, period.elapsedDays, period.totalDays]);
+  }, [isCurMonth, dayRows, t, period.elapsedDays, period.totalDays]);
 
   // AVG DAILY DPP: a closed period divides by its days; the period in progress by the days so far,
   // because dividing a partial month by its full length understates every day of it.
@@ -98,7 +97,7 @@ export default function RevenueTop({ period, rows, error }: {
       {/* THE PAGE'S OWN HEADER: "Revenue" with the Finance period bar beside it, and ONE status pill
           in place of the bar's partial-days chip (financeChrome lists this page as drawing its own). */}
       <FinancePeriodBar
-        period={period} now={now} supportedGrains={["month", "quarter", "year"]} unsupportedReason="" links={null}
+        period={period} now={now} supportedGrains={["month", "quarter", "year"]} unsupportedReason="" links={filters ?? null}
         onChangeGrain={(g) => setPeriod(changeGrain(period, g, now))}
         onStep={(dir) => setPeriod(stepPeriod(period, dir, now))}
         onJumpToNow={() => setPeriod(currentPeriod(period.grain, now))}

@@ -9,7 +9,7 @@ import { randomUUID } from "node:crypto";
 import { authenticateCapability } from "@/lib/capabilityAuth";
 import { authenticateMatchOpsRead, assertMatchInScope } from "@/lib/matchOpsAuth"; // GET is a Match Ops READ (Part D round 2); PUT stays admin + EDIT MATCHES
 import { apiGet, apiWrite, AmbiguousWriteError, WriteFailedError, StageHostGuardError, StageConfigError, DeniedFieldError, DeniedEndpointError, ProductionWriteBoltedError, NotAuthorizedError, type MatchdayEnv } from "@/lib/matchdayStageApi";
-import { EDITABLE_KEYS } from "@/lib/matchEditModel";
+import { EDITABLE_KEYS, FIRST_MATCH_FREE_KEY, hasFirstMatchFree } from "@/lib/matchEditModel";
 import { realOccupancyFromRoster, rosterRowCounts, type RosterRow } from "@/lib/gamedayModel";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
 // The refusal wording lives with the rule (matchEditAccess.ts) so the panel and this route cannot
@@ -24,7 +24,7 @@ export const maxDuration = 30;
 const EDITABLE = new Set<string>(EDITABLE_KEYS);
 const DATE_PAIR = new Set<string>(["startDate", "endDate"]);
 const WRITE_ONLY = new Set<string>(["teamNumbers"]); // accepted on write, absent from GET
-const WRITABLE = new Set<string>([...EDITABLE, ...DATE_PAIR, ...WRITE_ONLY]);
+const WRITABLE = new Set<string>([...EDITABLE, ...DATE_PAIR, ...WRITE_ONLY, FIRST_MATCH_FREE_KEY]);
 const READONLY = ["id", "startDate", "endDate", "isCancelled", "teams"];
 
 function isEnv(x: string): x is MatchdayEnv { return x === "staging" || x === "production"; }
@@ -33,6 +33,9 @@ function pickMatch(m: Record<string, unknown>) {
   const out: Record<string, unknown> = {};
   for (const k of EDITABLE) out[k] = m[k] ?? null;
   for (const k of READONLY) out[k] = m[k] ?? null;
+  // PRESENT OR ABSENT, NEVER null. Production has no such column yet; an absent key is how the
+  // panel knows to hide the control. Defaulting it to null like the keys above would erase that.
+  if (hasFirstMatchFree(m)) out[FIRST_MATCH_FREE_KEY] = m[FIRST_MATCH_FREE_KEY];
   const field = (m.field ?? {}) as Record<string, unknown>;
   const city = (field.city ?? {}) as Record<string, unknown>;
   out.fieldTitle = (field.title as string | undefined)?.trim() ?? null;
@@ -148,6 +151,22 @@ export async function PUT(req: Request, ctx: { params: Promise<{ env: string; id
     }, { status: 400 });
   }
 
+  /* ── FREE FIRST MATCH: ADMIN ONLY, A REAL BOOLEAN, AND ONLY WHERE THE BACKEND HAS IT ──────────
+   * The backend refuses a city manager's change with 403 FIRST_MATCH_FREE_ADMIN_ONLY
+   * (backend-189 matches.service.ts validateFirstMatchFreeChange) — but it judges the API ACCOUNT,
+   * and every Clubhouse write goes out as the one service account. That check can never fire for
+   * a Clubhouse user, so the rule is enforced HERE, on app_users.is_admin, read fresh per request.
+   * The body is the diff, so the key is only present when someone changed it; an unchanged value
+   * is never sent and a city manager's save of other fields is unaffected. */
+  if (keys.includes(FIRST_MATCH_FREE_KEY)) {
+    if (!auth.isAdmin) {
+      return Response.json({ error: "Only an admin can turn the free first match on or off for a match.", errorCode: "FIRST_MATCH_FREE_ADMIN_ONLY" }, { status: 403 });
+    }
+    if (typeof changes[FIRST_MATCH_FREE_KEY] !== "boolean") {
+      return Response.json({ error: `${FIRST_MATCH_FREE_KEY} must be true or false` }, { status: 400 });
+    }
+  }
+
   // EDIT MATCHES check — before ANY MatchDay read or write, so a read-only user
   // produces zero network calls (the guarded client enforces the same, unbypassably).
   if (!auth.canEditMatches) {
@@ -162,6 +181,11 @@ export async function PUT(req: Request, ctx: { params: Promise<{ env: string; id
     // cached so a name lookup does not add a fourth. Logging is best-effort and never
     // throws over the write.
     let cached = await apiGet<Record<string, unknown>>(env, `/admin/matches/${id}`); // before + name
+    // A backend without the column would 400 the whole save (forbidNonWhitelisted). Refuse it
+    // here, naming the field, before anything is written.
+    if (keys.includes(FIRST_MATCH_FREE_KEY) && !hasFirstMatchFree(cached)) {
+      return Response.json({ error: "This MatchDay backend does not have the free-first-match setting yet. Nothing was sent." }, { status: 409 });
+    }
     let reads = 0;
     const { outcome, error, logged } = await recordWrite(
       {

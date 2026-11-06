@@ -53,6 +53,10 @@ export function trimMatch(m: Raw) {
     fakeSpotLeft12h: num(m.fakeSpotLeft12h) ?? 0, fakeSpotLeft6h: num(m.fakeSpotLeft6h) ?? 0,
     fakeSpotLeft3h: num(m.fakeSpotLeft3h) ?? 0,
     isAutoBump: !!m.isAutoBump, category: (m.category as string) ?? null, type: (m.type as string) ?? null,
+    /* FREE FIRST MATCH (backend 1.89). Passed through ONLY as a real boolean: production does not
+     * have the field yet, and absent must stay absent — the board marks "Not free" on an explicit
+     * false and nothing else, so a missing field can never paint every row. */
+    ...(typeof m.firstMatchFreeEnabled === "boolean" ? { firstMatchFreeEnabled: m.firstMatchFreeEnabled } : {}),
     /* THE RATING, AND IT COSTS NOTHING. `starRating` and `starRatingCount` are ALREADY on the
      * /admin/matches LIST rows this route pages through — measured on production 2026-09-02, all
      * 22 rows for a past day carried both. They were simply not being passed through. The board

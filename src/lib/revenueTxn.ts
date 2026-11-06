@@ -41,6 +41,9 @@ export type RollupRow = {
   n: number;
   gross_cents: number;
   fee_cents: number;
+  /** Sales tax in this row, summed from each charge's own rounded tax by the database (fin_txn_sums,
+   *  0214). Absent on a hand-built row, which then has its tax computed here the same way. */
+  tax_cents?: number;
 };
 
 export const UNASSIGNED = "Unassigned";
@@ -66,12 +69,22 @@ export function taxRateOf(city: string | null): { rate: number; missing: string 
   return { rate: 0, missing: c };
 }
 
-/** Signed tax inside a row's gross, in cents. Zero for Venmo and for anything that is not money in. */
-export function taxCentsOf(r: Pick<RollupRow, "kind" | "source" | "city" | "gross_cents">): number {
+/** Round half away from zero — Postgres round(numeric), so a hand-built row and a database row agree. */
+const roundAway = (x: number) => Math.sign(x) * Math.round(Math.abs(x));
+
+/** Signed tax inside a row's gross, in cents. Zero for Venmo and for anything that is not money in.
+ *  TAX IS PER CHARGE: Stripe charged price + round(price × rate) on every charge (all 5,451 in
+ *  September 2026), so the tax in a charge is gross − round(gross ÷ (1 + rate)). A database row
+ *  carries that sum already (tax_cents); a single hand-built row is computed the same way. */
+export function taxCentsOf(r: Pick<RollupRow, "kind" | "source" | "city" | "gross_cents"> & { tax_cents?: number }): number {
   if (r.source !== "Stripe" || !MONEY.has(r.kind)) return 0;
+  if (r.tax_cents != null) return r.tax_cents;
   const { rate } = taxRateOf(r.city);
-  return rate === 0 ? 0 : Math.round(r.gross_cents - r.gross_cents / (1 + rate));
+  return rate === 0 ? 0 : r.gross_cents - roundAway(r.gross_cents / (1 + rate));
 }
+
+/** The rates the database needs to tax per charge (fin_txn_sums): salesTax.ts, passed as-is. */
+export const RATES_FOR_SQL = { p_rates: CITY_TAX_RATE, p_default_rate: UNASSIGNED_TAX_RATE };
 
 /** True for a row that is part of revenue at all (not a fee row, not test or internal). */
 export const isRevenueRow = (r: RollupRow) => !r.excluded && MONEY.has(r.kind);
@@ -204,49 +217,129 @@ export function splitCents(cents: number, shares: { venueId: number; share: numb
   return { parts, rest: cents - covered };
 }
 
-/** BY FIELD (fin_venue), in cents. A field is the venue its Stripe field ID maps to, never a match
- *  name.
+/** The key of the field a venue belongs to: name AND city. A field can span several venue rows
+ *  (split-rate legs), and names repeat across cities ("Hattrick"). */
+export const fieldKeyOf = (vid: number, venues: Map<number, { name: string; city: string | null }>, rowCity: string | null = null) => {
+  const v = venues.get(vid);
+  return `${v?.name ?? `Venue ${vid}`}|${v?.city ?? cityLabel(rowCity)}`;
+};
+
+/** MEMBERSHIP CREDITED TO FIELDS — the Cities page's rule (cityPnl.ts, "ALLOCATE membership onto
+ *  the pitches"): a field gets the city's membership for the month × (the field's member spots that
+ *  month ÷ the city's member spots that month). `memberShares` supplies those shares from the same
+ *  helpers (venueMemberSpotsFor, cityTotalMemberSpotsFor), keyed by the row's Central month.
  *
- *  MEMBERSHIP IS CREDITED TO FIELDS BY THE CITIES PAGE'S RULE (cityPnl.ts, "ALLOCATE membership
- *  onto the pitches"): a field gets the city's membership for the month × (the field's member spots
- *  that month ÷ the city's member spots that month). `memberShares` supplies those shares from the
- *  same helpers (venueMemberSpotsFor, cityTotalMemberSpotsFor). Membership refunds and disputes are
- *  split the same way. Only what cannot be placed — Unassigned members, a city-month with no member
- *  spots — stays in "Membership (no field)". */
+ *  Each venue-less membership row (charge or reversal) is replaced by one row per field, with its
+ *  gross AND its tax each split to the cent, plus a remainder row with no venue for whatever the
+ *  shares do not cover (Unassigned members; a city-month with no member spots). Nothing is created
+ *  or lost, and every later figure — the Field tab, and the page filtered to one field — is a sum
+ *  of these same rows, so they agree to the cent. Split rows carry n = 0: a charge is not divisible,
+ *  so the counts stay on the remainder row. */
+export function allocateMembership(rows: RollupRow[], memberShares?: MemberShares): RollupRow[] {
+  if (!memberShares) return rows;
+  const out: RollupRow[] = [];
+  for (const r of rows) {
+    if (r.fin_venue_id != null || bucketOf(r.type) !== "membership" || !isRevenueRow(r) || cityLabel(r.city) === UNASSIGNED) { out.push(r); continue; }
+    const shares = memberShares(cityLabel(r.city), `${r.period.slice(0, 7)}-01`);
+    if (!shares || shares.length === 0) { out.push(r); continue; }
+    const tax = taxCentsOf(r);
+    const g = splitCents(r.gross_cents, shares), t = splitCents(tax, shares);
+    for (const s of shares) {
+      const gc = g.parts.get(s.venueId) ?? 0, tc = t.parts.get(s.venueId) ?? 0;
+      if (gc === 0 && tc === 0) continue;
+      out.push({ ...r, fin_venue_id: s.venueId, n: 0, gross_cents: gc, tax_cents: tc, fee_cents: 0 });
+    }
+    if (g.rest !== 0 || t.rest !== 0 || r.fee_cents !== 0) out.push({ ...r, gross_cents: g.rest, tax_cents: t.rest });
+  }
+  return out;
+}
+
+/** allocateMembership FOR DAY ROWS, rounded at the MONTH. Splitting each day's membership on its own
+ *  rounds differently from splitting the month's total, so a field's chart drifted a few cents from
+ *  its Field-tab row. Here each month group (the grouping a month row has) is split exactly as
+ *  allocateMembership splits that month row, and each field's month amount is then spread over the
+ *  group's days by the days' gross, to the cent. Summing any field's days gives its month figure. */
+export function allocateMembershipDays(rows: RollupRow[], memberShares?: MemberShares): RollupRow[] {
+  if (!memberShares) return rows;
+  const out: RollupRow[] = [];
+  const groups = new Map<string, RollupRow[]>();
+  for (const r of rows) {
+    if (r.fin_venue_id != null || bucketOf(r.type) !== "membership" || !isRevenueRow(r) || cityLabel(r.city) === UNASSIGNED) { out.push(r); continue; }
+    const k = [r.period.slice(0, 7), r.kind, r.source, r.type, r.city, r.excluded].join("|");
+    const g = groups.get(k) ?? []; g.push(r); groups.set(k, g);
+  }
+  for (const days of groups.values()) {
+    const first = days[0];
+    const shares = memberShares(cityLabel(first.city), `${first.period.slice(0, 7)}-01`);
+    if (!shares || shares.length === 0) { out.push(...days); continue; }
+    const G = days.reduce((a, r) => a + r.gross_cents, 0), T = days.reduce((a, r) => a + taxCentsOf(r), 0);
+    const g = splitCents(G, shares), t = splitCents(T, shares);
+    // Day weights: each day's share of the month's gross (all on the first day if it nets to 0).
+    const w = G !== 0 ? days.map((r, i) => ({ venueId: i, share: r.gross_cents / G })) : days.map((_, i) => ({ venueId: i, share: i === 0 ? 1 : 0 }));
+    const spread = (amount: number) => { const sp = splitCents(amount, w); const by = days.map((_, i) => sp.parts.get(i) ?? 0); by[0] += sp.rest; return by; };
+    const targets: [number | null, number, number][] = [...shares.map((s) => [s.venueId, g.parts.get(s.venueId) ?? 0, t.parts.get(s.venueId) ?? 0] as [number, number, number]), [null, g.rest, t.rest]];
+    for (const [vid, gc, tc] of targets) {
+      if (gc === 0 && tc === 0 && vid != null) continue;
+      const gd = spread(gc), td = spread(tc);
+      days.forEach((r, i) => {
+        if (gd[i] === 0 && td[i] === 0 && !(vid == null && r.n)) return;
+        out.push({ ...r, fin_venue_id: vid, n: vid == null ? r.n : 0, gross_cents: gd[i], tax_cents: td[i], fee_cents: vid == null ? r.fee_cents : 0 });
+      });
+    }
+  }
+  return out;
+}
+
+/** BY FIELD (fin_venue), in cents. A field is the venue its Stripe field ID maps to, never a match
+ *  name; membership is credited by allocateMembership. Only what cannot be placed stays in
+ *  "Membership (no field)"; any other money with no field is "No field". */
 export function byFieldRows(
   rows: RollupRow[],
   venues: Map<number, { name: string; city: string | null }>,
   memberShares?: MemberShares,
 ): GroupRow[] {
   const m = new Map<string, GroupRow>();
-  const venueGroup = (vid: number, rowCity: string | null): GroupRow => {
-    // ONE ROW PER FIELD, NOT PER fin_venues ROW. A field can span several venue rows (split-rate
-    // legs), so the key is the name AND the city — names repeat across cities ("Hattrick").
-    const v = venues.get(vid);
-    const label = v?.name ?? `Venue ${vid}`, city = v?.city ?? cityLabel(rowCity);
-    const key = `f${label}|${city}`;
-    const g = m.get(key) ?? blankGroup(key, label, city, vid);
-    m.set(key, g);
-    return g;
-  };
-  const named = (key: string, label: string): GroupRow => {
-    const g = m.get(key) ?? blankGroup(key, label, null, null);
-    m.set(key, g);
-    return g;
-  };
-  for (const r of rows) {
+  for (const r of allocateMembership(rows, memberShares)) {
     if (!isRevenueRow(r)) continue;
-    if (r.fin_venue_id != null) { addTo(venueGroup(r.fin_venue_id, r.city), r); continue; }
-    if (bucketOf(r.type) !== "membership") { addTo(named("nofield", NO_FIELD_OTHER), r); continue; }
-    const shares = memberShares && cityLabel(r.city) !== UNASSIGNED ? memberShares(cityLabel(r.city), r.period) : null;
-    const net = r.gross_cents - taxCentsOf(r);
-    const col = REVERSAL.has(r.kind) ? "reversals" : "membership";
-    const { parts, rest } = shares && shares.length ? splitCents(net, shares) : { parts: new Map<number, number>(), rest: net };
-    for (const [vid, c] of parts) { const g = venueGroup(vid, r.city); g[col] += c; g.net += c; }
-    if (rest !== 0 || parts.size === 0) { const g = named("membership", NO_FIELD_MEMBERSHIP); g[col] += rest; g.net += rest; }
+    let key: string, label: string, city: string | null = null, vid: number | null = null;
+    if (r.fin_venue_id != null) {
+      const v = venues.get(r.fin_venue_id);
+      key = `f${fieldKeyOf(r.fin_venue_id, venues, r.city)}`; label = v?.name ?? `Venue ${r.fin_venue_id}`;
+      city = v?.city ?? cityLabel(r.city); vid = r.fin_venue_id;
+    } else if (bucketOf(r.type) === "membership") { key = "membership"; label = NO_FIELD_MEMBERSHIP; }
+    else { key = "nofield"; label = NO_FIELD_OTHER; }
+    const g = m.get(key) ?? blankGroup(key, label, city, vid);
+    addTo(g, r);
+    m.set(key, g);
   }
   return [...m.values()].sort((a, b) =>
     (a.venueId == null ? 1 : 0) - (b.venueId == null ? 1 : 0) || b.net - a.net);
+}
+
+/* ── THE PAGE FILTER: ONE CITY, OR ONE FIELD ──────────────────────────────────────────────────
+ * The rows the top card, the four-month table and the chart sum when a city or a field is chosen.
+ * A city keeps that city's rows; a field keeps that field's rows after allocateMembership — the
+ * very rows the Field tab groups — so "Austin" equals Austin's City row and "Austin · NEMP" equals
+ * NEMP's Field row, to the cent. */
+export type PageFilter = { city: string | null; field: string | null };   // field = fieldKeyOf(…)
+
+export function filterRows(
+  rows: RollupRow[],
+  f: PageFilter,
+  venues: Map<number, { name: string; city: string | null }>,
+  memberShares?: MemberShares,
+  /** Day rows: allocate at the month, so the days sum to the month figure (allocateMembershipDays). */
+  days = false,
+): RollupRow[] {
+  if (f.field) {
+    return (days ? allocateMembershipDays : allocateMembership)(rows, memberShares)
+      .filter((r) => r.fin_venue_id != null && fieldKeyOf(r.fin_venue_id, venues, r.city) === f.field);
+  }
+  if (f.city) {
+    // Stripe's fee rows carry no city and stay out: fees are a whole-business figure.
+    return rows.filter((r) => r.kind !== "fee" && cityLabel(r.city) === f.city);
+  }
+  return rows;
 }
 
 /** Net cents per period key for a filtered row set — the pace chart's series. */
