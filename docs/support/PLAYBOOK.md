@@ -129,6 +129,8 @@ numbers or codes appear.
     account, the thread is linked to it automatically (logged "Auto-linked from typed number") and
     the reply answers their real question with the account in hand. Several accounts or none: a
     person links it.
+26. Never tell a player why a match was cancelled unless a reason is recorded for that match. Never
+    say it was low turnout.
 
 ### What a draft must never do
 
