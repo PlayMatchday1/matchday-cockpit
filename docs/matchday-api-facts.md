@@ -8632,32 +8632,38 @@ Evidence: `app_request_log_batches` and `app_request_log`, paged by id, staging 
 - **A 404 on an unserved route carries no user id** (staging, 2026-11-06: `GET /matches/2822/match-price` from a
   signed-in player logged `route null, user_id null`). No route matched, so no guard ran.
 
-## Push Notifications (Match Ops): the backend is NOT on staging yet; every route below is UNKNOWN (2026-11-06)
+## Push Notifications and the shared audience: proven on staging (2026-11-06)
 
-**Evidence that it is absent.** 2026-11-06, a one-off staging probe signed in with the staging service account (no
-token printed), GET each path, 700 ms apart: `/admin/offers/page` answered JSON (52,822 bytes). `/admin/pushes`,
-`/admin/pushes/page`, `/admin/push-campaigns`, `/admin/push-notifications`, `/admin/pushes/filters`,
-`/admin/audience/filters`, `/admin/audiences/filters`, `/admin/offers/audience/filters` and
-`/admin/offers/audience-filters` each answered **200 with an HTML page** (`Unexpected token '<', "<!DOCTYPE "...`),
-which is how staging answers a route it does not have. `~/Code/backend-offers` branch `feature/push-notifications`
-is at a2118b4, the same commit as `feature/offers`: no push-campaign code yet.
+**Contract:** backend `docs/push-notifications.md` (backend-offers 5b590b3, d62a36d). Validation is
+`core/audiences/audience.types.ts` `parseAudienceFilter`; the Clubhouse writes rows in that format with
+`toContract` (`src/lib/audienceModel.ts`). The earlier guessed `/admin/pushes*` routes are gone from the Clubhouse.
 
-**What the Clubhouse assumes, all UNKNOWN until a payload proves it** (`src/lib/pushesServer.ts` is the one file to
-move): `GET /admin/pushes` → `{ pushes: PushCampaign[] }`; `GET /admin/pushes/:id`; `POST /admin/pushes`;
-`PATCH /admin/pushes/:id` (a draft only); `DELETE /admin/pushes/:id` (a draft only); `POST /admin/pushes/:id/send`
-(→ the push, `status` SCHEDULED or SENT); `POST /admin/pushes/:id/test` `{ title, body }` → `{ sent, failed }`;
-`GET /admin/pushes/:id/results` → `{ targeted, sent, opened, bookedWithin3Days, heldBack, heldBackBooked }`;
-`POST /admin/pushes/audience-count` and `/audience-sample` (FILTERS `{ filters }` or PLAYERS `{ playerIds }`);
-`POST /admin/pushes/players/lookup` `{ ids, emails, phones }` → `{ players, notFound }`. One filter row is
-`{ key, op, ids?, date?, date2?, n?, n2?, choice?, text? }` (`src/lib/audienceModel.ts` CATALOG; dates are wall-clock
-days). The push's own fields are `src/lib/pushesModel.ts` `PushCampaign`.
+**Evidence, staging, 2026-11-06 (through the Clubhouse routes, one paced read at a time):**
+- At 13:5x CT `GET /admin/push-notifications` was a Nest 404 ("Cannot GET"); by ~14:50 CT it answered
+  `{ counts: { live: 1, scheduled: 0, drafts: 1, ended: 6 }, items: [8] }`. Items carry `kind` MESSAGE or OFFER,
+  `state`, `group`, `players`, `cityIds`, `tap` (`{ target, effectiveTarget, matchId, fieldId, match: { name,
+  startLocal "YYYY-MM-DD HH:mm" } }`; offer rows have no `effectiveTarget`), `offer`, `sendLocal`, `results`
+  (`{ sent, opened, bookedWithin3Days, used }`, `used` null for messages).
+- `GET .../messages/:id` keys: kind, id, name, audience, audienceCount, holdoutPercent, title, body, tap, schedule,
+  sendLocal, status, state, group, queuedAt, createdByStaffEmail, launchedByStaffEmail, launchedAt, endedAt, createdAt,
+  updatedAt. A push id that isn't one: 404 `NOT_FOUND_PUSH_CAMPAIGN`.
+- `.../results` and `.../reachable` answer exactly the documented shapes. Staging's push mode is `allowlist`.
+- `POST /admin/audiences/count` `{ audience, holdoutPercent: 10 }` (Austin + last played before 2026-10-01):
+  `{ matching: 50, allowPushes: 43, on188: 0, holdoutPercent: 10, heldBack: 4, willSend: ... }`.
+- `POST /admin/audiences/players/lookup` `{ entries }`: an email and an id naming the same player came back once
+  (id 1481, `entry` the email); `(512) 555-0142` matched a staging account (1364); `999999999` in `notFound`.
+- **A message push, sent:** draft (exact players = 1481 only) created LANDED, test LANDED ("Sent to 1 phone"),
+  `POST .../send` LANDED (status LAUNCHED), results `targeted 1, sent 0, skipped.capped 1` (that account was at the
+  weekly cap of 2), `POST .../end` LANDED. Push 46, "ZZ Clubhouse push check mw5gahvd"; it stays in Ended.
+- **Offers take `audience`:** every staging campaign now carries it (35 of 35), old offers as the equivalent filters.
+  A draft saved with CITY + NEVER_PLAYED_AT + USUAL_DAY read back LANDED, compared as the same audience
+  (`canonicalAudience`: key and id order differ in the answer), reopened with nothing to save, and was deleted
+  LANDED. The Clubhouse sends `audience` and none of the old fields whenever the page's campaigns carry it.
+- **Test pushes go only to the caller.** Both test routes (`.../messages/:id/test`, offers `:id/push/test`) take no
+  recipient: push-campaign-sender.service.ts `test` sends "to the devices of one account only, the staff member's
+  own". The Send to box therefore sends only when the player in it is the signed-in person.
 
-**Proven, and used today:** the weekly cap is `GET /admin/offers/push-settings` (`weeklyCap`, 2 on production
-2026-11-06); Exact players on Offers resolves IDs through `POST /admin/offers/players/lookup` (staging 2026-11-06:
-of 8 ids taken from staging offers, 1481 found, 1527/1526/1516/1515/1513/1512/1510 not found; those were throwaway
-test accounts). Emails and phone numbers have no lookup route anywhere yet.
-
-**A route the backend lacks no longer pauses reads.** The Offers pacer (`src/lib/offersServer.ts`) used to stop
-every read for 30 seconds after any non-4xx failure, and staging's 200-HTML answer is a parse failure, so one read of
-the missing `/admin/pushes` emptied that page's match list and weekly cap. A non-JSON 200 now counts as an answer
+**A route the backend lacks no longer pauses reads.** The Offers pacer (`src/lib/offersServer.ts`) used to stop every
+read for 30 seconds after any non-4xx failure, and staging's 200-HTML answer to a missing route is a parse failure,
+so one read of a missing route emptied the page's match list and weekly cap. A non-JSON 200 now counts as an answer
 about the request, like a 4xx. A 5xx error page still stops reads.

@@ -1,13 +1,13 @@
-// GET /api/pushes/:id (a fresh copy), PATCH (a draft's changes: THE DIFF IS THE REQUEST BODY, the page sends only
-// what changed), DELETE (a draft). See src/lib/pushesServer.ts.
+// GET /api/pushes/:id (a fresh copy) and PATCH (THE DIFF IS THE REQUEST BODY: the page sends only what changed, and
+// only what may still change). Nothing is deleted: an unwanted draft is ended (POST .../end).
 
 import { offersGate, readJson } from "@/lib/offersServer";
-import { PUSHES, pushesErrorText, pushesWrite, readPush, verdictResponse } from "@/lib/pushesServer";
+import { MESSAGES, pushesErrorText, pushesWrite, readPush, verdictResponse } from "@/lib/pushesServer";
 import { PUSH_BODY_KEYS as BODY_KEYS } from "@/lib/pushesModel";
 
 export const dynamic = "force-dynamic";
 type Ctx = { params: Promise<{ id: string }> };
-const idOf = async (ctx: Ctx) => { const { id } = await ctx.params; const n = Number(id); return Number.isInteger(n) && n > 0 ? n : null; };
+const idOf = async (ctx: Ctx) => { const n = Number((await ctx.params).id); return Number.isInteger(n) && n > 0 ? n : null; };
 
 export async function GET(req: Request, ctx: Ctx) {
   const auth = await offersGate(req);
@@ -32,13 +32,5 @@ export async function PATCH(req: Request, ctx: Ctx) {
   let before;
   try { before = (await readPush(id)) ?? undefined; } catch (e) { return Response.json({ error: pushesErrorText(e) }, { status: 502 }); }
   if (!before) return Response.json({ error: "That push no longer exists. Refresh the list." }, { status: 404 });
-  return verdictResponse(await pushesWrite({ auth, source: "pushes:edit", method: "PATCH", path: `${PUSHES}/${id}`, body, id, expect: body, before }));
-}
-
-export async function DELETE(req: Request, ctx: Ctx) {
-  const auth = await offersGate(req);
-  if (auth instanceof Response) return auth;
-  const id = await idOf(ctx);
-  if (id === null) return Response.json({ error: "Not found" }, { status: 404 });
-  return verdictResponse(await pushesWrite({ auth, source: "pushes:delete", method: "DELETE", path: `${PUSHES}/${id}`, id, expect: {}, expectGone: true }));
+  return verdictResponse(await pushesWrite({ auth, source: "pushes:edit", method: "PATCH", path: `${MESSAGES}/${id}`, body, id, before }));
 }

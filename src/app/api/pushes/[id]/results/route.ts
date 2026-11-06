@@ -1,5 +1,5 @@
-// GET /api/pushes/:id/results: sent, opened, booked within 3 days, held back and their bookings (proposed
-// GET /admin/pushes/:id/results). See src/lib/pushesServer.ts.
+// GET /api/pushes/:id/results: sent, opened, booked within 3 days, held back and their bookings
+// (GET /admin/push-notifications/messages/:id/results). See src/lib/pushesServer.ts.
 
 import { offersGate } from "@/lib/offersServer";
 import { pushesErrorText, readPushResults } from "@/lib/pushesServer";

@@ -2,11 +2,10 @@
 // the filter rows, 20835:159 the Add filter menu, 20835:211 Last played, 20835:230 Exact players). Client-safe: the
 // components, the routes and the guards all use it.
 //
-// THE FILTER LIST IS THE DESIGN'S (20835:159), grouped Where / When / How much / Who. The Push Notifications backend
-// was not on staging when this was written (2026-11-06: every /admin/pushes* path answered with an HTML page, while
-// /admin/offers/page answered), so the body one row becomes (filterBody) is the Clubhouse's proposal and stands as
-// UNKNOWN in docs/matchday-api-facts.md until a payload proves it. Offers' backend takes only some of these filters
-// (OFFERS_FILTERS, docs/offers/M3-ENDPOINTS.md), and its form is mapped both ways here so one builder serves both.
+// THE FILTER LIST IS THE DESIGN'S (20835:159), grouped Where / When / How much / Who, and what a row becomes on the
+// wire is the backend's shared audience (backend docs/push-notifications.md, "The shared audience"; validated by
+// core/audiences/audience.types.ts parseAudienceFilter): toContract / fromContract below. Offers on a backend from
+// before the shared audience take only five filters in their old fields (OFFERS_FILTERS, specOfOffer / offerOfSpec).
 //
 // DATES ARE WALL-CLOCK DAYS ("2026-10-01"), never instants; they are read with UTC getters and never re-shifted.
 
@@ -41,8 +40,8 @@ export const CATALOG: FilterDef[] = [
   { key: "matchesLast30", label: "Matches in last 30 days", group: "How much", hint: "at least / at most", ops: [{ op: "atLeast", label: "at least", kind: "int" }, { op: "atMost", label: "at most", kind: "int" }] },
   { key: "neverPlayed", label: "Never played", group: "How much", hint: "signed up, no matches yet", ops: [{ op: "yes", label: "signed up, no matches yet", kind: "none" }] },
   { key: "freeFirstMatch", label: "Free first match", group: "How much", hint: "used / not used", ops: [{ op: "used", label: "used", kind: "none" }, { op: "notUsed", label: "not used", kind: "none" }] },
-  { key: "membership", label: "Membership", group: "Who", hint: "member / not / former", ops: [{ op: "is", label: "is", kind: "choice" }], choices: [{ value: "MEMBER", label: "Member" }, { value: "NON_MEMBER", label: "Not a member" }, { value: "FORMER", label: "Former member" }] },
-  { key: "usualDay", label: "Day they usually play", group: "Who", hint: "weekday / weekend / day of week", ops: [{ op: "is", label: "is", kind: "choice" }], choices: [{ value: "WEEKDAY", label: "Weekday" }, { value: "WEEKEND", label: "Weekend" }, { value: "MON", label: "Monday" }, { value: "TUE", label: "Tuesday" }, { value: "WED", label: "Wednesday" }, { value: "THU", label: "Thursday" }, { value: "FRI", label: "Friday" }, { value: "SAT", label: "Saturday" }, { value: "SUN", label: "Sunday" }] },
+  { key: "membership", label: "Membership", group: "Who", hint: "member / not / former", ops: [{ op: "is", label: "is", kind: "choice" }], choices: [{ value: "MEMBER", label: "Member" }, { value: "NOT_MEMBER", label: "Not a member" }, { value: "FORMER_MEMBER", label: "Former member" }] },
+  { key: "usualDay", label: "Day they usually play", group: "Who", hint: "weekday / weekend / day of week", ops: [{ op: "is", label: "is", kind: "choice" }], choices: [{ value: "WEEKDAY", label: "Weekday" }, { value: "WEEKEND", label: "Weekend" }, { value: "MONDAY", label: "Monday" }, { value: "TUESDAY", label: "Tuesday" }, { value: "WEDNESDAY", label: "Wednesday" }, { value: "THURSDAY", label: "Thursday" }, { value: "FRIDAY", label: "Friday" }, { value: "SATURDAY", label: "Saturday" }, { value: "SUNDAY", label: "Sunday" }] },
   { key: "appVersion", label: "App version", group: "Who", hint: "1.88 or newer", ops: [{ op: "atLeastVersion", label: "is at least", kind: "text" }] },
 ];
 export const GROUPS: FilterGroup[] = ["Where", "When", "How much", "Who"];
@@ -50,7 +49,7 @@ export const filterDef = (key: FilterKey): FilterDef => CATALOG.find((d) => d.ke
 export const opDef = (key: FilterKey, op: FilterOp): OpDef => filterDef(key).ops.find((o) => o.op === op) ?? filterDef(key).ops[0];
 
 // One row. Every value slot is always present (null when the op has no use for it) so the form never carries
-// undefined; filterBody drops what the op doesn't use.
+// undefined; toContract sends only what the op uses.
 export type FilterRow = { id: string; key: FilterKey; op: FilterOp; ids: number[]; date: string | null; date2: string | null; n: number | null; n2: number | null; choice: string | null; text: string | null };
 export type AudienceSpec = { mode: AudienceMode; filters: FilterRow[]; playersText: string };
 export const emptySpec = (): AudienceSpec => ({ mode: "FILTERS", filters: [], playersText: "" });
@@ -88,9 +87,16 @@ export function withOp(r: FilterRow, op: FilterOp, today: string): FilterRow {
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 // What is still missing from a row, in plain words, or null when it can be sent.
+// The backend's own limits (audience.types.ts): 20 filters, 200 ids in one list filter, 1 to 3650 days, counts to 100,000.
+export const MAX_FILTERS = 20;
+export const MAX_LIST_IDS = 200;
+export const MAX_DAYS = 3650;
 export function rowProblem(r: FilterRow): string | null {
   const k = opDef(r.key, r.op).kind;
   const label = filterDef(r.key).label;
+  if ((k === "cities" || k === "fields") && r.ids.length > MAX_LIST_IDS) return `${label}: at most ${MAX_LIST_IDS} in one filter.`;
+  if (k === "days" && r.n !== null && r.n > MAX_DAYS) return `${label}: at most ${MAX_DAYS.toLocaleString("en-US")} days.`;
+  if ((k === "int" || k === "intRange") && ((r.n ?? 0) > 100000 || (r.n2 ?? 0) > 100000)) return `${label}: that number is too big.`;
   switch (k) {
     case "cities": return r.ids.length ? null : `${label}: pick at least one city.`;
     case "fields": return r.ids.length ? null : `${label}: pick at least one field.`;
@@ -104,7 +110,8 @@ export function rowProblem(r: FilterRow): string | null {
     case "none": return null;
   }
 }
-export const specProblem = (s: AudienceSpec): string | null => (s.mode !== "FILTERS" ? null : s.filters.map(rowProblem).find((p) => p !== null) ?? null);
+export const specProblem = (s: AudienceSpec): string | null =>
+  s.mode !== "FILTERS" ? null : s.filters.length > MAX_FILTERS ? `At most ${MAX_FILTERS} filters.` : s.filters.map(rowProblem).find((p) => p !== null) ?? null;
 
 // "Oct 1, 2026" from a wall-clock day, with UTC getters so the day never shifts.
 export function dayLabel(day: string): string {
@@ -180,48 +187,99 @@ export function menuGroups(search: string, allowed: Allowed, used: FilterKey[], 
   })).filter((g) => g.entries.length > 0);
 }
 
-// THE BODY (proposed, UNKNOWN until the backend proves it): one object per row, with only the slots the op uses.
-export type FilterBody = { key: FilterKey; op: FilterOp; ids?: number[]; date?: string; date2?: string; n?: number; n2?: number; choice?: string; text?: string };
-export function filterBody(r: FilterRow): FilterBody {
-  const k = opDef(r.key, r.op).kind;
-  const b: FilterBody = { key: r.key, op: r.op };
-  if (k === "cities" || k === "fields") b.ids = [...r.ids].sort((x, y) => x - y);
-  if (k === "date" || k === "dateRange") b.date = r.date ?? undefined;
-  if (k === "dateRange") b.date2 = r.date2 ?? undefined;
-  if (k === "days" || k === "int" || k === "intRange") b.n = r.n ?? undefined;
-  if (k === "intRange") b.n2 = r.n2 ?? undefined;
-  if (k === "choice") b.choice = r.choice ?? undefined;
-  if (k === "text") b.text = r.text?.trim() ?? undefined;
-  return b;
+// ── THE WIRE FORMAT (backend docs/push-notifications.md, "The shared audience") ───────────────────────
+export type ContractFilter = { type: string; op?: string; [k: string]: unknown };
+export type ContractAudience = { mode: "FILTERS"; filters: ContractFilter[] } | { mode: "PLAYERS"; playerIds: number[] };
+const TYPE: Record<FilterKey, string> = {
+  city: "CITY", playedAt: "PLAYED_AT", neverPlayedAt: "NEVER_PLAYED_AT", homeField: "HOME_FIELD", lastPlayed: "LAST_PLAYED", firstPlayed: "FIRST_PLAYED",
+  signedUp: "SIGNED_UP", upcomingBooking: "UPCOMING_BOOKING", matchesPlayed: "MATCHES_PLAYED", matchesLast30: "MATCHES_LAST_30_DAYS", neverPlayed: "NEVER_PLAYED",
+  freeFirstMatch: "FREE_FIRST_MATCH", membership: "MEMBERSHIP", usualDay: "USUAL_DAY", appVersion: "APP_VERSION",
+};
+const KEY_OF = Object.fromEntries(Object.entries(TYPE).map(([k, t]) => [t, k])) as Record<string, FilterKey>;
+const DATE_OP: Partial<Record<FilterOp, string>> = { before: "BEFORE", since: "SINCE", between: "BETWEEN" };
+const ids = (xs: number[]) => [...new Set(xs)].sort((x, y) => x - y);
+// One row as the backend takes it. Only the fields its op uses are sent (the backend rejects nothing extra, but a
+// stored filter reads back exactly as sent this way).
+export function toContract(r: FilterRow): ContractFilter {
+  const type = TYPE[r.key];
+  switch (r.key) {
+    case "city": return { type, op: r.op === "isNotAnyOf" ? "NOT_IN" : "IN", cityIds: ids(r.ids) };
+    case "playedAt": case "neverPlayedAt": case "homeField": return { type, fieldIds: ids(r.ids) };
+    case "lastPlayed": case "firstPlayed": case "signedUp":
+      if (r.op === "between") return { type, op: "BETWEEN", from: r.date, to: r.date2 };
+      if (r.op === "moreThanDaysAgo") return { type, op: "MORE_THAN_DAYS", days: r.n };
+      if (r.op === "withinDays") return { type, op: "WITHIN_DAYS", days: r.n };
+      if (r.op === "never") return { type, op: "NEVER" };
+      return { type, op: DATE_OP[r.op], date: r.date };
+    case "upcomingBooking": return { type, value: r.op === "yes" };
+    case "matchesPlayed":
+      return r.op === "atLeast" ? { type, op: "AT_LEAST", min: r.n } : r.op === "atMost" ? { type, op: "AT_MOST", max: r.n } : { type, op: "BETWEEN", min: r.n, max: r.n2 };
+    case "matchesLast30": return { type, op: r.op === "atMost" ? "AT_MOST" : "AT_LEAST", count: r.n };
+    case "neverPlayed": return { type };
+    case "freeFirstMatch": return { type, used: r.op === "used" };
+    case "membership": case "usualDay": return { type, value: r.choice };
+    case "appVersion": return { type, min: r.text?.trim() || "1.88" };
+  }
 }
-export const rowsOf = (filters: FilterBody[] | undefined | null): FilterRow[] =>
-  (filters ?? []).map((b, i) => ({ id: `s${i}`, key: b.key, op: b.op, ids: b.ids ?? [], date: b.date ?? null, date2: b.date2 ?? null, n: b.n ?? null, n2: b.n2 ?? null, choice: b.choice ?? null, text: b.text ?? null }));
-export type AudienceBody = { audienceMode: "FILTERS"; filters: FilterBody[] } | { audienceMode: "PLAYERS"; playerIds: number[] };
-export const audienceBodyOf = (s: AudienceSpec, playerIds: number[]): AudienceBody =>
-  s.mode === "PLAYERS" ? { audienceMode: "PLAYERS", playerIds: [...new Set(playerIds)].sort((x, y) => x - y) } : { audienceMode: "FILTERS", filters: s.filters.map(filterBody) };
+// A stored filter back into a row. A type this page doesn't know is kept as an unknown row would be lost on the next
+// save, so it is returned as null and the caller says so (unknownFilters).
+export function fromContract(f: ContractFilter, i: number): FilterRow | null {
+  const key = KEY_OF[f.type];
+  if (!key) return null;
+  const r: FilterRow = { id: `s${i}`, key, op: filterDef(key).ops[0].op, ids: [], date: null, date2: null, n: null, n2: null, choice: null, text: null };
+  const num = (v: unknown) => (typeof v === "number" ? v : null);
+  const str = (v: unknown) => (typeof v === "string" ? v : null);
+  switch (key) {
+    case "city": return { ...r, op: f.op === "NOT_IN" ? "isNotAnyOf" : "isAnyOf", ids: (f.cityIds as number[]) ?? [] };
+    case "playedAt": case "neverPlayedAt": case "homeField": return { ...r, ids: (f.fieldIds as number[]) ?? [] };
+    case "lastPlayed": case "firstPlayed": case "signedUp":
+      if (f.op === "BETWEEN") return { ...r, op: "between", date: str(f.from), date2: str(f.to) };
+      if (f.op === "MORE_THAN_DAYS") return { ...r, op: "moreThanDaysAgo", n: num(f.days) };
+      if (f.op === "WITHIN_DAYS") return { ...r, op: "withinDays", n: num(f.days) };
+      if (f.op === "NEVER") return { ...r, op: "never" };
+      return { ...r, op: f.op === "SINCE" ? "since" : "before", date: str(f.date) };
+    case "upcomingBooking": return { ...r, op: f.value === false ? "no" : "yes" };
+    case "matchesPlayed": return f.op === "AT_MOST" ? { ...r, op: "atMost", n: num(f.max) } : f.op === "BETWEEN" ? { ...r, op: "between", n: num(f.min), n2: num(f.max) } : { ...r, op: "atLeast", n: num(f.min) };
+    case "matchesLast30": return { ...r, op: f.op === "AT_MOST" ? "atMost" : "atLeast", n: num(f.count) };
+    case "neverPlayed": return r;
+    case "freeFirstMatch": return { ...r, op: f.used === false ? "notUsed" : "used" };
+    case "membership": case "usualDay": return { ...r, choice: str(f.value) };
+    case "appVersion": return { ...r, text: str(f.min) ?? "1.88" };
+  }
+}
+export const audienceOf = (s: AudienceSpec, playerIds: number[]): ContractAudience =>
+  s.mode === "PLAYERS" ? { mode: "PLAYERS", playerIds: ids(playerIds) } : { mode: "FILTERS", filters: s.filters.map(toContract) };
+export function specOfAudience(a: ContractAudience | null | undefined, playersText = ""): { spec: AudienceSpec; unknown: number } {
+  if (!a) return { spec: emptySpec(), unknown: 0 };
+  if (a.mode === "PLAYERS") return { spec: { mode: "PLAYERS", filters: [], playersText: playersText || a.playerIds.join(", ") }, unknown: 0 };
+  const rows = a.filters.map(fromContract);
+  return { spec: { mode: "FILTERS", filters: rows.filter((r): r is FilterRow => r !== null), playersText }, unknown: rows.filter((r) => r === null).length };
+}
+// The same audience whatever order its keys and ids came back in: what a read-back is compared on.
+function sortDeep(v: unknown): unknown {
+  if (Array.isArray(v)) return v.every((x) => typeof x === "number") ? [...v].sort((x, y) => (x as number) - (y as number)) : v.map(sortDeep);
+  if (v && typeof v === "object") return Object.fromEntries(Object.keys(v).filter((k) => (v as Record<string, unknown>)[k] !== undefined && (v as Record<string, unknown>)[k] !== null).sort().map((k) => [k, sortDeep((v as Record<string, unknown>)[k])]));
+  return v;
+}
+export const canonicalAudience = (a: unknown) => JSON.stringify(sortDeep(a ?? null));
 
 // ── EXACT PLAYERS (20835:230) ──────────────────────────────────────────────────────────────────
-// What was pasted, one token per id, email or phone, in the order typed, duplicates dropped.
-export type Tokens = { ids: number[]; emails: string[]; phones: string[]; bad: string[]; all: string[] };
-export function parseTokens(text: string): Tokens {
-  const out: Tokens = { ids: [], emails: [], phones: [], bad: [], all: [] };
+// What was pasted, split the way the backend's lookup wants it (commas, semicolons and new lines), each entry once.
+export function entriesOf(text: string): string[] {
+  const out: string[] = [];
   const seen = new Set<string>();
   for (const raw of text.split(/[\n,;]+/)) {
     const t = raw.trim();
-    if (!t) continue;
-    const key = t.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    if (/^#?\d{1,9}$/.test(t)) { out.ids.push(Number(t.replace("#", ""))); out.all.push(t.replace("#", "")); }
-    else if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(t)) { out.emails.push(key); out.all.push(key); }
-    else if (/^\+?[\d\s().-]{7,}$/.test(t) && t.replace(/\D/g, "").length >= 7) { out.phones.push(t); out.all.push(t); }
-    else out.bad.push(t);
+    if (!t || seen.has(t.toLowerCase())) continue;
+    seen.add(t.toLowerCase()); out.push(t);
   }
   return out;
 }
-export type FoundPlayer = { id: number; name: string | null; city?: string | null; allowsPush?: boolean | null; token?: string };
+// POST /admin/audiences/players/lookup: { players: [{ id, name, allowPushes, entry }], notFound: [entry] }.
+export type FoundPlayer = { id: number; name: string | null; allowPushes?: boolean | null; entry?: string; city?: string | null };
 export type TokenLookup = { players: FoundPlayer[]; notFound: string[] };
-// "#78 Ryan M." on a tag.
+export const MAX_ENTRIES = 20000;
+// "#78 Ryan M." on a tag. The backend already sends first name and last initial; a full name is shortened the same way.
 export function tagText(p: FoundPlayer): string {
   const parts = (p.name ?? "").trim().split(/\s+/).filter(Boolean);
   const short = parts.length === 0 ? "" : parts.length === 1 ? parts[0] : `${parts[0]} ${parts[parts.length - 1][0]}.`;
@@ -236,21 +294,25 @@ export const notFoundText = (nf: string[]) => `${nf.length} not found: ${nf.slic
 // "5 players · 4 allow pushes" (the second part only when the lookup says who allows pushes).
 export function playersLine(players: FoundPlayer[]): string {
   const n = players.length;
-  const allow = players.filter((p) => p.allowsPush === true).length;
-  const known = players.some((p) => typeof p.allowsPush === "boolean");
+  const allow = players.filter((p) => p.allowPushes === true).length;
+  const known = players.some((p) => typeof p.allowPushes === "boolean");
   return `${n.toLocaleString("en-US")} ${n === 1 ? "player" : "players"}${known ? ` · ${allow.toLocaleString("en-US")} allow pushes` : ""}`;
 }
 
 // ── THE COUNT BAR (20835:156) ─────────────────────────────────────────────────────────────────
-// "412 players match · 338 allow pushes · 10% held back to measure". allowPush is absent where the host can't
-// say (Offers' count has no push column), and then that part is left out.
-export type AudienceCount = { count: number; allowPush?: number | null; holdoutPercent: number; heldBack: number };
-export function countLine(c: AudienceCount): string {
-  const parts = [`${c.count.toLocaleString("en-US")} ${c.count === 1 ? "player matches" : "players match"}`];
-  if (typeof c.allowPush === "number") parts.push(`${c.allowPush.toLocaleString("en-US")} allow pushes`);
+// POST /admin/audiences/count: { matching, allowPushes, on188, holdoutPercent, heldBack, willSend }.
+// "412 players match · 338 allow pushes · 10% held back to measure". allowPushes is left out where the host's count
+// has no such column (Offers on a backend from before the shared audience).
+export type ContractCount = { matching: number; allowPushes: number; on188?: number; holdoutPercent: number; heldBack: number; willSend: number };
+export function countLine(c: { matching: number; allowPushes?: number | null; holdoutPercent: number }): string {
+  const parts = [`${c.matching.toLocaleString("en-US")} ${c.matching === 1 ? "player matches" : "players match"}`];
+  if (typeof c.allowPushes === "number") parts.push(`${c.allowPushes.toLocaleString("en-US")} allow pushes`);
   if (c.holdoutPercent > 0) parts.push(`${c.holdoutPercent}% held back to measure`);
   return parts.join(" · ");
 }
+// The amber flag under it (Figma 20842:72): "38 already got 3 pushes this week and won't get this one."
+export const capFlagLine = (capped: number, cap: number) =>
+  `${capped.toLocaleString("en-US")} already ${capped === 1 ? "has" : "got"} ${cap} ${cap === 1 ? "push" : "pushes"} this week and won't get this one.`;
 
 // ── OFFERS ──────────────────────────────────────────────────────────────────────────────────────
 // What the Offers backend takes (M3-ENDPOINTS "Audience"): cities (any of), played at, last played as more than N
@@ -259,7 +321,7 @@ export const OFFERS_FILTERS: Allowed = {
   city: ["isAnyOf"], playedAt: ["anyOf"], lastPlayed: ["moreThanDaysAgo", "never"], matchesPlayed: ["atLeast", "atMost", "between"], membership: ["is"],
 };
 export const OFFERS_HINTS: Partial<Record<FilterKey, string>> = { city: "is any of", lastPlayed: "more than N days ago / never", membership: "member / not" };
-export const OFFERS_MEMBERSHIP = [{ value: "MEMBER", label: "Member" }, { value: "NON_MEMBER", label: "Not a member" }];
+export const OFFERS_MEMBERSHIP = [{ value: "MEMBER", label: "Member" }, { value: "NOT_MEMBER", label: "Not a member" }];
 export type OfferAudience = { audienceMode: AudienceMode; cityIds: number[]; fieldIds: number[]; lastPlayed: LastPlayed; lastPlayedDays: number | null; minMatches: number; maxMatches: number | null; membership: Membership; playerIdsText: string };
 export function specOfOffer(a: OfferAudience): AudienceSpec {
   const rows: FilterRow[] = [];
@@ -271,7 +333,7 @@ export function specOfOffer(a: OfferAudience): AudienceSpec {
   if (a.minMatches > 0 && a.maxMatches !== null) rows.push(row("matchesPlayed", "between", { n: a.minMatches, n2: a.maxMatches }));
   else if (a.minMatches > 0) rows.push(row("matchesPlayed", "atLeast", { n: a.minMatches }));
   else if (a.maxMatches !== null) rows.push(row("matchesPlayed", "atMost", { n: a.maxMatches }));
-  if (a.membership !== "ANYONE") rows.push(row("membership", "is", { choice: a.membership === "MEMBERS" ? "MEMBER" : "NON_MEMBER" }));
+  if (a.membership !== "ANYONE") rows.push(row("membership", "is", { choice: a.membership === "MEMBERS" ? "MEMBER" : "NOT_MEMBER" }));
   return { mode: a.audienceMode, filters: rows, playersText: a.playerIdsText };
 }
 // Back to the Offers form's own fields. A row the Offers backend can't take (none can be added on that page, but a
@@ -281,12 +343,13 @@ export function offerOfSpec(s: AudienceSpec): Omit<OfferAudience, "playerIdsText
   for (const r of s.filters) {
     if (r.key === "city") out.cityIds = [...r.ids];
     else if (r.key === "playedAt") out.fieldIds = [...r.ids];
+    else if (r.key === "neverPlayed") out.lastPlayed = "NEVER";
     else if (r.key === "lastPlayed") { if (r.op === "never") out.lastPlayed = "NEVER"; else { out.lastPlayed = "LAPSED"; out.lastPlayedDays = r.n ?? 30; } }
     else if (r.key === "matchesPlayed") {
       if (r.op === "atLeast") { out.minMatches = r.n ?? 0; out.maxMatches = null; }
       else if (r.op === "atMost") { out.minMatches = 0; out.maxMatches = r.n; }
       else { out.minMatches = r.n ?? 0; out.maxMatches = r.n2; }
-    } else if (r.key === "membership") out.membership = r.choice === "MEMBER" ? "MEMBERS" : r.choice === "NON_MEMBER" ? "NON_MEMBERS" : "ANYONE";
+    } else if (r.key === "membership") out.membership = r.choice === "MEMBER" ? "MEMBERS" : r.choice === "NOT_MEMBER" || r.choice === "FORMER_MEMBER" ? "NON_MEMBERS" : "ANYONE";
   }
   return out;
 }

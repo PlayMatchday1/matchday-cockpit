@@ -197,16 +197,16 @@ The rest of the Clubhouse also has no answer for a revoked session: pages keep r
 that looks valid while every API call returns 401. Only Match Ops › Offers says so (`SignInAgain` in
 `src/components/offers/OffersView.tsx`, on feature/offers).
 
-## Push Notifications: when the backend lands (2026-11-06)
+## Push Notifications (2026-11-06)
 
-- Wire `src/lib/pushesServer.ts` to the real routes and fields, then record each one with its payload in
-  docs/matchday-api-facts.md (every route there is UNKNOWN today).
-- Delete `src/lib/pushesFixture.ts` and the `PUSHES_FIXTURE` switch. It is dev-only (refused under
-  NODE_ENV=production and on Vercel) and exists only so the screens could be built before the backend.
-- Offers' Exact players takes IDs only: the Offers backend stores `playerIds` and has no email or phone lookup. Once
-  the pushes lookup takes emails and phones, Offers can resolve them to IDs through it.
-- "See players" on Offers asks the pushes sample route with the offer's filters; it says "isn't on this server yet"
-  until that route exists.
+- Delete `src/lib/pushesFixture.ts` and the `PUSHES_FIXTURE` switch once nobody needs to look at the screens without
+  a backend. It is dev-only (refused under NODE_ENV=production and on Vercel).
+- Send test: the backend sends a test only to the signed-in person's own phones, so the Send to box sends only to you.
+  Sending a test to another player needs a recipient field on both test routes (backend).
+- Offers decide old fields or `audience` from the page's own campaigns (any one carrying `audience`). An empty offer
+  list on a new backend would fall back to the old fields until the first offer exists.
+- The cap flag counts the SAVED audience (`.../reachable`); while the audience on screen is edited and unsaved it is
+  hidden, because no route counts the cap for an unsaved audience.
 - Left out on purpose for now: the "Repeating & automatic" tab, Sends > Repeats and Automatic, and the Find a match
   and A field tap targets (drawn disabled, "needs the next app update").
 

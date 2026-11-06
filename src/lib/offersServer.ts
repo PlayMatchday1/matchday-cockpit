@@ -19,6 +19,7 @@ import { OFFERS_NOT_FOUND } from "@/lib/offersAccess";
 import { readOffersConfig, type OffersConfig, type OffersConfigResult } from "@/lib/offersConfig";
 import { chicagoWallNow, offerMatchOpt, offersLogBody, photoUrlOk, pickerRange, showAgainWhy, wallFromMatch, type ApiOfferMatch, type Campaign, type City, type FieldCover, type FieldOpt, type MatchOpt, type ShowAgainPreview, type ShowAgainReason } from "@/lib/offersModel";
 import { OFFERS_READ_PACE_MS, READS_STOPPED, makePacer } from "@/lib/offersPacing";
+import { canonicalAudience } from "@/lib/audienceModel";
 import { pushesVisible, type CampaignPush, type PushMode, type PushResults, type Reach } from "@/lib/offersPush";
 import { STAFF_NOT_ALLOWED_PLAIN, WHO_ARE_YOU, staffEmailOf, staffErrorKind } from "@/lib/staffIdentity";
 
@@ -230,7 +231,8 @@ const ID_SETS = new Set(["cityIds", "fieldIds", "playerIds", "appliesFieldIds"])
 const sortedIds = (v: unknown) => (Array.isArray(v) ? [...v].sort((x, y) => Number(x) - Number(y)) : v);
 export function mismatches(expected: Record<string, unknown>, after: Record<string, unknown> | null): string[] {
   if (!after) return Object.keys(expected);
-  return Object.keys(expected).filter((k) => (ID_SETS.has(k) ? !same(sortedIds(expected[k]), sortedIds(after[k])) : !same(expected[k], after[k])));
+  // The shared audience reads back with its own key and id order; it is compared as the same audience, not the same text.
+  return Object.keys(expected).filter((k) => (k === "audience" ? canonicalAudience(expected[k]) !== canonicalAudience(after[k]) : ID_SETS.has(k) ? !same(sortedIds(expected[k]), sortedIds(after[k])) : !same(expected[k], after[k])));
 }
 
 export type WriteResult = { verdict: Verdict; after: Campaign | null; error?: string; detail?: string };

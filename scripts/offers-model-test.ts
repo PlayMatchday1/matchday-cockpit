@@ -1358,31 +1358,76 @@ function routeFiles(dir: string): string[] {
     _setOffersGateDepsForTest(null);
   }
 
-  // ── WHO GETS IT, the shared builder (src/lib/audienceModel.ts). THE DIFF IS THE REQUEST BODY: an offer's audience
-  // read into the builder and written straight back is the same audience, so an untouched offer still sends nothing.
+  // ── WHO GETS IT, the shared builder (src/lib/audienceModel.ts) and the shared audience on the wire (backend
+  // docs/push-notifications.md). THE DIFF IS THE REQUEST BODY: whatever is loaded and not touched sends nothing.
   {
     const am = await import("../src/lib/audienceModel");
     const pm = await import("../src/lib/pushesModel");
+    // Legacy offers (a backend without the shared audience): the old fields round-trip through the builder.
     const cases = [
       { audienceMode: "FILTERS" as const, cityIds: [1, 2], fieldIds: [5], lastPlayed: "LAPSED" as const, lastPlayedDays: 45, minMatches: 2, maxMatches: 9, membership: "NON_MEMBERS" as const, playerIdsText: "" },
       { audienceMode: "FILTERS" as const, cityIds: [], fieldIds: [], lastPlayed: "NEVER" as const, lastPlayedDays: null, minMatches: 0, maxMatches: null, membership: "ANYONE" as const, playerIdsText: "" },
       { audienceMode: "FILTERS" as const, cityIds: [], fieldIds: [], lastPlayed: "ANY" as const, lastPlayedDays: null, minMatches: 0, maxMatches: 4, membership: "MEMBERS" as const, playerIdsText: "" },
       { audienceMode: "PLAYERS" as const, cityIds: [], fieldIds: [], lastPlayed: "ANY" as const, lastPlayedDays: null, minMatches: 0, maxMatches: null, membership: "ANYONE" as const, playerIdsText: "7, 8" },
     ];
-    for (const a of cases) eq(`offer audience round-trips through the builder (${a.audienceMode} ${a.lastPlayed} ${a.membership})`, am.offerOfSpec(am.specOfOffer(a)), a);
-    const c0Offer = draftFrom({ fieldIds: [1], minMatches: 2, membership: "MEMBERS" });
-    const loaded = formOf(c0Offer, matches, cities);
-    eq("an untouched offer, round-tripped through the builder, sends nothing", patchBody(c0Offer, { ...loaded, ...am.offerOfSpec(am.specOfOffer(loaded)) }, matches, cities), {});
-    eq("the Offers menu offers only what the Offers backend takes", am.keysFor(am.OFFERS_FILTERS), ["city", "playedAt", "lastPlayed", "matchesPlayed", "membership"]);
-    eq("an unfinished row blocks the send, in plain words", am.specProblem({ mode: "FILTERS", filters: [am.newRow("city", null, "2026-11-06", "x")], playersText: "" }), "City: pick at least one city.");
-    eq("a row's body carries only what its op uses", am.filterBody(am.withOp(am.newRow("lastPlayed", null, "2026-11-06", "x"), "never", "2026-11-06")), { key: "lastPlayed", op: "never" });
-    eq("pasted ids, emails and phones are told apart", (({ ids, emails, phones, bad }) => ({ ids, emails, phones, bad }))(am.parseTokens("78, #1481\nluis@example.com\n(512) 555-0142\nnope")), { ids: [78, 1481], emails: ["luis@example.com"], phones: ["(512) 555-0142"], bad: ["nope"] });
-    // Pushes: a draft loaded and not touched sends nothing; one changed field sends that field alone.
-    const draft: import("../src/lib/pushesModel").PushCampaign = { id: 3, name: "N", title: "T", body: "B", tapTarget: "HOME", tapMatchId: null, tapFieldId: null, audienceMode: "FILTERS", filters: [{ key: "city", op: "isAnyOf", ids: [1] }], playerIds: [], holdoutPercent: 10, sendLocal: null, status: "DRAFT", queuedAt: null, sentAt: null, sentByStaffEmail: null, createdByStaffEmail: null, results: null };
-    const pf = pm.pushFormOf(draft, "2026-11-06 10:00:00");
+    for (const a of cases) eq(`legacy offer audience round-trips through the builder (${a.audienceMode} ${a.lastPlayed} ${a.membership})`, am.offerOfSpec(am.specOfOffer(a)), a);
+    const legacy = draftFrom({ fieldIds: [1], minMatches: 2, membership: "MEMBERS" });
+    const lf = formOf(legacy, matches, cities);
+    eq("legacy: an untouched offer, round-tripped through the builder, sends nothing", patchBody(legacy, { ...lf, ...am.offerOfSpec(am.specOfOffer(lf)) }, matches, cities), {});
+    eq("legacy: no `audience` is ever sent", "audience" in createBody(lf, matches, cities), false);
+    eq("legacy: the Offers menu offers only the five old filters", am.keysFor(am.OFFERS_FILTERS), ["city", "playedAt", "lastPlayed", "matchesPlayed", "membership"]);
+
+    // Every row, both ways, in the backend's exact format.
+    const today = "2026-11-06";
+    const wire: [string, unknown][] = [];
+    for (const d of am.CATALOG) for (const o of d.ops) {
+      const r = { ...am.withOp(am.newRow(d.key, null, today, "x"), o.op, today), ids: [3, 1], choice: d.choices?.[1]?.value ?? null };
+      const r2 = am.fromContract(am.toContract(r), 0)!;
+      wire.push([`${d.key}/${o.op}`, am.toContract(r)]);
+      eq(`${d.key} ${o.op} round-trips through the wire format`, am.toContract(r2), am.toContract(r));
+    }
+    const w = Object.fromEntries(wire);
+    eq("wire: city", w["city/isNotAnyOf"], { type: "CITY", op: "NOT_IN", cityIds: [1, 3] });
+    eq("wire: last played between", w["lastPlayed/between"], { type: "LAST_PLAYED", op: "BETWEEN", from: today, to: today });
+    eq("wire: last played more than N days", w["lastPlayed/moreThanDaysAgo"], { type: "LAST_PLAYED", op: "MORE_THAN_DAYS", days: 30 });
+    eq("wire: matches played between", w["matchesPlayed/between"], { type: "MATCHES_PLAYED", op: "BETWEEN", min: 1, max: 3 });
+    eq("wire: matches in 30 days", w["matchesLast30/atMost"], { type: "MATCHES_LAST_30_DAYS", op: "AT_MOST", count: 1 });
+    eq("wire: membership and usual day use the backend's values", [w["membership/is"], w["usualDay/is"]], [{ type: "MEMBERSHIP", value: "NOT_MEMBER" }, { type: "USUAL_DAY", value: "WEEKEND" }]);
+    eq("wire: yes/no filters are booleans", [w["upcomingBooking/no"], w["freeFirstMatch/notUsed"], w["neverPlayed/yes"]], [{ type: "UPCOMING_BOOKING", value: false }, { type: "FREE_FIRST_MATCH", used: false }, { type: "NEVER_PLAYED" }]);
+    eq("a type this page doesn't know is counted, not dropped silently", am.specOfAudience({ mode: "FILTERS", filters: [{ type: "CITY", op: "IN", cityIds: [1] }, { type: "SOMETHING_NEW" }] }).unknown, 1);
+    eq("an unfinished row blocks the send, in plain words", am.specProblem({ mode: "FILTERS", filters: [am.newRow("city", null, today, "x")], playersText: "" }), "City: pick at least one city.");
+    eq("the backend's limits: 20 filters", am.specProblem({ mode: "FILTERS", filters: Array.from({ length: 21 }, (_, i) => am.newRow("neverPlayed", null, today, `x${i}`)), playersText: "" }), "At most 20 filters.");
+    eq("the same audience in another key and id order is the same", am.canonicalAudience({ filters: [{ cityIds: [3, 1], op: "IN", type: "CITY" }], mode: "FILTERS" }) === am.canonicalAudience({ mode: "FILTERS", filters: [{ type: "CITY", op: "IN", cityIds: [1, 3] }] }), true);
+    eq("pasted entries split as the lookup wants them", am.entriesOf("78, #1481\nluis@example.com; (512) 555-0142\n78"), ["78", "#1481", "luis@example.com", "(512) 555-0142"]);
+
+    // Offers on a backend with the shared audience: `audience` replaces the old fields, and an untouched offer sends nothing.
+    const aud = { mode: "FILTERS" as const, filters: [{ type: "CITY", op: "IN", cityIds: [1] }, { type: "LAST_PLAYED", op: "MORE_THAN_DAYS", days: 30 }] };
+    const v2 = { ...draftFrom(), audience: aud } as Campaign;
+    const vf = formOf(v2, matches, cities);
+    eq("shared: an untouched offer sends nothing", patchBody(v2, vf, matches, cities), {});
+    const spec = am.specOfAudience(aud).spec;
+    eq("shared: loaded into the builder and written back, still nothing", patchBody(v2, { ...vf, ...am.offerOfSpec(spec), audienceFilters: spec.filters.map(am.toContract) }, matches, cities), {});
+    const more = { ...vf, audienceFilters: [...aud.filters, { type: "NEVER_PLAYED_AT", fieldIds: [2] }] };
+    eq("shared: one filter added sends the audience alone", patchBody(v2, more, matches, cities), { audience: { mode: "FILTERS", filters: more.audienceFilters } });
+    const created = createBody({ ...nowF, name: "x", audienceFilters: aud.filters }, matches, cities);
+    eq("shared: a create sends `audience` and none of the old fields", [created.audience, ["audienceMode", "playerIds", "cityIds", "lastPlayed", "membership", "fieldIds"].filter((k) => k in created)], [aud, []]);
+    eq("shared: exact players go as PLAYERS, sorted", createBody({ ...nowF, name: "x", audienceFilters: [], audienceMode: "PLAYERS", playerIds: [9, 3] }, matches, cities).audience, { mode: "PLAYERS", playerIds: [3, 9] });
+
+    // Message pushes (backend docs/push-notifications.md).
+    const draft: import("../src/lib/pushesModel").PushMessage = {
+      kind: "MESSAGE", id: 3, name: "N", audience: { mode: "FILTERS", filters: [{ type: "CITY", op: "IN", cityIds: [1] }] }, audienceCount: null, holdoutPercent: 10, title: "T", body: "B",
+      tap: { target: "HOME", effectiveTarget: "HOME", matchId: null, fieldId: null, match: null }, schedule: "ONCE", sendLocal: null, status: "DRAFT", state: "DRAFT", group: "DRAFTS",
+      queuedAt: null, createdByStaffEmail: null, launchedByStaffEmail: null, launchedAt: null, endedAt: null,
+    };
+    const pf = pm.pushFormOf(draft, "2026-11-06 10:00:00").form;
     eq("a push draft loaded and not touched sends nothing", pm.patchBody(draft, pf, []), {});
     eq("a push edit sends only what changed", pm.patchBody(draft, { ...pf, title: "New" }, []), { title: "New" });
-    eq("Exact players never carry a holdout", pm.fullBody({ ...pf, audience: { mode: "PLAYERS", filters: [], playersText: "5" } }, [5]).holdoutPercent, 0);
+    eq("a push's tap goes as tapTarget and tapMatchId", pm.patchBody(draft, { ...pf, tapTarget: "MATCH", tapMatchId: 116 }, []), { tapTarget: "MATCH", tapMatchId: 116 });
+    eq("an exact list under 200 sends no holdout (the backend stores none)", pm.fullBody({ ...pf, audience: { mode: "PLAYERS", filters: [], playersText: "5" } }, [5]).holdoutPercent, 0);
+    eq("scheduled and nobody has it yet: everything but the send time may change", pm.patchBody({ ...draft, status: "LAUNCHED", state: "SCHEDULED" }, { ...pf, title: "New", at: true, sendLocal: "2026-11-09 09:00" }, []), { title: "New" });
+    eq("after it went: the name only", pm.patchBody({ ...draft, status: "LAUNCHED", state: "SENT" }, { ...pf, name: "M", title: "New" }, []), { name: "M" });
+    eq("a read-back with the audience reordered is not a mismatch", pm.pushMismatches({ audience: { mode: "FILTERS", filters: [{ type: "CITY", op: "IN", cityIds: [2, 1] }] } }, { ...draft, audience: { mode: "FILTERS", filters: [{ cityIds: [1, 2], type: "CITY", op: "IN" }] } }), []);
+    eq("a read-back that lost the title is a mismatch", pm.pushMismatches({ title: "X" }, draft), ["title"]);
   }
 
   console.log(`\n${pass} passed, ${fail} failed`);

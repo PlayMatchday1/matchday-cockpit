@@ -15,10 +15,15 @@ import {
 } from "@/lib/audienceModel";
 import { Card, O } from "@/components/offers/offersUi";
 
+// "Oct 3": an instant shown as its Chicago day.
+const chicagoDay = (iso: string) => { const d = new Date(iso); return Number.isNaN(d.getTime()) ? iso : new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", month: "short", day: "numeric" }).format(d); };
+
 type Named = { id: number; name: string };
 type FieldLike = { id: number; title: string; cityId: number | null };
-export type CountBar = { state: "counting" | "ready" | "error" | "off"; text?: string; error?: string; onRetry?: () => void; extra?: React.ReactNode };
-export type SampleAnswer = { players: { id: number; name: string | null; city: string | null; allowsPush?: boolean; lastPlayed?: string | null }[]; total: number; fixture?: boolean } | { error: string };
+// capFlag: the amber line under the count (Figma 20842:72), "38 already got 3 pushes this week and won't get this one."
+export type CountBar = { state: "counting" | "ready" | "error" | "off"; text?: string; error?: string; onRetry?: () => void; extra?: React.ReactNode; capFlag?: string | null };
+// POST /admin/audiences/sample: up to 50, most recent players first; names as first name and last initial.
+export type SampleAnswer = { players: { id: number; name: string | null; city: string | null; lastPlayedAt?: string | null }[]; total?: number; fixture?: boolean } | { error: string };
 export type PlayersBox = {
   hint: string; placeholder: string;
   tags: { key: string; label: string }[]; notFound: string[]; line: React.ReactNode | null; extra?: React.ReactNode;
@@ -114,6 +119,7 @@ export default function WhoGetsIt({ spec, onChange, allowed, cities, fields, now
           {count.state === "ready" && onSample && <button type="button" data-testid={`${testId}-see`} className="whitespace-nowrap" onClick={openSample}>See players ›</button>}
         </div>
       )}
+      {filters && count.state === "ready" && count.capFlag && <div data-testid={`${testId}-cap-flag`} className="rounded-[10px] px-3.5 py-[9px] text-[13px] font-semibold" style={{ background: "#fff2d9", color: "#8c590d" }}>{count.capFlag}</div>}
       {filters && count.extra}
       {sample && <SampleList answer={sample} onClose={() => setSample(null)} testId={testId} />}
     </Card>
@@ -310,7 +316,7 @@ function SampleList({ answer, onClose, testId }: { answer: SampleAnswer | "loadi
           : (
             <>
               <div className="text-[12px]" style={{ color: O.muted }}>
-                A sample of {answer.players.length.toLocaleString("en-US")} of {answer.total.toLocaleString("en-US")}.{answer.fixture ? " Stand-in data from the dev fixture, not real players." : ""}
+                {answer.players.length === 0 ? "Nobody matches right now." : `The ${answer.players.length.toLocaleString("en-US")} most recent players who match${typeof answer.total === "number" ? ` (of ${answer.total.toLocaleString("en-US")})` : ""}.`}{answer.fixture ? " Stand-in data from the dev fixture, not real players." : ""}
               </div>
               <div className="flex flex-col overflow-y-auto rounded-[10px] border" style={{ borderColor: O.line }}>
                 {answer.players.map((p) => (
@@ -318,7 +324,7 @@ function SampleList({ answer, onClose, testId }: { answer: SampleAnswer | "loadi
                     <span className="w-[56px] shrink-0 font-mono text-[12px]" style={{ color: O.muted }}>#{p.id}</span>
                     <span className="min-w-0 flex-1 truncate font-semibold" style={{ color: O.ink }}>{p.name ?? "No name"}</span>
                     <span className="shrink-0 text-[12px]" style={{ color: O.muted }}>{p.city ?? ""}</span>
-                    {typeof p.allowsPush === "boolean" && <span className="shrink-0 text-[11px] font-semibold" style={{ color: p.allowsPush ? O.ok : O.muted }}>{p.allowsPush ? "Pushes on" : "Pushes off"}</span>}
+                    <span className="shrink-0 text-[11px]" style={{ color: O.muted }}>{p.lastPlayedAt ? `Played ${chicagoDay(p.lastPlayedAt)}` : "Never played"}</span>
                   </div>
                 ))}
               </div>

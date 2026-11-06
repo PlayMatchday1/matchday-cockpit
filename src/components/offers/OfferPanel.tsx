@@ -18,13 +18,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FIRST_NAME_TOKEN, isAdminAccount, MAX_TEST_IDS, SECTION_ADD, addSection, autoCopy, canReset, copyAfterType, isRemovable, staleLines, staleSections, writtenForOnLoad, removeSection, resetCopy, sectionCollapsed, copyAfterHide, hideUpload, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, MAX_USES_PER_PLAYER, notFoundLine, parsePlayerIds, playerLine, PREVIEW_FIRST_NAME, amountText, limitLine, stepLimit, stepUses, usesLine, audienceBody, buttonMatchNote, buttonOf, opensText, chicagoWallNow, copyOf, createBody, defaultRun, endsTicket, formOf, formProblem, fromInput, matchInfo,
-  newForm, on188Line, heldBackLine, playersHoldoutOn, PLAYERS_HOLDOUT_MIN, patchBody, playedAtSuggestions, mergeMatches, withCovers, endNote, pauseNote, ranUntil, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, countWanted, lockedSummary, endHasPassed, launchProblem, offerWallNow, offerZones, setPriceAnyWarning, setPriceProblem, pickedMatch, startLabel, STEPPER, summary, toInput, wallLabel,
+  newForm, contractIncomplete, on188Line, heldBackLine, playersHoldoutOn, PLAYERS_HOLDOUT_MIN, patchBody, playedAtSuggestions, mergeMatches, withCovers, endNote, pauseNote, ranUntil, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, countWanted, lockedSummary, endHasPassed, launchProblem, offerWallNow, offerZones, setPriceAnyWarning, setPriceProblem, pickedMatch, startLabel, STEPPER, summary, toInput, wallLabel,
   photoTiles, photoTileOf, suggestedPhotoTiles, suggestedPhotoLabel, photoReason, photoRowName, lockScreenDate, popupOffBlock, pushOnlyPrefix,
   type Campaign, type City, type Count, type FieldOpt, type Lookup, type UploadedPhoto, type CopyKey, type ListChange, type DealType, type Form, type MatchOpt, type WrittenFor,
 } from "@/lib/offersModel";
 import MatchPicker from "./MatchPicker";
 import WhoGetsIt, { type SampleAnswer } from "@/components/audience/WhoGetsIt";
-import { OFFERS_FILTERS, OFFERS_HINTS, OFFERS_MEMBERSHIP, audienceBodyOf, countLine, newRow, offerOfSpec, specOfOffer, specProblem, tagText, todayWall, type AudienceSpec } from "@/lib/audienceModel";
+import { OFFERS_FILTERS, OFFERS_HINTS, OFFERS_MEMBERSHIP, audienceOf, countLine, entriesOf, newRow, offerOfSpec, removeToken, specOfAudience, specOfOffer, specProblem, tagText, toContract, todayWall, type AudienceSpec, type TokenLookup } from "@/lib/audienceModel";
 import PhotoPicker from "./PhotoPicker";
 import OfferPreview, { type PreviewTab } from "./OfferPreview";
 import { PushReach, PushSection, SendsTo } from "./OfferPush";
@@ -86,7 +86,11 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
   const [poolWanted, setPoolWanted] = useState(c === null || c.status === "DRAFT");
   const [poolRetry, setPoolRetry] = useState(0);
   const data = useMemo(() => (pool ? { ...loaded, matches: withCovers(mergeMatches(pool.matches, loaded.matches), loaded.fields) } : loaded), [loaded, pool]);
-  const start = useMemo(() => (c ? formOf(c, data.matches, data.cities, data.fields) : newForm(nowWall)), [c, data, nowWall]);
+  // THE SHARED AUDIENCE (backend docs/push-notifications.md): a backend that has it answers every campaign with
+  // `audience`. Then the full filter list, the email and phone lookup and the sample are on, and `audience` is what is
+  // sent; on a backend from before it, the five old filters and ids only, exactly as before.
+  const v2 = data.campaigns.some((x) => x.audience !== undefined);
+  const start = useMemo(() => (c ? formOf(c, data.matches, data.cities, data.fields) : { ...newForm(nowWall), audienceFilters: v2 ? [] : null }), [c, data, nowWall, v2]);
   const [f, setF] = useState<Form>(start);
   const set = (patch: Partial<Form>) => setF((x) => ({ ...x, ...patch }));
   const locked = c !== null && c.status !== "DRAFT";
@@ -155,7 +159,7 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => {
     latestKey.current = audKey;
-    if (matchUnread || !wantCount) return;
+    if (matchUnread || !wantCount || contractIncomplete(f.audienceFilters)) return;
     const t = setTimeout(() => { void askCount(); }, COUNT_DEBOUNCE_MS);
     return () => clearTimeout(t);
   }, [audKey, matchUnread, wantCount, askCount]);
@@ -300,15 +304,18 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
   };
 
   // ── who gets it ──
-  // The builder's rows, kept here so a row still being filled in (a City with no city yet) isn't lost; every change is
-  // also written back to the form's own audience fields (offerOfSpec), which is all that is ever sent.
-  const [aud, setAudState] = useState<AudienceSpec>(() => specOfOffer(start));
-  const setAud = (s: AudienceSpec) => { setAudState(s); set(offerOfSpec(s)); };
+  // The builder's rows, kept here so a row still being filled in (a City with no city yet) isn't lost. Every change is
+  // written back to the form: the rows as the backend takes them (audienceFilters, sent on a backend with the shared
+  // audience), and the nearest old fields (sent on one without it, and used for the suggested copy either way).
+  const allowed = v2 ? null : OFFERS_FILTERS;
+  const [audLoad] = useState(() => (v2 && c?.audience ? specOfAudience(c.audience, c.playerIds.join(", ")) : { spec: specOfOffer(start), unknown: 0 }));
+  const [aud, setAudState] = useState<AudienceSpec>(audLoad.spec);
+  const setAud = (s: AudienceSpec) => { setAudState(s); set({ ...offerOfSpec(s), audienceFilters: v2 ? s.filters.map(toContract) : null }); };
   const addPlayedAt = (id: number) => {
     const has = aud.filters.find((r) => r.key === "playedAt");
-    setAud({ ...aud, filters: has ? aud.filters.map((r) => (r.key === "playedAt" ? { ...r, ids: [...r.ids, id] } : r)) : [...aud.filters, { ...newRow("playedAt", OFFERS_FILTERS, todayWall(nowWall)), ids: [id] }] });
+    setAud({ ...aud, filters: has ? aud.filters.map((r) => (r.key === "playedAt" ? { ...r, ids: [...r.ids, id] } : r)) : [...aud.filters, { ...newRow("playedAt", allowed, todayWall(nowWall)), ids: [id] }] });
   };
-  const audWhy = f.audienceMode === "FILTERS" ? specProblem(aud) : null;
+  const audWhy = audLoad.unknown > 0 ? `This offer has ${audLoad.unknown} ${audLoad.unknown === 1 ? "filter" : "filters"} this page can't show yet, so it can't be saved here.` : f.audienceMode === "FILTERS" ? specProblem(aud) : null;
   const fieldsInCities = data.fields.filter((x) => f.cityIds.length === 0 || (x.cityId !== null && f.cityIds.includes(x.cityId)));
   const [addingScopeField, setAddingScopeField] = useState(false);
   const otherScopeFields = fieldsInCities.filter((x) => !f.appliesFieldIds.includes(x.id));
@@ -328,7 +335,32 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
   // The ids (joined) the last answer or error was for. Save and Launch wait until it is the list on screen.
   const [lookupFor, setLookupFor] = useState<string | null>(null);
   const idsKey = parsed.ids.join(",");
+  // With the shared audience: ids, emails and phone numbers, one lookup (POST /admin/audiences/players/lookup).
+  const entries = useMemo(() => (v2 ? entriesOf(f.playerIdsText) : []), [v2, f.playerIdsText]);
+  const entriesKey = entries.join("\n");
+  const [entryNotFound, setEntryNotFound] = useState<string[]>([]);
+  // Which pasted entry found each player, so a tag's × takes that entry (an email, say) out of the box.
+  const [lookupEntry, setLookupEntry] = useState<Record<string, string>>({});
   useEffect(() => {
+    if (!v2) return;
+    if (!players || entries.length === 0) { setLookup(null); setLookupErr(null); setLookupFor(null); setEntryNotFound([]); return; }
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      setLookupDone(0);
+      const r = await authed("/api/audiences/lookup", { method: "POST", body: JSON.stringify({ text: entriesKey }) });
+      if (cancelled) return;
+      setLookupDone(null); setLookupFor(entriesKey);
+      if (!r.ok) { setLookupErr(String(r.json.error)); setLookup(null); setEntryNotFound([]); return; }
+      const a = r.json as unknown as TokenLookup;
+      setLookupErr(null); setEntryNotFound(a.notFound);
+      setLookupEntry(Object.fromEntries(a.players.map((p) => [String(p.id), p.entry ?? String(p.id)])));
+      setLookup({ players: a.players.map((p) => ({ id: p.id, name: p.name, city: p.city ?? null, matchesPlayed: 0 })), notFound: [] });
+    }, 350);
+    return () => { cancelled = true; clearTimeout(t); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [v2, players, entriesKey]);
+  useEffect(() => {
+    if (v2) return;
     if (!players || parsed.ids.length === 0) { setLookup(null); setLookupErr(null); setLookupDone(null); setLookupFor(null); return; }
     let cancelled = false;
     const t = setTimeout(async () => {
@@ -344,14 +376,15 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
     }, 350);
     return () => { cancelled = true; clearTimeout(t); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [players, idsKey]);
+  }, [v2, players, idsKey]);
   // The ids sent are the ones typed, less any the lookup says are not players (the backend refuses those).
   useEffect(() => {
     const missing = new Set(lookup?.notFound ?? []);
-    const keep = parsed.ids.filter((id) => !missing.has(id));
+    // With the shared audience the ids are the players the lookup found, whatever was pasted to find them.
+    const keep = v2 ? [...new Set((lookup?.players ?? []).map((p) => p.id))] : parsed.ids.filter((id) => !missing.has(id));
     setF((x) => (x.playerIds.join(",") === keep.join(",") ? x : { ...x, playerIds: keep }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [idsKey, lookup]);
+  }, [v2, idsKey, lookup]);
 
   // ── popup text ──
   const suggested = autoCopy(f, data.matches, data.cities, data.fields);
@@ -521,7 +554,9 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
   };
   const dl = locked || frozen; // deal, audience and run locked
   const passed = endHasPassed(f.endsLocal, offerWall());
-  const idsWhy = playerLookupBlock({ players, typed: parsed.ids, answeredFor: lookupFor, lookup, failed: lookupErr !== null, sending: f.playerIds });
+  const idsWhy = !v2 ? playerLookupBlock({ players, typed: parsed.ids, answeredFor: lookupFor, lookup, failed: lookupErr !== null, sending: f.playerIds })
+    : !players || entries.length === 0 ? null : lookupFor === entriesKey && lookupErr ? "Couldn't look the players up. Change the list to try again."
+    : lookupFor !== entriesKey || !lookup || f.playerIds.join(",") !== [...new Set(lookup.players.map((p) => p.id))].join(",") ? "Still looking the players up." : null;
   const nothingOn = popupOffBlock(f, pushOn && pf.enabled);
   const launchWhy = matchUnread ? matchUnreadText(matchRead) : problem ?? audWhy ?? pushProb ?? idsWhy ?? nothingOn ?? launchProblem(f, offerWall()) ?? COUNT_BLOCK[countNow];
   const dealWarn = setPriceProblem(f, m);
@@ -717,22 +752,26 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
             )}
           </Card>
 
-          {/* WHO GETS IT: the shared builder (src/components/audience/WhoGetsIt.tsx, Figma 20828:192 / 20835:230), narrowed to the
-              five filters the Offers backend takes (OFFERS_FILTERS). The lookup, the count and the save gate stay here. */}
-          <WhoGetsIt spec={aud} onChange={setAud} allowed={OFFERS_FILTERS} hints={OFFERS_HINTS} choices={{ membership: OFFERS_MEMBERSHIP }} cities={data.cities} fields={data.fields} nowWall={nowWall} disabled={dl} testId="offers"
+          {/* WHO GETS IT: the shared builder (src/components/audience/WhoGetsIt.tsx, Figma 20828:192 / 20835:230). Every filter on
+              a backend with the shared audience; the five old ones (OFFERS_FILTERS) on one without. The lookup, the count and
+              the save gate stay here. */}
+          <WhoGetsIt spec={aud} onChange={setAud} allowed={allowed} hints={v2 ? undefined : OFFERS_HINTS} choices={v2 ? undefined : { membership: OFFERS_MEMBERSHIP }} cities={data.cities} fields={data.fields} nowWall={nowWall} disabled={dl || audLoad.unknown > 0} testId="offers-who"
             playersSub={holdoutOn ? `Only these players get it. Filters don't apply. With ${PLAYERS_HOLDOUT_MIN} or more, some are held back to measure (More options, under Runs).` : "Only these players get it. Filters don't apply and nobody is held back."}
             count={players || matchUnread || !wantCount ? { state: "off" } : countNow === "error" ? { state: "error", error: countErr ?? undefined, onRetry: retryCount }
-              : count ? { state: "ready", text: countLine({ count: count.count, holdoutPercent: f.holdoutPercent, heldBack: count.heldBack }), extra: on188Line(count) ? <div data-testid="offers-count-on188" className="self-start text-[12px]" style={{ color: O.muted }}>{on188Line(count)}</div> : null } : { state: "counting" }}
+              : count ? { state: "ready", text: countLine({ matching: count.count, holdoutPercent: f.holdoutPercent }), extra: on188Line(count) ? <div data-testid="offers-count-on188" className="self-start text-[12px]" style={{ color: O.muted }}>{on188Line(count)}</div> : null } : { state: "counting" }}
             onSample={async () => {
-              const r = await authed("/api/pushes/audience", { method: "POST", body: JSON.stringify({ ...audienceBodyOf(aud, []), sample: true }) });
+              const r = await authed("/api/audiences/sample", { method: "POST", body: JSON.stringify({ audience: audienceOf(aud, f.playerIds) }) });
               return r.ok ? (r.json as unknown as SampleAnswer) : { error: String(r.json.error) };
             }}
             players={{
-              hint: "Paste player IDs, separated by commas, spaces or new lines.", placeholder: "10482, 10511, 9877",
+              hint: v2 ? "Paste player IDs, emails or phone numbers, separated by commas or new lines." : "Paste player IDs, separated by commas, spaces or new lines.", placeholder: v2 ? "10482, 10511\nluis@example.com" : "10482, 10511, 9877",
               tags: (lookup?.players ?? []).map((p) => ({ key: String(p.id), label: tagText({ id: p.id, name: p.name }) })),
-              notFound: [...(lookup?.notFound ?? []).map(String), ...parsed.bad],
-              line: lookup ? pastedLine(parsed.ids.length, lookup) : lookupDone !== null && parsed.ids.length > 0 ? `Looking up ${lookupDone.toLocaleString("en-US")} of ${parsed.ids.length.toLocaleString("en-US")} IDs…` : null,
-              onRemove: (k) => { const ids = parsePlayerIds(f.playerIdsText).ids.filter((id) => String(id) !== k); setAud({ ...aud, playersText: ids.join(", ") }); },
+              notFound: v2 ? entryNotFound : [...(lookup?.notFound ?? []).map(String), ...parsed.bad],
+              line: lookup ? (v2 ? pastedLine(entries.length, { players: lookup.players, notFound: entryNotFound.map(() => 0) }) : pastedLine(parsed.ids.length, lookup)) : v2 && lookupDone !== null ? "Looking them up…" : lookupDone !== null && parsed.ids.length > 0 ? `Looking up ${lookupDone.toLocaleString("en-US")} of ${parsed.ids.length.toLocaleString("en-US")} IDs…` : null,
+              onRemove: (k) => {
+                if (v2) { const entry = lookup?.players.find((p) => String(p.id) === k) ? (lookupEntry[k] ?? k) : k; setAud({ ...aud, playersText: removeToken(f.playerIdsText, entry) }); return; }
+                const ids = parsePlayerIds(f.playerIdsText).ids.filter((id) => String(id) !== k); setAud({ ...aud, playersText: ids.join(", ") });
+              },
               extra: (
                 <>
                   {parsed.tooMany && <div data-testid="offers-ids-too-many" className="self-start rounded-[8px] px-2.5 py-1.5 text-[12px] font-medium" style={{ background: O.warnBg, color: O.warnInk }}>One offer takes up to {MAX_OFFER_PLAYER_IDS.toLocaleString("en-US")} IDs. Only the first {MAX_OFFER_PLAYER_IDS.toLocaleString("en-US")} are used.</div>}

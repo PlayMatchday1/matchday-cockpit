@@ -8,11 +8,12 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   CAP_MAX, CAP_MIN, CUT_OFF_NOTE, FIRST_NAME, MATCH_TOKEN, PUSH_BODY_MAX, PUSH_BODY_SOFT, PUSH_TITLE_MAX, PUSH_TITLE_SOFT, capLine, fillPush, mayCutOff, pushAfterType, pushLocked,
-  pushStatusText, pushText, reachHeadline, reachModeNote, reachRows, reachWarns, sendTimeNote, sendsToText, skippedRows, skippedTotal, testSendOutcome,
+  pushStatusText, pushText, reachHeadline, reachModeNote, reachRows, reachWarns, sendTimeNote, sendsToText, skippedRows, skippedTotal,
   type CampaignPush, type PushForm, type PushResults, type Reach,
 } from "@/lib/offersPush";
 import { wallLabel, type MatchOpt } from "@/lib/offersModel";
 import { Btn, Chip, O, Toggle, VerdictLine, authed, inputCls, inputStyle, outcomeOf, type WriteOutcome } from "./offersUi";
+import SendTestBox, { type TestAnswer } from "@/components/audience/SendTestBox";
 
 const n = (x: number) => x.toLocaleString("en-US");
 const toInput = (s: string) => s.replace(" ", "T");
@@ -27,17 +28,11 @@ export function PushSection({ pf, setPf, sugg, scope, match, campaignId, campaig
   const off = disabled || locked;
   const t = pushText(pf, sugg);
   const note = sendTimeNote(pf, startsLocal, endsLocal);
-  const [test, setTest] = useState<WriteOutcome | null>(null);
-  const [testing, setTesting] = useState(false);
-  async function sendTest() {
-    if (campaignId === null || testing) return;
-    setTesting(true);
-    try {
-      const r = await authed(`/api/offers/${campaignId}/push/test`, { method: "POST", body: JSON.stringify({ title: t.title, body: t.body }) });
-      // A 2xx says how many of your phones took it: 0, or any failure, is a warning, not the green box.
-      setTest(r.json.verdict === "SENT" ? testSendOutcome(r.json) : outcomeOf(r, ""));
-    } finally { setTesting(false); }
-  }
+  // SEND TEST (Figma 20842:74, the same box as Push Notifications): the text on screen, to your own phones only.
+  const sendTest = async (): Promise<TestAnswer> => {
+    const r = await authed(`/api/offers/${campaignId}/push/test`, { method: "POST", body: JSON.stringify({ title: t.title, body: t.body }) });
+    return r.json.verdict === "SENT" || r.json.verdict === "PARTIAL" ? { ok: true, sent: Number(r.json.sent ?? 0), failed: Number(r.json.failed ?? 0) } : { ok: false, error: outcomeOf(r, "").text };
+  };
   return (
     <div data-testid="offers-push" className="flex flex-col gap-3.5">
       {/* The switch row (Figma 20825:226). The phone itself is the Push tab of the preview column (PushLockScreen). */}
@@ -85,12 +80,7 @@ export function PushSection({ pf, setPf, sugg, scope, match, campaignId, campaig
             {note && <div data-testid="offers-push-time-note" className="text-[12px]" style={{ color: O.warnInk }}>{note}</div>}
           </div>
           {problem && <div data-testid="offers-push-problem" className="text-[12px]" style={{ color: O.warnInk }}>{problem}</div>}
-          <div className="flex flex-col items-start gap-1.5">
-            {campaignId === null && <div data-testid="offers-push-save-first" className="text-[11.5px]" style={{ color: O.muted }}>Save it as a draft first.</div>}
-            <Btn testId="offers-push-test" disabled={campaignId === null || testing || !!problem} onClick={sendTest}>Send test push to my phone</Btn>
-            <div className="text-[11.5px]" style={{ color: O.muted }}>Goes only to phones signed in to your account. Not counted in results.</div>
-            {test && <VerdictLine outcome={test} />}
-          </div>
+          <SendTestBox testId="offers-push-test" onOffers send={sendTest} blockedWhy={campaignId === null ? "Save it as a draft first." : problem} />
         </div>
       )}
     </div>

@@ -10,6 +10,7 @@
 // MONEY: cents. dealAmount is a percent (PERCENT_OFF), cents (AMOUNT_OFF, SET_PRICE) or 0 (FREE_MATCH).
 
 import { LOCAL_MDAPI_HOST } from "./localMode";
+import { canonicalAudience, offerOfSpec, specOfAudience, type ContractAudience, type ContractFilter } from "./audienceModel";
 
 export type DealType = "PERCENT_OFF" | "AMOUNT_OFF" | "SET_PRICE" | "FREE_MATCH";
 export type LastPlayed = "ANY" | "LAPSED" | "NEVER";
@@ -56,6 +57,9 @@ export type Campaign = Copy & {
   popupEnabled?: boolean;
   // "Show again" (backend 08145ea): the popup round (1 until the first press) and the last press. Absent before it.
   popupRound?: number; showAgain?: ShowAgainState;
+  // Who gets it in the shared format (backend docs/push-notifications.md), beside the old fields. Absent on a backend from
+  // before it; present, it is what the page edits and sends (Form.audienceFilters).
+  audience?: ContractAudience;
   // The push that goes with it (backend docs/offer-push.md); absent on a backend without pushes.
   push?: import("./offersPush").CampaignPush;
 };
@@ -124,8 +128,10 @@ export const EDITABLE_AFTER_LAUNCH = new Set<string>([
 // Every key the Clubhouse may send on create or edit. The routes drop anything else.
 export const BODY_KEYS = new Set<string>([
   ...EDITABLE_AFTER_LAUNCH, "dealType", "dealAmount", "usesPerPlayer", "appliesFieldIds", "cityIds", "lastPlayed", "lastPlayedDays",
-  "minMatches", "maxMatches", "membership", "fieldIds", "audienceMode", "playerIds", "matchIds", "startsLocal", "endsLocal", "holdoutPercent",
+  "minMatches", "maxMatches", "membership", "fieldIds", "audienceMode", "playerIds", "matchIds", "startsLocal", "endsLocal", "holdoutPercent", "audience",
 ]);
+// The old audience fields: never sent beside `audience` (saving them without it clears the stored filters).
+export const OLD_AUDIENCE_KEYS = ["audienceMode", "playerIds", "cityIds", "fieldIds", "lastPlayed", "lastPlayedDays", "minMatches", "maxMatches", "membership"];
 
 // ── WALL CLOCK ───────────────────────────────────────────────────────────────────────────────────
 const WALL = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/;
@@ -338,6 +344,10 @@ export type Form = {
   showTicket: boolean;
   // Show popup on app open. Off is push only: the popup text is kept but never shown; the discount still applies.
   popupEnabled: boolean;
+  // THE SHARED AUDIENCE: the filter rows as the backend takes them, on a backend that has it (its campaigns carry
+  // `audience`); null on one from before it, where the old fields above are what is sent. With filters the old fields
+  // still hold the nearest equivalent, for the suggested copy and the photo; they are never sent then.
+  audienceFilters: ContractFilter[] | null;
   // Where the popup's button goes (Edit text › Button opens). Forced to the deal's match when the
   // offer is for a specific match; see buttonOf.
   buttonTarget: ButtonTarget; buttonMatchId: number | null;
@@ -352,7 +362,7 @@ export function newForm(nowWall: string): Form {
     name: "", dealType: "PERCENT_OFF", dealAmount: 50, usesPerPlayer: 1, matchId: null, scope: "ANY", appliesFieldIds: [],
     audienceMode: "FILTERS", playerIdsText: "", playerIds: [], fieldIds: [],
     cityIds: [], lastPlayed: "ANY", lastPlayedDays: null, membership: "ANYONE",
-    minMatches: 0, maxMatches: null, ...defaultRun(nowWall), holdoutPercent: 10, maxRedemptions: null, showTicket: true, popupEnabled: true,
+    minMatches: 0, maxMatches: null, ...defaultRun(nowWall), holdoutPercent: 10, maxRedemptions: null, showTicket: true, popupEnabled: true, audienceFilters: null,
     buttonTarget: "FIND_MATCH", buttonMatchId: null, copy: {},
   };
 }
@@ -368,7 +378,13 @@ export function formOf(c: Campaign, matches: MatchOpt[], cities: City[], fields:
     startsLocal: c.startsLocal, endsLocal: c.endsLocal, holdoutPercent: c.audienceMode === "PLAYERS" && c.playerIds.length < PLAYERS_HOLDOUT_MIN ? DEFAULT_HOLDOUT_PERCENT : c.holdoutPercent,
     maxRedemptions: c.maxRedemptions, showTicket: c.showTicket ?? true, popupEnabled: c.popupEnabled ?? true,
     buttonTarget: c.buttonTarget, buttonMatchId: c.buttonMatchId, copy: {},
+    audienceFilters: c.audience ? (c.audience.mode === "FILTERS" ? c.audience.filters : []) : null,
   };
+  // Saved with the shared audience, the old columns may not hold it: read the nearest old fields from it instead.
+  if (c.audience?.mode === "FILTERS") {
+    const o = offerOfSpec(specOfAudience(c.audience).spec);
+    Object.assign(f, { cityIds: o.cityIds, fieldIds: o.fieldIds, lastPlayed: o.lastPlayed, lastPlayedDays: o.lastPlayedDays, minMatches: o.minMatches, maxMatches: o.maxMatches, membership: o.membership });
+  }
   // Stored copy that differs from what the deal would write was typed by someone: keep it as typed.
   // A stored null on a section is removed even where nothing is suggested today: the backend can't tell
   // the two apart, and a removed section must not come back when the audience or the match changes.
@@ -732,12 +748,23 @@ export function fullBody(f: Form, matches: MatchOpt[], cities: City[], fields: F
     ...copy, buttonTarget: buttonOf(f, matches).target, buttonMatchId: buttonOf(f, matches).matchId,
   };
 }
+// A row still being filled in (no city picked yet, no date): not something to count or send.
+export const contractIncomplete = (filters: ContractFilter[] | null) =>
+  !!filters?.some((x) => Object.values(x).some((v) => v === null || v === undefined || (Array.isArray(v) && v.length === 0)));
+// The body as sent: on a backend with the shared audience, `audience` in place of the old fields.
+function bodyOf(f: Form, matches: MatchOpt[], cities: City[], fields: FieldOpt[] = []): Record<string, unknown> {
+  const full = fullBody(f, matches, cities, fields);
+  if (f.audienceFilters === null) return full;
+  for (const k of OLD_AUDIENCE_KEYS) delete full[k];
+  full.audience = f.audienceMode === "PLAYERS" ? { mode: "PLAYERS", playerIds: [...f.playerIds].sort((x, y) => x - y) } : { mode: "FILTERS", filters: f.audienceFilters };
+  return full;
+}
 
 // CREATE: the full body with nulls left out (the backend's defaults stand in for them), except a
 // removed section and no end date, which are sent as null like any other save. A shown ticket is the
 // default, so it's left out as well.
 export function createBody(f: Form, matches: MatchOpt[], cities: City[], fields: FieldOpt[] = []): Record<string, unknown> {
-  return Object.fromEntries(Object.entries(fullBody(f, matches, cities, fields)).filter(([k, v]) => (k === "showTicket" || k === "popupEnabled" ? v === false : k === "appliesFieldIds" ? (v as number[]).length > 0 : v !== null || k === "endsLocal" || isRemovable(k as CopyKey))));
+  return Object.fromEntries(Object.entries(bodyOf(f, matches, cities, fields)).filter(([k, v]) => (k === "showTicket" || k === "popupEnabled" ? v === false : k === "appliesFieldIds" ? (v as number[]).length > 0 : v !== null || k === "endsLocal" || isRemovable(k as CopyKey))));
 }
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
@@ -745,7 +772,7 @@ const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stri
 // EDIT: only what changed against the campaign as the backend holds it. After launch only the
 // fields the backend still accepts are compared at all, so a locked field can never be sent.
 export function patchBody(c: Campaign, f: Form, matches: MatchOpt[], cities: City[], fields: FieldOpt[] = []): Record<string, unknown> {
-  const full = fullBody(f, matches, cities, fields);
+  const full = bodyOf(f, matches, cities, fields);
   const locked = c.status !== "DRAFT";
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(full)) {
@@ -753,15 +780,15 @@ export function patchBody(c: Campaign, f: Form, matches: MatchOpt[], cities: Cit
     const stored = k === "showTicket" ? (c.showTicket ?? true) : k === "popupEnabled" ? (c.popupEnabled ?? true)
       : k === "appliesFieldIds" ? [...(c.appliesFieldIds ?? [])].sort((x, y) => x - y)
       : (c as unknown as Record<string, unknown>)[k];
-    if (!same(v, stored)) out[k] = v;
+    if (k === "audience" ? canonicalAudience(v) !== canonicalAudience(stored) : !same(v, stored)) out[k] = v;
   }
   return out;
 }
 
 // The live count's body: who gets it and the deal, never the copy.
 export function audienceBody(f: Form, matches: MatchOpt[], cities: City[]): Record<string, unknown> {
-  const full = fullBody(f, matches, cities);
-  const keys = ["audienceMode", "playerIds", "cityIds", "fieldIds", "lastPlayed", "lastPlayedDays", "minMatches", "maxMatches", "membership", "matchIds", "dealType", "dealAmount", "usesPerPlayer", "maxRedemptions", "holdoutPercent"];
+  const full = bodyOf(f, matches, cities);
+  const keys = ["audience", "audienceMode", "playerIds", "cityIds", "fieldIds", "lastPlayed", "lastPlayedDays", "minMatches", "maxMatches", "membership", "matchIds", "dealType", "dealAmount", "usesPerPlayer", "maxRedemptions", "holdoutPercent"];
   return Object.fromEntries(keys.filter((k) => full[k] !== null && full[k] !== undefined).map((k) => [k, full[k]]));
 }
 
