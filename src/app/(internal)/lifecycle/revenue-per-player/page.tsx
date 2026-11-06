@@ -1,10 +1,11 @@
 "use client";
 
-// REVENUE PER PLAYER — ARPP, moved verbatim.
-// FOLLOWS THE PERIOD. SHOWS THE START DATES: revenue is play-derived and begins at the play floor,
-// so a period set earlier than that renders empty months which are "no data yet", not zero.
+// REVENUE PER PLAYER — redesigned 2026-11-05 (Figma "Revenue per Player", frames 15:3 and 16:2).
+// NO PERIOD BAR: the preset bubbles were the first thing Miguel asked to lose (Sep 17), and the bar's
+// period never reached this page anyway. The panel owns a From / To month range of its own, read
+// against the month-by-month series in data.arppCard.series.
 
-import ArppPanel from "@/components/growth/ArppPanel";
+import RevenuePerPlayerPanel from "@/components/growth/RevenuePerPlayerPanel";
 import SectionFrame from "@/components/growth/SectionFrame";
 import { useGrowth } from "@/components/growth/GrowthDataProvider";
 
@@ -13,9 +14,10 @@ export default function LifecycleArppPage() {
   return (
     <SectionFrame
       title="Revenue per Player"
-      subtitle="What an active player is worth per month, and how that has moved."
+      subtitle="What a paying player is worth each month"
+      period={false}
     >
-      {g.data && <ArppPanel data={g.data} />}
+      {g.data && <RevenuePerPlayerPanel data={g.data} />}
     </SectionFrame>
   );
 }

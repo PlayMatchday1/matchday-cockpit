@@ -1574,3 +1574,26 @@
 .fbcSort .fieldLabel { margin: 0; }
 .fbcSort select { min-height: 32px; border-radius: 9px; border: 1px solid var(--hair); padding: 0 8px; font: inherit; font-size: 12.5px; font-weight: 700; color: var(--ink); background: #fff; }
 .fbcDir { min-height: 32px; border-radius: 999px; border: 1px solid var(--hair); background: #fff; padding: 0 10px; font: inherit; font-size: 12px; font-weight: 700; color: var(--muted); cursor: pointer; }
+
+/* ── REVENUE PER PLAYER (redesign, 2026-11-05) ────────────────────────────────────────────────
+   The month columns scroll horizontally when the From / To range is long; the name column and the
+   three trailing columns (change vs last month, change vs a year earlier, players) stay pinned.
+   Right-pinned widths are fixed so each sticks at its own offset. */
+.rppWrap { overflow-x: auto; }
+.rppTable th, .rppTable td { white-space: nowrap; }
+.rppLeft { position: sticky; left: 0; z-index: 2; background: var(--surface); }
+.rppRight { position: sticky; z-index: 2; background: var(--surface); }
+.rppRight1 { right: 0; min-width: 84px; }
+.rppRight2 { right: 84px; min-width: 112px; }
+.rppRight3 { right: 196px; min-width: 96px; box-shadow: -6px 0 6px -6px rgba(7, 42, 32, .12); }
+.rppLatest { font-weight: 800; color: var(--forest); }
+.rppTable .summaryRow .rppLeft, .rppTable .summaryRow .rppRight { background: var(--hair); }
+.rppHow { font-size: 0.8rem; color: var(--muted); }
+.rppHow summary { cursor: pointer; font-weight: 700; color: var(--forest); list-style: none; display: inline-flex; align-items: center; gap: 6px; }
+.rppHow summary::-webkit-details-marker { display: none; }
+.rppHow summary::after { content: "▸"; font-size: 0.8rem; }
+.rppHow[open] summary::after { content: "▾"; }
+.rppHow dl { display: grid; grid-template-columns: 140px minmax(0, 1fr); gap: 8px 14px; margin: 12px 0 0; padding: 14px 16px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; }
+.rppHow dt { font-weight: 800; color: var(--forest); }
+.rppHow dd { margin: 0; color: var(--ink); }
+@media (max-width: 560px) { .rppHow dl { grid-template-columns: minmax(0, 1fr); } }

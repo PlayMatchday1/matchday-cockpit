@@ -9,7 +9,9 @@
 import { useState } from "react";
 import styles from "./growth.module.css";
 
-export type Series = { label: string; color: string; values: (number | null)[] };
+/** `dash`: draw the line dashed (Revenue per Player's "same month a year earlier"). Optional, so every
+ *  existing caller is unchanged. */
+export type Series = { label: string; color: string; values: (number | null)[]; dash?: boolean };
 
 const PAD_L = 46;
 const PAD_R = 12;
@@ -25,6 +27,7 @@ export function LineChart({
   formatAxis = (s: string) => s,
   startMarkers = [],
   yUnit = "",
+  formatTick,
 }: {
   axis: string[];
   series: Series[];
@@ -34,6 +37,8 @@ export function LineChart({
   formatAxis?: (s: string) => string;
   startMarkers?: { index: number; label: string }[];
   yUnit?: string;
+  /** The y-axis label for a grid value; defaults to the integer / "k" rule below. */
+  formatTick?: (v: number) => string;
 }) {
   const [hover, setHover] = useState<number | null>(null);
   const plotW = Math.max(1, axis.length - 1) * step;
@@ -65,7 +70,7 @@ export function LineChart({
           <g key={i}>
             <line x1={PAD_L} x2={width - PAD_R} y1={y(gv)} y2={y(gv)} stroke="var(--hair)" />
             <text x={PAD_L - 6} y={y(gv) + 3} textAnchor="end" fontSize="10" fill="var(--muted)">
-              {gv >= 1000 ? (gv / 1000).toFixed(gv % 1000 === 0 ? 0 : 1) + "k" : Math.round(gv)}
+              {formatTick ? formatTick(gv) : gv >= 1000 ? (gv / 1000).toFixed(gv % 1000 === 0 ? 0 : 1) + "k" : Math.round(gv)}
             </text>
           </g>
         ))}
@@ -102,6 +107,7 @@ export function LineChart({
                 fill="none"
                 stroke={s.color}
                 strokeWidth={2}
+                strokeDasharray={s.dash ? "5 4" : undefined}
                 points={seg.map((i) => `${x(i)},${y(s.values[i]!)}`).join(" ")}
               />
             ))}

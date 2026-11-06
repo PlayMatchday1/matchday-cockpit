@@ -285,6 +285,23 @@ export type ArppPoint = {
 // member's played fields; members who played nothing that month are held in the
 // city-level unallocated bucket (surfaced in the footnote).
 export type ArppTriple = { cur: number | null; prev: number | null; py: number | null };
+/* ── THE MONTH-BY-MONTH SERIES (Revenue per Player redesign, 2026-11-05) ───────────────────────
+ * Miguel (Oct 14): the page only compared two months and the time period picker did nothing. The
+ * card above still holds the three fixed months; this carries EVERY settled month at network,
+ * city and field grain, so a From / To range can be read on the client. Same arithmetic as the
+ * card (arppNetwork / arppCity / arppField), same exclusions, same null-means-did-not-exist rule.
+ * `players` is the denominator: players who played or held a paying membership that month,
+ * counted once at network grain and once per city or field at that grain. */
+export type ArppMonthPoint = { arpp: number | null; net: number; players: number };
+export type ArppSeries = {
+  /** Every settled month with clean revenue, oldest first; the last one is the card's curMonth. */
+  months: string[];
+  network: Record<string, ArppMonthPoint>;
+  cities: { name: string; points: Record<string, ArppMonthPoint> }[];
+  fields: { name: string; city: string | null; points: Record<string, ArppMonthPoint> }[];
+  /** One row per year with revenue, oldest first. The last is year to date through curMonth. */
+  annual: { year: number; months: number; net: number; players: number; arpp: number | null; ytd: boolean }[];
+};
 export type ArppEntity = { name: string; city: string | null; cur: number | null; prev: number | null; py: number | null };
 export type ArppCard = {
   curMonth: string;
@@ -305,6 +322,8 @@ export type ArppCard = {
     deleted: { m: string; deletedNet: number; arppWith: number | null; arppWithout: number | null }[];
     membership: { m: string; total: number; allocated: number; unallocated: number; zeroMatchMembers: number }[];
   };
+  /** Optional so a payload from an older build still typechecks on a newer client. */
+  series?: ArppSeries;
 };
 
 export type CohortRow = {

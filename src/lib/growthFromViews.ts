@@ -567,7 +567,7 @@ export function computeGrowthFromViews(input: ViewInput): GrowthData {
 // denominator yields null → the card renders an em-dash, never $0.00. Field-level
 // membership = each member's subs.price split evenly across the distinct fields
 // they played that month; zero-match members go to a city-level unallocated bucket.
-import type { ArppCard, ArppEntity, ArppTriple } from "./growthAnalytics";
+import type { ArppCard, ArppEntity, ArppMonthPoint, ArppSeries, ArppTriple } from "./growthAnalytics";
 
 const DELETED_CITY = "Deleted Account Revenue";
 const yearOf = (m: string) => m.slice(0, 4);
@@ -777,8 +777,39 @@ export function computeArppCard(
     })),
   };
 
+  /* ── THE SERIES: every settled month, same resolvers as the three fixed months above ────────
+   * Months run from the first clean-revenue month through curMonth (the latest COMPLETE month), so
+   * the running month never appears — its members are billed on the 1st and its play is days in.
+   * A city or field is listed when it has play in ANY settled month, not only in curMonth: a range
+   * set to last spring must still show a pitch that has since closed. The client drops rows that
+   * are null across the range it is showing. */
+  const seriesMonths = revenueMonths.filter((m) => m <= curMonth);
+  const point = (arpp: number | null, net: number, players: number): ArppMonthPoint => ({ arpp, net, players });
+  const network: Record<string, ArppMonthPoint> = {};
+  for (const m of seriesMonths) network[m] = point(arppNetwork(m), netCleanM.get(m) ?? 0, unionSize(playedM.get(m), membersM.get(m)));
+  const everCity = [...new Set([...playedMCity.keys(), ...membersMCity.keys()])].filter((c) => c !== UNKNOWN_CITY).sort();
+  const seriesCities = everCity.map((c) => {
+    const points: Record<string, ArppMonthPoint> = {};
+    for (const m of seriesMonths) points[m] = point(arppCity(c, m), netMCity.get(c)?.get(m) ?? 0, unionSize(playedMCity.get(c)?.get(m), membersMCity.get(c)?.get(m)));
+    return { name: c, points };
+  }).filter((c) => seriesMonths.some((m) => c.points[m].arpp != null));
+  const seriesFields = [...playedMField.keys()].sort().map((f) => {
+    const points: Record<string, ArppMonthPoint> = {};
+    for (const m of seriesMonths) points[m] = point(arppField(f, m), (netMFieldNonMember.get(f)?.get(m) ?? 0) + (memFieldAllocM.get(f)?.get(m) ?? 0), playedMField.get(f)?.get(m)?.size ?? 0);
+    return { name: f, city: fieldCity.get(f) ?? null, points };
+  }).filter((f) => seriesMonths.some((m) => f.points[m].arpp != null));
+  const years = [...new Set(seriesMonths.map(yearOf))].sort();
+  const annual = years.map((y) => {
+    const ms = seriesMonths.filter((m) => yearOf(m) === y);
+    const net = ms.reduce((a, m) => a + (netCleanM.get(m) ?? 0), 0);
+    const players = unionSize(playedY.get(y), membersY.get(y));
+    return { year: Number(y), months: ms.length, net, players, arpp: arppNetworkY(y), ytd: y === curYear };
+  });
+  const series: ArppSeries = { months: seriesMonths, network, cities: seriesCities, fields: seriesFields, annual };
+
   void revMonths;
   return {
+    series,
     curMonth, prevMonth, pyMonth, curYear: Number(curYear), prevYear: Number(prevYear), pyYear: Number(pyYear),
     monthly: { matchday: mdM, cities: cityRowsM, fields: fieldRowsM },
     annual: { matchday: mdA, cities: cityRowsA, fields: fieldRowsA },
