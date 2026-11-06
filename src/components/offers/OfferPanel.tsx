@@ -23,6 +23,8 @@ import {
   type Campaign, type City, type Count, type FieldOpt, type Lookup, type UploadedPhoto, type CopyKey, type ListChange, type DealType, type Form, type MatchOpt, type WrittenFor,
 } from "@/lib/offersModel";
 import MatchPicker from "./MatchPicker";
+import WhoGetsIt, { type SampleAnswer } from "@/components/audience/WhoGetsIt";
+import { OFFERS_FILTERS, OFFERS_HINTS, OFFERS_MEMBERSHIP, audienceBodyOf, countLine, newRow, offerOfSpec, specOfOffer, specProblem, tagText, todayWall, type AudienceSpec } from "@/lib/audienceModel";
 import PhotoPicker from "./PhotoPicker";
 import OfferPreview, { type PreviewTab } from "./OfferPreview";
 import { PushReach, PushSection, SendsTo } from "./OfferPush";
@@ -298,13 +300,16 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
   };
 
   // ── who gets it ──
-  const [addingCity, setAddingCity] = useState(false);
-  const otherCities = data.cities.filter((x) => !f.cityIds.includes(x.id));
-  const lastPlayedOn = (lp: Form["lastPlayed"], days: number | null) => f.lastPlayed === lp && (lp !== "LAPSED" || f.lastPlayedDays === days);
-  const oddLapse = f.lastPlayed === "LAPSED" && f.lastPlayedDays !== 30 && f.lastPlayedDays !== 60;
-  const [addingField, setAddingField] = useState(false);
+  // The builder's rows, kept here so a row still being filled in (a City with no city yet) isn't lost; every change is
+  // also written back to the form's own audience fields (offerOfSpec), which is all that is ever sent.
+  const [aud, setAudState] = useState<AudienceSpec>(() => specOfOffer(start));
+  const setAud = (s: AudienceSpec) => { setAudState(s); set(offerOfSpec(s)); };
+  const addPlayedAt = (id: number) => {
+    const has = aud.filters.find((r) => r.key === "playedAt");
+    setAud({ ...aud, filters: has ? aud.filters.map((r) => (r.key === "playedAt" ? { ...r, ids: [...r.ids, id] } : r)) : [...aud.filters, { ...newRow("playedAt", OFFERS_FILTERS, todayWall(nowWall)), ids: [id] }] });
+  };
+  const audWhy = f.audienceMode === "FILTERS" ? specProblem(aud) : null;
   const fieldsInCities = data.fields.filter((x) => f.cityIds.length === 0 || (x.cityId !== null && f.cityIds.includes(x.cityId)));
-  const otherFields = fieldsInCities.filter((x) => !f.fieldIds.includes(x.id));
   const [addingScopeField, setAddingScopeField] = useState(false);
   const otherScopeFields = fieldsInCities.filter((x) => !f.appliesFieldIds.includes(x.id));
   const strayScopeFields = f.appliesFieldIds.filter((id) => !fieldsInCities.some((x) => x.id === id));
@@ -518,7 +523,7 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
   const passed = endHasPassed(f.endsLocal, offerWall());
   const idsWhy = playerLookupBlock({ players, typed: parsed.ids, answeredFor: lookupFor, lookup, failed: lookupErr !== null, sending: f.playerIds });
   const nothingOn = popupOffBlock(f, pushOn && pf.enabled);
-  const launchWhy = matchUnread ? matchUnreadText(matchRead) : problem ?? pushProb ?? idsWhy ?? nothingOn ?? launchProblem(f, offerWall()) ?? COUNT_BLOCK[countNow];
+  const launchWhy = matchUnread ? matchUnreadText(matchRead) : problem ?? audWhy ?? pushProb ?? idsWhy ?? nothingOn ?? launchProblem(f, offerWall()) ?? COUNT_BLOCK[countNow];
   const dealWarn = setPriceProblem(f, m);
   const anyWarn = setPriceAnyWarning(f, data.matches);
   const pushShown = pushOn && pf.enabled ? (() => { const t = pushText(pf, pushSugg); return { title: fillPush(t.title, m), body: fillPush(t.body, m) }; })() : null;
@@ -533,7 +538,7 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
     <Btn kind="primary" testId={testId} disabled={busy || dirty || passed} title={passed ? "The end time has already passed." : dirty ? "Save or undo your changes first" : undefined} onClick={() => setConfirm("launch")}>Resume</Btn>
   );
   const saveBtn = (c === null || dirty) && (
-    <Btn testId="offers-save" disabled={busy || !!problem || !!pushProb || !!idsWhy || (c !== null && settled(outcome) && !dirty)} title={idsWhy ?? undefined} onClick={onSave}>{c === null ? "Save draft" : "Save changes"}</Btn>
+    <Btn testId="offers-save" disabled={busy || !!problem || !!audWhy || !!pushProb || !!idsWhy || (c !== null && settled(outcome) && !dirty)} title={audWhy ?? idsWhy ?? undefined} onClick={onSave}>{c === null ? "Save draft" : "Save changes"}</Btn>
   );
   const testBtn = (
     <Btn testId="offers-test" disabled={busy || c === null || (c.status === "DRAFT" && dirty)} title={c === null ? "Save it as a draft first" : c.status === "DRAFT" && dirty ? "Save your changes first, so the phone shows what you see" : undefined}
@@ -712,123 +717,34 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
             )}
           </Card>
 
-          {/* WHO GETS IT (Figma 20620:75 filters + fields; 20620:128 specific players) */}
-          <Card title="Who gets it" sub="City, fields played at, last played, membership, or exact player IDs" testId="offers-who">
-            <div className="flex flex-wrap gap-2">
-              <Chip testId="offers-mode-FILTERS" on={!players} disabled={dl} onClick={() => set({ audienceMode: "FILTERS" })}>Filters</Chip>
-              <Chip testId="offers-mode-PLAYERS" on={players} disabled={dl} onClick={() => set({ audienceMode: "PLAYERS" })}>Specific players</Chip>
-            </div>
-            {players ? (
-              <>
-                <Labeled label="Player IDs" hint="commas, spaces or one per line">
-                  <textarea data-testid="offers-player-ids" rows={4} disabled={dl} className={`${inputCls} leading-[19px]`} style={inputStyle}
-                    value={f.playerIdsText} onChange={(e) => set({ playerIdsText: e.target.value })} placeholder="10482, 10511, 9877" />
-                </Labeled>
-                {parsed.bad.length > 0 && <div data-testid="offers-ids-bad" className="self-start rounded-[8px] px-2.5 py-1.5 text-[12px] font-medium" style={{ background: O.warnBg, color: O.warnInk }}>Not an ID: {parsed.bad.slice(0, 5).join(", ")}{parsed.bad.length > 5 ? "…" : ""}. It will be skipped.</div>}
-                {/* Past the backend's own limit, not a 2,000 note: one offer takes MAX_OFFER_PLAYER_IDS, and more would be refused. */}
-                {parsed.tooMany && <div data-testid="offers-ids-too-many" className="self-start rounded-[8px] px-2.5 py-1.5 text-[12px] font-medium" style={{ background: O.warnBg, color: O.warnInk }}>One offer takes up to {MAX_OFFER_PLAYER_IDS.toLocaleString("en-US")} IDs. Only the first {MAX_OFFER_PLAYER_IDS.toLocaleString("en-US")} are used.</div>}
-                {lookupErr && <div className="self-start rounded-[8px] px-2.5 py-1.5 text-[12px]" style={{ background: O.critBg, color: O.critInk }}>Couldn&apos;t look them up: {lookupErr}</div>}
-                {lookupDone !== null && parsed.ids.length > 0 && (
-                  <div data-testid="offers-lookup-progress" className="self-start text-[12px]" style={{ color: O.muted }}>
-                    Looking up {lookupDone.toLocaleString("en-US")} of {parsed.ids.length.toLocaleString("en-US")} IDs…
-                  </div>
-                )}
-                {lookup && (
-                  <>
-                    <div data-testid="offers-found" className="flex gap-1.5 self-start rounded-[8px] px-2.5 py-1.5 text-[12px]" style={{ background: O.mint, color: O.ok }}>
-                      <b>{pastedLine(parsed.ids.length, lookup)}</b>
-                    </div>
-                    {lookup.notFound.length > 0 && (
-                      <details data-testid="offers-not-found" className="self-start rounded-[8px] px-2.5 py-1.5 text-[12px] font-medium" style={{ background: O.warnBg, color: O.warnInk }}>
-                        <summary className="cursor-pointer">{lookup.notFound.length.toLocaleString("en-US")} not found. {lookup.notFound.length === 1 ? "It" : "They"} will be skipped. Show {lookup.notFound.length === 1 ? "it" : "them"}</summary>
-                        <div data-testid="offers-not-found-ids" className="mt-1.5 max-h-[120px] overflow-y-auto break-all font-mono text-[11px] font-normal">{lookup.notFound.join(", ")}</div>
-                      </details>
-                    )}
-                    {lookup.players.length > 0 && (
-                      <div data-testid="offers-found-list" className="flex flex-col gap-1 rounded-[8px] px-3 py-2.5 text-[12px]" style={{ background: O.subtle }}>
-                        {lookup.players.slice(0, 3).map((p) => <PlayerRow key={p.id} p={p} />)}
-                        {lookup.players.length > 3 && <div style={{ color: O.ok }}>+ {(lookup.players.length - 3).toLocaleString("en-US")} more</div>}
-                      </div>
-                    )}
-                  </>
-                )}
-                {holdoutOn ? (
-                  <>
-                    <div className="text-[12px] leading-[17px]" style={{ color: O.muted }}>Only these players get it. City and other filters don&apos;t apply. With {PLAYERS_HOLDOUT_MIN} or more, some are held back to measure (More options, under Runs).</div>
-                    {f.holdoutPercent > 0 && wantCount && countNow !== "error" && count && <div data-testid="offers-players-held-back" className="self-start text-[12px] font-medium" style={{ color: O.ink }}>{heldBackLine(count.heldBack)}</div>}
-                  </>
-                ) : <div data-testid="offers-players-nobody-held" className="text-[12px] leading-[17px]" style={{ color: O.muted }}>Only these players get it. City and other filters don&apos;t apply, and nobody is held back.</div>}
-              </>
-            ) : (
-              <>
-                <div className="grid gap-3.5 sm:grid-cols-2">
-                  <Labeled label="City">
-                    <div className="flex flex-wrap gap-2">
-                      {f.cityIds.map((id) => (
-                        <Chip key={id} on disabled={dl} title={dl ? undefined : "Remove"} onClick={() => set({ cityIds: f.cityIds.filter((x) => x !== id) })}>
-                          {`${data.cities.find((x) => x.id === id)?.name ?? `City ${id}`}  ×`}
-                        </Chip>
-                      ))}
-                      {f.cityIds.length === 0 && <span className="self-center text-[12px]" style={{ color: O.muted }}>All cities</span>}
-                      {!dl && otherCities.length > 0 && <Chip testId="offers-add-city" on={false} onClick={() => setAddingCity((v) => !v)}>+ City</Chip>}
-                    </div>
-                    {addingCity && !dl && (
-                      <div className="flex flex-wrap gap-2 rounded-[8px] p-2" style={{ background: O.subtle }}>
-                        {otherCities.map((x) => <Chip key={x.id} testId={`offers-city-${x.id}`} on={false} onClick={() => { set({ cityIds: [...f.cityIds, x.id] }); setAddingCity(false); }}>{x.name}</Chip>)}
-                      </div>
-                    )}
-                  </Labeled>
-                  <Labeled label="Last played">
-                    <div className="flex flex-wrap gap-2">
-                      <Chip testId="offers-lp-any" on={lastPlayedOn("ANY", null)} disabled={dl} onClick={() => set({ lastPlayed: "ANY", lastPlayedDays: null })}>Any time</Chip>
-                      <Chip testId="offers-lp-30" on={lastPlayedOn("LAPSED", 30)} disabled={dl} onClick={() => set({ lastPlayed: "LAPSED", lastPlayedDays: 30 })}>30+ days ago</Chip>
-                      <Chip testId="offers-lp-60" on={lastPlayedOn("LAPSED", 60)} disabled={dl} onClick={() => set({ lastPlayed: "LAPSED", lastPlayedDays: 60 })}>60+ days ago</Chip>
-                      {oddLapse && <Chip on>{`${f.lastPlayedDays}+ days ago`}</Chip>}
-                      <Chip testId="offers-lp-never" on={lastPlayedOn("NEVER", null)} disabled={dl} onClick={() => set({ lastPlayed: "NEVER", lastPlayedDays: null })}>Never</Chip>
-                    </div>
-                  </Labeled>
-                </div>
-                <div data-testid="offers-played-at" className="flex flex-col gap-1.5">
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-[12px] font-semibold" style={{ color: O.ink }}>Played at</span>
-                    <span className="text-[11px]" style={{ color: O.label }}>any of these fields · leave empty for all</span>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    {f.fieldIds.map((id) => (
-                      <Chip key={id} on testId={`offers-pf-${id}`} disabled={dl} title={dl ? undefined : "Remove"} onClick={() => set({ fieldIds: f.fieldIds.filter((x) => x !== id) })}>{`${fieldTitle(id)}  ×`}</Chip>
-                    ))}
-                    {!dl && otherFields.length > 0 && <Chip testId="offers-add-field" on={false} onClick={() => setAddingField((v) => !v)}>+ Field</Chip>}
-                    {f.fieldIds.length === 0 && (dl || otherFields.length === 0) && <span className="self-center text-[12px]" style={{ color: O.muted }}>Any field</span>}
-                  </div>
-                  {!dl && playedAtSuggestions(f, data.fields, data.matches).map((x) => (
-                    <button key={x.id} type="button" data-testid={`offers-pf-suggest-${x.id}`} onClick={() => set({ fieldIds: [...f.fieldIds, x.id] })}
-                      className="self-start text-left text-[12px] font-semibold" style={{ color: O.ok }}>Only players who&apos;ve played at {x.title}?</button>
-                  ))}
-                  {addingField && !dl && (
-                    <div className="flex flex-wrap gap-2 rounded-[8px] p-2" style={{ background: O.subtle }}>
-                      {otherFields.map((x) => <Chip key={x.id} testId={`offers-field-${x.id}`} on={false} onClick={() => { set({ fieldIds: [...f.fieldIds, x.id] }); setAddingField(false); }}>{x.title}</Chip>)}
-                    </div>
-                  )}
-                </div>
-                <Labeled label="Membership">
-                  <div className="flex flex-wrap gap-2">
-                    <Chip testId="offers-mem-ANYONE" on={f.membership === "ANYONE"} disabled={dl} onClick={() => set({ membership: "ANYONE" })}>Anyone</Chip>
-                    <Chip testId="offers-mem-MEMBERS" on={f.membership === "MEMBERS"} disabled={dl} onClick={() => set({ membership: "MEMBERS" })}>Members</Chip>
-                    <Chip testId="offers-mem-NON_MEMBERS" on={f.membership === "NON_MEMBERS"} disabled={dl} onClick={() => set({ membership: "NON_MEMBERS" })}>Not members</Chip>
-                  </div>
-                </Labeled>
-                {(f.minMatches > 0 || f.maxMatches !== null) && (
-                  <div className="text-[12px]" style={{ color: O.muted }}>Also: {f.maxMatches === f.minMatches ? `played exactly ${f.minMatches}` : f.maxMatches !== null ? `played ${f.minMatches} to ${f.maxMatches}` : `played ${f.minMatches}+`} matches (set outside this page).</div>
-                )}
-              </>
-            )}
-            {!players && !matchUnread && wantCount && <div data-testid="offers-count" data-state={countNow} className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-[13px] font-semibold" style={{ color: countNow === "error" ? O.critInk : O.chipOn }}>
-              {countNow === "error" ? <><span>Couldn&apos;t count: {countErr}</span><button type="button" data-testid="offers-count-retry" className="font-semibold underline" onClick={retryCount}>Retry</button></>
-                : count ? <><span>≈ {count.count.toLocaleString("en-US")} {count.count === 1 ? "player matches" : "players match"} right now</span>{f.holdoutPercent > 0 && <span className="whitespace-nowrap font-medium" style={{ color: O.muted }}>{f.holdoutPercent}% held back to measure</span>}</>
-                : <span className="font-medium" style={{ color: O.muted }}>Counting…</span>}
-            </div>}
-            {!players && !matchUnread && wantCount && countNow !== "error" && count && on188Line(count) && <div data-testid="offers-count-on188" className="self-start text-[12px]" style={{ color: O.muted }}>{on188Line(count)}</div>}
-          </Card>
+          {/* WHO GETS IT: the shared builder (src/components/audience/WhoGetsIt.tsx, Figma 20828:192 / 20835:230), narrowed to the
+              five filters the Offers backend takes (OFFERS_FILTERS). The lookup, the count and the save gate stay here. */}
+          <WhoGetsIt spec={aud} onChange={setAud} allowed={OFFERS_FILTERS} hints={OFFERS_HINTS} choices={{ membership: OFFERS_MEMBERSHIP }} cities={data.cities} fields={data.fields} nowWall={nowWall} disabled={dl} testId="offers"
+            playersSub={holdoutOn ? `Only these players get it. Filters don't apply. With ${PLAYERS_HOLDOUT_MIN} or more, some are held back to measure (More options, under Runs).` : "Only these players get it. Filters don't apply and nobody is held back."}
+            count={players || matchUnread || !wantCount ? { state: "off" } : countNow === "error" ? { state: "error", error: countErr ?? undefined, onRetry: retryCount }
+              : count ? { state: "ready", text: countLine({ count: count.count, holdoutPercent: f.holdoutPercent, heldBack: count.heldBack }), extra: on188Line(count) ? <div data-testid="offers-count-on188" className="self-start text-[12px]" style={{ color: O.muted }}>{on188Line(count)}</div> : null } : { state: "counting" }}
+            onSample={async () => {
+              const r = await authed("/api/pushes/audience", { method: "POST", body: JSON.stringify({ ...audienceBodyOf(aud, []), sample: true }) });
+              return r.ok ? (r.json as unknown as SampleAnswer) : { error: String(r.json.error) };
+            }}
+            players={{
+              hint: "Paste player IDs, separated by commas, spaces or new lines.", placeholder: "10482, 10511, 9877",
+              tags: (lookup?.players ?? []).map((p) => ({ key: String(p.id), label: tagText({ id: p.id, name: p.name }) })),
+              notFound: [...(lookup?.notFound ?? []).map(String), ...parsed.bad],
+              line: lookup ? pastedLine(parsed.ids.length, lookup) : lookupDone !== null && parsed.ids.length > 0 ? `Looking up ${lookupDone.toLocaleString("en-US")} of ${parsed.ids.length.toLocaleString("en-US")} IDs…` : null,
+              onRemove: (k) => { const ids = parsePlayerIds(f.playerIdsText).ids.filter((id) => String(id) !== k); setAud({ ...aud, playersText: ids.join(", ") }); },
+              extra: (
+                <>
+                  {parsed.tooMany && <div data-testid="offers-ids-too-many" className="self-start rounded-[8px] px-2.5 py-1.5 text-[12px] font-medium" style={{ background: O.warnBg, color: O.warnInk }}>One offer takes up to {MAX_OFFER_PLAYER_IDS.toLocaleString("en-US")} IDs. Only the first {MAX_OFFER_PLAYER_IDS.toLocaleString("en-US")} are used.</div>}
+                  {lookupErr && <div className="self-start rounded-[8px] px-2.5 py-1.5 text-[12px]" style={{ background: O.critBg, color: O.critInk }}>Couldn&apos;t look them up: {lookupErr}</div>}
+                  {holdoutOn && f.holdoutPercent > 0 && wantCount && countNow !== "error" && count && <div data-testid="offers-players-held-back" className="self-start text-[12px] font-medium" style={{ color: O.ink }}>{heldBackLine(count.heldBack)}</div>}
+                </>
+              ),
+            }} />
+          {!players && !dl && playedAtSuggestions(f, data.fields, data.matches).map((x) => (
+            <button key={x.id} type="button" data-testid={`offers-pf-suggest-${x.id}`} onClick={() => addPlayedAt(x.id)}
+              className="-mt-2 self-start px-1 text-left text-[12px] font-semibold" style={{ color: O.ok }}>Only players who&apos;ve played at {x.title}?</button>
+          ))}
 
           {/* POPUP (Figma 20825:181). Every line is written from the deal and editable here; the preview on the left redraws as you type. */}
           <Card title="Popup" sub={popupOff ? null : "Written for you from the deal. Change any line if you want."} testId="offers-popup">

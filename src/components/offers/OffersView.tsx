@@ -56,6 +56,16 @@ export default function OffersView() {
     })();
     return () => { cancelled = true; };
   }, [access, key]);
+  // ?open=<id> (Push Notifications' "With offer" rows link here): open that offer once the list has it, then drop the
+  // parameter so Back to offers and a refresh show the list.
+  const [askedOpen, setAskedOpen] = useState(false);
+  useEffect(() => {
+    if (askedOpen || !data) return;
+    setAskedOpen(true);
+    const id = Number(new URLSearchParams(window.location.search).get("open"));
+    if (Number.isInteger(id) && id > 0 && data.campaigns.some((c) => c.id === id)) setOpen(id);
+    if (window.location.search) window.history.replaceState(null, "", window.location.pathname);
+  }, [askedOpen, data]);
   // THE PUSH MODE on production: asked once per page read, after the list is on screen. Any failure leaves the
   // controls hidden, which is what an unknown mode means here.
   const ask = data?.pushesAsk ?? null;

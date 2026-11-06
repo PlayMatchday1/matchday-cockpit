@@ -1358,6 +1358,33 @@ function routeFiles(dir: string): string[] {
     _setOffersGateDepsForTest(null);
   }
 
+  // ── WHO GETS IT, the shared builder (src/lib/audienceModel.ts). THE DIFF IS THE REQUEST BODY: an offer's audience
+  // read into the builder and written straight back is the same audience, so an untouched offer still sends nothing.
+  {
+    const am = await import("../src/lib/audienceModel");
+    const pm = await import("../src/lib/pushesModel");
+    const cases = [
+      { audienceMode: "FILTERS" as const, cityIds: [1, 2], fieldIds: [5], lastPlayed: "LAPSED" as const, lastPlayedDays: 45, minMatches: 2, maxMatches: 9, membership: "NON_MEMBERS" as const, playerIdsText: "" },
+      { audienceMode: "FILTERS" as const, cityIds: [], fieldIds: [], lastPlayed: "NEVER" as const, lastPlayedDays: null, minMatches: 0, maxMatches: null, membership: "ANYONE" as const, playerIdsText: "" },
+      { audienceMode: "FILTERS" as const, cityIds: [], fieldIds: [], lastPlayed: "ANY" as const, lastPlayedDays: null, minMatches: 0, maxMatches: 4, membership: "MEMBERS" as const, playerIdsText: "" },
+      { audienceMode: "PLAYERS" as const, cityIds: [], fieldIds: [], lastPlayed: "ANY" as const, lastPlayedDays: null, minMatches: 0, maxMatches: null, membership: "ANYONE" as const, playerIdsText: "7, 8" },
+    ];
+    for (const a of cases) eq(`offer audience round-trips through the builder (${a.audienceMode} ${a.lastPlayed} ${a.membership})`, am.offerOfSpec(am.specOfOffer(a)), a);
+    const c0Offer = draftFrom({ fieldIds: [1], minMatches: 2, membership: "MEMBERS" });
+    const loaded = formOf(c0Offer, matches, cities);
+    eq("an untouched offer, round-tripped through the builder, sends nothing", patchBody(c0Offer, { ...loaded, ...am.offerOfSpec(am.specOfOffer(loaded)) }, matches, cities), {});
+    eq("the Offers menu offers only what the Offers backend takes", am.keysFor(am.OFFERS_FILTERS), ["city", "playedAt", "lastPlayed", "matchesPlayed", "membership"]);
+    eq("an unfinished row blocks the send, in plain words", am.specProblem({ mode: "FILTERS", filters: [am.newRow("city", null, "2026-11-06", "x")], playersText: "" }), "City: pick at least one city.");
+    eq("a row's body carries only what its op uses", am.filterBody(am.withOp(am.newRow("lastPlayed", null, "2026-11-06", "x"), "never", "2026-11-06")), { key: "lastPlayed", op: "never" });
+    eq("pasted ids, emails and phones are told apart", (({ ids, emails, phones, bad }) => ({ ids, emails, phones, bad }))(am.parseTokens("78, #1481\nluis@example.com\n(512) 555-0142\nnope")), { ids: [78, 1481], emails: ["luis@example.com"], phones: ["(512) 555-0142"], bad: ["nope"] });
+    // Pushes: a draft loaded and not touched sends nothing; one changed field sends that field alone.
+    const draft: import("../src/lib/pushesModel").PushCampaign = { id: 3, name: "N", title: "T", body: "B", tapTarget: "HOME", tapMatchId: null, tapFieldId: null, audienceMode: "FILTERS", filters: [{ key: "city", op: "isAnyOf", ids: [1] }], playerIds: [], holdoutPercent: 10, sendLocal: null, status: "DRAFT", queuedAt: null, sentAt: null, sentByStaffEmail: null, createdByStaffEmail: null, results: null };
+    const pf = pm.pushFormOf(draft, "2026-11-06 10:00:00");
+    eq("a push draft loaded and not touched sends nothing", pm.patchBody(draft, pf, []), {});
+    eq("a push edit sends only what changed", pm.patchBody(draft, { ...pf, title: "New" }, []), { title: "New" });
+    eq("Exact players never carry a holdout", pm.fullBody({ ...pf, audience: { mode: "PLAYERS", filters: [], playersText: "5" } }, [5]).holdoutPercent, 0);
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`);
   if (pass === 0 || fail > 0) process.exit(1);
 })();

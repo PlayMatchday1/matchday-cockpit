@@ -9,12 +9,14 @@ import { useMemo, useState } from "react";
 import { fillFraction, matchNeeds, fillText, money, matchPicked, matchTitle, matchWhere, pickerView, type City, type MatchOpt, type PickerDays } from "@/lib/offersModel";
 import { O } from "./offersUi";
 
-export default function MatchPicker({ matches, cities, cityIds, selected, nowWall, onPick, onOpen, onRetry, listState, listError, partial, disabled, locked, testId, empty }: {
+export default function MatchPicker({ matches, cities, cityIds, selected, nowWall, onPick, onOpen, onRetry, listState, listError, partial, disabled, locked, testId, empty, startOpen = false }: {
   matches: MatchOpt[]; cities: City[]; cityIds: number[]; selected: MatchOpt | null; nowWall: string; onPick: (id: number) => void;
   onOpen: () => void; onRetry: () => void; listState: "ready" | "loading" | "failed"; listError: string | null; partial: boolean;
   disabled?: boolean; locked?: boolean; testId: string; empty?: string;
+  // Open from the first draw (Push Notifications' Change opens straight into the list).
+  startOpen?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(startOpen);
   const [search, setSearch] = useState("");
   const [days, setDays] = useState<PickerDays>(7);
   const [needsPlayers, setNeedsPlayers] = useState(true);

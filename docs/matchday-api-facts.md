@@ -8631,3 +8631,33 @@ Evidence: `app_request_log_batches` and `app_request_log`, paged by id, staging 
   `GET /admin/matches` 530, `GET /admin/matches/:matchId/players` 170, and the Stripe webhooks.
 - **A 404 on an unserved route carries no user id** (staging, 2026-11-06: `GET /matches/2822/match-price` from a
   signed-in player logged `route null, user_id null`). No route matched, so no guard ran.
+
+## Push Notifications (Match Ops): the backend is NOT on staging yet; every route below is UNKNOWN (2026-11-06)
+
+**Evidence that it is absent.** 2026-11-06, a one-off staging probe signed in with the staging service account (no
+token printed), GET each path, 700 ms apart: `/admin/offers/page` answered JSON (52,822 bytes). `/admin/pushes`,
+`/admin/pushes/page`, `/admin/push-campaigns`, `/admin/push-notifications`, `/admin/pushes/filters`,
+`/admin/audience/filters`, `/admin/audiences/filters`, `/admin/offers/audience/filters` and
+`/admin/offers/audience-filters` each answered **200 with an HTML page** (`Unexpected token '<', "<!DOCTYPE "...`),
+which is how staging answers a route it does not have. `~/Code/backend-offers` branch `feature/push-notifications`
+is at a2118b4, the same commit as `feature/offers`: no push-campaign code yet.
+
+**What the Clubhouse assumes, all UNKNOWN until a payload proves it** (`src/lib/pushesServer.ts` is the one file to
+move): `GET /admin/pushes` → `{ pushes: PushCampaign[] }`; `GET /admin/pushes/:id`; `POST /admin/pushes`;
+`PATCH /admin/pushes/:id` (a draft only); `DELETE /admin/pushes/:id` (a draft only); `POST /admin/pushes/:id/send`
+(→ the push, `status` SCHEDULED or SENT); `POST /admin/pushes/:id/test` `{ title, body }` → `{ sent, failed }`;
+`GET /admin/pushes/:id/results` → `{ targeted, sent, opened, bookedWithin3Days, heldBack, heldBackBooked }`;
+`POST /admin/pushes/audience-count` and `/audience-sample` (FILTERS `{ filters }` or PLAYERS `{ playerIds }`);
+`POST /admin/pushes/players/lookup` `{ ids, emails, phones }` → `{ players, notFound }`. One filter row is
+`{ key, op, ids?, date?, date2?, n?, n2?, choice?, text? }` (`src/lib/audienceModel.ts` CATALOG; dates are wall-clock
+days). The push's own fields are `src/lib/pushesModel.ts` `PushCampaign`.
+
+**Proven, and used today:** the weekly cap is `GET /admin/offers/push-settings` (`weeklyCap`, 2 on production
+2026-11-06); Exact players on Offers resolves IDs through `POST /admin/offers/players/lookup` (staging 2026-11-06:
+of 8 ids taken from staging offers, 1481 found, 1527/1526/1516/1515/1513/1512/1510 not found; those were throwaway
+test accounts). Emails and phone numbers have no lookup route anywhere yet.
+
+**A route the backend lacks no longer pauses reads.** The Offers pacer (`src/lib/offersServer.ts`) used to stop
+every read for 30 seconds after any non-4xx failure, and staging's 200-HTML answer is a parse failure, so one read of
+the missing `/admin/pushes` emptied that page's match list and weekly cap. A non-JSON 200 now counts as an answer
+about the request, like a 4xx. A 5xx error page still stops reads.

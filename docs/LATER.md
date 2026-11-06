@@ -196,3 +196,17 @@ and someone with access is still told they are not authorized. Fixing it means t
 The rest of the Clubhouse also has no answer for a revoked session: pages keep rendering on a token
 that looks valid while every API call returns 401. Only Match Ops › Offers says so (`SignInAgain` in
 `src/components/offers/OffersView.tsx`, on feature/offers).
+
+## Push Notifications: when the backend lands (2026-11-06)
+
+- Wire `src/lib/pushesServer.ts` to the real routes and fields, then record each one with its payload in
+  docs/matchday-api-facts.md (every route there is UNKNOWN today).
+- Delete `src/lib/pushesFixture.ts` and the `PUSHES_FIXTURE` switch. It is dev-only (refused under
+  NODE_ENV=production and on Vercel) and exists only so the screens could be built before the backend.
+- Offers' Exact players takes IDs only: the Offers backend stores `playerIds` and has no email or phone lookup. Once
+  the pushes lookup takes emails and phones, Offers can resolve them to IDs through it.
+- "See players" on Offers asks the pushes sample route with the offer's filters; it says "isn't on this server yet"
+  until that route exists.
+- Left out on purpose for now: the "Repeating & automatic" tab, Sends > Repeats and Automatic, and the Find a match
+  and A field tap targets (drawn disabled, "needs the next app update").
+

@@ -41,6 +41,9 @@ function cfg(): OffersConfig {
   if (!r.ok) throw new StageConfigError(`Offers config: ${r.problem}`);
   return r.config;
 }
+// For src/lib/pushesServer.ts, which talks to the same backend through the same config and log store.
+export const _offersCfg = cfg;
+export const _offersLogStore = () => gateDeps.logStore();
 
 export async function offersGate(req: Request): Promise<OffersAuth | Response> {
   const auth = await gateDeps.authenticate(req);
@@ -115,7 +118,13 @@ export function errorText(e: unknown): string {
 // ── READS ───────────────────────────────────────────────────────────────────────────────────────
 // EVERY OTHER READ GOES THROUGH THE PACER (src/lib/offersPacing.ts) at the repo's rule for the production API:
 // one at a time, one every 2 seconds. Never nest paced() inside paced(): the inner one waits behind the outer.
-const paced = makePacer({ paceMs: OFFERS_READ_PACE_MS, sleep: (ms) => gateDeps.sleep(ms), now: () => gateDeps.now(), stopsOn: (e) => !(e instanceof WriteFailedError && e.status >= 400 && e.status < 500) });
+// A 200 that isn't JSON (SyntaxError) is a route this backend doesn't have (staging answers those with its web page,
+// 2026-10-30 and again for /admin/pushes on 2026-11-06): an answer about the request, like a 4xx, not a strained server.
+// A 5xx error page arrives as a WriteFailedError and still stops reads.
+const paced = makePacer({ paceMs: OFFERS_READ_PACE_MS, sleep: (ms) => gateDeps.sleep(ms), now: () => gateDeps.now(), stopsOn: (e) => !(e instanceof SyntaxError) && !(e instanceof WriteFailedError && e.status >= 400 && e.status < 500) });
+// Push Notifications (src/lib/pushesServer.ts) reads the same backend through this same pacer, so the two pages
+// together still make one request at a time.
+export const _offersPaced = paced;
 export function offersGet<T>(path: string, query?: Record<string, string | number | boolean>): Promise<T> {
   const { env, baseUrl } = cfg();
   return paced(() => apiGet<T>(env, path, query, baseUrl));
