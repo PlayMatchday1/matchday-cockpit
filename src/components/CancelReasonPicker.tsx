@@ -1,9 +1,9 @@
 "use client";
 
-// THE CANCEL REASON (Ryan, 2026-11-01), required on every Clubhouse cancel: the five staff reasons as
-// chips, a note that is required only for Other. Players is never offered: it is MatchDay's own
-// auto-cancel, worked out at read time (src/lib/cancelReasons.ts). The Cancel button beside this is
-// disabled until the hook's canRun.
+// THE CANCEL REASON (Ryan, 2026-11-01), required on every Clubhouse cancel: the six staff reasons as
+// chips, a note that is required only for Other. Not enough players comes first (Ryan, 2026-11-06): it
+// is the same "players" reason MatchDay's own auto-cancels are read as (src/lib/cancelReasons.ts), so
+// Health counts both together. The Cancel button beside this is disabled until the hook's canRun.
 
 import { NOTE_MAX, REASON_HINT, REASON_LABEL, STAFF_REASONS } from "@/lib/cancelReasons";
 import type { CancelState } from "@/lib/useCancelMatch";

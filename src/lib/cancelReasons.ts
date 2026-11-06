@@ -1,7 +1,13 @@
 // WHY A MATCH WAS CANCELLED (Ryan, 2026-11-01). Pure; the server reads live in cancelReasonsLoad.ts.
 //
-// STORED: the reason staff pick when they cancel in the Clubhouse (match_cancel_reasons, 0246), one of
-// Weather, Manager, Facility, Slate change, Other (Other needs a note). A stored reason always wins.
+// STORED: the reason staff pick when they cancel in the Clubhouse (match_cancel_reasons, 0246, 0255), one
+// of Not enough players, Weather, Manager, Facility, Slate change, Other (Other needs a note). A stored
+// reason always wins.
+//
+// NOT ENOUGH PLAYERS (Ryan, 2026-11-06) is the same "players" reason the automatic cancels below are
+// read as, so Health counts a staff cancel for low turnout and a MatchDay auto-cancel together under
+// one heading, and both count in the cancel rate (only Slate change is left out). Which is which stays
+// knowable: a stored row is staff's (set_by 'staff', 0255), an inferred one is MatchDay's.
 //
 // INFERRED, at read time, for a cancel with no stored reason, in this order:
 //   Slate change  the cancel (match.updatedAt, which equals the cancel time: measured against every
@@ -15,16 +21,18 @@
 // Accepted limits (Ryan, 2026-11-01): an edit after a cancel moves updatedAt; a Retool cancel inside
 // the window reads as Players.
 
-export const STAFF_REASONS = ["weather", "manager", "facility", "slate_change", "other"] as const;
+export const STAFF_REASONS = ["players", "weather", "manager", "facility", "slate_change", "other"] as const;
 export type StaffReason = (typeof STAFF_REASONS)[number];
-export type CancelReason = StaffReason | "players" | "unknown";
+export type CancelReason = StaffReason | "unknown";
 
+/** One name per reason, the same on every chip, line, tag and log entry. */
 export const REASON_LABEL: Record<CancelReason, string> = {
-  players: "Players", weather: "Weather", manager: "Manager", facility: "Facility",
+  players: "Not enough players", weather: "Weather", manager: "Manager", facility: "Facility",
   slate_change: "Slate change", other: "Other", unknown: "Unknown",
 };
 /** What each staff reason means, under its chip. */
 export const REASON_HINT: Record<StaffReason, string> = {
+  players: "Too few players to play; MatchDay's own auto-cancels count here too",
   weather: "Weather", manager: "No manager available", facility: "Field unavailable, lights, access",
   slate_change: "Removed from the slate, not really cancelled", other: "Needs a short note",
 };

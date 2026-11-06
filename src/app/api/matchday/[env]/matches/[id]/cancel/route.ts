@@ -7,8 +7,9 @@
 //
 // GET  = a LIVE preview: { name, count, total, alreadyCancelled } read at confirm time (never a stale
 //        render), so the confirmation states real numbers.
-// REASON (Ryan, 2026-11-01): every Clubhouse cancel carries one of the five staff reasons (Other with a
-// note), checked BEFORE anything is sent. It is written to change_log with the cancel, and to
+// REASON (Ryan, 2026-11-01): every Clubhouse cancel carries one of the six staff reasons (Other with a
+// note; Not enough players since 2026-11-06, stored as "players" like the auto-cancels), checked BEFORE
+// anything is sent. It is written to change_log with the cancel, and to
 // match_cancel_reasons only AFTER the re-read says the cancel landed, so a reason never exists for a
 // match that was not cancelled. If that write fails the response says so (reasonSaved: false); it is
 // not retried.
@@ -145,7 +146,14 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
         set_by_app_user_id: auth.appUserId, set_by_email: auth.email,
       }, { onConflict: "env,match_id" });
       reasonSaved = !ins.error;
-      if (ins.error) { reasonError = ins.error.message; console.error(`[cancel] reason not saved for ${env} match ${id}: ${ins.error.message}`); }
+      if (ins.error) {
+        /* A CHECK VIOLATION ON "players" means migration 0255 (which admits it) is not applied yet; said
+         * in those words rather than as a bare constraint name. The cancel itself has landed. */
+        reasonError = reason === "players" && /check|violates/i.test(ins.error.message)
+          ? `the database does not accept "Not enough players" yet (apply migration 0255_match_cancel_reasons_players): ${ins.error.message}`
+          : ins.error.message;
+        console.error(`[cancel] reason not saved for ${env} match ${id}: ${ins.error.message}`);
+      }
     }
     return Response.json({
       ok: true, outcome, logRecorded: logged, landed, reason, reasonSaved, reasonError,

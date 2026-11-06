@@ -319,6 +319,8 @@ const NODE_SUITES = [
   // The staff app's view of a match chat message: the player app's reply, reaction, edit and
   // delete markers honoured only on their own document, phone and email never passed on.
   "scripts/match-chat-test.ts",
+  // Cancel reasons: Not enough players stored as the auto-cancels' "players" and counted with them.
+  "scripts/cancel-reasons-test.ts",
   "scripts/app-credits-test.ts",
   /* AN ASSERTION OVER AN EMPTY COLLECTION PASSES WITHOUT TESTING ANYTHING. 27 sites across 10
    * browser suites were in that shape, and one had been green for a round while testing nothing.
