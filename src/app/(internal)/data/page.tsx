@@ -28,8 +28,10 @@ export default function DataPage() {
           users → snapshots. Each card surfaces its last fin_sync_log
           row so operators can see freshness at a glance. */}
 
-      {/* 1. Stripe */}
-      {showFinanceSections && (
+      {/* 1. Stripe — HIDDEN (Ryan, 2026-11-05). The uploader writes Stripe rows into fin_revenue, which
+          no page reads any more: every revenue figure comes from fin_txn (Finance > Revenue's source)
+          through fin_txn_daily. The component and everything it wrote stay; only the mount is off. */}
+      {false && showFinanceSections && (
         <section className="mb-12">
           <SectionHeader
             title="Stripe data"
