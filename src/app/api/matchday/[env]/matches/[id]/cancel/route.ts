@@ -26,6 +26,7 @@ import { rosterRowIsFake, rosterRowCancelled, type RosterRow } from "@/lib/gamed
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
 import { refreshMatchMirror } from "@/lib/mirrorWriteThrough";
 import { REASON_LABEL, reasonProblem, surfaceOf, type StaffReason } from "@/lib/cancelReasons";
+import { sameMatchName } from "@/lib/matchName";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -101,7 +102,10 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
   try { live = await readLive(env, id); } catch (e) { return errToResponse(e); }
   const view = creditView(live.match, live.players);
   if (view.alreadyCancelled) return Response.json({ error: "This match is already cancelled.", ...view }, { status: 409 });
-  if (confirmName !== view.name) return Response.json({ error: `The typed name doesn't match. Type the match name exactly: "${view.name}".`, nameMismatch: true }, { status: 400 });
+  /* TRIMMED AND CASE-INSENSITIVE (matchName.ts). This guard exists to catch a match RENAMED between the
+   * preview and the press; a leading space in the stored name (" One Touch", Atlanta, 2026-11) is not a
+   * rename, and it blocked every cancel of those matches. */
+  if (!sameMatchName(confirmName, view.name)) return Response.json({ error: `The typed name doesn't match. Type the match name exactly: "${view.name.trim()}".`, nameMismatch: true }, { status: 400 });
 
   const actor = { canEditMatches: auth.canEditMatches, email: auth.email, userId: auth.appUserId };
   try {

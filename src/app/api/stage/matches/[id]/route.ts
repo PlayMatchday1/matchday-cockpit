@@ -12,6 +12,7 @@
 
 import { randomUUID } from "node:crypto";
 import { authenticateCapability } from "@/lib/capabilityAuth";
+import { trimNameIn } from "@/lib/matchName";
 import { stageGet, apiWrite, AmbiguousWriteError, WriteFailedError, StageHostGuardError, StageConfigError, NotAuthorizedError } from "@/lib/matchdayStageApi";
 import { EDITABLE_KEYS } from "@/lib/matchEditModel";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
@@ -83,6 +84,7 @@ export async function PUT(req: Request, ctx: { params: Promise<{ id: string }> }
   }
   const keys = Object.keys(changes);
   if (keys.length === 0) return Response.json({ error: "no changes to apply" }, { status: 400 });
+  trimNameIn(changes);   // a name is stored trimmed (matchName.ts)
   const illegal = keys.filter((k) => !WRITABLE.has(k));
   if (illegal.length) return Response.json({ error: `not editable: ${illegal.join(", ")}` }, { status: 400 });
   // The date pair is all-or-nothing: a lone startDate can silently invert a match

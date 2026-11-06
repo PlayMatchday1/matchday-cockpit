@@ -11,6 +11,7 @@ import { authenticateCapability } from "@/lib/capabilityAuth";
 import { authenticateMatchOpsRead, assertMatchInScope } from "@/lib/matchOpsAuth"; // GET is a Match Ops READ (Part D round 2); PUT stays admin + EDIT MATCHES
 import { apiGet, apiWrite, AmbiguousWriteError, WriteFailedError, StageHostGuardError, StageConfigError, DeniedFieldError, DeniedEndpointError, ProductionWriteBoltedError, NotAuthorizedError, type MatchdayEnv } from "@/lib/matchdayStageApi";
 import { EDITABLE_KEYS, FIRST_MATCH_FREE_KEY, hasFirstMatchFree } from "@/lib/matchEditModel";
+import { trimNameIn } from "@/lib/matchName";
 import { realOccupancyFromRoster, rosterRowCounts, type RosterRow } from "@/lib/gamedayModel";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
 // The refusal wording lives with the rule (matchEditAccess.ts) so the panel and this route cannot
@@ -122,6 +123,7 @@ export async function PUT(req: Request, ctx: { params: Promise<{ env: string; id
   if (!changes || typeof changes !== "object" || Array.isArray(changes)) return Response.json({ error: "changes object required" }, { status: 400 });
   const keys = Object.keys(changes);
   if (keys.length === 0) return Response.json({ error: "no changes to apply" }, { status: 400 });
+  trimNameIn(changes);   // a name is stored trimmed, whichever editor sent it (matchName.ts)
   const illegal = keys.filter((k) => !WRITABLE.has(k));
   if (illegal.length) return Response.json({ error: `not editable: ${illegal.join(", ")}` }, { status: 400 });
   /* ── A LONE startDate IS REFUSED. A LONE endDate IS NOT. ─────────────────────────────────────

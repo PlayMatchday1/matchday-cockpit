@@ -321,6 +321,10 @@ const NODE_SUITES = [
   "scripts/match-chat-test.ts",
   // Cancel reasons: Not enough players stored as the auto-cancels' "players" and counted with them.
   "scripts/cancel-reasons-test.ts",
+  /* MATCH NAMES: trimmed on every write, and the cancel confirmation compares trimmed and case-insensitive.
+   * The Atlanta " One Touch" matches could not be cancelled at all (2026-11-06) — a cancel is a match record
+   * saying what happened, so the rule sits in the gate. */
+  "scripts/match-name-test.ts",
   "scripts/app-credits-test.ts",
   /* AN ASSERTION OVER AN EMPTY COLLECTION PASSES WITHOUT TESTING ANYTHING. 27 sites across 10
    * browser suites were in that shape, and one had been green for a round while testing nothing.

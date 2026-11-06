@@ -21,6 +21,7 @@ import { authenticateCapability } from "@/lib/capabilityAuth";
 import { apiGet, apiWrite, type MatchdayEnv } from "@/lib/matchdayStageApi";
 import { insertMatchMirror } from "@/lib/mirrorWriteThrough";
 import { EDITABLE_KEYS } from "@/lib/matchEditModel";
+import { trimNameIn } from "@/lib/matchName";
 import { supabaseLogStore } from "@/lib/changeLog";
 import { NO_EDIT_MATCHES } from "@/lib/matchEditAccess";
 import { cityNameFor } from "@/lib/cityScope";
@@ -216,6 +217,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string }>
      * explicit undefined — the diff IS the request body, here as everywhere. */
     const payload: Record<string, unknown> = {};
     for (const k of CREATE_FIELDS) if (k in match) payload[k] = match[k];
+    trimNameIn(payload);   // " One Touch" is never created, and never copied onward (matchName.ts)
     /* A RUNG THE CALLER DID NOT SEND GETS THE DEFAULT, never the API's. Both create paths send
      * all five (copyMatch.ts, MatchEditor create mode), so this only fires for a caller that does
      * not — and what the API does with an absent rung is UNKNOWN; a 0 rung would mean every open
