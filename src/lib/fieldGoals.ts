@@ -286,9 +286,11 @@ export async function fetchGoalMatches(
  *   spreadsheet has.
  */
 
-/** THE PREDICATE. The row table and the twelve-month chart both read this and nothing else. */
-export const rowCountsTowardTotals = (row: { notCounted?: boolean | null }): boolean =>
-  row.notCounted !== true;
+/** THE PREDICATE. The row table and the twelve-month chart both read this and nothing else.
+ *  HIDDEN (2026-11-05, field_goal_rows.hidden) is the second exclusion: a hidden field leaves the
+ *  list AND every total, where not-counted leaves the totals and stays listed. */
+export const rowCountsTowardTotals = (row: { notCounted?: boolean | null; hidden?: boolean | null }): boolean =>
+  row.notCounted !== true && row.hidden !== true;
 
 /** Quiet in the month on screen: no match played, whatever the spots say. */
 export const isDormantIn = (
@@ -463,6 +465,8 @@ export type CityFieldRow = {
   hist: (number | null)[];
   /** Listed but adding nothing (field_goal_rows.not_counted). Only present with `opts.cities`. */
   notCounted?: boolean;
+  /** Off the list and out of every total (field_goal_rows.hidden). Only present with `opts.cities`. */
+  hidden?: boolean;
 };
 
 /** A city as the page stores it (growth_cities, 0253). Passing these to cityRollup makes the stored
@@ -478,6 +482,9 @@ export type CityRow = {
   gapDaily: number; gapSort: number;
   existing: number; slots: number; noGoal: number;
   fields: CityFieldRow[];
+  /** The city's hidden fields, kept apart so "Show N hidden" can list them. Only with `opts.cities`:
+   *  without stored cities the row's shape is exactly what it was (the golden fixture compares it). */
+  hiddenFields?: CityFieldRow[];
   /** The three months before the live one, oldest first. Null is "no market yet", never 0.0. */
   hist: (number | null)[];
   /** Baseline month minus the EARLIEST history month (the live month itself in month-to-date
@@ -494,6 +501,7 @@ export type CityRow = {
 export type RollupRow = {
   key: string; kind: "existing" | "slot"; name: string; city: string | null;
   notCounted?: boolean | null;
+  hidden?: boolean | null;
   /* `matches` IS WHAT SAYS A PITCH EXISTED THAT MONTH, and `daily` cannot say it: a month with no
    * matches and a month whose matches carried no spots both read 0. History needs the difference,
    * because "no market yet" and "a quiet month" are opposite statements about a city. Optional so
@@ -614,7 +622,7 @@ export function cityRollup(
       oct, nov, dec,
       gapDaily: shownGap(dec, base, "day"),
       gapSort: dec == null ? null : shownGap(dailyIn(dec, unit), dailyIn(base, unit), unit),
-      ...(stored ? { notCounted: !counted } : {}),
+      ...(stored ? { notCounted: r.notCounted === true, hidden: r.hidden === true } : {}),
     });
   }
 
@@ -651,7 +659,7 @@ export function cityRollup(
     /* A NOT-COUNTED FIELD IS LISTED AND ADDS NOTHING: every sum below reads `all`, the counted
      * ones; `c.fields` keeps both for the drawer. */
     const listed = c.fields;
-    c.fields = listed.filter((f) => !f.notCounted);
+    c.fields = listed.filter((f) => !f.notCounted && !f.hidden);
     /* ── THE CITY'S HISTORY, UNDER THE SAME TWO RULES AS THE REST OF THE COLUMN ───────────────
      * SUMMED FROM THE FIELD VALUES AS DISPLAYED, so a history column foots to its drawer exactly
      * as September and December do. And a month where EVERY pitch dashes dashes at city level too
@@ -690,7 +698,9 @@ export function cityRollup(
      * of its fields' gaps, which is how OKC printed +0.4 under 0.7 and 1.0. */
     c.gapDaily = shownGap(c.dec, c.base, "day") as number;
     c.gapSort = shownGap(dailyIn(c.dec, unit), dailyIn(c.base, unit), unit) as number;
-    c.fields = sortGoalRows((stored ? listed : c.fields).map((f) => ({ ...f, city: c.city })), sort);
+    /* A HIDDEN FIELD IS OFF THE LIST, not greyed on it: it goes to hiddenFields for "Show N hidden". */
+    c.fields = sortGoalRows((stored ? listed.filter((f) => !f.hidden) : c.fields).map((f) => ({ ...f, city: c.city })), sort);
+    if (stored) c.hiddenFields = sortGoalRows(listed.filter((f) => f.hidden).map((f) => ({ ...f, city: c.city })), sort);
   }
 
   /* NO CITY SET GOES LAST UNDER EVERY ORDER, the same treatment a row with no goal already gets:

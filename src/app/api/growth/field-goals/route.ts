@@ -99,11 +99,16 @@ export async function GET(req: Request) {
     /* A STORED ROW IS MATCHED TO A COMPUTED ONE BY IDENTITY, never by name. A slot has neither a
      * venue nor a field, so it stands alone until somebody points it at a venue — which is how a
      * slot graduates without losing the goals and actions typed against it. */
-    const storedByKey = new Map<string, { id: string; notCounted: boolean }>();
+    const storedByKey = new Map<string, { id: string; notCounted: boolean; hidden: boolean }>();
     for (const r of goalRows ?? []) {
       const k = r.venue_id != null ? `v${r.venue_id}` : r.field_id != null ? `f${r.field_id}` : null;
-      if (k) storedByKey.set(k, { id: r.id as string, notCounted: (r as Record<string, unknown>).not_counted === true });
+      if (k) storedByKey.set(k, { id: r.id as string, notCounted: (r as Record<string, unknown>).not_counted === true,
+        hidden: (r as Record<string, unknown>).hidden === true });
     }
+    /* HIDE IS OFFERED ONLY ONCE 0254 HAS LANDED. `select("*")` shows whether the column exists; before
+     * it does, the page shows no Hide item at all rather than one that fails (the same deploy-before-
+     * migration rule as not_counted above, with the control held back instead of merely tolerated). */
+    const hideSupported = (allGoalRows ?? []).length > 0 && "hidden" in ((allGoalRows ?? [])[0] as Record<string, unknown>);
 
     const monthsOf = (rowId: string | null): Record<string, number> => {
       const out: Record<string, number> = {};
@@ -131,6 +136,7 @@ export async function GET(req: Request) {
         name: a.name, city: home.name, cityId: home.id, cityCode: code, cityHidden: home.hidden,
         venueId: a.venueId, fieldId: a.fieldId,
         notCounted: stored?.notCounted === true,
+        hidden: stored?.hidden === true,
         matches: a.matches, monthly,
         targets: monthsOf(stored?.id ?? null),
         actions: actionsOf(stored?.id ?? null),
@@ -160,6 +166,7 @@ export async function GET(req: Request) {
       kanbanCardId: ((r as Record<string, unknown>).kanban_card_id as string | null) ?? null,
       venueId: null, fieldId: null,
       notCounted: (r as Record<string, unknown>).not_counted === true,
+      hidden: (r as Record<string, unknown>).hidden === true,
       matches: 0,
       monthly: MONTH_LABELS.map((label, i) => {
         const { days, of, partial } = daysElapsed(i, year, now);
@@ -211,6 +218,7 @@ export async function GET(req: Request) {
       slots,
       cities,
       hiddenCities,
+      hideSupported,
       scopeCity: scope,
       counts: { matches: scope ? rows.reduce((n, r) => n + r.matches, 0) : rollup.matchCount, rows: rows.length, unmappedFields: rows.filter((r) => r.fieldId != null).length },
     }, { headers: { "Cache-Control": "no-store" } });
