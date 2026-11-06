@@ -16,7 +16,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
-import { useAuth, canEditMatches, canManagePlayers, canEditCredits, canEditMemberships } from "@/lib/useAuth";
+import { useAuth, canEditMatches, canManagePlayers, canEditCredits, canEditMemberships, canViewActivity } from "@/lib/useAuth";
+import AppActivityCard from "./AppActivityCard";
 import { memKind, actionsFor, isComp, centsFromDollars, dollarsFromCents, addPathFor, COMP_ADD_ENABLED, COMP_DISABLED_REASON, type MemFacts, type AddKind } from "@/lib/membershipAdminModel";
 import PlayerFinder from "./PlayerFinder";
 import MatchManagersPanel from "./MatchManagersPanel";
@@ -231,6 +232,10 @@ export default function PlayerLookup() {
   // EDIT MEMBERSHIPS (0195) — independent of every other grant and NOT implied by Match Ops.
   // Courtesy gate only; all three routes re-check against a fresh database read.
   const canMember = canEditMemberships(appUser);
+  // VIEW ACTIVITY (0257) — read only; the card is not rendered without it. The route re-checks.
+  const canActivity = canViewActivity(appUser);
+  // &activity=open (Player Chats' "See all") opens the card expanded for THAT player only.
+  const [activityOpenFor, setActivityOpenFor] = useState<number | null>(null);
   const badge = envBadge(ENV);
 
   const [q, setQ] = useState("");
@@ -322,9 +327,13 @@ export default function PlayerLookup() {
   useEffect(() => {
     if (bootRef.current) return;
     bootRef.current = true;
-    const raw = new URLSearchParams(window.location.search).get("id");
+    const sp = new URLSearchParams(window.location.search);
+    const raw = sp.get("id");
     const id = raw ? Number(raw) : NaN;
-    if (Number.isInteger(id) && id > 0) void openProfile(id);
+    if (Number.isInteger(id) && id > 0) {
+      if (sp.get("activity") === "open") setActivityOpenFor(id);
+      void openProfile(id);
+    }
     // openProfile is recreated whenever `recent` changes; the guard above keeps this to one run.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -484,6 +493,7 @@ export default function PlayerLookup() {
               Putting the action on their card means there is no second search box to rebuild. */}
           <MatchManagerRosterCard playerId={profile.player.id} playerName={profile.player.name} />
           <ProfileView p={profile} fields={fields} canEdit={canEdit} canManage={canManage} canCredit={canCredit} canMember={canMember}
+            canActivity={canActivity} activityStartOpen={activityOpenFor === profile.player.id}
             onReload={reloadProfile}
             onOpenMatch={(id) => router.push(`/match-ops/matches/${id}`)}
             onAdd={() => setModal({ type: "add" })}
@@ -518,8 +528,9 @@ function Fact({ k, v, big }: { k: string; v: React.ReactNode; big?: boolean }) {
   return <span className="f"><span className="k">{k}</span><span className={`v${big ? " big" : ""}`}>{v}</span></span>;
 }
 
-function ProfileView({ p, fields, canEdit, canManage, canCredit, canMember, onOpenMatch, onAdd, onRemove, onSuspend, onExpel, onLift, onReload }: {
+function ProfileView({ p, fields, canEdit, canManage, canCredit, canMember, canActivity, activityStartOpen, onOpenMatch, onAdd, onRemove, onSuspend, onExpel, onLift, onReload }: {
   p: Profile; fields: Record<FieldKey, boolean>; canEdit: boolean; canManage: boolean; canCredit: boolean; canMember: boolean;
+  canActivity: boolean; activityStartOpen: boolean;
   onOpenMatch: (id: number) => void; onAdd: () => void; onRemove: (m: MatchRow) => void;
   onSuspend: () => void; onExpel: () => void; onLift: () => void;
   /* Re-read the whole profile. The strike total is the SERVER's point sum and a removal must not
@@ -577,6 +588,10 @@ function ProfileView({ p, fields, canEdit, canManage, canCredit, canMember, onOp
           {fields.mgr && <Fact k="CITY MANAGER" v={pl.cityManager ? "Yes" : "No"} />}
         </div>
       </div>
+
+      {/* APP ACTIVITY (0257): under the player card, above Credits. Keyed by player so Show/Hide
+          never carries from one player to the next. */}
+      {canActivity && <AppActivityCard key={pl.id} env={ENV} playerId={pl.id} city={pl.city} startOpen={activityStartOpen} />}
 
       <CreditPanel playerId={pl.id} playerName={pl.name} balanceCents={liveCredits ?? pl.credits}
         canCredit={canCredit} onBalance={setLiveCredits} />

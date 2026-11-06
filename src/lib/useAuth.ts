@@ -29,6 +29,7 @@ export type AppUser = {
   can_edit_credits?: boolean;      // Phase 27 — adjust a player's credit balance. MOVES MONEY; not tied to Match Ops
   can_edit_memberships?: boolean;  // 0195 — add, price and end a membership. MOVES MONEY; not tied to Match Ops
   can_send_messages?: boolean;     // Phase 19 — the chat SEND permission (read is can_access_chats)
+  can_view_activity?: boolean;     // 0257 — read a player's app activity (API request log). Read only
   is_service_account?: boolean;    // the Clubhouse E2E account (never holds a write permission)
   created_at: string;
   last_login_at: string | null;
@@ -139,6 +140,16 @@ export function canEditCredits(appUser: AppUser | null | undefined): boolean {
 // Courtesy gate only — the route re-checks against a fresh database read on every request.
 export function canEditMemberships(appUser: AppUser | null | undefined): boolean {
   return can(appUser as CapRow | null, "editMemberships", appUser?.email);
+}
+
+// VIEW ACTIVITY (0257) — read a player's app activity on Player Lookup and in Player Chats. A read
+// grant, but of request logs carrying IPs, so it is its own column and never implied. Never for a
+// service account or a city manager (the guard trigger refuses both). Courtesy gate only: the
+// activity route re-reads the column from the database on every request.
+export function canViewActivity(appUser: AppUser | null | undefined): boolean {
+  if (!appUser || appUser.can_view_activity !== true) return false;
+  if (appUser.is_service_account === true || appUser.is_city_manager === true) return false;
+  return appUser.is_admin === true || appUser.can_access_matchops === true;
 }
 
 // MANAGE PROMOS (Phase 18b) — INDEPENDENT of EDIT MATCHES and MANAGE PLAYERS. This is the WRITE

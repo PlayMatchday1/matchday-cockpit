@@ -29,7 +29,8 @@ import { linkThreadToPlayer, THREAD_LINKED_EVENT } from "@/lib/crmLinkClient";
 import { freshAccessToken } from "@/lib/crmSession";
 import CopyPhone from "@/components/CopyPhone";
 import { colorForCity } from "@/lib/cityColors";
-import { useAuth, canEditCredits } from "@/lib/useAuth";
+import { useAuth, canEditCredits, canViewActivity } from "@/lib/useAuth";
+import RecentAppActivity from "./RecentAppActivity";
 import { FULL_EDITOR_ENV } from "@/lib/matchEnv";
 import { validateAdjustment, fmtUsd, REASON_REQUIRED } from "@/lib/creditsModel";
 import {
@@ -114,9 +115,16 @@ const dayOf = (iso: string | null) => {
   return new Date(Date.parse(iso)).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" });
 };
 
-export default function ContextPane({ threadId, phone }: { threadId: string; phone?: string | null }) {
+export default function ContextPane({ threadId, phone, playerId, onClose }: {
+  threadId: string; phone?: string | null;
+  /* The thread's linked player (crm_threads.player_id) — the source for app activity, so the card
+   * still works when the MatchDay profile read fails. */
+  playerId?: number | null;
+  onClose?: () => void;
+}) {
   const { appUser } = useAuth();
   const canCredit = canEditCredits(appUser);
+  const canActivity = canViewActivity(appUser);
   const [data, setData] = useState<ContextResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   // A locally-adjusted balance, so a credit applied here updates the pane without a refetch.
@@ -181,12 +189,29 @@ export default function ContextPane({ threadId, phone }: { threadId: string; pho
   // The mirror's address — the same mdapi_users row the conversation header reads it from.
   const email = mirror?.email?.trim() || null;
 
+  const activityPlayer = playerId ?? prof?.player.id ?? null;
+
+  /* WIDTHS (Ryan, 2026-11-06): a docked column at 1260px and wider; an overlay drawer from the right
+   * between 1024 and 1259px, with a scrim that closes it; not shown below 1024px. */
   return (
+    <>
+    {onClose && (
+      <div aria-hidden data-testid="ctx-scrim" onClick={onClose}
+        className="fixed inset-0 z-40 hidden bg-[rgba(9,30,20,.22)] lg:block min-[1260px]:hidden" />
+    )}
     <aside
       data-testid="ctx-pane"
-      className="hidden min-h-0 w-[392px] shrink-0 flex-col overflow-y-auto border-l min-[1260px]:flex"
+      className="hidden min-h-0 w-[392px] shrink-0 flex-col overflow-y-auto border-l lg:fixed lg:inset-y-0 lg:right-0 lg:z-50 lg:flex lg:shadow-[-12px_0_32px_rgba(9,30,20,.18)] min-[1260px]:static min-[1260px]:z-auto min-[1260px]:shadow-none"
       style={{ background: "linear-gradient(180deg,#fafbfa,#f6f9f7)", borderColor: LINE }}
     >
+      <div className="flex items-center border-b px-4 py-[9px]" style={{ borderColor: LINE }}>
+        <span className="text-[10.5px] font-[800] tracking-[0.1em]" style={{ color: MUTED }}>PLAYER CONTEXT</span>
+        {onClose && (
+          <button type="button" data-testid="ctx-close" aria-label="Close player context" onClick={onClose}
+            className="ml-auto flex h-8 w-8 items-center justify-center rounded-full text-[18px] leading-none hover:bg-white"
+            style={{ color: MUTED }}>×</button>
+        )}
+      </div>
       {/* PART 2 — SEARCH. Full box on an unlinked thread, one collapsed line on a linked one,
           because "my friend's account" is the same lookup. */}
       <Search compact={linked} />
@@ -264,6 +289,11 @@ export default function ContextPane({ threadId, phone }: { threadId: string; pho
               </div>
             ))}
           </div>
+
+          {/* RECENT APP ACTIVITY (0257), under the player, behind VIEW ACTIVITY. */}
+          {canActivity && activityPlayer != null && (
+            <RecentAppActivity key={activityPlayer} env={FULL_EDITOR_ENV} playerId={activityPlayer} city={cityName} />
+          )}
 
           {!prof && (
             <p className="px-4 py-3 text-[11.5px]" data-testid="ctx-profile-missing" style={{ color: "#8a6300" }}>
@@ -349,6 +379,7 @@ export default function ContextPane({ threadId, phone }: { threadId: string; pho
         </>
       )}
     </aside>
+    </>
   );
 }
 

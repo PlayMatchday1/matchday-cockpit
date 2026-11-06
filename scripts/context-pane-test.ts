@@ -169,7 +169,9 @@ const CTX = noComments(readFileSync("src/app/api/crm/threads/[id]/context/route.
 
 // The pane widened, and the hide/toggle breakpoint is untouched.
 /w-\[392px\]/.test(PANE_C) ? ok("the pane is 392px") : bad("the pane is not 392px");
-/min-\[1260px\]:flex/.test(PANE_C) ? ok("…and still hides below min-[1260px] with the toggle") : bad("the breakpoint moved");
+// 2026-11-06 (Ryan): docked from 1260px, an overlay drawer from lg (1024px) to 1259px, hidden below lg.
+/\bhidden\b[^"]*\blg:fixed\b[^"]*\blg:flex\b[^"]*min-\[1260px\]:static/.test(PANE_C)
+  ? ok("…docked from min-[1260px], a drawer from lg, hidden below lg") : bad("the breakpoint moved");
 
 // The route carries the boundary the page enforces.
 /auth\.confinedCity/.test(CTX) && /CONFINED_CITY_ERROR/.test(CTX)

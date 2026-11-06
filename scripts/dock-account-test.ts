@@ -147,7 +147,7 @@ const LOOKUP = readFileSync("src/components/PlayerLookup.tsx", "utf8");
 /<Fact k="CANCELLED" v=\{fmtDateCT\(m\.canceledAt\)\} \/>/.test(LOOKUP)
   ? ok("the card prints a CANCELLED date, in Central")
   : bad("the cancelled date is still missing from the card");
-/URLSearchParams\(window\.location\.search\)\.get\("id"\)/.test(LOOKUP)
+/new URLSearchParams\(window\.location\.search\)/.test(LOOKUP) && /\.get\("id"\)/.test(LOOKUP)
   ? ok("Player Lookup opens ?id=<n> directly (what the dock link needs)")
   : bad("Player Lookup has no ?id= entry point");
 

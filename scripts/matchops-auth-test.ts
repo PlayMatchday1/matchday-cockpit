@@ -178,6 +178,8 @@ is("authenticateMatchOpsRead is imported by EXACTLY the 22 intended routes", imp
   "promos/matches/route.ts", "promos/check/route.ts",
   // round 2 — the one WRITE moved, onto its own flag
   "lookup/[env]/ban/route.ts",
+  // App activity (0257): Match Ops read, then VIEW ACTIVITY re-read fresh, confined accounts refused.
+  "lookup/[env]/activity/route.ts",
   // Removing a strike. The same shape as the ban write and deliberately on the same authority:
   // Match Ops read gate, an explicit MANAGE PLAYERS check before any outbound call, and
   // requires:"manage" at the write chokepoint. A penalty on a player, like suspend / expel / lift.

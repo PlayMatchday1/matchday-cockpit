@@ -121,6 +121,10 @@
       "schedule": "45 * * * *"
     },
     {
+      "path": "/api/sync/app-request-log-retention",
+      "schedule": "25 9 * * *"
+    },
+    {
       "path": "/api/app/cron/warm",
       "schedule": "*/5 * * * *"
     }

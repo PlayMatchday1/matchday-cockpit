@@ -189,11 +189,33 @@ export default function CrmClient() {
   const [flagStarred, setFlagStarred] = useState(false);
   const [flagAssigned, setFlagAssigned] = useState(false);
   const [flagMembers, setFlagMembers] = useState(false);
-  const [contextHidden, setContextHidden] = useState(false);
+  const [contextHiddenState, setContextHiddenState] = useState(false);
 
-  // The player-context pane (ContextPane) is shown by default beside a
-  // selected thread; contextHidden (declared with the other redesign UI state
-  // above) toggles it off. It is always hidden below 1260px via CSS.
+  // The player-context pane (ContextPane) is shown by default beside a selected thread;
+  // contextHidden toggles it off. At 1260px and wider it docks as a column; from 1024 to 1259px it
+  // opens as an overlay drawer from the right (Ryan, 2026-11-06 — the toggle used to switch a pane
+  // CSS kept hidden there); below 1024px it is not shown.
+  //
+  // OPEN OR CLOSED IS REMEMBERED PER STAFF MEMBER (Figma frame 3): localStorage keyed on the
+  // app_users id, read once that id is known. Nothing stored = open, as before.
+  const contextKey = appUser?.id ? `crm:contextOpen:v1:${appUser.id}` : null;
+  const contextLoaded = useRef<string | null>(null);
+  useEffect(() => {
+    if (!contextKey || contextLoaded.current === contextKey) return;
+    contextLoaded.current = contextKey;
+    try {
+      const v = window.localStorage.getItem(contextKey);
+      if (v === "0" || v === "1") setContextHiddenState(v === "0");
+    } catch { /* private mode: the default stands */ }
+  }, [contextKey]);
+  const contextHidden = contextHiddenState;
+  const setContextHidden = useCallback((next: boolean | ((h: boolean) => boolean)) => {
+    setContextHiddenState((prev) => {
+      const h = typeof next === "function" ? next(prev) : next;
+      if (contextKey) { try { window.localStorage.setItem(contextKey, h ? "0" : "1"); } catch { /* private mode */ } }
+      return h;
+    });
+  }, [contextKey]);
 
   // Lock document scroll while /chats is mounted. iOS Safari standalone
   // PWA scrolls the document when the keyboard opens (to keep the focused
@@ -1027,8 +1049,11 @@ export default function CrmClient() {
             )}
           </section>
 
-          {/* ---- PLAYER CONTEXT (392px, hidden < 1260px + toggle) ---- */}
-          {selectedThread && !contextHidden && <ContextPane threadId={selectedThread.id} phone={selectedThread.phone_number} />}
+          {/* ---- PLAYER CONTEXT (392px; docked >= 1260px, drawer 1024-1259px, hidden < 1024px) ---- */}
+          {selectedThread && !contextHidden && (
+            <ContextPane threadId={selectedThread.id} phone={selectedThread.phone_number}
+              playerId={selectedThread.player_id ?? null} onClose={() => setContextHidden(true)} />
+          )}
         </div>
       </div>
 
@@ -1926,13 +1951,12 @@ function ConversationHeader({
             <span className="hidden sm:inline">Reopen</span>
           </button>
         ))}
-      {/* Info button — toggles the context panel. Two variants
-          stacked behind responsive utilities so the same icon does
-          the right thing on each surface:
-            mobile (<lg): opens the slide-up sheet
-            desktop (lg+): toggles the right-column panel, preserves
-                           the open/closed state in localStorage
-                           (crm:contextOpen:v1). */}
+      {/* Info button — toggles the context panel. Two variants stacked behind responsive utilities:
+            below lg (1024px): sets the panel open, but the panel is not shown at that width
+                               (no sheet exists; left as it is, Ryan 2026-11-06)
+            lg and up: toggles it — an overlay drawer from 1024 to 1259px, a docked column from
+                       1260px. Open or closed is remembered per staff member
+                       (crm:contextOpen:v1:<app_users id>). */}
       <button
         type="button"
         onClick={onOpenContext}

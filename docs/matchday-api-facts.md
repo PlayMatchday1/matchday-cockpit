@@ -8586,3 +8586,28 @@ push test, push-settings and photo register (`actingStaffEmail` / `requiredActin
 (`offer-push.service.ts` `test`): "<email> has no device to send to" and "<email> has no device on app 1.88 or
 newer". `403 OFFER_TEST_PUSH_NOT_ALLOWED` is the mode not live and the caller neither allowlisted nor
 `@playmatchday.com`. Mapped to plain words in `testPushErrorText` (`src/lib/offersServer.ts`).
+
+## App activity: the backend request log and the Heroku drain (2026-11-06)
+
+Evidence: backend `~/Code/backend-logger-fix` at 57bd888 (= matchday-stage v869, `heroku releases -a matchday-stage -n 3`,
+2026-11-06 14:01 CT), read only; devcenter.heroku.com/articles/log-drains and /logplex, read 2026-11-06. Production
+behaviour of the drain is UNKNOWN until a drain is attached; observations will be added here.
+
+- **One JSON line per request**, `process.stdout.write(JSON.stringify(line) + '\n')` from a Fastify `onResponse` hook
+  (`core/request-logger/request-log.ts:84-106`, `request-logger.module.ts:17-28`). Fields: ts, reqId, method, path,
+  route, status, durationMs, userId, errorCode, ip. No prefix. `matchId` is being added separately.
+- **`route` has no global prefix** (no `setGlobalPrefix`); URI versioning gives `/v3/matches/join`. `route` is null for
+  an unmatched route (404, spec `request-logger.spec.ts:359-371`).
+- **A booking carries no match id in the path**: `POST /v3/matches/join` (`matches.controller.ts:345-349`) takes
+  `matchId` in the body (`join-match.dto.ts:11`), which is never logged. `/matches/:id/join` does not exist.
+- **`errorCode` is null** for guard 401s, ValidationPipe 400s and unmatched 404s (only `IErrorOptions.errorCode` via
+  `SentryExceptionFilter` is recorded). **There is no `PAYMENT_FAILED` code** (grep of `apps/api/src`, 2026-11-06).
+- **`userId` is null on a failed sign-in**; set on success for signup/signin/social/refresh (57bd888).
+- **`reqId` is Heroku's X-Request-ID** (`requestIdHeader: 'x-request-id'`, `request-log.ts:11-14`); Fastify's `req-N`
+  only when the header is missing. It is the dedupe key `(env, req_id)` in `app_request_log` (0257).
+- **Heroku HTTPS drain (docs):** POST, `application/logplex-1`, headers `Logplex-Msg-Count`, `Logplex-Frame-Id` (reused
+  on resend), `Logplex-Drain-Token`; body is RFC 6587 octet-counted syslog with STRUCTURED-DATA omitted entirely;
+  respond 2xx with `Content-Length: 0`; non-2xx is resent. Auth is HTTP Basic in the drain URL. Batch size, frequency,
+  max line length and the router line's exact shape are not documented — UNKNOWN until observed.
+- Parser and route: `src/lib/logplexDrain.ts`, `src/app/api/drains/heroku/[env]/route.ts`. App calls the backend does
+  not serve: `docs/app-calls-unserved-routes.md`.
