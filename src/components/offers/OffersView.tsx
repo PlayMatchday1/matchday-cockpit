@@ -17,6 +17,7 @@ import {
 } from "@/lib/offersModel";
 import OfferPanel, { type MatchRead } from "./OfferPanel";
 import { PushResultsRow, PushSettingsCard } from "./OfferPush";
+import ShowAgainRow from "./OfferShowAgain";
 import { Banner, Btn, NotFound, O, StateChip, authed, type WriteOutcome } from "./offersUi";
 import { useOffersAccessState } from "./useOffersAccess";
 
@@ -130,7 +131,7 @@ export default function OffersView() {
         <div data-testid="offers-error" className="rounded-[10px] border px-3 py-2.5 text-[12.5px]" style={{ background: O.critBg, borderColor: O.critLine, color: O.critInk }}>Could not load: {err}</div>
       ) : !view ? <div className="py-6 text-[13px]" style={{ color: O.muted }}>Loading…</div> : editing ? (
         <OfferPanel key={`${open}:${ver}:${open === "new" ? newN : ""}:${matchRead === "ok"}`} c={current} data={view} matchRead={matchRead} onRetryMatch={() => setMatchRetry((n) => n + 1)} onClose={() => setOpen(null)} onLanded={landed}
-          results={current && current.state !== "DRAFT" ? <ResultsCard c={current} nowWall={nowWall} pushes={!!view.pushes} /> : null} />
+          results={current && current.state !== "DRAFT" ? <ResultsCard c={current} nowWall={nowWall} pushes={!!view.pushes} onLanded={landed} /> : null} />
       ) : (
         <div className="flex flex-col gap-5">
           <div data-testid="offers-list" className="overflow-hidden rounded-[12px] border" style={{ background: O.surface, borderColor: O.line }}>
@@ -207,7 +208,7 @@ function Stat({ value, label, testId }: { value: string; label: string; testId: 
   );
 }
 
-function ResultsCard({ c, nowWall, pushes }: { c: Campaign; nowWall: string; pushes: boolean }) {
+function ResultsCard({ c, nowWall, pushes, onLanded }: { c: Campaign; nowWall: string; pushes: boolean; onLanded: (o: WriteOutcome, selectId?: number, change?: ListChange) => void }) {
   const r = c.results;
   const up = usedPct(r);
   const extra = extraBookingsLine(r);
@@ -226,6 +227,8 @@ function ResultsCard({ c, nowWall, pushes }: { c: Campaign; nowWall: string; pus
       <div data-testid="offers-comparison" className="rounded-[8px] px-3 py-[9px] text-[13px] font-medium" style={{ background: O.mint, color: O.ok }}>{comparisonLine(r)}</div>
       {extra && <div data-testid="offers-extra" className="px-3 text-[13px] font-medium" style={{ color: O.ink }}>{extra}</div>}
       {pushes && c.push?.enabled && <PushResultsRow campaignId={c.id} />}
+      {/* "Show again" (backend 08145ea): only a backend that carries popupRound has the route. Ended offers still show the row, greyed, so the history reads. */}
+      {typeof c.popupRound === "number" && <ShowAgainRow c={c} onLanded={onLanded} />}
     </div>
   );
 }

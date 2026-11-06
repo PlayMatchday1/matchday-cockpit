@@ -17,7 +17,7 @@ import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
 import { StageConfigError, apiGet, apiWrite, WriteFailedError, type WriteActor } from "@/lib/matchdayStageApi";
 import { OFFERS_NOT_FOUND } from "@/lib/offersAccess";
 import { readOffersConfig, type OffersConfig, type OffersConfigResult } from "@/lib/offersConfig";
-import { chicagoWallNow, offerMatchOpt, offersLogBody, photoUrlOk, pickerRange, wallFromMatch, type ApiOfferMatch, type Campaign, type City, type FieldCover, type FieldOpt, type MatchOpt } from "@/lib/offersModel";
+import { chicagoWallNow, offerMatchOpt, offersLogBody, photoUrlOk, pickerRange, showAgainWhy, wallFromMatch, type ApiOfferMatch, type Campaign, type City, type FieldCover, type FieldOpt, type MatchOpt, type ShowAgainPreview, type ShowAgainReason } from "@/lib/offersModel";
 import { OFFERS_READ_PACE_MS, READS_STOPPED, makePacer } from "@/lib/offersPacing";
 import { pushesVisible, type CampaignPush, type PushMode, type PushResults, type Reach } from "@/lib/offersPush";
 import { STAFF_NOT_ALLOWED_PLAIN, WHO_ARE_YOU, staffEmailOf, staffErrorKind } from "@/lib/staffIdentity";
@@ -67,6 +67,14 @@ function backendMessage(e: unknown): { code: string | null; message: string | nu
     return { code: j.errorCode ?? null, message: Array.isArray(j.message) ? j.message.join("; ") : j.message ?? null };
   } catch { return { code: null, message: null }; }
 }
+// OFFER_SHOW_AGAIN_NOT_ALLOWED carries the reason beside the message (errorData.reason, errorData.nextAllowedAt).
+function showAgainErrorData(e: unknown): { reason: ShowAgainReason | null; nextAllowedAt: string | null } {
+  const snippet = e instanceof WriteFailedError ? e.bodySnippet : "";
+  try {
+    const j = JSON.parse(snippet) as { errorData?: { reason?: ShowAgainReason; nextAllowedAt?: string | null } };
+    return { reason: j.errorData?.reason ?? null, nextAllowedAt: j.errorData?.nextAllowedAt ?? null };
+  } catch { return { reason: null, nextAllowedAt: null }; }
+}
 const NO_PUSHES = "This backend doesn't have offer pushes yet, so nothing was sent or saved.";
 const NO_PUSH_ROUTE = "OffersNoPushRoute";
 export const NO_OFFERS = "Offers isn't deployed on this backend yet.";
@@ -93,6 +101,10 @@ export function errorText(e: unknown): string {
   if (code === "INVALID_OFFER_CAMPAIGN") return `The backend refused it: ${message?.split(": ").slice(1).join(": ") || "the offer is not valid"}. Nothing was saved.`;
   if (code === "OFFER_PUSH_LOCKED") return "The push is already queued, so it can't change now. Nothing was saved.";
   if (code === "INVALID_OFFER_PUSH") return `The backend refused the push: ${message?.split(": ").slice(1).join(": ") || message || "the push is not valid"}. Nothing was sent.`;
+  if (code === "OFFER_SHOW_AGAIN_NOT_ALLOWED") {
+    const data = showAgainErrorData(e);
+    return `Show again didn't run: ${showAgainWhy(data.reason, data.nextAllowedAt) ?? message ?? "the backend refused it"} Nothing changed.`;
+  }
   if (code === "OFFER_CAMPAIGN_STATUS_CHANGE_NOT_ALLOWED") return "It can't move to that status from where it is now. Refresh to see its current status.";
   if (code === "NOT_FOUND_OFFER_CAMPAIGN") return "That offer no longer exists. Refresh the list.";
   if (e instanceof WriteFailedError && e.status === 400 && message) return `The backend refused it: ${message}. Nothing was saved.`;
@@ -485,4 +497,35 @@ export async function savePushSettings(auth: OffersAuth, weeklyCap: number): Pro
   const a = answer as { weeklyCap?: number } | null;
   if (!a || typeof a.weeklyCap !== "number") return Response.json({ verdict: "UNKNOWN", detail: "The backend answered without the limit. Refresh to see what it holds." });
   return Response.json({ verdict: a.weeklyCap === weeklyCap ? "LANDED" : "NOT APPLIED", weeklyCap: a.weeklyCap });
+}
+
+// ── "SHOW AGAIN" (backend 08145ea; docs/offers/M3-ENDPOINTS.md) ────────────────────────────────────────────
+// The read: what a press would do now, paced like every other read.
+export const readShowAgain = (id: number) => offersGet<ShowAgainPreview>(`${CAMPAIGNS}/${id}/show-again`);
+// The press: POST .../show-again, bodyless, as the signed-in person. It answers { reached, campaign }, not a campaign,
+// so the verdict is its own: LANDED when the campaign it returns is one round past the round the page pressed from
+// (fromRound, what the page had on screen), NOT APPLIED when it isn't, UNKNOWN when no campaign came back.
+export async function showAgain(auth: OffersAuth, id: number, fromRound: number): Promise<Response> {
+  const path = `${CAMPAIGNS}/${id}/show-again`;
+  let answer: { reached?: number; campaign?: Campaign } | null = null;
+  const roundAfter = () => (answer?.campaign && typeof answer.campaign.popupRound === "number" ? answer.campaign.popupRound : null);
+  const { outcome, error } = await recordWrite(
+    {
+      env: cfg().env, source: "offers:show-again", actorName: auth.email, actorEmail: auth.email, saveId: randomUUID(),
+      matchId: null, matchName: null, method: "POST", path, body: { fromRound }, keys: ["popupRound"], label: (k) => k,
+      applied: () => (roundAfter() === null ? "unknown" : roundAfter() === fromRound + 1),
+    },
+    {
+      readResource: async () => ({ popupRound: roundAfter() ?? fromRound }),
+      write: async () => { const r = await offersApiWrite<typeof answer>(auth, "POST", path, undefined); answer = r ?? null; return r; },
+      now: () => new Date().toISOString(),
+    },
+    gateDeps.logStore(),
+  );
+  if (error) return Response.json({ verdict: outcome === "unknown" ? "UNKNOWN" : "FAILED", error: errorText(error) }, { status: outcome === "unknown" ? 200 : 502 });
+  const a = answer as { reached?: number; campaign?: Campaign } | null;
+  const after = a?.campaign ?? null;
+  if (roundAfter() === null) return Response.json({ verdict: "UNKNOWN", detail: "The backend answered without the campaign. Refresh to see whether the round moved.", after });
+  if (roundAfter() !== fromRound + 1) return Response.json({ verdict: "NOT APPLIED", detail: `The backend answered with round ${roundAfter()}, not ${fromRound + 1}. Refresh and look before pressing again.`, after });
+  return Response.json({ verdict: "LANDED", reached: typeof a?.reached === "number" ? a.reached : null, after });
 }

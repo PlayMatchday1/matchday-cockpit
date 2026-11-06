@@ -51,6 +51,11 @@ export type Campaign = Copy & {
   buttonTarget: ButtonTarget; buttonMatchId: number | null; status: CampaignStatus; state: CampaignState;
   createdByStaffEmail: string | null; launchedByStaffEmail: string | null; launchedAt: string | null; updatedAt?: string;
   results: Results;
+  // popupEnabled false is a push-only offer (backend 08145ea): no popup on app open, the discount still applies at
+  // checkout, "Show again" is off (POPUP_OFF). Absent on a backend from before it, which is the same as true.
+  popupEnabled?: boolean;
+  // "Show again" (backend 08145ea): the popup round (1 until the first press) and the last press. Absent before it.
+  popupRound?: number; showAgain?: ShowAgainState;
   // The push that goes with it (backend docs/offer-push.md); absent on a backend without pushes.
   push?: import("./offersPush").CampaignPush;
 };
@@ -114,7 +119,7 @@ export function pickerRange(nowWall: string): { from: string; to: string } {
 
 // Fields a launched or paused campaign may still change (the backend's EDITABLE_AFTER_LAUNCH).
 export const EDITABLE_AFTER_LAUNCH = new Set<string>([
-  "name", "eyebrow", "caption", "headline", "line", "body", "photoUrl", "showTicket", "buttonLabel", "buttonTarget", "buttonMatchId", "dismissLabel", "maxRedemptions",
+  "name", "eyebrow", "caption", "headline", "line", "body", "photoUrl", "showTicket", "buttonLabel", "buttonTarget", "buttonMatchId", "dismissLabel", "maxRedemptions", "popupEnabled",
 ]);
 // Every key the Clubhouse may send on create or edit. The routes drop anything else.
 export const BODY_KEYS = new Set<string>([
@@ -331,6 +336,8 @@ export type Form = {
   minMatches: number; maxMatches: number | null;
   startsLocal: string; endsLocal: string | null; holdoutPercent: number; maxRedemptions: number | null;
   showTicket: boolean;
+  // Show popup on app open. Off is push only: the popup text is kept but never shown; the discount still applies.
+  popupEnabled: boolean;
   // Where the popup's button goes (Edit text › Button opens). Forced to the deal's match when the
   // offer is for a specific match; see buttonOf.
   buttonTarget: ButtonTarget; buttonMatchId: number | null;
@@ -345,7 +352,7 @@ export function newForm(nowWall: string): Form {
     name: "", dealType: "PERCENT_OFF", dealAmount: 50, usesPerPlayer: 1, matchId: null, scope: "ANY", appliesFieldIds: [],
     audienceMode: "FILTERS", playerIdsText: "", playerIds: [], fieldIds: [],
     cityIds: [], lastPlayed: "ANY", lastPlayedDays: null, membership: "ANYONE",
-    minMatches: 0, maxMatches: null, ...defaultRun(nowWall), holdoutPercent: 10, maxRedemptions: null, showTicket: true,
+    minMatches: 0, maxMatches: null, ...defaultRun(nowWall), holdoutPercent: 10, maxRedemptions: null, showTicket: true, popupEnabled: true,
     buttonTarget: "FIND_MATCH", buttonMatchId: null, copy: {},
   };
 }
@@ -359,7 +366,7 @@ export function formOf(c: Campaign, matches: MatchOpt[], cities: City[], fields:
     minMatches: c.minMatches, maxMatches: c.maxMatches,
     // A short Specific players list stores 0; the form keeps the default, which applies if the list grows to 200.
     startsLocal: c.startsLocal, endsLocal: c.endsLocal, holdoutPercent: c.audienceMode === "PLAYERS" && c.playerIds.length < PLAYERS_HOLDOUT_MIN ? DEFAULT_HOLDOUT_PERCENT : c.holdoutPercent,
-    maxRedemptions: c.maxRedemptions, showTicket: c.showTicket ?? true,
+    maxRedemptions: c.maxRedemptions, showTicket: c.showTicket ?? true, popupEnabled: c.popupEnabled ?? true,
     buttonTarget: c.buttonTarget, buttonMatchId: c.buttonMatchId, copy: {},
   };
   // Stored copy that differs from what the deal would write was typed by someone: keep it as typed.
@@ -653,6 +660,45 @@ export function copyAfterHide(copy: Form["copy"], url: string, saved: string | n
   return saved === undefined || saved === deflt ? rest : { ...rest, photoUrl: saved };
 }
 
+// ── PUSH ONLY and "SHOW AGAIN" (backend 08145ea; docs/offers/M3-ENDPOINTS.md "Show again") ──────────────────────
+// The summary's opening when the popup is off. The launch block when the popup is off and there is no push either.
+export const PUSH_ONLY = "Push only, no popup.";
+export const pushOnlyPrefix = (f: Pick<Form, "popupEnabled">) => (f.popupEnabled ? "" : `${PUSH_ONLY} `);
+export const popupOffBlock = (f: Pick<Form, "popupEnabled">, pushEnabled: boolean): string | null =>
+  !f.popupEnabled && !pushEnabled ? "The popup is off and there's no push, so nobody would ever see this offer. Turn the popup or the push on." : null;
+
+export type ShowAgainReason = "NOT_LIVE" | "POPUP_OFF" | "TOO_SOON" | "AT_USE_CAP" | "NO_ONE_TO_REACH";
+export type ShowAgainState = { lastAt: string | null; lastByStaffEmail: string | null; nextAllowedAt: string | null };
+export type ShowAgainPreview = ShowAgainState & { allowed: boolean; reason: ShowAgainReason | null; reach: number; round: number };
+// An instant (ISO, UTC) as Chicago wall time: "Sat, Nov 7 · 10:29 AM". The backend's lastAt and nextAllowedAt are true instants.
+export function chicagoLabel(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const f = (o: Intl.DateTimeFormatOptions) => new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", ...o }).format(d);
+  return `${f({ weekday: "short" })}, ${f({ month: "short" })} ${f({ day: "numeric" })} · ${f({ hour: "numeric", minute: "2-digit" })}`;
+}
+// Why Show again can't run now, in plain words (null when it can).
+export function showAgainWhy(reason: ShowAgainReason | null | undefined, nextAllowedAt: string | null | undefined): string | null {
+  switch (reason) {
+    case null: case undefined: return null;
+    case "NOT_LIVE": return "Only a live offer can be shown again.";
+    case "POPUP_OFF": return "This offer has no popup (push only), so there is nothing to show again.";
+    case "TOO_SOON": return `Once a day per offer. It can run again ${nextAllowedAt ? `at ${chicagoLabel(nextAllowedAt)}` : "later"}.`;
+    case "AT_USE_CAP": return "The offer has hit its total cap, so nobody could use it again.";
+    case "NO_ONE_TO_REACH": return "Nobody has seen the current popup and still has it to use.";
+    default: return `It can't run now (${String(reason)}).`;
+  }
+}
+export const showAgainLine = (reach: number) => `Show again to ${reach.toLocaleString("en-US")} ${reach === 1 ? "player" : "players"} who saw it but haven't booked`;
+// The round history the backend gives: the current round and the last press. It keeps every press in offer_popup_rounds
+// but exposes only the latest (showAgain), so earlier rounds and bookings per round are not readable from here.
+export function showAgainHistory(c: Pick<Campaign, "popupRound" | "showAgain">): string | null {
+  const round = c.popupRound ?? 1;
+  if (round <= 1 || !c.showAgain?.lastAt) return null;
+  const by = c.showAgain.lastByStaffEmail ? ` by ${c.showAgain.lastByStaffEmail}` : "";
+  return `Round ${round} · shown again${by} on ${chicagoLabel(c.showAgain.lastAt)}${round > 2 ? ` (${round - 1} times in all)` : ""}`;
+}
+
 // ── REQUEST BODIES ───────────────────────────────────────────────────────────────────────────────
 // Everything the campaign would hold, as the backend's field names.
 // THE HOLDOUT. The backend's playersHoldout (offer-campaigns.service.ts, 2026-11-02): a Specific players list of
@@ -682,7 +728,7 @@ export function fullBody(f: Form, matches: MatchOpt[], cities: City[], fields: F
     minMatches: players ? 0 : f.minMatches, maxMatches: players ? null : f.maxMatches, membership: players ? "ANYONE" : f.membership,
     matchIds: m ? [m.id] : [], appliesFieldIds: f.scope === "FIELD" ? [...f.appliesFieldIds].sort((x, y) => x - y) : [],
     startsLocal: f.startsLocal, endsLocal: f.endsLocal, holdoutPercent: holdoutFor(f), maxRedemptions: f.maxRedemptions,
-    showTicket: f.showTicket,
+    showTicket: f.showTicket, popupEnabled: f.popupEnabled,
     ...copy, buttonTarget: buttonOf(f, matches).target, buttonMatchId: buttonOf(f, matches).matchId,
   };
 }
@@ -691,7 +737,7 @@ export function fullBody(f: Form, matches: MatchOpt[], cities: City[], fields: F
 // removed section and no end date, which are sent as null like any other save. A shown ticket is the
 // default, so it's left out as well.
 export function createBody(f: Form, matches: MatchOpt[], cities: City[], fields: FieldOpt[] = []): Record<string, unknown> {
-  return Object.fromEntries(Object.entries(fullBody(f, matches, cities, fields)).filter(([k, v]) => (k === "showTicket" ? v === false : k === "appliesFieldIds" ? (v as number[]).length > 0 : v !== null || k === "endsLocal" || isRemovable(k as CopyKey))));
+  return Object.fromEntries(Object.entries(fullBody(f, matches, cities, fields)).filter(([k, v]) => (k === "showTicket" || k === "popupEnabled" ? v === false : k === "appliesFieldIds" ? (v as number[]).length > 0 : v !== null || k === "endsLocal" || isRemovable(k as CopyKey))));
 }
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
@@ -704,7 +750,7 @@ export function patchBody(c: Campaign, f: Form, matches: MatchOpt[], cities: Cit
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(full)) {
     if (locked && !EDITABLE_AFTER_LAUNCH.has(k)) continue;
-    const stored = k === "showTicket" ? (c.showTicket ?? true)
+    const stored = k === "showTicket" ? (c.showTicket ?? true) : k === "popupEnabled" ? (c.popupEnabled ?? true)
       : k === "appliesFieldIds" ? [...(c.appliesFieldIds ?? [])].sort((x, y) => x - y)
       : (c as unknown as Record<string, unknown>)[k];
     if (!same(v, stored)) out[k] = v;

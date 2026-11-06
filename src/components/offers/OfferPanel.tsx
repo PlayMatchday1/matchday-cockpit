@@ -19,7 +19,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FIRST_NAME_TOKEN, isAdminAccount, MAX_TEST_IDS, SECTION_ADD, addSection, autoCopy, canReset, copyAfterType, isRemovable, staleLines, staleSections, writtenForOnLoad, removeSection, resetCopy, sectionCollapsed, copyAfterHide, hideUpload, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, MAX_USES_PER_PLAYER, notFoundLine, parsePlayerIds, playerLine, PREVIEW_FIRST_NAME, amountText, limitLine, stepLimit, stepUses, usesLine, audienceBody, buttonMatchNote, buttonOf, opensText, chicagoWallNow, copyOf, createBody, defaultRun, endsTicket, formOf, formProblem, fromInput, matchInfo,
   newForm, on188Line, heldBackLine, playersHoldoutOn, PLAYERS_HOLDOUT_MIN, patchBody, playedAtSuggestions, mergeMatches, withCovers, endNote, pauseNote, ranUntil, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, countWanted, lockedSummary, endHasPassed, launchProblem, offerWallNow, offerZones, setPriceAnyWarning, setPriceProblem, pickedMatch, startLabel, STEPPER, summary, toInput, wallLabel,
-  photoTiles, photoTileOf, suggestedPhotoTiles, suggestedPhotoLabel, photoReason, photoRowName, lockScreenDate,
+  photoTiles, photoTileOf, suggestedPhotoTiles, suggestedPhotoLabel, photoReason, photoRowName, lockScreenDate, popupOffBlock, pushOnlyPrefix,
   type Campaign, type City, type Count, type FieldOpt, type Lookup, type UploadedPhoto, type CopyKey, type ListChange, type DealType, type Form, type MatchOpt, type WrittenFor,
 } from "@/lib/offersModel";
 import MatchPicker from "./MatchPicker";
@@ -29,7 +29,7 @@ import { PushReach, PushSection, SendsTo } from "./OfferPush";
 import { defaultSendLocal, fillPush, pushBodyOf, pushDirty, pushFormOf, pushLocked, pushProblem, pushSuggestion, pushText, type PushForm } from "@/lib/offersPush";
 import { lookupInBatches, MAX_OFFER_PLAYER_IDS, pastedLine, playerLookupBlock } from "@/lib/offersModel";
 import {
-  Btn, Card, Chip, ConfirmDialog, Labeled, O, VerdictLine, authed, inputCls, inputStyle, outcomeOf, settled, type WriteOutcome,
+  Btn, Card, Chip, ConfirmDialog, Labeled, O, Toggle, VerdictLine, authed, inputCls, inputStyle, outcomeOf, settled, type WriteOutcome,
 } from "./offersUi";
 
 // Whether the matches this offer names are in hand. Until they are, what the form would work out from
@@ -360,7 +360,10 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
   const [typedBefore, setTypedBefore] = useState<Partial<Record<CopyKey, string>>>({});
   const [more, setMore] = useState(false);
   const ends = endsTicket(f.endsLocal, offerWall());
-  const [tab, setTab] = useState<PreviewTab>("popup");
+  const [tab, setTab] = useState<PreviewTab>(start.popupEnabled ? "popup" : "push");
+  // Push only (popupEnabled off): the preview can only show the push, and the Popup card keeps its text out of sight.
+  const popupOff = !f.popupEnabled;
+  const setPopupEnabled = (on: boolean) => { set({ popupEnabled: on }); setTab(on ? "popup" : "push"); };
   // ── Button opens (Figma 20612:47 / 92 / 142). Editable after launch like the rest of the text;
   // forced and locked to the deal's match when the offer is for a specific match.
   const btn = buttonOf(f, data.matches);
@@ -514,7 +517,8 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
   const dl = locked || frozen; // deal, audience and run locked
   const passed = endHasPassed(f.endsLocal, offerWall());
   const idsWhy = playerLookupBlock({ players, typed: parsed.ids, answeredFor: lookupFor, lookup, failed: lookupErr !== null, sending: f.playerIds });
-  const launchWhy = matchUnread ? matchUnreadText(matchRead) : problem ?? pushProb ?? idsWhy ?? launchProblem(f, offerWall()) ?? COUNT_BLOCK[countNow];
+  const nothingOn = popupOffBlock(f, pushOn && pf.enabled);
+  const launchWhy = matchUnread ? matchUnreadText(matchRead) : problem ?? pushProb ?? idsWhy ?? nothingOn ?? launchProblem(f, offerWall()) ?? COUNT_BLOCK[countNow];
   const dealWarn = setPriceProblem(f, m);
   const anyWarn = setPriceAnyWarning(f, data.matches);
   const pushShown = pushOn && pf.enabled ? (() => { const t = pushText(pf, pushSugg); return { title: fillPush(t.title, m), body: fillPush(t.body, m) }; })() : null;
@@ -535,7 +539,7 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
     <Btn testId="offers-test" disabled={busy || c === null || (c.status === "DRAFT" && dirty)} title={c === null ? "Save it as a draft first" : c.status === "DRAFT" && dirty ? "Save your changes first, so the phone shows what you see" : undefined}
       onClick={() => { if (!testOpen) setTestText(readTestIds()); setTestOpen((v) => !v); }}>Send test</Btn>
   );
-  const summaryText = matchUnread ? matchUnreadText(matchRead) : wantCount ? summary(f, count, data.matches, data.cities, offerWall(), data.fields) : lockedSummary(f, data.matches, data.cities, offerWall(), data.fields, c ? ranUntil(c) : null);
+  const summaryText = matchUnread ? matchUnreadText(matchRead) : `${pushOnlyPrefix(f)}${wantCount ? summary(f, count, data.matches, data.cities, offerWall(), data.fields) : lockedSummary(f, data.matches, data.cities, offerWall(), data.fields, c ? ranUntil(c) : null)}`;
 
   return (
     <div data-testid="offers-panel" data-status={c?.status ?? "NEW"} className="flex flex-col gap-5">
@@ -596,7 +600,7 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
       {/* COLUMNS (Figma 20825:86): the preview pinned on the left above 1100px, on top below it. */}
       <div className="grid items-start gap-7 min-[1100px]:grid-cols-[430px_minmax(0,1fr)]">
         <div className="min-w-0 min-[1100px]:sticky min-[1100px]:top-[calc(var(--nav-h)+16px)]">
-          <OfferPreview tab={tab} setTab={setTab} copy={copy} ends={ends} showTicket={f.showTicket} opens={opens} push={pushShown} dateLine={lockScreenDate(nowWall)} />
+          <OfferPreview tab={popupOff ? "push" : tab} setTab={setTab} copy={copy} ends={ends} showTicket={f.showTicket} opens={opens} push={pushShown} dateLine={lockScreenDate(nowWall)} popupOff={popupOff} />
         </div>
         <div className="flex min-w-0 flex-col gap-4">
           {results}
@@ -827,13 +831,26 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
           </Card>
 
           {/* POPUP (Figma 20825:181). Every line is written from the deal and editable here; the preview on the left redraws as you type. */}
-          <Card title="Popup" sub="Written for you from the deal. Change any line if you want." testId="offers-popup">
-            {/* SHOW POPUP ON APP OPEN (Figma 20825:184) goes here, first in the card: "Off = push only. The discount still
-                auto-applies at checkout." It waits on the backend's field for it; nothing is drawn until that lands. */}
-            <div className="grid gap-3.5 sm:grid-cols-2">
-              {COPY_FIELDS.map(([k, label, max]) => copyField(k, label, max))}
+          <Card title="Popup" sub={popupOff ? null : "Written for you from the deal. Change any line if you want."} testId="offers-popup">
+            {/* SHOW POPUP ON APP OPEN (Figma 20825:184; backend popupEnabled, 08145ea). Off is push only: the text below is
+                kept but hidden, the preview shows the push, and the discount still applies at checkout. */}
+            <div className="flex items-center gap-3">
+              <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                <div className="text-[13px] font-semibold" style={{ color: O.ink }}>Show popup on app open</div>
+                <div className="text-[12px]" style={{ color: O.muted }}>Off = push only. The discount still auto-applies at checkout.</div>
+              </div>
+              <Toggle testId="offers-popup-on" on={f.popupEnabled} disabled={frozen} label="Show popup on app open" onChange={setPopupEnabled} />
             </div>
-            {f.showTicket ? (
+            {popupOff && (
+              <div data-testid="offers-popup-off-note" className="rounded-[8px] px-3 py-2 text-[12px]" style={{ background: O.subtle, color: O.muted }}>
+                Push only. Nobody sees a popup; the push&apos;s tap lands on {f.scope === "MATCH" ? "the match" : f.scope === "FIELD" && f.appliesFieldIds.length === 1 ? "the field" : "Find a match"} and the offer is already applied there.
+                {!(pushOn && pf.enabled) && <span className="ml-1 font-medium" style={{ color: O.warnInk }}>There is no push either, so it can&apos;t launch like this.</span>}
+              </div>
+            )}
+            {!popupOff && <div className="grid gap-3.5 sm:grid-cols-2">
+              {COPY_FIELDS.map(([k, label, max]) => copyField(k, label, max))}
+            </div>}
+            {popupOff ? null : f.showTicket ? (
               <div data-testid="offers-ticket" className="flex flex-col gap-1">
                 <div className="flex items-baseline gap-2">
                   <span className="text-[12px] font-semibold" style={{ color: O.ink }}>Ticket</span>
@@ -844,12 +861,12 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
             ) : !frozen && (
               <button type="button" data-testid="offers-add-ticket" className="self-start text-[12px] font-semibold" style={{ color: O.ok }} onClick={() => set({ showTicket: true })}>+ Add ticket</button>
             )}
-            {buttonOpens()}
-            {photoRow()}
-            <div data-testid="offers-firstname-hint" className="text-[11.5px]" style={{ color: O.muted }}>
+            {!popupOff && buttonOpens()}
+            {!popupOff && photoRow()}
+            {!popupOff && <div data-testid="offers-firstname-hint" className="text-[11.5px]" style={{ color: O.muted }}>
               <code className="rounded px-1" style={{ background: O.subtle, color: O.ink }}>{FIRST_NAME_TOKEN}</code> becomes the player&apos;s first name (shown here as {PREVIEW_FIRST_NAME}). With no first name on file it is left out.
               {stale.length > 0 && <span data-testid="offers-stale-note" className="ml-1 font-medium" style={{ color: O.warnInk }}>Written for the old deal: {stale.length} {stale.length === 1 ? "section" : "sections"}.</span>}
-            </div>
+            </div>}
           </Card>
 
           {/* PUSH NOTIFICATION (Figma 20825:223). Only where the server lets this account see pushes (OFFERS_PUSH_ACCOUNTS on production). */}
@@ -922,7 +939,7 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
       )}
       {confirm === "launch" && (
         <ConfirmDialog title={c?.status === "PAUSED" ? `Resume ${f.name.trim()}?` : `Launch ${f.name.trim()}?`}
-          note={c?.status === "PAUSED" ? "Players who match start getting it again the next time they open the app." : `${summary(f, count, data.matches, data.cities, offerWall(), data.fields)} After launch the deal, who gets it and when it runs can't change.${pushOn && pf.enabled ? ` Also sends a push, "${pushText(pf, pushSugg).title}", ${pf.at ? `at ${pf.sendLocal} in each player's city` : "as soon as it launches"}.` : ""}`}
+          note={c?.status === "PAUSED" ? "Players who match start getting it again the next time they open the app." : `${pushOnlyPrefix(f)}${summary(f, count, data.matches, data.cities, offerWall(), data.fields)} After launch the deal, who gets it and when it runs can't change.${pushOn && pf.enabled ? ` Also sends a push, "${pushText(pf, pushSugg).title}", ${pf.at ? `at ${pf.sendLocal} in each player's city` : "as soon as it launches"}.` : ""}`}
           extra={c?.status !== "PAUSED" && pushOn && pf.enabled ? <SendsTo campaignId={c && !offerDirty ? c.id : null} /> : null}
           warnings={staleLines(stale, f)}
           action={c?.status === "PAUSED" ? "Resume" : stale.length > 0 ? "Launch anyway" : "Launch"} onCancel={() => setConfirm(null)}

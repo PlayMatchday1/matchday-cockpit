@@ -15,8 +15,10 @@ export type PreviewTab = "popup" | "push";
 const POPUP_FULL = 320;
 const POPUP_INSET = 18;
 
-export default function OfferPreview({ tab, setTab, copy, ends, showTicket, opens, push, dateLine }: {
+export default function OfferPreview({ tab, setTab, copy, ends, showTicket, opens, push, dateLine, popupOff = false }: {
   tab: PreviewTab; setTab: (t: PreviewTab) => void; copy: Copy; ends: string | null; showTicket: boolean;
+  // Push only: the Popup tab is greyed (there is no popup to show) and the Push tab is the one drawn.
+  popupOff?: boolean;
   // "↳ Opens Find a match" (offersModel opensText): the popup's button and the push's tap go to the same place.
   opens: string;
   // The push as the phone shows it, or null when this offer sends none (or pushes aren't shown to this account).
@@ -34,7 +36,8 @@ export default function OfferPreview({ tab, setTab, copy, ends, showTicket, open
       <div className="flex gap-1 rounded-full border p-1" style={{ background: O.surface, borderColor: O.line }}>
         {(["popup", "push"] as const).map((t) => (
           <button key={t} type="button" data-testid={`offers-preview-${t}`} data-on={tab === t ? "1" : "0"} onClick={() => setTab(t)}
-            className={`rounded-full px-4 py-[7px] text-[13px] ${tab === t ? "font-semibold" : "font-medium"}`}
+            disabled={t === "popup" && popupOff} title={t === "popup" && popupOff ? "The popup is off for this offer" : undefined}
+            className={`rounded-full px-4 py-[7px] text-[13px] disabled:cursor-not-allowed disabled:opacity-40 ${tab === t ? "font-semibold" : "font-medium"}`}
             style={tab === t ? { background: O.chipOn, color: "#fff" } : { color: O.muted }}>{t === "popup" ? "Popup" : "Push"}</button>
         ))}
       </div>
