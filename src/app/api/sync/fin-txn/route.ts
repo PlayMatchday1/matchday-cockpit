@@ -28,6 +28,7 @@ import { runWithLog, type TriggeredBy } from "@/lib/syncLogging";
 import { syncFinTxn, finTxnLogPatch, windowDaysBack, windowForMonth, windowPart } from "@/lib/finTxnSync";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
 import { mirrorVenmo } from "@/lib/finTxnVenmo";
+import { DAILY_BACKSTOP_DAYS, centralDay, refreshFinTxnDailyRanges } from "@/lib/finTxnDaily";
 import { refuseUnlessAdmin } from "@/lib/adminSession";
 
 /* 300s IS THE CEILING AND A MONTH IS THE UNIT. September alone is ~6,100 balance transactions at
@@ -149,6 +150,23 @@ export async function runFinTxnSync(req: Request, forced?: { days: number; part?
 
   if (!run.ok) return Response.json({ error: run.error, outcome: "FAILED" }, { status: 500 });
 
+  /* ── fin_txn_daily (0255): rebuild every Central day this run could have changed ─────────────
+   * The synced window, every day the Venmo mirror inserted or edited (a row moved to a new date
+   * rebuilds both days), and on the nightly catch-up's last piece the last 90 days again as a
+   * backstop for anything re-classified outside a window. Never fatal: the ledger is the source and
+   * this is its mirror, so a failed rebuild is reported and the next run rebuilds it. Until 0255 is
+   * applied the call fails with "function does not exist" and is reported the same way. */
+  const ranges: { from: string; to: string }[] = [{ from: centralDay(since), to: centralDay(new Date(Math.min(until.getTime(), Date.now()))) }];
+  const venmoDays = (run.result as { venmo?: { touchedDays?: string[] } }).venmo?.touchedDays ?? [];
+  for (const d of venmoDays) ranges.push({ from: d, to: d });
+  if (forced && forced.part === forced.parts && forced.days >= 60) {
+    const to = centralDay(new Date());
+    const from = new Date(Date.now() - DAILY_BACKSTOP_DAYS * 86400000);
+    ranges.push({ from: centralDay(from), to });
+  }
+  const daily = await refreshFinTxnDailyRanges(supabase, ranges);
+  if (!daily.ok) console.warn("[fin-txn] fin_txn_daily refresh:", daily.errors.join(" | "));
+
   /* ── change_log, FOR THE MANUAL RUNS ONLY ────────────────────────────────────────────────────
    * Ryan: log who clicked it. A cron has no actor, and 24 rows a day of "the clock fired" is noise
    * in a log whose job is to say who changed what. NEVER THE ROW BODIES — a fin_txn row carries a
@@ -183,7 +201,7 @@ export async function runFinTxnSync(req: Request, forced?: { days: number; part?
     ).catch(() => {});
   }
 
-  return Response.json({ outcome: "LANDED", source, window: label, triggeredBy, ...run.result });
+  return Response.json({ outcome: "LANDED", source, window: label, triggeredBy, ...run.result, daily });
 }
 
 /** Manual calls and the back-fill walker: ?days=N or ?month=YYYY-MM. */

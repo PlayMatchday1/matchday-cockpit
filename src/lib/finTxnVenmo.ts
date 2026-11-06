@@ -21,7 +21,11 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { BUSINESS_TZ, zonedWallClockToUtcMs } from "./businessHours";
 import { isAfterFinal } from "./revenueTxn";
 
-export type VenmoMirrorResult = { inserted: number; updated: number; attributed: number; orphaned: string[] };
+export type VenmoMirrorResult = { inserted: number; updated: number; attributed: number; orphaned: string[];
+  /** Every Central day a row was inserted or changed on this run, old date included when a date moved —
+   *  the days fin_txn_daily (0255) must be rebuilt for. */
+  touchedDays: string[] };
+const centralDayOf = (iso: string): string => new Intl.DateTimeFormat("en-CA", { timeZone: BUSINESS_TZ }).format(new Date(iso));
 
 /** Noon Central on the row's date: the Central day of the stored instant is always fin_revenue's date. */
 export const venmoInstant = (ymd: string): string => {
@@ -43,6 +47,7 @@ export async function mirrorVenmo(sb: SupabaseClient): Promise<VenmoMirrorResult
   const keys = new Set<string>();
   const inserts: Record<string, unknown>[] = [];
   let updated = 0, attributed = 0;
+  const touched = new Set<string>();
   const nowMs = Date.now();
 
   for (const r of src.data ?? []) {
@@ -62,6 +67,7 @@ export async function mirrorVenmo(sb: SupabaseClient): Promise<VenmoMirrorResult
       const late = isAfterFinal(row.created_at_utc, nowMs,
         (y, m, d) => zonedWallClockToUtcMs(y, m, d, 0, 0, BUSINESS_TZ));
       inserts.push(late ? { ...row, updated_at: new Date(nowMs).toISOString() } : row);
+      touched.add(centralDayOf(row.created_at_utc));
       continue;
     }
     const amount = was.gross_cents !== cents || Date.parse(String(was.created_at_utc)) !== Date.parse(row.created_at_utc);
@@ -70,6 +76,8 @@ export async function mirrorVenmo(sb: SupabaseClient): Promise<VenmoMirrorResult
     if (!amount && !other) continue;
     const { error } = await sb.from("fin_txn").update({ ...row, updated_at: amount ? new Date().toISOString() : was.updated_at }).eq("id", was.id);
     if (error) throw new Error(`fin_txn Venmo update failed: ${error.message}`);
+    touched.add(centralDayOf(row.created_at_utc));
+    touched.add(centralDayOf(String(was.created_at_utc)));
     if (amount) updated++; else attributed++;
   }
   if (inserts.length) {
@@ -77,5 +85,5 @@ export async function mirrorVenmo(sb: SupabaseClient): Promise<VenmoMirrorResult
     if (error) throw new Error(`fin_txn Venmo insert failed: ${error.message}`);
   }
   const orphaned = [...byKey.keys()].filter((k) => !keys.has(k));
-  return { inserted: inserts.length, updated, attributed, orphaned };
+  return { inserted: inserts.length, updated, attributed, orphaned, touchedDays: [...touched].sort() };
 }
