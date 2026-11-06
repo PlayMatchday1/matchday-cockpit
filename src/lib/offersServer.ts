@@ -451,41 +451,56 @@ export const savePush = (auth: OffersAuth, id: number, body: Record<string, unkn
 
 // Why a test push could not go, in plain words: the backend's INVALID_OFFER_PUSH names the device problem in its
 // message (offer-push.service.ts test: "<email> has no device to send to" / "has no device on app 1.88 or newer").
-export function testPushErrorText(error: unknown, email: string): string {
+// SEND TEST'S RECIPIENT (backend e9e90a7, both test routes): the box's text as targetUserId (an id, "#" optional) or
+// targetEmail; empty is the caller's own account. who: how the refusals name them ("#28", or the email).
+export type TestTarget = { targetUserId?: number; targetEmail?: string };
+export function testTargetOf(to: unknown): { target: TestTarget; who: string | null } | { error: string } {
+  const v = typeof to === "string" ? to.trim() : "";
+  if (!v) return { target: {}, who: null };
+  if (/^#?\d{1,9}$/.test(v)) { const id = Number(v.replace("#", "")); return id > 0 ? { target: { targetUserId: id }, who: `#${id}` } : { error: "That isn't a player ID." }; }
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v) && v.length <= 255) return { target: { targetEmail: v.toLowerCase() }, who: v.toLowerCase() };
+  return { error: "Send to takes a player ID or an email." };
+}
+// The refusals, in plain words, naming who it was for (who null: the caller, named by their email).
+export function testPushErrorText(error: unknown, email: string, who: string | null = null): string {
   const { code, message } = backendMessage(error);
+  const name = who ?? email;
   if (code === "NOT_FOUND_PREVIEW_PLAYER") return `No player account in the app uses ${email}. Sign up in the app with that email, then try again.`;
-  if (code === "OFFER_TEST_PUSH_NOT_ALLOWED") return "Test pushes are off on this backend until its push mode is live, so nothing was sent.";
-  if (code === "INVALID_OFFER_PUSH" && /no device on app/i.test(message ?? "")) return `None of the phones signed in as ${email} has the MatchDay app on 1.88 or newer, so nothing was sent. Update the app on your phone, open it once, then try again.`;
-  if (code === "INVALID_OFFER_PUSH" && /no device to send to/i.test(message ?? "")) return `No phone is signed in to the MatchDay app as ${email}, so nothing was sent. Sign in on your phone, then try again.`;
+  if (code === "NOT_FOUND_PUSH_TEST_TARGET") return `no account has the ${who?.startsWith("#") ? "ID" : "email"} ${name}.`;
+  if (code === "INVALID_PUSH_TEST_TARGET") return "send to one player: an ID or an email, not both.";
+  if (code === "OFFER_TEST_PUSH_NOT_ALLOWED") return who ? `until pushes are live on this server, a test can only go to a @playmatchday.com account or one on the allowlist, and ${name} is neither.` : "Test pushes are off on this backend until its push mode is live, so nothing was sent.";
+  if (/no device on app/i.test(message ?? "")) return who ? `${name} has no phone on app 1.88 or newer.` : `None of the phones signed in as ${email} has the MatchDay app on 1.88 or newer, so nothing was sent. Update the app on your phone, open it once, then try again.`;
+  if (/no device to send to/i.test(message ?? "")) return who ? `${name} has no phone signed in.` : `No phone is signed in to the MatchDay app as ${email}, so nothing was sent. Sign in on your phone, then try again.`;
   return errorText(error);
 }
-
-// THE TEST PUSH (POST .../push/test): the signed-in person's own devices, and nobody else's. The backend
-// takes no ids, emails or tokens, and reads who from X-Acting-Staff-Email. A 2xx is SENT, never "arrived".
-export async function sendTestPush(auth: OffersAuth, id: number, text: { title?: string; body?: string }): Promise<Response> {
-  const path = `${CAMPAIGNS}/${id}/push/test`;
+// ONE TEST, LOGGED, NEVER RETRIED: offer pushes (source offers:push-test) and message pushes (pushes:test) alike. The
+// body is the text and, when the box names someone, the target; nothing else reaches the backend.
+export async function sendLoggedTest(auth: OffersAuth, path: string, source: string, text: { title?: string; body?: string }, to?: { target: TestTarget; who: string | null }): Promise<Response> {
+  const body = { ...text, ...(to?.target ?? {}) };
   let answer: { pushId?: number; devices?: number; sent?: number; failed?: number } | null = null;
   const { outcome, error } = await recordWrite(
     {
-      env: cfg().env, source: "offers:push-test", actorName: auth.email, actorEmail: auth.email, saveId: randomUUID(),
-      matchId: null, matchName: null, method: "POST", path, body: text, keys: [], label: (k) => k,
+      env: cfg().env, source, actorName: auth.email, actorEmail: auth.email, saveId: randomUUID(),
+      matchId: null, matchName: null, method: "POST", path, body, keys: [], label: (k) => k,
       applied: () => (answer && typeof answer.sent === "number" ? true : "unknown"),
     },
     {
       readResource: async () => ({}),
-      write: async () => { const r = await offersApiWrite<typeof answer>(auth, "POST", path, text); answer = r ?? null; return r; },
+      write: async () => { const r = await offersApiWrite<typeof answer>(auth, "POST", path, body); answer = r ?? null; return r; },
       now: () => new Date().toISOString(),
     },
     gateDeps.logStore(),
   );
   if (error) {
-    const msg = testPushErrorText(error, auth.email);
+    const msg = testPushErrorText(error, auth.email, to?.who ?? null);
     return Response.json({ verdict: outcome === "unknown" ? "UNKNOWN" : "FAILED", error: msg }, { status: outcome === "unknown" ? 200 : 502 });
   }
   const a = answer as { pushId?: number; devices?: number; sent?: number; failed?: number } | null;
-  if (!a || typeof a.sent !== "number") return Response.json({ verdict: "UNKNOWN", detail: "The backend answered without saying how many phones it sent to. Check your phone before trying again." });
+  if (!a || typeof a.sent !== "number") return Response.json({ verdict: "UNKNOWN", detail: "The backend answered without saying how many phones it sent to. Check the phone before trying again." });
   return Response.json({ verdict: "SENT", devices: a.devices ?? null, sent: a.sent, failed: a.failed ?? 0 });
 }
+export const sendTestPush = (auth: OffersAuth, id: number, text: { title?: string; body?: string }, to?: { target: TestTarget; who: string | null }) =>
+  sendLoggedTest(auth, `${CAMPAIGNS}/${id}/push/test`, "offers:push-test", text, to);
 
 // THE SHARED WEEKLY LIMIT (PUT /admin/offers/push-settings). It returns the settings; LANDED when they match.
 export async function savePushSettings(auth: OffersAuth, weeklyCap: number): Promise<Response> {

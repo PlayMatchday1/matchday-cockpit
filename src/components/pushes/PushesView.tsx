@@ -251,20 +251,23 @@ function PushEditor({ c, data, onClose, onLanded }: { c: PushMessage | null; dat
   }, [countBody, countWanted, countTry]);
   const countNow = countFor === countBody ? count : null;
 
-  // ── the cap flag: how many of the SAVED audience are at the weekly limit (GET .../reachable). Only while the audience
-  // on screen is the saved one; an edited audience has no such count until it is saved. ──
+  // ── the cap flag (Figma 20842:72): how many of these players are already at the weekly cap, from the live count's
+  // atCap (backend e9e90a7), so it shows while the audience is still being edited. A backend from before it has no
+  // atCap; then the saved push's reachable read (GET .../reachable, capped) stands in, for the saved audience only. ──
   const savedAudience = c !== null && canonicalAudience(c.audience) === canonicalAudience(audience);
   const [reach, setReach] = useState<PushReachable | null>(null);
+  const countHasCap = typeof countNow?.atCap === "number";
   useEffect(() => {
-    if (!c || missing || c.status === "ENDED") return;
+    if (!c || missing || c.status === "ENDED" || countHasCap) return;
     let cancelled = false;
     (async () => {
       const r = await authed(`/api/pushes/${c.id}/reachable`);
       if (!cancelled && r.ok) setReach(r.json as unknown as PushReachable);
     })();
     return () => { cancelled = true; };
-  }, [c, missing]);
-  const capFlag = savedAudience && reach && reach.capped > 0 ? capFlagLine(reach.capped, cap) : null;
+  }, [c, missing, countHasCap]);
+  const capFlag = countHasCap ? (countNow!.atCap! > 0 ? capFlagLine(countNow!.atCap!, countNow!.weeklyCap ?? cap) : null)
+    : savedAudience && reach && reach.capped > 0 ? capFlagLine(reach.capped, cap) : null;
 
   // ── tap target ──
   const m = f.tapTarget === "MATCH" && f.tapMatchId !== null ? data.matches.find((x) => x.id === f.tapMatchId) ?? null : null;
@@ -311,10 +314,10 @@ function PushEditor({ c, data, onClose, onLanded }: { c: PushMessage | null; dat
     if (o.verdict === "LANDED") onLanded(o, (r.json.after ?? null) as PushMessage | null);
     return o;
   }
-  // SEND TEST: the text on screen, saved or not; to your own phones only.
+  // SEND TEST: the text on screen, saved or not, to the player in the Send to box.
   const testBox = useRef<HTMLDivElement>(null);
-  const sendTest = async (): Promise<TestAnswer> => {
-    const r = await authed(`/api/pushes/${c!.id}/test`, { method: "POST", body: JSON.stringify({ title: f.title, body: f.body }) });
+  const sendTest = async (to: string): Promise<TestAnswer> => {
+    const r = await authed(`/api/pushes/${c!.id}/test`, { method: "POST", body: JSON.stringify({ title: f.title, body: f.body, to }) });
     return r.json.verdict === "SENT" || r.json.verdict === "PARTIAL" ? { ok: true, sent: Number(r.json.sent ?? 0), failed: Number(r.json.failed ?? 0), devices: Number(r.json.devices ?? 0) } : { ok: false, error: String(r.json.error ?? "the backend refused it") };
   };
   const testWhy = missing ? "The Push Notifications backend isn't on this server yet." : c === null ? "Save it as a draft first." : !f.title.trim() || !f.body.trim() ? "Write a title and a message first." : null;

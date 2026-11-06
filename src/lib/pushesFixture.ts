@@ -69,8 +69,9 @@ export const fixture = {
     const h = hash(JSON.stringify(a.filters));
     const matching = Math.max(0, Math.round(2600 / (1 + a.filters.length * 0.9)) - (h % 97));
     const allowPushes = Math.round(matching * 0.82);
-    const heldBack = Math.round((allowPushes * holdoutPercent) / 100);
-    return { matching, allowPushes, on188: Math.round(matching * 0.6), holdoutPercent, heldBack, willSend: allowPushes - heldBack };
+    const atCap = Math.round(allowPushes * 0.08);
+    const heldBack = Math.round(((allowPushes - atCap) * holdoutPercent) / 100);
+    return { matching, allowPushes, on188: Math.round(matching * 0.6), atCap, weeklyCap: 3, holdoutPercent, heldBack, willSend: allowPushes - atCap - heldBack };
   },
   sample(a: ContractAudience) {
     const c = fixture.count(a);
@@ -86,7 +87,13 @@ export const fixture = {
     }
     return { players, notFound };
   },
-  test(id: number) { seed(); return store.has(id) ? { pushId: 1, devices: 1, sent: 1, failed: 0 } : { pushId: 0, devices: 0, sent: 0, failed: 0 }; },
+  test(id: number, t: { targetUserId?: number; targetEmail?: string } = {}): { pushId: number; devices: number; sent: number; failed: number } | { error: string } {
+    seed();
+    if (!store.has(id)) return { error: "That push no longer exists." };
+    if (t.targetUserId === 28) return { error: "#28 has no phone signed in." };
+    if (t.targetUserId && t.targetUserId % 7 === 0) return { error: `no account has the ID #${t.targetUserId}.` };
+    return { pushId: 1, devices: 1, sent: 1, failed: 0 };
+  },
   write(method: "POST" | "PATCH", path: string, body: Record<string, unknown> | undefined, email: string): { after: PushMessage } | { error: string } {
     seed();
     const m = /^\/admin\/push-notifications\/messages(?:\/(\d+))?(?:\/(send|pause|end))?$/.exec(path);

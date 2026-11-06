@@ -1,11 +1,11 @@
 "use client";
 
 // SEND TEST (Figma 20842:74), in Push Notifications' Message card and in the Offers push section: a Send to box (a
-// player id or an email, remembered in this browser), who that is, Send test, and what happened.
+// player ID or an email, remembered in this browser), who that is, Send test, and what happened.
 //
-// THE BACKEND SENDS A TEST ONLY TO THE SIGNED-IN PERSON'S OWN PHONES (backend push-campaign-sender.service.ts test,
-// offer-push test: "to the devices of one account only, the staff member's own"; no recipient field). So the box sends
-// only when the player in it is you, and says so plainly for anyone else rather than sending to you while naming them.
+// It goes to the player in the box, any player (backend e9e90a7: targetUserId / targetEmail on both test routes; the
+// backend logs every attempt). Empty sends to the signed-in person. A refusal comes back in plain words ("Not sent:
+// #28 has no phone signed in.").
 
 import { useEffect, useState } from "react";
 import { useAuth } from "@/lib/useAuth";
@@ -28,7 +28,7 @@ function selfIdOf(email: string): Promise<number | null> {
 
 export type TestAnswer = { ok: true; sent: number; failed: number; devices?: number } | { ok: false; error: string };
 export default function SendTestBox({ send, blockedWhy, testId, onOffers = false }: {
-  send: () => Promise<TestAnswer>; blockedWhy?: string | null; testId: string; onOffers?: boolean;
+  send: (to: string) => Promise<TestAnswer>; blockedWhy?: string | null; testId: string; onOffers?: boolean;
 }) {
   const { appUser } = useAuth();
   const me = (appUser?.email ?? "").toLowerCase();
@@ -58,7 +58,7 @@ export default function SendTestBox({ send, blockedWhy, testId, onOffers = false
     setBusy(true);
     keep(v);
     try {
-      const a = await send();
+      const a = await send(v);
       const label = current?.player ? `#${current.player.id}` : v;
       const phones = (k: number) => `${k} ${k === 1 ? "phone" : "phones"}`;
       const line = !a.ok ? { ok: false, text: `Not sent: ${a.error}` }
@@ -67,7 +67,7 @@ export default function SendTestBox({ send, blockedWhy, testId, onOffers = false
       setLines((xs) => [line, ...xs].slice(0, 3));
     } finally { setBusy(false); }
   }
-  const why = blockedWhy ?? (!v ? "Type your player ID or email." : !isMe ? "Test pushes go only to your own account. The backend sends a test to the signed-in person's phones and nobody else." : null);
+  const why = blockedWhy ?? (!v ? "Type a player ID or email." : !/^#?\d+$/.test(v) && !v.includes("@") ? "Send to takes a player ID or an email." : null);
   return (
     <div data-testid={testId} className="flex flex-col gap-2 rounded-[10px] border px-3.5 py-3" style={{ borderColor: O.line }}>
       <div className="text-[12px] font-semibold" style={{ color: O.ink }}>Send test</div>
@@ -81,7 +81,7 @@ export default function SendTestBox({ send, blockedWhy, testId, onOffers = false
         </span>
         <Btn testId={`${testId}-send`} disabled={busy || !!why} title={why ?? undefined} onClick={go}>{busy ? "Sending…" : "Send test"}</Btn>
       </div>
-      {why && v && <div data-testid={`${testId}-why`} className="text-[12px]" style={{ color: O.muted }}>{why}</div>}
+      {why && <div data-testid={`${testId}-why`} className="text-[12px]" style={{ color: O.muted }}>{why}</div>}
       {lines.map((l, i) => (
         <div key={i} data-testid={`${testId}-line`} data-ok={l.ok ? "1" : "0"} className="self-start rounded-[8px] px-2.5 py-1.5 text-[12px] font-semibold" style={l.ok ? { background: O.mint, color: O.chipOn } : { background: "#fff2d9", color: "#8c590d" }}>{l.text}</div>
       ))}

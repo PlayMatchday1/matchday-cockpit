@@ -201,12 +201,13 @@ that looks valid while every API call returns 401. Only Match Ops › Offers say
 
 - Delete `src/lib/pushesFixture.ts` and the `PUSHES_FIXTURE` switch once nobody needs to look at the screens without
   a backend. It is dev-only (refused under NODE_ENV=production and on Vercel).
-- Send test: the backend sends a test only to the signed-in person's own phones, so the Send to box sends only to you.
-  Sending a test to another player needs a recipient field on both test routes (backend).
 - Offers decide old fields or `audience` from the page's own campaigns (any one carrying `audience`). An empty offer
   list on a new backend would fall back to the old fields until the first offer exists.
-- The cap flag counts the SAVED audience (`.../reachable`); while the audience on screen is edited and unsaved it is
-  hidden, because no route counts the cap for an unsaved audience.
+- The cap flag reads the live count's `atCap`. On a backend without it, it falls back to the saved push's
+  `.../reachable` (`capped`), and is hidden while the audience is edited. Offers' own count route has no `atCap`, so
+  the flag is on Push Notifications only.
+- The weekly limit now has its own route with who and when (`/admin/push-notifications/settings`); the page still uses
+  `/admin/offers/push-settings` (the same setting) and doesn't show who last changed it.
 - Left out on purpose for now: the "Repeating & automatic" tab, Sends > Repeats and Automatic, and the Find a match
   and A field tap targets (drawn disabled, "needs the next app update").
 

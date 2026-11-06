@@ -1,8 +1,9 @@
-// POST /api/offers/{id}/push/test, body { title?, body? } (the unsaved text, or the saved text when left
-// out): the push, filled in for the signed-in person, to their own phones only. See sendTestPush.
+// POST /api/offers/{id}/push/test, body { title?, body?, to? } (the unsaved text, or the saved text when left out; to:
+// a player ID or email, or empty for the signed-in person): the push, filled in for that player, to their phones.
+// See sendLoggedTest.
 
 import { PUSH_BODY_MAX, PUSH_TITLE_MAX } from "@/lib/offersPush";
-import { offersGate, pushNotFound, readJson, sendTestPush } from "@/lib/offersServer";
+import { offersGate, pushNotFound, readJson, sendTestPush, testTargetOf } from "@/lib/offersServer";
 
 export const dynamic = "force-dynamic";
 
@@ -13,10 +14,12 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   if (!Number.isInteger(id) || id <= 0) return pushNotFound();
   const raw = await readJson(req);
   if (raw instanceof Response) return raw;
-  // Only the text: nothing here can name who it goes to.
+  // The text, and who it goes to from `to` alone: no other field can name a recipient.
+  const to = testTargetOf(raw.to);
+  if ("error" in to) return Response.json({ error: to.error }, { status: 400 });
   const text: { title?: string; body?: string } = {};
   if (typeof raw.title === "string") text.title = raw.title;
   if (typeof raw.body === "string") text.body = raw.body;
   if ((text.title?.length ?? 0) > PUSH_TITLE_MAX || (text.body?.length ?? 0) > PUSH_BODY_MAX) return Response.json({ error: "The push text is too long." }, { status: 400 });
-  return sendTestPush(auth, id, text);
+  return sendTestPush(auth, id, text, to);
 }

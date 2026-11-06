@@ -1300,6 +1300,22 @@ function routeFiles(dir: string): string[] {
     eq("test: SENT, to the phones the backend names", [t.verdict, t.sent, t.devices], ["SENT", 2, 2]);
     eq("...the request carries only the text, and the signed-in person as staff", [seen.map((x) => `${x.m} ${x.path}`), JSON.parse(seen[0].body!), seen[0].staff], [["POST /admin/offers/campaigns/9/push/test"], { title: "Hi", body: "There" }, "staff@playmatchday.com"]);
     eq("...and is logged as the test it is", [rows2.at(-1)?.source, rows2.at(-1)?.outcome], ["offers:push-test", "landed"]);
+    // SEND TO (backend e9e90a7): the box's text is the one field that can name a recipient.
+    answer = () => new Response(JSON.stringify({ pushId: 9082, devices: 1, sent: 1, failed: 0 }), { status: 201 });
+    seen.length = 0;
+    await test.POST(req("POST", { title: "Hi", body: "There", to: "#28", userIds: [7] }), ctx);
+    await test.POST(req("POST", { title: "Hi", body: "There", to: " Luis@Example.com " }), ctx);
+    eq("send to: an ID goes as targetUserId, an email as targetEmail, nothing else", seen.map((x) => JSON.parse(x.body!)), [{ title: "Hi", body: "There", targetUserId: 28 }, { title: "Hi", body: "There", targetEmail: "luis@example.com" }]);
+    seen.length = 0;
+    const bad = await test.POST(req("POST", { title: "Hi", to: "(512) 555-0142" }), ctx);
+    eq("send to: anything but an ID or email is refused here, before the backend", [bad.status, (await json(bad)).error, seen.length], [400, "Send to takes a player ID or an email.", 0]);
+    answer = () => new Response(JSON.stringify({ errorCode: "INVALID_OFFER_PUSH", message: "Offer push is not valid: account 28 has no device to send to" }), { status: 400 });
+    eq("send to: a refusal names the player", (await json(await test.POST(req("POST", { to: "28" }), ctx))).error, "#28 has no phone signed in.");
+    answer = () => new Response(JSON.stringify({ errorCode: "NOT_FOUND_PUSH_TEST_TARGET", message: "No account has that id or email" }), { status: 404 });
+    eq("send to: no such account", (await json(await test.POST(req("POST", { to: "nobody@example.com" }), ctx))).error, "no account has the email nobody@example.com.");
+    answer = () => new Response(JSON.stringify({ errorCode: "OFFER_TEST_PUSH_NOT_ALLOWED", message: "x" }), { status: 403 });
+    eq("send to: off the allowlist before push mode is live", (await json(await test.POST(req("POST", { to: "9" }), ctx))).error, "until pushes are live on this server, a test can only go to a @playmatchday.com account or one on the allowlist, and #9 is neither.");
+    eq("send to: the attempt is logged as a test", rows2.at(-1)?.source, "offers:push-test");
     answer = () => new Response(JSON.stringify({ errorCode: "NOT_FOUND_PREVIEW_PLAYER", message: "x" }), { status: 404 });
     eq("no player account for that email: said", (await json(await test.POST(req("POST", {}), ctx))).error, "No player account in the app uses staff@playmatchday.com. Sign up in the app with that email, then try again.");
     answer = () => new Response("{}", { status: 201 });
@@ -1428,6 +1444,11 @@ function routeFiles(dir: string): string[] {
     eq("after it went: the name only", pm.patchBody({ ...draft, status: "LAUNCHED", state: "SENT" }, { ...pf, name: "M", title: "New" }, []), { name: "M" });
     eq("a read-back with the audience reordered is not a mismatch", pm.pushMismatches({ audience: { mode: "FILTERS", filters: [{ type: "CITY", op: "IN", cityIds: [2, 1] }] } }, { ...draft, audience: { mode: "FILTERS", filters: [{ cityIds: [1, 2], type: "CITY", op: "IN" }] } }), []);
     eq("a read-back that lost the title is a mismatch", pm.pushMismatches({ title: "X" }, draft), ["title"]);
+    // The count with atCap (backend e9e90a7): the cap flag and the summary name the players a push now skips.
+    const cnt = { matching: 412, allowPushes: 338, on188: 290, atCap: 12, weeklyCap: 3, holdoutPercent: 10, heldBack: 33, willSend: 293 };
+    eq("cap flag from the count", am.capFlagLine(cnt.atCap, cnt.weeklyCap), "12 already got 3 pushes this week and won't get this one.");
+    eq("summary with players at the cap", pm.summaryLine(pf, cnt, 2), "Sends now to about 293 players (338 who allow pushes, minus 12 at the weekly limit and 10% held back to measure). Players already at 3 pushes this week are skipped.");
+    eq("summary on a backend without atCap", pm.summaryLine(pf, { matching: 412, allowPushes: 338, holdoutPercent: 10, heldBack: 34, willSend: 304 }, 2), "Sends now to about 304 players (338 who allow pushes, minus 10% held back to measure). Players already at 2 pushes this week are skipped.");
   }
 
   console.log(`\n${pass} passed, ${fail} failed`);

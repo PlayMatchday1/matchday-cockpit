@@ -28,9 +28,9 @@ export function PushSection({ pf, setPf, sugg, scope, match, campaignId, campaig
   const off = disabled || locked;
   const t = pushText(pf, sugg);
   const note = sendTimeNote(pf, startsLocal, endsLocal);
-  // SEND TEST (Figma 20842:74, the same box as Push Notifications): the text on screen, to your own phones only.
-  const sendTest = async (): Promise<TestAnswer> => {
-    const r = await authed(`/api/offers/${campaignId}/push/test`, { method: "POST", body: JSON.stringify({ title: t.title, body: t.body }) });
+  // SEND TEST (Figma 20842:74, the same box as Push Notifications): the text on screen, to the player in the box.
+  const sendTest = async (to: string): Promise<TestAnswer> => {
+    const r = await authed(`/api/offers/${campaignId}/push/test`, { method: "POST", body: JSON.stringify({ title: t.title, body: t.body, to }) });
     return r.json.verdict === "SENT" || r.json.verdict === "PARTIAL" ? { ok: true, sent: Number(r.json.sent ?? 0), failed: Number(r.json.failed ?? 0) } : { ok: false, error: outcomeOf(r, "").text };
   };
   return (

@@ -15,9 +15,8 @@ import { randomUUID } from "node:crypto";
 import { recordWrite } from "@/lib/changeLog";
 import { apiGet, apiWrite, WriteFailedError } from "@/lib/matchdayStageApi";
 import { offersLogBody } from "@/lib/offersModel";
-import { _offersCfg, _offersLogStore, _offersPaced, errorText, offersApiWrite, readPlayerLookup, testPushErrorText, type OffersAuth, type Verdict } from "@/lib/offersServer";
+import { _offersCfg, _offersLogStore, _offersPaced, errorText, offersApiWrite, readPlayerLookup, sendLoggedTest, type OffersAuth, type TestTarget, type Verdict } from "@/lib/offersServer";
 import { READS_STOPPED } from "@/lib/offersPacing";
-import { testSendOutcome } from "@/lib/offersPush";
 import { entriesOf, MAX_ENTRIES, type ContractAudience, type ContractCount, type TokenLookup } from "@/lib/audienceModel";
 import { pushMismatches, type ListPage, type PushMessage, type PushReachable, type PushResultsData } from "@/lib/pushesModel";
 import { fixture } from "@/lib/pushesFixture";
@@ -166,14 +165,9 @@ export const movePush = (auth: OffersAuth, id: number, move: Move, before?: Push
   check: (after) => (after.status === MOVED[move] ? [] : ["status"]),
 });
 
-// A TEST to the signed-in person's own phones only (the backend sends nowhere else), with the text as typed.
-export async function sendTestPush(auth: OffersAuth, id: number, text: { title: string; body: string }): Promise<Response> {
-  try {
-    const a = fixtureOn() ? fixture.test(id) : await offersApiWrite<{ sent?: number; failed?: number; devices?: number }>(auth, "POST", `${MESSAGES}/${id}/test`, text);
-    const o = testSendOutcome(a);
-    return Response.json({ verdict: o.verdict, text: o.text, sent: a.sent, failed: a.failed, devices: a.devices });
-  } catch (e) {
-    console.error(`[pushes] test push ${id}: ${e instanceof Error ? e.message.slice(0, 300) : String(e)}`);
-    return Response.json({ verdict: "FAILED", error: missingRoute(e) ? NO_PUSHES_BACKEND : testPushErrorText(e, auth.email) }, { status: 502 });
-  }
+// A TEST to one player (the Send to box; the signed-in person when it is empty), with the text as typed. Logged and
+// never retried, through the same function as an offer's test (sendLoggedTest).
+export async function sendTestPush(auth: OffersAuth, id: number, text: { title: string; body: string }, to: { target: TestTarget; who: string | null }): Promise<Response> {
+  if (fixtureOn()) { const a = fixture.test(id, to.target); return "error" in a ? Response.json({ verdict: "FAILED", error: a.error }, { status: 502 }) : Response.json({ verdict: "SENT", ...a }); }
+  return sendLoggedTest(auth, `${MESSAGES}/${id}/test`, "pushes:test", text, to);
 }

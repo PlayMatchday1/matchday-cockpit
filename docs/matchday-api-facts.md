@@ -8659,9 +8659,18 @@ Evidence: `app_request_log_batches` and `app_request_log`, paged by id, staging 
   A draft saved with CITY + NEVER_PLAYED_AT + USUAL_DAY read back LANDED, compared as the same audience
   (`canonicalAudience`: key and id order differ in the answer), reopened with nothing to save, and was deleted
   LANDED. The Clubhouse sends `audience` and none of the old fields whenever the page's campaigns carry it.
-- **Test pushes go only to the caller.** Both test routes (`.../messages/:id/test`, offers `:id/push/test`) take no
-  recipient: push-campaign-sender.service.ts `test` sends "to the devices of one account only, the staff member's
-  own". The Send to box therefore sends only when the player in it is the signed-in person.
+- **Send test goes to any player (backend e9e90a7, on staging 2026-11-06).** Both test routes take `targetUserId` or
+  `targetEmail` (not both, 400 `INVALID_PUSH_TEST_TARGET`); none is the caller. Staging, through the Clubhouse:
+  message push 46 `to: "999999999"` answered 404 `NOT_FOUND_PUSH_TEST_TARGET` (shown "no account has the ID
+  #999999999."), `to: "rmancuso@playmatchday.com"` answered `{ devices: 1, sent: 1, failed: 0 }`; offer 38
+  `to: "999999999"` the same 404. Until push mode is live the target must be allowlisted or @playmatchday.com (403
+  `OFFER_TEST_PUSH_NOT_ALLOWED`, not seen yet). A device refusal names the account in its message ("account 28 has no
+  device to send to"); the Clubhouse matches the message, not a code. The Clubhouse sends `to` as `targetUserId` for
+  an ID ("#" optional) and `targetEmail` for an email, and nothing else can name a recipient
+  (`testTargetOf`, src/lib/offersServer.ts).
+- **The count reports the cap (e9e90a7).** `POST /admin/audiences/count` (Austin, holdout 10) on staging:
+  `{ matching: 209, allowPushes: 165, on188: 11, atCap: 1, weeklyCap: 3, holdoutPercent: 10, heldBack: 16,
+  willSend: 148 }`: willSend = allowPushes - atCap - heldBack. The weekly cap default is 3 now (was 2).
 
 **A route the backend lacks no longer pauses reads.** The Offers pacer (`src/lib/offersServer.ts`) used to stop every
 read for 30 seconds after any non-4xx failure, and staging's 200-HTML answer to a missing route is a parse failure,

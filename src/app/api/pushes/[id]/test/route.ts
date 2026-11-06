@@ -1,8 +1,8 @@
-// POST /api/pushes/:id/test, body { title, body }: a test to the signed-in person's own phones, with the text as
-// typed. Nothing is saved and nothing is read back; the answer is how many phones took it (SENT or PARTIAL).
+// POST /api/pushes/:id/test, body { title, body, to? }: a test to one player's phones (to: an ID or email; empty is the
+// signed-in person), with the text as typed. Nothing is saved and nothing is read back; the answer is how many phones took it (SENT or PARTIAL).
 
 import { PUSH_BODY_MAX, PUSH_TITLE_MAX } from "@/lib/offersPush";
-import { offersGate, readJson } from "@/lib/offersServer";
+import { offersGate, readJson, testTargetOf } from "@/lib/offersServer";
 import { sendTestPush } from "@/lib/pushesServer";
 
 export const dynamic = "force-dynamic";
@@ -18,5 +18,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   const text = typeof body.body === "string" ? body.body.trim() : "";
   if (!title || !text) return Response.json({ error: "Write a title and a message first." }, { status: 400 });
   if (title.length > PUSH_TITLE_MAX || text.length > PUSH_BODY_MAX) return Response.json({ error: "The push is too long to send." }, { status: 400 });
-  return sendTestPush(auth, id, { title, body: text });
+  const to = testTargetOf(body.to);
+  if ("error" in to) return Response.json({ error: to.error }, { status: 400 });
+  return sendTestPush(auth, id, { title, body: text }, to);
 }

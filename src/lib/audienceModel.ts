@@ -303,7 +303,9 @@ export function playersLine(players: FoundPlayer[]): string {
 // POST /admin/audiences/count: { matching, allowPushes, on188, holdoutPercent, heldBack, willSend }.
 // "412 players match · 338 allow pushes · 10% held back to measure". allowPushes is left out where the host's count
 // has no such column (Offers on a backend from before the shared audience).
-export type ContractCount = { matching: number; allowPushes: number; on188?: number; holdoutPercent: number; heldBack: number; willSend: number };
+// atCap / weeklyCap (backend e9e90a7): of allowPushes, players already at the weekly cap, who a push now skips; then
+// heldBack is the holdout of the rest and willSend = allowPushes - atCap - heldBack. Absent on a backend before it.
+export type ContractCount = { matching: number; allowPushes: number; on188?: number; atCap?: number; weeklyCap?: number; holdoutPercent: number; heldBack: number; willSend: number };
 export function countLine(c: { matching: number; allowPushes?: number | null; holdoutPercent: number }): string {
   const parts = [`${c.matching.toLocaleString("en-US")} ${c.matching === 1 ? "player matches" : "players match"}`];
   if (typeof c.allowPushes === "number") parts.push(`${c.allowPushes.toLocaleString("en-US")} allow pushes`);

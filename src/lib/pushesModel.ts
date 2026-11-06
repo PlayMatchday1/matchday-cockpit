@@ -49,7 +49,8 @@ export const TAP_LABEL: Record<TapTarget, string> = { MATCH: "A match", HOME: "H
 // The next app update carries the Find a match and field pages; until then those two are drawn disabled.
 export const TAP_NEEDS_APP: TapTarget[] = ["FIND_MATCH", "FIELD"];
 export const TAP_NOTE = "Find a match and field pages need the next app update. Players on older versions open Home.";
-export const WEEKLY_CAP_DEFAULT = 2;
+// The backend's default since e9e90a7 (was 2); the page shows the stored value whenever it can read it.
+export const WEEKLY_CAP_DEFAULT = 3;
 export const HOLDOUT_MIN_TO_COMPARE = 30;
 export const PLAYERS_HOLDOUT_MIN = 200;
 
@@ -150,10 +151,15 @@ export function tapOpensText(target: TapTarget, m: MatchOpt | null): string {
 // pushes this week are skipped." willSend is the backend's own allowPushes - heldBack.
 export function summaryLine(f: PushForm, count: ContractCount | null, weeklyCap: number): string {
   const when = f.at ? `Sends ${wallLabel(`${f.sendLocal}:00`)} in each player's city` : "Sends now";
-  const cap = `Players already at ${weeklyCap} ${weeklyCap === 1 ? "push" : "pushes"} this week are skipped.`;
+  const capN = count?.weeklyCap ?? weeklyCap;
+  const cap = `Players already at ${capN} ${capN === 1 ? "push" : "pushes"} this week are skipped.`;
   if (!count) return `${when} to the players who match. ${cap}`;
-  const minus = count.heldBack > 0 ? `, minus ${count.holdoutPercent}% held back to measure` : f.audience.mode === "PLAYERS" ? "; nobody is held back" : "";
-  return `${when} to about ${n(count.willSend)} ${count.willSend === 1 ? "player" : "players"} (${n(count.allowPushes)} who allow pushes${minus}). ${cap}`;
+  const minus = [
+    count.atCap ? `${n(count.atCap)} at the weekly limit` : null,
+    count.heldBack > 0 ? `${count.holdoutPercent}% held back to measure` : null,
+  ].filter(Boolean);
+  const tail = minus.length ? `, minus ${minus.join(" and ")}` : f.audience.mode === "PLAYERS" ? "; nobody is held back" : "";
+  return `${when} to about ${n(count.willSend)} ${count.willSend === 1 ? "player" : "players"} (${n(count.allowPushes)} who allow pushes${tail}). ${cap}`;
 }
 
 // ── THE LIST (20834:76) ──────────────────────────────────────────────────────────────────────────
