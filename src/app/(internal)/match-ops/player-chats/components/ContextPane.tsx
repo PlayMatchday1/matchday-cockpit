@@ -192,16 +192,19 @@ export default function ContextPane({ threadId, phone, playerId, onClose }: {
   const activityPlayer = playerId ?? prof?.player.id ?? null;
 
   /* WIDTHS (Ryan, 2026-11-06): a docked column at 1260px and wider; an overlay drawer from the right
-   * between 1024 and 1259px, with a scrim that closes it; not shown below 1024px. */
+   * between 1024 and 1259px, with a scrim that closes it; not shown below 1024px.
+   * THE DRAWER CLASSES ARE RANGE-SCOPED (lg:max-[1259px]:), not lg: overridden by min-[1260px]:.
+   * Tailwind emitted the px breakpoint min-[1260px] BEFORE the rem breakpoint lg in the stylesheet,
+   * so lg:fixed won at every width and the pane was a drawer at 1627px too (seen 2026-11-06). */
   return (
     <>
     {onClose && (
       <div aria-hidden data-testid="ctx-scrim" onClick={onClose}
-        className="fixed inset-0 z-40 hidden bg-[rgba(9,30,20,.22)] lg:block min-[1260px]:hidden" />
+        className="fixed inset-0 z-40 hidden bg-[rgba(9,30,20,.22)] lg:max-[1259px]:block" />
     )}
     <aside
       data-testid="ctx-pane"
-      className="hidden min-h-0 w-[392px] shrink-0 flex-col overflow-y-auto border-l lg:fixed lg:inset-y-0 lg:right-0 lg:z-50 lg:flex lg:shadow-[-12px_0_32px_rgba(9,30,20,.18)] min-[1260px]:static min-[1260px]:z-auto min-[1260px]:shadow-none"
+      className="hidden min-h-0 w-[392px] shrink-0 flex-col overflow-y-auto border-l lg:flex lg:max-[1259px]:fixed lg:max-[1259px]:inset-y-0 lg:max-[1259px]:right-0 lg:max-[1259px]:z-50 lg:max-[1259px]:shadow-[-12px_0_32px_rgba(9,30,20,.18)]"
       style={{ background: "linear-gradient(180deg,#fafbfa,#f6f9f7)", borderColor: LINE }}
     >
       <div className="flex items-center border-b px-4 py-[9px]" style={{ borderColor: LINE }}>
