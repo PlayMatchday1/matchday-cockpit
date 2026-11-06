@@ -4,6 +4,7 @@
 // shipping; see the ship report for query text + output.
 
 import { supabase } from "@/lib/supabase";
+import { RATES_FOR_SQL, type RollupRow } from "@/lib/revenueTxn";
 import { countActiveMembers } from "@/lib/membershipStats";
 
 const SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -62,17 +63,21 @@ async function pageAll<T>(build: (from: number, to: number) => PromiseLike<{ dat
   return out;
 }
 
-// Revenue — SUM(fin_revenue.gross) for the current month bucket. Basis = PAYMENT
-// DATE (fin_revenue is the Stripe-charge ledger; .month is the charge month), so
-// it is month-to-date as charges land. Gross (before processing fees). Not the
-// match-date basis.
-async function fetchRevenueGross(): Promise<number | null> {
-  const { data, error } = await supabase
-    .from("fin_revenue")
-    .select("gross")
-    .eq("month", currentMonthLabel());
+// Revenue — FINANCE > REVENUE'S "GROSS COLLECTED" for the current Central month (Ryan, 2026-11-05):
+// the same fin_txn_sums rows the Finance page sums, charges and Venmo, test and internal rows out,
+// sales tax in, refunds and fees untouched. It read SUM(fin_revenue.gross) before, which was $561
+// short in October 2026 on charges that ledger never imported ($94,369 against $94,930). Basis is
+// still the payment date, month-to-date as charges land, in Central time like every Finance page.
+async function fetchRevenueGross(now = new Date()): Promise<number | null> {
+  const ymd = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago" }).format(now);
+  const from = `${ymd.slice(0, 7)}-01`;
+  const { data, error } = await supabase.rpc("fin_txn_sums", {
+    p_from: from, p_to: ymd, p_grain: "month", p_by_venue: false, p_venue_id: null, ...RATES_FOR_SQL,
+  }).range(0, 999);
   if (error) return null;
-  return (data ?? []).reduce((s, r) => s + Number((r as { gross: number }).gross || 0), 0);
+  let cents = 0;
+  for (const r of (data ?? []) as RollupRow[]) if (!r.excluded && (r.kind === "charge" || r.kind === "manual")) cents += r.gross_cents;
+  return cents / 100;
 }
 
 // Active members — COUNT(mdapi_subscriptions WHERE status='ACTIVE' AND price>0).

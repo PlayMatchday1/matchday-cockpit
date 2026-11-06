@@ -366,7 +366,7 @@ function SnapshotStrip({ snapshot }: { snapshot: Snapshot | null }) {
       k: "Revenue",
       v: `$${Math.round(snapshot.revenueGross / 1000)}K`,
       u: "all 7 cities",
-      title: `Gross revenue (before processing fees): SUM(fin_revenue.gross) for ${mo}. Basis: payment date (Stripe charge date), month-to-date. Not the match-date basis.`,
+      title: `Gross collected, as Finance › Revenue counts it: Stripe charges and Venmo for ${mo}, sales tax in, before refunds and processing fees. Basis: payment date, month-to-date, Central time. Not the match-date basis.`,
     });
   if (snapshot.monthlyPlayers != null)
     cells.push({
