@@ -26,6 +26,7 @@ import { authenticateAdmin } from "@/lib/adminAuth";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
 import { resolveCityScope, CITY_IDENTIFIERS } from "@/lib/cityScope";
 import type { Change } from "@/lib/changeLogModel";
+import { CITY_MANAGER_FORBIDDEN_BROAD } from "@/lib/cityManagerPreset";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -118,13 +119,13 @@ export async function POST(req: Request) {
   // so this is DEFENCE rather than the guarantee — but a state that cannot be created is a state
   // nobody has to notice later, and the grid is where it was created the first time.
   if (nextIsCm) {
-    const broad = ["can_access_matchops", "can_access_home", "can_access_finance", "can_access_lifecycle",
-      "can_access_growth", "can_access_membership", "can_access_chats", "can_access_tech",
-      "can_access_org"] as const;
+    // 0256: the City manager preset's four (Match Ops, Chats, Player Lifecycle, Growth) are allowed;
+    // the rest still refuse, as the CHECK does.
+    const broad = CITY_MANAGER_FORBIDDEN_BROAD.filter((k) => k !== "is_admin");
     const held = broad.filter((k) => (t as unknown as Record<string, unknown>)[k] === true);
     if (held.length > 0) {
       return Response.json({
-        error: `This account still holds ${held.join(", ")}. A City Manager is scoped to their own city pages, so those flags grant nothing here and previously opened the whole Match Ops estate. Remove them before granting the tier.`,
+        error: `This account still holds ${held.join(", ")}. A City Manager may hold only the City manager preset's flags (Match Ops, Chats, Player Lifecycle, Growth); remove the others before granting the tier.`,
         held,
       }, { status: 409 });
     }

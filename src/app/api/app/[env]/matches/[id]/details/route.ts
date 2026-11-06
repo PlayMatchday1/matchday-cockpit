@@ -20,7 +20,7 @@ import { apiGet, StageConfigError, StageHostGuardError } from "@/lib/matchdaySta
 import { CONFINED_CITY_ERROR } from "@/lib/cityConfinement";
 import { GET as desktopMatchGet, PUT as desktopMatchPut } from "@/app/api/matchday/[env]/matches/[id]/route";
 import { isReviewToken, reviewMasked, reviewMatchDetails } from "@/lib/reviewAccount";
-import { forwardedAuth } from "@/lib/viewAs";
+import { forwardedAuth } from "@/lib/staffAppForward";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";

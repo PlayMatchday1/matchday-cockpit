@@ -10,6 +10,7 @@ import { CITY_SCOPES, cityNameFor, isUnknownScope } from "@/lib/cityScope";
 import { confinementSummary, CONFINED_RAIL_KEYS } from "@/lib/cityConfinement";
 // The city rail's own list — the count in the sentence is its length, so the two cannot disagree.
 import { CITY_SECTIONS } from "@/app/(internal)/city/citySections";
+import { holdsCityManagerPreset } from "@/lib/cityManagerPreset";
 
 type PermissionKey =
   | "can_send_messages"
@@ -202,6 +203,25 @@ export default function AdminUsersView() {
       if (!res.ok) { setPermErr({ id: user.id, msg: json?.error ?? `HTTP ${res.status}` }); return; }
       const row = json.user as { is_city_manager: boolean; city_identifier: string | null } | undefined;
       if (row) setUsers((prev) => prev.map((u) => (u.id === user.id ? { ...u, is_city_manager: row.is_city_manager, city_identifier: row.city_identifier } : u)));
+      flash(user.id);
+    } catch (e) { setPermErr({ id: user.id, msg: e instanceof Error ? e.message : String(e) }); }
+  }
+
+  // THE "CITY MANAGER" PRESET (cityManagerPreset.ts): the staff app's city grants in one update,
+  // through its own guarded route. The grid then shows what the server re-read.
+  async function applyCityManagerPreset(user: AppUser) {
+    setPermErr((e) => (e?.id === user.id ? null : e));
+    const { data: sess } = await supabase.auth.getSession();
+    try {
+      const res = await fetch("/api/admin/users/city-manager-preset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(sess.session ? { Authorization: `Bearer ${sess.session.access_token}` } : {}) },
+        body: JSON.stringify({ userId: user.id }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) { setPermErr({ id: user.id, msg: json?.error ?? `HTTP ${res.status}` }); return; }
+      const row = json.user as Record<string, unknown> | undefined;
+      if (row) setUsers((prev) => prev.map((u) => (u.id === user.id ? { ...u, ...row } as AppUser : u)));
       flash(user.id);
     } catch (e) { setPermErr({ id: user.id, msg: e instanceof Error ? e.message : String(e) }); }
   }
@@ -524,6 +544,21 @@ export default function AdminUsersView() {
                             <span className="max-w-[120px] text-[9px] leading-tight text-deep-green/50" data-testid="cm-admin-conflict">
                               Admins can&rsquo;t be City Managers
                             </span>
+                          )}
+                          {/* THE PRESET: Match Ops, Edit matches, Chats, Send messages, Player
+                              Lifecycle and Growth, each confined to their city by the server. */}
+                          {u.is_city_manager && u.city_identifier && (
+                            holdsCityManagerPreset(u as unknown as Record<string, unknown>) ? (
+                              <span className="max-w-[120px] text-[9px] leading-tight text-deep-green/55" data-testid="cm-preset-on">
+                                City manager preset
+                              </span>
+                            ) : (
+                              <button type="button" data-testid="cm-preset-apply" onClick={() => applyCityManagerPreset(u)}
+                                title="Match Ops, Edit matches, Chats, Send messages, Player Lifecycle and Growth for their own city in the staff app. No credits, memberships, promos or desktop pages."
+                                className="rounded-md border border-cream-line bg-white px-2 py-0.5 text-[10px] font-semibold text-deep-green hover:bg-cream">
+                                Apply City manager preset
+                              </button>
+                            )
                           )}
                         </div>
                       </td>

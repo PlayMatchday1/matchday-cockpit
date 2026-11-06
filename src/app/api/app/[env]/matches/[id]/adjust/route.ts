@@ -28,7 +28,7 @@ import { realOccupancyFromRoster, rosterRowCounts, rosterRowIsFake } from "@/lib
 import { RUNG_KEYS, fakesFor, spotsLeftNow, spotsLeftWriteDiff, type Ladder } from "@/lib/fakeLadder";
 import { PUT as desktopMatchPut } from "@/app/api/matchday/[env]/matches/[id]/route";
 import { POST as desktopFakesPost } from "@/app/api/matchday/[env]/matches/[id]/fakes/route";
-import { forwardedAuth } from "@/lib/viewAs";
+import { forwardedAuth } from "@/lib/staffAppForward";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";

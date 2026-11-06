@@ -1,5 +1,5 @@
 import "server-only";
-import { forwardedAuth } from "@/lib/viewAs";
+import { forwardedAuth } from "@/lib/staffAppForward";
 // STAFF APP: CALL A DESKTOP ROUTE HANDLER IN PROCESS, as the caller. The /api/app routes write and
 // read nothing of their own where a desktop route already does it: they hand the desktop handler a
 // request carrying the caller's own Authorization header, at the desktop URL, so its permission

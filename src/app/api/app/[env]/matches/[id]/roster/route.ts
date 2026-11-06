@@ -47,7 +47,7 @@ import { POST as desktopFakesPost } from "@/app/api/matchday/[env]/matches/[id]/
 import { GET as convertGet, POST as convertPost } from "@/app/api/matchday/[env]/matches/[id]/convert-4/route";
 import { GET as reduceGet, POST as reducePost } from "@/app/api/matchday/[env]/matches/[id]/reduce-2/route";
 import { reviewMasked } from "@/lib/reviewAccount";
-import { forwardedAuth } from "@/lib/viewAs";
+import { forwardedAuth } from "@/lib/staffAppForward";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";

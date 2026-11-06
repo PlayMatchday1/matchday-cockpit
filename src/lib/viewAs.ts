@@ -128,14 +128,3 @@ export async function applyViewAs(
   };
 }
 
-/**
- * The headers an /api/app route hands a desktop handler it calls in process: the caller's bearer
- * AND, while viewing as, the View as header. Without the second, the desktop gate would see the
- * admin's own session and answer with the admin's access. Every in-process forward uses this.
- */
-export function forwardedAuth(from: Request): Record<string, string> {
-  const h: Record<string, string> = { authorization: from.headers.get("authorization") ?? "" };
-  const va = from.headers.get(VIEW_AS_HEADER);
-  if (va) h[VIEW_AS_HEADER] = va;
-  return h;
-}

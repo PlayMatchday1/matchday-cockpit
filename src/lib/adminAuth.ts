@@ -16,6 +16,7 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { isConfined, CONFINED_ERROR } from "./cityConfinement";
 import { applyViewAs, type ViewAsInfo } from "./viewAs";
+import { appForwardState, markStaffApp, STAFF_APP_KEY } from "./staffAppForward";
 
 export type AdminAuthResult =
   | { ok: true; supabase: SupabaseClient; appUserId: string; email: string; canEditMatches: boolean; canManagePlayers: boolean; canManagePromos: boolean }
@@ -45,8 +46,12 @@ export type AppUserRow = Record<string, unknown>;
 // is_admin WINS if somehow both are set — an admin must never be locked out of their own tool.
 // The two are already mutually exclusive at the grant; this is belt and braces, stated rather
 // than assumed.
+//
+// THE STAFF APP IS THE ONE EXCEPTION (staffAppForward.ts, Ryan 2026-11-06): a row the server marked
+// as reached through the staff app is an ordinary confined account, so its own city's grants work
+// there. Unmarked (every desktop request), the lockout is unchanged.
 export function isCityManagerConfined(row: AppUserRow): boolean {
-  return row.is_city_manager === true && row.is_admin !== true;
+  return row.is_city_manager === true && row.is_admin !== true && row[STAFF_APP_KEY] !== true;
 }
 
 export const CITY_MANAGER_CONFINED_ERROR =
@@ -116,7 +121,11 @@ export async function resolveSessionUser(req: Request, opts: { ignoreViewAs?: bo
   if (opts.ignoreViewAs) return { ok: true, supabase: sb, row: appUser.data as AppUserRow, email, viewAs: null };
   const va = await applyViewAs(req, sb, appUser.data as AppUserRow, email);
   if (!va.ok) return va;
-  return { ok: true, supabase: sb, row: va.row, email: va.email, viewAs: va.viewAs };
+  // A staff-app forward, vouched for by the server (staffAppForward.ts). A forged marker is refused.
+  const fwd = appForwardState(req);
+  if (fwd === "invalid") return { ok: false, status: 403, error: "This request's staff-app marker is not valid." };
+  const row = fwd === "valid" ? markStaffApp(va.row) : va.row;
+  return { ok: true, supabase: sb, row, email: va.email, viewAs: va.viewAs };
 }
 
 export async function authenticateAdmin(req: Request): Promise<AdminAuthResult> {

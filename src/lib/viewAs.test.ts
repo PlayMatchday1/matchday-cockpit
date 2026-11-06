@@ -1,7 +1,8 @@
 // Run: `node --test src/lib/viewAs.test.ts`
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { signViewAs, verifyViewAs, canViewAs, viewAsMethodAllowed, applyViewAs, VIEW_AS_HEADER, VIEW_AS_ADMINS_ONLY, VIEW_AS_READ_ONLY, VIEW_AS_INVALID, VIEW_AS_EXPIRED, forwardedAuth } from "./viewAs.ts";
+import { signViewAs, verifyViewAs, canViewAs, viewAsMethodAllowed, applyViewAs, VIEW_AS_HEADER, VIEW_AS_ADMINS_ONLY, VIEW_AS_READ_ONLY, VIEW_AS_INVALID, VIEW_AS_EXPIRED } from "./viewAs.ts";
+import { forwardedAuth, appForwardState, appForwardValue, APP_FORWARD_HEADER, markStaffApp, STAFF_APP_KEY } from "./staffAppForward.ts";
 
 const SECRET = "test-secret";
 process.env.SUPABASE_SERVICE_ROLE_KEY = SECRET;
@@ -50,6 +51,16 @@ test("applyViewAs refuses, never falls back to the admin", async () => {
 
 test("forwardedAuth carries the header on in-process calls", () => {
   const r = new Request("http://x", { headers: { authorization: "Bearer b", [VIEW_AS_HEADER]: "v" } });
-  assert.deepEqual(forwardedAuth(r), { authorization: "Bearer b", [VIEW_AS_HEADER]: "v" });
-  assert.deepEqual(forwardedAuth(new Request("http://x", { headers: { authorization: "Bearer b" } })), { authorization: "Bearer b" });
+  const fwd = appForwardValue()!;
+  assert.deepEqual(forwardedAuth(r), { authorization: "Bearer b", [VIEW_AS_HEADER]: "v", [APP_FORWARD_HEADER]: fwd });
+  assert.deepEqual(forwardedAuth(new Request("http://x", { headers: { authorization: "Bearer b" } })), { authorization: "Bearer b", [APP_FORWARD_HEADER]: fwd });
+});
+
+test("the staff-app marker: only the server's value is valid; a guess is refused", () => {
+  const ok = new Request("http://x", { headers: { [APP_FORWARD_HEADER]: appForwardValue()! } });
+  assert.equal(appForwardState(ok), "valid");
+  assert.equal(appForwardState(new Request("http://x")), "absent");
+  assert.equal(appForwardState(new Request("http://x", { headers: { [APP_FORWARD_HEADER]: "1" } })), "invalid");
+  assert.equal(appForwardState(new Request("http://x", { headers: { [APP_FORWARD_HEADER]: appForwardValue("other")! } })), "invalid");
+  assert.equal(markStaffApp({ id: "x" })[STAFF_APP_KEY], true);
 });

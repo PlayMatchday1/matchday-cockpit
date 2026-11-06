@@ -52,7 +52,7 @@ import { perTeamError } from "@/lib/reduceTwoTeams";
 import { TEAM_SIZE_MAX, TEAM_SIZE_MIN } from "@/lib/rosterEditModel";
 import { fakesFollowingSpotsLeft } from "@/lib/fakeLadder";
 import { POST as fakesPost } from "@/app/api/matchday/[env]/matches/[id]/fakes/route";
-import { forwardedAuth } from "@/lib/viewAs";
+import { forwardedAuth } from "@/lib/staffAppForward";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";

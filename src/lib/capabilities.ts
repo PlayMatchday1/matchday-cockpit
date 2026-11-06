@@ -70,8 +70,14 @@ export const CITY_MANAGER_CONFINED_ERROR =
   "City manager accounts are scoped to their own city. Use Manager Pay, Reviews or Gameday Ops under /city.";
 
 /** A city manager is confined to /city/* regardless of which boxes their row carries. */
+/** STAFF_APP_KEY in staffAppForward.ts, restated because this module imports nothing it can avoid. */
+const STAFF_APP_KEY = "__clubhouseStaffApp";
+
+/** A city manager is confined to /city/* regardless of which boxes their row carries, EXCEPT in the
+ *  staff app: a row the server marked as reached through it (staffAppForward.ts) is an ordinary
+ *  confined account there, so its ticked boxes work for its own city. */
 export function isCityManagerConfined(row: CapRow | null | undefined): boolean {
-  return !!row && row.is_city_manager === true && row.is_admin !== true;
+  return !!row && row.is_city_manager === true && row.is_admin !== true && row[STAFF_APP_KEY] !== true;
 }
 
 /* THE CITY BOUNDARY, IMPORTED — not a third copy of a predicate. */
@@ -85,6 +91,12 @@ function confinedBlocks(row: CapRow | null | undefined, cap: Capability): boolea
   // neither grants a write nor revokes one, it scopes the data the write acts on. can_manage_promos
   // stays the only thing standing between this account and a 100%-off code, exactly as today.
   if (NEEDS_MATCHOPS.has(cap)) return false;
+  /* SEND MESSAGES, IN THE STAFF APP ONLY (Ryan, 2026-11-06). Player Chats' send route has always
+   * read can_send_messages straight off the row for a confined account (crmAuth.ts), while the staff
+   * app's match chat asks can(), which refused it here. Inside the staff app the column now decides
+   * for a confined account too; every send there is already confined to the match's or thread's
+   * city. The desktop's own can("sendMessages") callers are unchanged. */
+  if (cap === "sendMessages" && (row as CapRow)[STAFF_APP_KEY] === true) return false;
   return true;
 }
 

@@ -12,6 +12,7 @@ import { confinedCity } from "./cityConfinement";
 import { cityNameFor } from "./cityScope";
 import { appAccess, type AppAccess } from "./appModel";
 import { type ViewAsInfo } from "./viewAs";
+import { markStaffApp } from "./staffAppForward";
 
 export const SERVICE_EMAIL = "clubhouse-e2e@playmatchday.com";
 
@@ -34,7 +35,9 @@ export async function authenticateApp(req: Request): Promise<AppAuthResult> {
   }
   const access = appAccess(r.row, confinedCity(r.row));
   return {
-    ok: true, supabase: r.supabase, row: r.row, email: r.email, appUserId: String(r.row.id), viewAs: r.viewAs,
+    // MARKED: every /api/app/* route is the staff app, so a city manager's ticked boxes work here,
+    // confined to their city (staffAppForward.ts). The desktop never sees this mark.
+    ok: true, supabase: r.supabase, row: markStaffApp(r.row), email: r.email, appUserId: String(r.row.id), viewAs: r.viewAs,
     scopeCityName: access.scopeCity ? cityNameFor(access.scopeCity) : null,
     ...access,
   };

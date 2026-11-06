@@ -18,6 +18,7 @@
 import { authenticateApp, readRefusal } from "@/lib/appAuth";
 import { computeTiles } from "@/lib/managerPayView";
 import type { ManagerPayWeekPayload } from "@/lib/managerPayCompute";
+import { scopeWeekToCity } from "@/lib/appManagerPayScope";
 import { callDesktop, passThrough } from "@/lib/appCall";
 import { GET as weekGet } from "@/app/api/manager-pay/week/route";
 import { GET as aliasesGet } from "@/app/api/manager-pay/aliases/route";
@@ -37,11 +38,13 @@ async function week(req: Request, weekStart: string, scopeCity: string | null) {
   const c = await callDesktop(req, weekGet, `/api/manager-pay/week?week=${weekStart}`);
   if (!c.ok || !c.json) return { error: c };
   const payload = c.json as unknown as ManagerPayWeekPayload & Row;
-  const cities = scopeCity ? payload.cities.filter((x) => x.cityIdentifier === scopeCity) : payload.cities;
-  const scoped = { ...payload, cities } as ManagerPayWeekPayload;
+  // CONFINED: every row cut to this city's matches and the attention counts recomputed for it
+  // (appManagerPayScope.ts); nothing counted across cities leaves this route.
+  const scoped = scopeCity ? { ...payload, ...scopeWeekToCity(payload, scopeCity) } : payload;
+  const cities = scoped.cities;
   const tiles: Record<string, ReturnType<typeof computeTiles>> = { all: computeTiles(scoped, null, true) };
   for (const x of cities) tiles[x.cityIdentifier] = computeTiles(scoped, x.cityIdentifier, true);
-  return { payload: { ...payload, cities, network: scopeCity ? null : payload.network }, tiles };
+  return { payload: { ...scoped, cities, network: scopeCity ? null : payload.network }, tiles };
 }
 
 async function getRoute(req: Request) {

@@ -16,9 +16,10 @@ export const CITY_MANAGER_CONSTRAINT = "app_users_city_manager_is_exclusive";
 // BOTH lifecycle AND growth. The DB CHECK (0139) enumerates both columns, so a violation can be
 // caused by either; an array that named only one would build a message omitting the actual
 // conflict. can_access_growth is dormant today and becomes the Growth tab's permission later.
+// 0256: Match Ops, Chats, Player Lifecycle and Growth are no longer in the CHECK (the staff app's
+// City manager preset); these six still are.
 const BROAD_FLAGS = [
-  "is_admin", "can_access_matchops", "can_access_home", "can_access_finance",
-  "can_access_lifecycle", "can_access_growth", "can_access_membership", "can_access_chats",
+  "is_admin", "can_access_home", "can_access_finance", "can_access_membership",
   "can_access_tech", "can_access_org",
 ] as const;
 
@@ -44,8 +45,8 @@ export function cityManagerConstraintMessage(attempted?: Record<string, unknown>
     : [];
   const which = held.length ? ` The conflict is: ${held.join(", ")}.` : "";
   return (
-    "A City Manager is scoped to their own city pages and cannot also hold Admin or any broad " +
-    `access flag — that combination is what let a city manager read every city's data.${which} ` +
+    "A City Manager may hold the City manager preset's flags (Match Ops, Chats, Player Lifecycle, Growth) " +
+    `but not Admin, Home, Finance, Membership, Tech or Org.${which} ` +
     "Remove the City Manager tier first, or leave those flags off."
   );
 }
