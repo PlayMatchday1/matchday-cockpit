@@ -1,15 +1,15 @@
 "use client";
 
 // OFFER RESULTS (Figma 20864:72 "Offer results · Funnel"), on the Offers list: the range pill, four tiles (Chosen ›
-// Can get it › Saw it › Used it), the "can't get offers yet" banner with Add message push, one row per offer with its
-// mini funnel, and the audience planner. Backend contract: docs/offers/M3-ENDPOINTS.md "Funnel". Every rule and
+// Can get it › Saw it › Used it), one row per offer with its mini funnel, and the audience planner. The design's
+// "can't get offers yet" banner and its Add message push were taken out (Ryan, 2026-11-07); the players-without-app
+// route stays for a possible per-offer button. Backend contract: docs/offers/M3-ENDPOINTS.md "Funnel". Every rule and
 // string is src/lib/offersFunnel.ts.
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 import {
-  DEFAULT_NEED, DEFAULT_RANGE, PREFILL_KEY, RANGES, cantGetLine, dealLines, pctText, plannerView, rangeQuery, statusLine, steps, tileSub,
-  type FunnelPage, type Range, type WithoutApp,
+  DEFAULT_NEED, DEFAULT_RANGE, RANGES, dealLines, pctText, plannerView, rangeQuery, statusLine, steps, tileSub,
+  type FunnelPage, type Range,
 } from "@/lib/offersFunnel";
 import type { Campaign, FieldOpt, MatchOpt } from "@/lib/offersModel";
 import { O, authed } from "./offersUi";
@@ -18,7 +18,6 @@ const AMBER_BG = "#fff7e6", AMBER_INK = "#b7791f", AMBER_BAR = "#f2c46d", GREEN 
 const n = (x: number) => x.toLocaleString("en-US");
 
 export default function OfferResults({ campaigns, matches, fields }: { campaigns: Campaign[]; matches: MatchOpt[]; fields: FieldOpt[] }) {
-  const router = useRouter();
   const [range, setRange] = useState<Range>(DEFAULT_RANGE);
   const [page, setPage] = useState<(FunnelPage & { fixture?: boolean }) | null>(null);
   const [err, setErr] = useState<{ text: string; missing: boolean } | null>(null);
@@ -34,30 +33,7 @@ export default function OfferResults({ campaigns, matches, fields }: { campaigns
     return () => { cancelled = true; };
   }, [range]);
 
-  // ADD MESSAGE PUSH: the players each offer in the range chooses now who aren't on 1.88+, one read per offer (the
-  // contract has no range-wide list), merged, then the Push Notifications editor opens with them as Exact players.
-  const [adding, setAdding] = useState<{ done: number; of: number } | null>(null);
-  const [addErr, setAddErr] = useState<string | null>(null);
-  async function addPush() {
-    if (!page || adding) return;
-    const offers = page.offers.filter((o) => o.funnel.chosen - o.funnel.canGetIt > 0);
-    setAddErr(null); setAdding({ done: 0, of: offers.length });
-    const ids = new Set<number>();
-    for (const [i, o] of offers.entries()) {
-      const r = await authed(`/api/offers/${o.id}/players-without-app`);
-      if (!r.ok) { setAddErr(`Couldn't read the players for "${o.name}": ${String(r.json.error)}`); setAdding(null); return; }
-      for (const id of (r.json as unknown as WithoutApp).playerIds) ids.add(id);
-      setAdding({ done: i + 1, of: offers.length });
-    }
-    setAdding(null);
-    if (ids.size === 0) { setAddErr("Nobody to add: they're all on app 1.88 or newer now."); return; }
-    try { sessionStorage.setItem(PREFILL_KEY, JSON.stringify({ playerIds: [...ids].sort((a, b) => a - b), from: "Offer results" })); }
-    catch { setAddErr("This browser wouldn't hand the list over (private window?). Nothing was sent."); return; }
-    router.push("/match-ops/push-notifications?prefill=1");
-  }
-
   const t = page?.totals;
-  const banner = t ? cantGetLine(t) : null;
   const plan = page ? plannerView(page.planner, need) : null;
   return (
     <section data-testid="offers-results-funnel" className="flex flex-col gap-[18px] rounded-[14px] border px-4 pb-6 pt-[22px] sm:px-6" style={{ background: O.surface, borderColor: O.line }}>
@@ -93,19 +69,6 @@ export default function OfferResults({ campaigns, matches, fields }: { campaigns
               </div>
             ))}
           </div>
-
-          {/* THE BANNER */}
-          {banner && (
-            <div data-testid="offers-results-banner" className="flex flex-wrap items-center gap-2.5 rounded-[10px] px-3.5 py-2.5" style={{ background: AMBER_BG }}>
-              <span className="text-[13px] font-bold" style={{ color: AMBER_INK }}>!</span>
-              <span className="min-w-0 flex-1 text-[13px]" style={{ color: O.ink }}>{banner}</span>
-              <button type="button" data-testid="offers-results-add-push" disabled={!!adding} onClick={addPush}
-                className="rounded-[8px] border bg-white px-2.5 py-1.5 text-[12px] font-semibold disabled:opacity-60" style={{ borderColor: O.line, color: O.ink }}>
-                {adding ? `Finding players… ${adding.done} of ${adding.of}` : "Add message push"}
-              </button>
-              {addErr && <div data-testid="offers-results-add-error" className="w-full text-[12px]" style={{ color: O.critInk }}>{addErr}</div>}
-            </div>
-          )}
 
           {/* THE TABLE */}
           <div className="flex flex-col">
