@@ -6708,6 +6708,10 @@ sends the literal `"Removed by Retool"` as its reason, so Retool captures no rea
   `CANCELED` 2,374 and `ACTIVE` 450. **`ADDED_FROM_ADMIN`: 0 rows.** Source-read and live data
   agree.
 
+> **CONTESTED (2026-11-07):** the two bullets above do not settle this. See "Membership history
+> sources" (2026-11-07) at the end of this file: the backend's list query DOES admit `ADDED_FROM_ADMIN`
+> under `status=ACTIVE`, so 0 rows may mean production holds no comps, not that the sync drops them.
+
 **SO A COMP IS INVISIBLE TO EVERY MEMBERSHIP PAGE**, which all read the mirror, while
 `/admin/players/{id}` shows it live. The two disagree by construction and always will until the
 sync captures that status. A $0 ACTIVE membership is the opposite case: it DOES reach the mirror
@@ -8676,3 +8680,49 @@ Evidence: `app_request_log_batches` and `app_request_log`, paged by id, staging 
 read for 30 seconds after any non-4xx failure, and staging's 200-HTML answer to a missing route is a parse failure,
 so one read of a missing route emptied the page's match list and weekly cap. A non-JSON 200 now counts as an answer
 about the request, like a 4xx. A 5xx error page still stops reads.
+
+## Membership history sources: five findings (2026-11-07)
+
+**Evidence: read-only PostgREST reads of production with the service role on 2026-11-07, paged in
+1,000-row windows and checked against `count: "exact"`; one sign-in and three single
+`GET /admin/players/{id}` calls 2.5 s apart (all 200, no retries); the backend checkout at
+`~/Code/backend` (`apps/api/src/core/subscriptions/subscriptions.repository.ts`). Scratch scripts
+`mh1.mts`–`mh4.mts`, not committed.**
+
+- **Migration 0224's table does not exist in production.** `GET /rest/v1/mdapi_subscription_stripe_end`
+  answered `PGRST205 Could not find the table 'public.mdapi_subscription_stripe_end'`. 0224 was drafted and
+  never applied, so the Stripe end date the 2026-10-14 entries point to ("Until it lands, the date comes from
+  Stripe (`mdapi_subscription_stripe_end`, 0224)") is not stored anywhere. Anything reading that table fails.
+- **This file contradicts itself on comps, and the question is UNKNOWN.** The 2026-09-30 section says the sync's
+  three status passes capture `ADDED_FROM_ADMIN` under none of them. The backend's list query
+  (`userSubscriptionRawQueryForRetool`, the `status === ACTIVE` branch) writes
+  `us.status IN ('ACTIVE', 'ADDED_FROM_ADMIN')`, and the 2026-10-14 section says the same
+  (`subscriptions.repository.ts:56–58`). On 2026-11-07 the mirror held `CANCELED` 2,619, `ACTIVE` 334,
+  `PAST_DUE` 53 and **0 `ADDED_FROM_ADMIN`** (3,006 rows, all synced 10:40 UTC). Both readings fit 0 rows: no comps
+  exist in production, or the deployed backend differs from the checkout. How many comps production holds is
+  UNKNOWN until one is looked up live.
+- **How much of the Stripe ledger links to a player, by year.** `fin_txn` rows with `type='Membership'`
+  carrying a `customer_id` (the only route to `stripe_customers.md_user_id`): **2024: 0 of 1,906; 2025: 1,080 of
+  3,459 (31%); 2026: 4,301 of 4,301.** So a per-player refund, dispute or charge count from `fin_txn` is complete only
+  from 2026-01-01; before that, absence is not evidence. Total Membership rows 9,666: charge 9,405, fee 109,
+  dispute 117, refund 21, failed 14. `stripe_member_invoices` has no such gap: 10,621 paid invoices
+  (2024-02-29 → 2026-11-06), every one carrying `md_user_id` and `md_membership_id`, and all 10,621
+  `md_membership_id` values exist in `mdapi_subscriptions`. It holds **paid invoices only**
+  (`stripePeopleSync.ts`, `invoices.list({ status: "paid" })`), so a failed renewal is in neither table.
+- **Every undated cancellation has an invoice to infer an end month from.** External (non-staff) CANCELED rows
+  with a price above $0: 2,315; with no `canceled_at`: **621, and all 621 have at least one paid invoice** (0 have
+  none). The month after the last paid invoice is therefore available for every one of them as an estimated end.
+  It is an estimate: MatchDay records no end date (see 2026-10-14, webhooks never write `canceled_at`).
+- **`currentPeriodEnd` is not always the Central month boundary.** Two ACTIVE paying members read live the same
+  minute, both with `currentPeriodStart` 2026-11-01: one `currentPeriodEnd` `2026-12-01T05:59:59.000Z`, the other
+  `2026-12-01T04:59:59.000Z`. In December Central is UTC−6, so 05:59:59Z is the last second of November in Central
+  and 04:59:59Z is an hour earlier (Nov 30 23:59:59 CST). The 2026-09-04 note ("`…T04:59:59Z` = the last second of
+  the month in Central") was true in CDT months. Both print `Dec 1` in UTC, which is what Player Lookup does
+  (`fmtDayUTC`), so the card is not affected; anything comparing period ends as instants, or deriving a month in
+  Central from one, will split these two. Why they differ is UNKNOWN (a guess is the anchor was set in CDT and
+  carried forward; not checked).
+
+Also measured the same day, for whoever builds on this: 456 of 1,885 non-staff players hold a CANCELED row
+followed by a later row (rejoin is row succession); the live `GET /admin/players/{id}` returned **only the current
+membership** (a cancelled-only player: 0 entries; a rejoined player: only the newer row), so it cannot supply
+history; and the mirror's `price` is whole dollars (live `amount` 6650 reads `66`).
