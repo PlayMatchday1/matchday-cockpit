@@ -26,7 +26,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { readWithBackoff } from "./finTxnSync";
 
 export type Window = { since: Date; until: Date };
-export type PeopleJob = "customers" | "invoices" | "charges";
+export type PeopleJob = "customers" | "invoices" | "charges" | "unpaid";
 export type PeopleSyncResult = {
   job: PeopleJob; fetched: number; written: number;
   /** customers: deleted customers read one by one. charges: fin_txn rows given a customer. */
@@ -112,36 +112,147 @@ export async function syncStripeCustomers(sb: SupabaseClient, stripe: Stripe, w:
     sinceIso: w.since.toISOString(), untilIso: w.until.toISOString() };
 }
 
+/** The paid-invoice row (0236), plus attempt_count (0262): 1 = paid first time, N > 1 = N-1 failures first. */
+function memberInvoiceRow(inv: Stripe.Invoice, at: string): Record<string, unknown> | null {
+  const sd = inv.parent?.subscription_details;
+  if (!sd) return null;   // not a subscription invoice
+  // The payment that settled it: the first PAID payment, else the first one listed.
+  const pays = inv.payments?.data ?? [];
+  const pay = pays.find((p) => p.status === "paid") ?? pays[0];
+  return {
+    invoice_id: inv.id,
+    customer_id: idOf(inv.customer as string | { id: string } | null),
+    subscription_id: idOf(sd.subscription as string | { id: string }),
+    md_user_id: intOf(sd.metadata?.userId),
+    md_membership_id: intOf(sd.metadata?.userSubscriptionId),
+    payment_intent_id: idOf(pay?.payment?.payment_intent as string | { id: string } | null | undefined),
+    charge_id: idOf(pay?.payment?.charge as string | { id: string } | null | undefined),
+    amount_paid_cents: inv.amount_paid,
+    status: inv.status,
+    billing_reason: inv.billing_reason,
+    created_at_utc: iso(inv.created),
+    paid_at_utc: iso(inv.status_transitions?.paid_at),
+    attempt_count: typeof inv.attempt_count === "number" ? inv.attempt_count : null,
+    synced_at: at,
+  };
+}
+
 export async function syncMemberInvoices(sb: SupabaseClient, stripe: Stripe, w: Window): Promise<PeopleSyncResult> {
   const at = new Date().toISOString();
   const all = await listAll<Stripe.Invoice>((after) => stripe.invoices.list({
     created: created(w), status: "paid", limit: 100, expand: ["data.payments"],
     ...(after ? { starting_after: after } : {}),
   }));
-  const rows = all.flatMap((inv) => {
-    const sd = inv.parent?.subscription_details;
-    if (!sd) return [];   // not a subscription invoice
-    // The payment that settled it: the first PAID payment, else the first one listed.
-    const pays = inv.payments?.data ?? [];
-    const pay = pays.find((p) => p.status === "paid") ?? pays[0];
-    return [{
-      invoice_id: inv.id,
-      customer_id: idOf(inv.customer as string | { id: string } | null),
-      subscription_id: idOf(sd.subscription as string | { id: string }),
-      md_user_id: intOf(sd.metadata?.userId),
-      md_membership_id: intOf(sd.metadata?.userSubscriptionId),
-      payment_intent_id: idOf(pay?.payment?.payment_intent as string | { id: string } | null | undefined),
-      charge_id: idOf(pay?.payment?.charge as string | { id: string } | null | undefined),
-      amount_paid_cents: inv.amount_paid,
-      status: inv.status,
-      billing_reason: inv.billing_reason,
-      created_at_utc: iso(inv.created),
-      paid_at_utc: iso(inv.status_transitions?.paid_at),
-      synced_at: at,
-    }];
-  });
+  const rows = all.map((inv) => memberInvoiceRow(inv, at)).filter((r): r is Record<string, unknown> => r != null);
   await upsert(sb, "stripe_member_invoices", "invoice_id", rows);
   return { job: "invoices", fetched: all.length, written: rows.length, extra: all.length - rows.length,
+    sinceIso: w.since.toISOString(), untilIso: w.until.toISOString() };
+}
+
+/* ── UNPAID MEMBERSHIP INVOICES (0262) ─────────────────────────────────────────────────────────
+ * What stripe_member_invoices cannot hold: renewals Stripe has not been paid for.
+ *   open           ALL currently open subscription invoices, every run (no window: an open invoice
+ *                  can be any age, and the set is small)
+ *   uncollectible  in the window (Stripe gave up)
+ *   void           in the window (cancelled before it was paid)
+ * The last failure's code comes from the invoice's payment intent (last_payment_error), read only for
+ * an invoice that has been attempted and whose attempt count moved since we last read it, at one GET
+ * every 250 ms, up to PI_BUDGET a run; the rest keep what they had and are read next run.
+ *
+ * RECONCILE. A row we hold as open that Stripe no longer lists as open is read back: PAID moves to
+ * stripe_member_invoices (with its attempt_count) and leaves this table; anything else is updated.
+ * This also catches a retried renewal paid after the hourly paid sync's 3-day created window. */
+const PI_GAP_MS = 250;
+const PI_BUDGET = 150;
+const RECONCILE_BUDGET = 100;
+const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
+type Failure = { code: string | null; message: string | null };
+
+function unpaidRow(inv: Stripe.Invoice, at: string, failure: Failure | null): Record<string, unknown> | null {
+  const sd = inv.parent?.subscription_details;
+  if (!sd) return null;
+  if (inv.status !== "open" && inv.status !== "uncollectible" && inv.status !== "void") return null;
+  const pays = inv.payments?.data ?? [];
+  const pay = pays[0];
+  return {
+    invoice_id: inv.id,
+    customer_id: idOf(inv.customer as string | { id: string } | null),
+    subscription_id: idOf(sd.subscription as string | { id: string }),
+    md_user_id: intOf(sd.metadata?.userId),
+    md_membership_id: intOf(sd.metadata?.userSubscriptionId),
+    payment_intent_id: idOf(pay?.payment?.payment_intent as string | { id: string } | null | undefined),
+    amount_due_cents: inv.amount_due,
+    status: inv.status,
+    billing_reason: inv.billing_reason,
+    attempt_count: typeof inv.attempt_count === "number" ? inv.attempt_count : null,
+    next_payment_attempt_utc: iso(inv.next_payment_attempt),
+    last_failure_code: failure?.code ?? null,
+    last_failure_message: failure?.message ?? null,
+    created_at_utc: iso(inv.created),
+    synced_at: at,
+  };
+}
+
+export async function syncUnpaidInvoices(sb: SupabaseClient, stripe: Stripe, w: Window): Promise<PeopleSyncResult> {
+  const at = new Date().toISOString();
+  const list = (status: "open" | "uncollectible" | "void", windowed: boolean) => listAll<Stripe.Invoice>((after) => stripe.invoices.list({
+    status, limit: 100, expand: ["data.payments"], ...(windowed ? { created: created(w) } : {}),
+    ...(after ? { starting_after: after } : {}),
+  }));
+  const open = await list("open", false);
+  const listed = [...open, ...await list("uncollectible", true), ...await list("void", true)]
+    .filter((inv) => inv.parent?.subscription_details);
+  const ids = listed.map((i) => i.id);
+
+  // What we hold already: failure fields to keep, and attempt counts to compare.
+  const held = new Map<string, { attempt_count: number | null; last_failure_code: string | null; last_failure_message: string | null }>();
+  for (let i = 0; i < ids.length; i += 200) {
+    const { data, error } = await sb.from("stripe_member_unpaid_invoices").select("invoice_id,attempt_count,last_failure_code,last_failure_message").in("invoice_id", ids.slice(i, i + 200));
+    if (error) throw new Error(`stripe_member_unpaid_invoices read failed: ${error.message}`);
+    for (const r of data ?? []) held.set(String(r.invoice_id), r as never);
+  }
+
+  let piReads = 0;
+  const rows: Record<string, unknown>[] = [];
+  for (const inv of listed) {
+    const before = held.get(inv.id);
+    let failure: Failure | null = before ? { code: before.last_failure_code, message: before.last_failure_message } : null;
+    const pi = idOf(inv.payments?.data?.[0]?.payment?.payment_intent as string | { id: string } | null | undefined);
+    const moved = !before || before.attempt_count !== (inv.attempt_count ?? null);
+    if (pi && (inv.attempt_count ?? 0) > 0 && moved && piReads < PI_BUDGET) {
+      if (piReads > 0) await pause(PI_GAP_MS);
+      piReads++;
+      const intent = await readWithBackoff(() => stripe.paymentIntents.retrieve(pi));
+      const e = intent.last_payment_error;
+      failure = e ? { code: (e.decline_code ?? e.code ?? null) as string | null, message: e.message ? e.message.slice(0, 200) : null } : failure;
+    }
+    const row = unpaidRow(inv, at, failure);
+    if (row) rows.push(row);
+  }
+  await upsert(sb, "stripe_member_unpaid_invoices", "invoice_id", rows);
+
+  // Reconcile rows we hold as open that Stripe no longer lists as open.
+  const openNow = new Set(open.map((i) => i.id));
+  const { data: stale, error: staleErr } = await sb.from("stripe_member_unpaid_invoices").select("invoice_id").eq("status", "open").limit(1000);
+  if (staleErr) throw new Error(`stripe_member_unpaid_invoices read failed: ${staleErr.message}`);
+  let movedToPaid = 0, reads = 0;
+  for (const r of (stale ?? []).filter((x) => !openNow.has(String(x.invoice_id))).slice(0, RECONCILE_BUDGET)) {
+    if (reads > 0) await pause(PI_GAP_MS);
+    reads++;
+    const inv = await readWithBackoff(() => stripe.invoices.retrieve(String(r.invoice_id), { expand: ["payments"] }));
+    if (inv.status === "paid") {
+      const paid = memberInvoiceRow(inv, at);
+      if (paid) await upsert(sb, "stripe_member_invoices", "invoice_id", [paid]);
+      const { error } = await sb.from("stripe_member_unpaid_invoices").delete().eq("invoice_id", inv.id);
+      if (error) throw new Error(`stripe_member_unpaid_invoices delete failed: ${error.message}`);
+      movedToPaid++;
+    } else {
+      const { data: keep } = await sb.from("stripe_member_unpaid_invoices").select("last_failure_code,last_failure_message").eq("invoice_id", inv.id).maybeSingle();
+      const row = unpaidRow(inv, at, keep ? { code: keep.last_failure_code as string | null, message: keep.last_failure_message as string | null } : null);
+      if (row) await upsert(sb, "stripe_member_unpaid_invoices", "invoice_id", [row]);
+    }
+  }
+  return { job: "unpaid", fetched: listed.length, written: rows.length, extra: movedToPaid,
     sinceIso: w.since.toISOString(), untilIso: w.until.toISOString() };
 }
 

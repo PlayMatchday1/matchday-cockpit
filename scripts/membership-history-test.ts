@@ -12,7 +12,7 @@
 
 import {
   buildMembershipHistory, invoiceYm, ymChicago, isRetool, neverMemberLine,
-  type History, type InvoiceRow, type LiveMembership, type RefundRow, type SubRow, type MembershipBlock,
+  type History, type InvoiceRow, type UnpaidRow, type LiveMembership, type RefundRow, type SubRow, type MembershipBlock,
 } from "../src/lib/membershipHistory";
 import { planSubEnds, endRowFrom, NO_SUBSCRIPTION, STRIPE_MISSING } from "../src/lib/stripeSubEnds";
 import type Stripe from "stripe";
@@ -70,8 +70,8 @@ is("renews, with none missed and the next date", [ev(a1, "renews")?.title, ev(a1
 is("no price change on a constant charge (control: fixture 3 finds one)", a1.events.filter((e) => e.key.startsWith("price")).length, 0);
 is("no gap line on one membership (control: fixture 3 has one)", gaps(A).length, 0);
 is("badge and range", [a1.badge, a1.range], ["ACTIVE", "Jan 31, 2026 to now"]);
-is("the footer says failed payments aren't shown, and that end dates come from Stripe or are estimated",
-  /Failed payments aren't shown yet/.test(A.footer) && /End dates come from Stripe; where Stripe's isn't on record, they are estimated/.test(A.footer), true);
+is("the footer names paid and unpaid invoices, and says end dates come from Stripe or are estimated",
+  /Stripe's invoices, paid and unpaid/.test(A.footer) && /End dates come from Stripe; where Stripe's isn't on record, they are estimated/.test(A.footer), true);
 
 // a membership with a month that carried no charge
 const A2 = build([row(5, "ACTIVE", 66, "2026-05-02T18:00:00Z")],
@@ -217,10 +217,43 @@ const P_ROWS = [row(700, "PAST_DUE", 66, "2026-06-10T16:00:00Z")];
 const P_INV = [inv(700, 7199, "subscription_create", "2026-06-10T16:00:02Z"), ...months("2026-07", 4).map((ym) => cyc(700, 7199, ym))];
 const P = build(P_ROWS, P_INV, null);
 const p1 = blocks(P)[0];
-is("the past-due state, current state only: no attempts claimed", [P.now.title, P.now.tone, P.now.badge, P.now.sub],
-  ["Payment overdue", "bad", "PAST DUE", "The November renewal hasn't been paid. Failed payment attempts aren't shown."]);
+is("the past-due state with no Stripe invoice on record claims no attempts", [P.now.title, P.now.tone, P.now.badge, P.now.sub],
+  ["Payment overdue", "bad", "PAST DUE", "The November renewal hasn't been paid. No failed attempt is on record yet."]);
 is("the block carries it too, with no end estimate (control: fixture 2 has one)", [p1.badge, ev(p1, "pastdue")?.title, ev(p1, "ended")], ["PAST DUE", "Payment overdue", null]);
 is("the same when the live record says PAST_DUE", build(P_ROWS, P_INV, { id: 700, statusRaw: "PAST_DUE", canceledAt: null, renews: null, priceCents: 6650 }).now.title, "Payment overdue");
+
+// ── 6b. failed payments (0262) ────────────────────────────────────────────────────────────────
+console.log("\n— 6b. failed payments —");
+{
+  const unp = (mid: number, over: Partial<UnpaidRow> = {}): UnpaidRow => ({
+    md_membership_id: mid, amount_due_cents: 7199, status: "open", billing_reason: "subscription_cycle", attempt_count: 2,
+    next_payment_attempt_utc: "2026-11-09T15:00:00Z", last_failure_code: "card_declined", created_at_utc: "2026-11-01T05:00:12Z", ...over,
+  });
+  const INV = [inv(900, 7199, "subscription_create", "2026-05-02T18:00:00Z"), ...months("2026-06", 5).map((ym) => ({ ...cyc(900, 7199, ym), attempt_count: ym === "2026-08" ? 3 : 1 }))];
+  const F = buildMembershipHistory({ rows: [row(900, "ACTIVE", 66, "2026-05-02T18:00:00Z")], invoices: INV, refunds: [], unpaid: [unp(900)],
+    live: { id: 900, statusRaw: "ACTIVE", canceledAt: null, renews: "2026-12-01T05:59:59.000Z", priceCents: 6650 }, now: NOW, syncedAt: null });
+  const f1 = blocks(F)[0];
+  is("a renewal paid on its third attempt: failed 2 times, then paid", f1.events.filter((e) => e.key.startsWith("retried")).map((e) => [e.title, e.sub]),
+    [["Renewal failed 2 times, then paid", "Aug 2026 · $71.99"]]);
+  is("…only that one: attempt_count 1 is a first-time payment (control: the four others carry 1)", INV.filter((v) => v.attempt_count === 1).length, 4);
+  is("an open renewal: attempts, the reason in words and the next retry", f1.events.filter((e) => e.key.startsWith("unpaid")).map((e) => [e.title, e.sub]),
+    [["November renewal failed 2 times, not paid", "$71.99 due · last: card declined · Stripe retries next on Nov 9, 2026"]]);
+  is("the strip carries the month as Not paid", f1.strip.map((c) => c.kind), ["first", "paid", "paid", "paid", "paid", "paid", "failed"]);
+  is("…and the renewals line counts it", ev(f1, "renews")?.sub, "5 renewals paid, 1 month not paid · next Dec 1");
+  is("an unpaid month is not a paid month, and nothing due is counted as paid", [F.summary.monthsPaid, F.summary.totalPaidCents], [6, 6 * 7199]);
+  const PD = buildMembershipHistory({ rows: P_ROWS, invoices: P_INV, refunds: [], unpaid: [unp(700, { attempt_count: 3, last_failure_code: "insufficient_funds" })], live: null, now: NOW, syncedAt: null });
+  is("past due shows its attempts, the reason and the next retry", [PD.now.sub, ev(blocks(PD)[0], "pastdue")?.sub],
+    Array(2).fill("The November renewal failed 3 times (last: insufficient funds). Stripe retries next on Nov 9, 2026."));
+  const PS = buildMembershipHistory({ rows: P_ROWS, invoices: P_INV, refunds: [], unpaid: [unp(700, { attempt_count: 4, next_payment_attempt_utc: null, last_failure_code: "weird_new_code" })], live: null, now: NOW, syncedAt: null });
+  is("…says when Stripe has stopped, and keeps an unknown code in its own words", PS.now.sub, "The November renewal failed 4 times (last: weird new code). Stripe has stopped retrying.");
+  const V0 = buildMembershipHistory({ rows: [row(901, "CANCELED", 66, "2026-05-02T18:00:00Z")], invoices: [inv(901, 7199, "subscription_create", "2026-05-02T18:00:00Z")], refunds: [],
+    unpaid: [unp(901, { status: "void", attempt_count: 0, created_at_utc: "2026-06-01T05:00:12Z" })], live: null, now: NOW, syncedAt: null });
+  is("a voided invoice never attempted is not a failure", blocks(V0)[0].events.filter((e) => e.key.startsWith("unpaid")).length, 0);
+  const V1 = buildMembershipHistory({ rows: [row(902, "CANCELED", 66, "2026-05-02T18:00:00Z")], invoices: [inv(902, 7199, "subscription_create", "2026-05-02T18:00:00Z")], refunds: [],
+    unpaid: [unp(902, { status: "void", attempt_count: 4, next_payment_attempt_utc: null, created_at_utc: "2026-06-01T05:00:12Z" })], live: null, now: NOW, syncedAt: null });
+  is("CONTROL: a voided invoice that was attempted is one, and says it was voided", blocks(V1)[0].events.filter((e) => e.key.startsWith("unpaid")).map((e) => [e.title, e.sub]),
+    [["June renewal failed 4 times, not paid", "$71.99 due · last: card declined · The invoice was voided"]]);
+}
 
 // ── 7. never a member ──────────────────────────────────────────────────────────────────────────
 console.log("\n— 7. never a member —");

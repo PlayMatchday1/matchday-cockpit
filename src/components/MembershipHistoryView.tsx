@@ -11,11 +11,11 @@ import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import {
   buildMembershipHistory, money, type History, type HistItem, type InvoiceRow, type LiveMembership,
-  type MembershipBlock, type RefundRow, type SubRow, type Tone, type CellKind, type NowTone,
+  type MembershipBlock, type RefundRow, type SubRow, type UnpaidRow, type Tone, type CellKind, type NowTone,
 } from "@/lib/membershipHistory";
 
 const INK = "#13241d", MUTED = "#5e6b66", FAINT = "#7c8782", LINE = "#e3e3db";
-const CELL: Record<CellKind, string> = { first: "#a5ebc8", paid: "#2cdb87", none: "#e3e3db", refunded: "#d64531" };
+const CELL: Record<CellKind, string> = { first: "#a5ebc8", paid: "#2cdb87", none: "#e3e3db", refunded: "#d64531", failed: "#f0a63a" };
 const DOT: Record<Tone, string> = { green: "#2cdb87", amber: "#c98a0b", red: "#d64531", grey: "#9aa39f" };
 const BADGE_STYLE: Record<string, { bg: string; fg: string }> = {
   ACTIVE: { bg: "#e3f7ec", fg: "#0e6b3f" },
@@ -38,7 +38,7 @@ async function authFetch(path: string): Promise<Response> {
 export type HistoryRead =
   | { phase: "loading" }
   | { phase: "error"; error: string }
-  | { phase: "ok"; rows: SubRow[]; invoices: InvoiceRow[]; refunds: RefundRow[]; syncedAt: string | null };
+  | { phase: "ok"; rows: SubRow[]; invoices: InvoiceRow[]; refunds: RefundRow[]; unpaid: UnpaidRow[]; syncedAt: string | null };
 
 /** The one read. `reloadKey` re-reads after a membership write on the card. */
 export function useMembershipHistory(env: string, playerId: number | null, reloadKey = 0): HistoryRead | null {
@@ -53,7 +53,7 @@ export function useMembershipHistory(env: string, playerId: number | null, reloa
         const j = await res.json().catch(() => ({}));
         if (!live) return;
         if (!res.ok || j?.ok !== true) setState({ phase: "error", error: j?.error || `Failed (${res.status})` });
-        else setState({ phase: "ok", rows: j.rows ?? [], invoices: j.invoices ?? [], refunds: j.refunds ?? [], syncedAt: j.syncedAt ?? null });
+        else setState({ phase: "ok", rows: j.rows ?? [], invoices: j.invoices ?? [], refunds: j.refunds ?? [], unpaid: j.unpaid ?? [], syncedAt: j.syncedAt ?? null });
       } catch (e) { if (live) setState({ phase: "error", error: e instanceof Error ? e.message : String(e) }); }
     })();
     return () => { live = false; };
@@ -63,7 +63,7 @@ export function useMembershipHistory(env: string, playerId: number | null, reloa
 
 export function useBuiltHistory(read: HistoryRead | null, live: LiveMembership): History | null {
   return useMemo(() => (read?.phase === "ok"
-    ? buildMembershipHistory({ rows: read.rows, invoices: read.invoices, refunds: read.refunds, live, now: new Date(), syncedAt: read.syncedAt })
+    ? buildMembershipHistory({ rows: read.rows, invoices: read.invoices, refunds: read.refunds, unpaid: read.unpaid, live, now: new Date(), syncedAt: read.syncedAt })
     : null), [read, live]);
 }
 
@@ -127,7 +127,7 @@ function Items({ items, compact }: { items: HistItem[]; compact: boolean }) {
 }
 
 function Legend() {
-  const k: [CellKind, string][] = [["first", "First charge"], ["paid", "Paid month"], ["none", "No charge"], ["refunded", "Refunded"]];
+  const k: [CellKind, string][] = [["first", "First charge"], ["paid", "Paid month"], ["failed", "Not paid"], ["none", "No charge"], ["refunded", "Refunded"]];
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11.5px]" style={{ color: MUTED }}>
       {k.map(([kind, label]) => (

@@ -2,6 +2,8 @@
  *
  *   ?job=customers|invoices|charges&month=2026-09   one Central month, for the back-fill
  *   ?job=customers|invoices&days=3                  a recent window
+ *   ?job=unpaid&month=2026-09 | &days=3             unpaid membership invoices (0262): every open one,
+ *                                                   uncollectible and void ones in the window
  *   ?job=sub-ends&limit=600                         Stripe's end date per CANCELED membership (0261,
  *                                                   lib/stripeSubEnds): paced, no retries, first error
  *                                                   stops; run again until `remaining` is 0
@@ -14,7 +16,7 @@ import Stripe from "stripe";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { runWithLog, type TriggeredBy } from "@/lib/syncLogging";
 import { windowDaysBack, windowForMonth } from "@/lib/finTxnSync";
-import { backfillChargeCustomers, peopleLogPatch, syncMemberInvoices, syncStripeCustomers, type PeopleJob } from "@/lib/stripePeopleSync";
+import { backfillChargeCustomers, peopleLogPatch, syncMemberInvoices, syncStripeCustomers, syncUnpaidInvoices, type PeopleJob } from "@/lib/stripePeopleSync";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
 import { syncSubEnds, subEndsLogPatch } from "@/lib/stripeSubEnds";
 import { refuseUnlessAdmin } from "@/lib/adminSession";
@@ -92,7 +94,7 @@ export async function runStripePeopleSync(req: Request, forced?: { jobs: PeopleJ
     jobs = forced.jobs; w = windowDaysBack(forced.days); label = `last ${forced.days} days`;
   } else {
     const job = url.searchParams.get("job");
-    if (job !== "customers" && job !== "invoices" && job !== "charges") return Response.json({ error: "job must be customers, invoices or charges" }, { status: 400 });
+    if (job !== "customers" && job !== "invoices" && job !== "charges" && job !== "unpaid") return Response.json({ error: "job must be customers, invoices, charges, unpaid or sub-ends" }, { status: 400 });
     jobs = [job];
     const month = url.searchParams.get("month");
     if (month) {
@@ -108,10 +110,11 @@ export async function runStripePeopleSync(req: Request, forced?: { jobs: PeopleJ
   const stripe = new Stripe(apiKey, { maxNetworkRetries: 4 });
   const results = [];
   for (const job of jobs) {
-    const source = job === "invoices" ? "stripe-member-invoices" : "stripe-customers";
+    const source = job === "invoices" ? "stripe-member-invoices" : job === "unpaid" ? "stripe-member-unpaid-invoices" : "stripe-customers";
     const run = await runWithLog(source, triggeredBy, admin, (sb) =>
       job === "customers" ? syncStripeCustomers(sb, stripe, w)
         : job === "invoices" ? syncMemberInvoices(sb, stripe, w)
+        : job === "unpaid" ? syncUnpaidInvoices(sb, stripe, w)
         : backfillChargeCustomers(sb, stripe, w), peopleLogPatch);
     if (!run.ok) return Response.json({ error: run.error, job, outcome: "FAILED", done: results }, { status: 500 });
     results.push(run.result);

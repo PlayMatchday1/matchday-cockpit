@@ -10,6 +10,7 @@
 //   stripe_member_invoices  their paid invoices (service role only, 0236)
 //   fin_txn                 Membership refunds, linked charge → payment intent → invoice
 //   mdapi_subscription_stripe_end  Stripe's end date per CANCELED membership (0261), when asked
+//   stripe_member_unpaid_invoices  renewals Stripe was not paid for, with attempts (0262)
 //
 // GATE: the same as the Membership card today — the Player Lookup profile read (Match Ops read,
 // authenticateMatchOpsRead), and for a confined account the same city union the profile route
@@ -22,7 +23,7 @@ import { CONFINED_CITY_ERROR, playerInConfinedScope } from "@/lib/cityConfinemen
 import { hasPlayedInCity } from "@/lib/playerCityScope";
 import { isFakePlayerEmail } from "@/lib/mdapiFakePlayer";
 import { makeServerClient } from "@/lib/supabaseServer";
-import type { InvoiceRow, RefundRow, SubRow } from "@/lib/membershipHistory";
+import type { InvoiceRow, RefundRow, SubRow, UnpaidRow } from "@/lib/membershipHistory";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -58,19 +59,23 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string }> 
     if (!allowed) return Response.json({ error: CONFINED_CITY_ERROR }, { status: 403 });
   }
 
-  const [subs, invs, ends] = await Promise.all([
+  const [subs, invs, ends, unpaidQ] = await Promise.all([
     sb.from("mdapi_subscriptions")
       .select("membership_id, status, price, activation_date, canceled_at, cancel_reason, synced_at", { count: "exact" })
       .eq("user_id", uid).order("membership_id").limit(MAX),
     sb.from("stripe_member_invoices")
-      .select("md_membership_id, amount_paid_cents, billing_reason, created_at_utc, payment_intent_id", { count: "exact" })
+      .select("md_membership_id, amount_paid_cents, billing_reason, created_at_utc, payment_intent_id, attempt_count", { count: "exact" })
       .eq("md_user_id", uid).order("created_at_utc").limit(MAX),
     sb.from("mdapi_subscription_stripe_end")
       .select("membership_id, stripe_status, stripe_ended_at, match_method")
       .eq("user_id", uid).limit(MAX),
+    sb.from("stripe_member_unpaid_invoices")
+      .select("md_membership_id, amount_due_cents, status, billing_reason, attempt_count, next_payment_attempt_utc, last_failure_code, created_at_utc")
+      .eq("md_user_id", uid).limit(MAX),
   ]);
   if (subs.error) return Response.json({ ok: false, error: `Membership records could not be read: ${subs.error.message}` }, { status: 502 });
   if (invs.error) return Response.json({ ok: false, error: `Invoices could not be read: ${invs.error.message}` }, { status: 502 });
+  if (unpaidQ.error) return Response.json({ ok: false, error: `Unpaid invoices could not be read: ${unpaidQ.error.message}` }, { status: 502 });
   if (ends.error) return Response.json({ ok: false, error: `Stripe end dates could not be read: ${ends.error.message}` }, { status: 502 });
   /* ONLY A MATCHED ROW SPEAKS. "unmatched" (no subscription, or Stripe's metadata naming another
    * membership) leaves the card on its estimate. */
@@ -109,9 +114,16 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string }> 
   const invoices: InvoiceRow[] = (invs.data ?? []).map((v) => ({
     md_membership_id: Number(v.md_membership_id), amount_paid_cents: Number(v.amount_paid_cents), billing_reason: v.billing_reason as string | null,
     created_at_utc: v.created_at_utc as string, payment_intent_id: v.payment_intent_id as string | null,
+    attempt_count: v.attempt_count == null ? null : Number(v.attempt_count),
+  }));
+  const unpaid: UnpaidRow[] = (unpaidQ.data ?? []).filter((u) => u.md_membership_id != null).map((u) => ({
+    md_membership_id: Number(u.md_membership_id), amount_due_cents: Number(u.amount_due_cents), status: u.status as string,
+    billing_reason: u.billing_reason as string | null, attempt_count: u.attempt_count == null ? null : Number(u.attempt_count),
+    next_payment_attempt_utc: u.next_payment_attempt_utc as string | null, last_failure_code: u.last_failure_code as string | null,
+    created_at_utc: u.created_at_utc as string,
   }));
   const syncedAt = (subs.data ?? []).map((r) => r.synced_at as string | null).filter(Boolean).sort().pop() ?? null;
-  return new Response(JSON.stringify({ ok: true, rows, invoices, refunds, syncedAt, ms: Date.now() - t0 }), {
+  return new Response(JSON.stringify({ ok: true, rows, invoices, refunds, unpaid, syncedAt, ms: Date.now() - t0 }), {
     status: 200, headers: { "content-type": "application/json", "cache-control": "no-store" },
   });
 }

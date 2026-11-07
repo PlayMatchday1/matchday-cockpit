@@ -7,9 +7,11 @@
 //   mdapi_subscriptions     one row per membership (a rejoin is a NEW row). activation_date and
 //                           canceled_at are TRUE UTC (ORM-written) → displayed in America/Chicago.
 //                           price is whole dollars and the CURRENT plan only (no price history).
-//   stripe_member_invoices  PAID invoices only. amount_paid_cents includes tax. A failed renewal is
-//                           not here, so nothing below ever claims a payment failed or was missed for
-//                           certain: a month with no invoice is "no charge", nothing more.
+//   stripe_member_invoices  PAID invoices. amount_paid_cents includes tax; attempt_count (0262) > 1 means
+//                           the renewal failed attempt_count − 1 times before it was paid.
+//   stripe_member_unpaid_invoices  (0262) renewals Stripe was NOT paid for: open (still retrying, or
+//                           stopped), uncollectible, void — with attempts and the last failure code.
+//                           A month with neither a paid nor an unpaid invoice is "no charge".
 //   fin_txn refunds         linked to an invoice by charge → payment intent → invoice (all 21
 //                           Membership refunds linked that way, 2026-11-07). fin_txn starts
 //                           2024-03-01, so a refund of an earlier charge cannot be linked.
@@ -48,6 +50,19 @@ export type InvoiceRow = {
   billing_reason: string | null;
   created_at_utc: string;
   payment_intent_id: string | null;
+  /** 0262: Stripe's attempt_count on the paid invoice; null until the sync has read it. */
+  attempt_count?: number | null;
+};
+/** 0262: a membership invoice Stripe has not been paid for. */
+export type UnpaidRow = {
+  md_membership_id: number;
+  amount_due_cents: number;
+  status: "open" | "uncollectible" | "void" | string;
+  billing_reason: string | null;
+  attempt_count: number | null;
+  next_payment_attempt_utc: string | null;
+  last_failure_code: string | null;
+  created_at_utc: string;
 };
 /** A Membership refund already resolved to the payment intent of the charge it refunds. `cents` is positive. */
 export type RefundRow = { payment_intent_id: string; cents: number; created_at_utc: string };
@@ -60,7 +75,7 @@ export type LiveMembership = {
   priceCents: number | null;
 } | null;
 
-export type CellKind = "first" | "paid" | "none" | "refunded";
+export type CellKind = "first" | "paid" | "none" | "refunded" | "failed";
 export type StripCell = { ym: string; label: string; kind: CellKind; title: string };
 export type Tone = "green" | "amber" | "red" | "grey";
 export type HistEvent = { key: string; tone: Tone; title: string; sub?: string; quote?: string };
@@ -166,6 +181,16 @@ const stripeEndDay = (iso: string) => isBillingBoundary(iso)
   ? new Date(Date.parse(iso)).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" })
   : dateCT(iso);
 const stripeEndYm = (iso: string) => (isBillingBoundary(iso) ? ymUtc(iso) : ymChicago(iso));
+const FAILURE_WORDS: Record<string, string> = {
+  card_declined: "card declined", generic_decline: "card declined", do_not_honor: "card declined by the bank",
+  insufficient_funds: "insufficient funds", expired_card: "card expired", incorrect_cvc: "wrong security code",
+  lost_card: "card reported lost", stolen_card: "card reported stolen", processing_error: "processing error at the bank",
+  authentication_required: "the bank asked for authentication", card_not_supported: "card not supported",
+  transaction_not_allowed: "card blocked this payment", try_again_later: "the bank asked to try again later",
+};
+/** Stripe's failure code in words ("card_declined" → "card declined"); unknown codes keep their own words. */
+export const failureWords = (code: string | null | undefined) => (code ? FAILURE_WORDS[code] ?? code.replace(/_/g, " ") : null);
+const times = (n: number) => `${n} time${n === 1 ? "" : "s"}`;
 const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
 export const isRetool = (reason: string | null) => (reason ?? "").trim().toLowerCase() === RETOOL_REASON;
 
@@ -189,9 +214,9 @@ export function neverMemberLine(played: number, firstPlayedWallClock: string | n
   return `Pays per match. ${played} ${played === 1 ? "match" : "matches"} played${since}.`;
 }
 
-type Built = { block: MembershipBlock; lastPaidYm: string | null; regular: number | null; canceledAt: string | null; reason: string | null };
+type Built = { block: MembershipBlock; lastPaidYm: string | null; regular: number | null; canceledAt: string | null; reason: string | null; unpaid: UnpaidRow[] };
 
-function buildBlock(n: number, r: SubRow, invs: InvoiceRow[], refundsByPi: Map<string, number>, live: LiveMembership): Built {
+function buildBlock(n: number, r: SubRow, invs: InvoiceRow[], refundsByPi: Map<string, number>, live: LiveMembership, unpaidIn: UnpaidRow[] = []): Built {
   const state = stateOf(r);
   const sorted = [...invs].sort((a, b) => a.created_at_utc.localeCompare(b.created_at_utc));
   const cycles = sorted.filter((i) => i.billing_reason === "subscription_cycle" && i.amount_paid_cents > 0);
@@ -200,11 +225,15 @@ function buildBlock(n: number, r: SubRow, invs: InvoiceRow[], refundsByPi: Map<s
   const paidYms = sorted.filter((i) => i.amount_paid_cents > 0).map(invoiceYm);
   const lastPaidYm = paidYms.length ? paidYms.reduce((a, b) => (a > b ? a : b)) : null;
   const isLive = live != null && live.id != null && live.id === r.membership_id;
+  // Unpaid renewals that count as failed: open ones, and uncollectible/void ones Stripe attempted.
+  const unpaid = [...unpaidIn].filter((u) => u.status === "open" || (u.attempt_count ?? 0) > 0)
+    .sort((a, b) => a.created_at_utc.localeCompare(b.created_at_utc));
+  const unpaidYm = (u: UnpaidRow) => (u.billing_reason === "subscription_cycle" ? ymUtc(u.created_at_utc) : ymChicago(u.created_at_utc));
 
   // ── the month strip: first to last invoice month ──
   const strip: StripCell[] = [];
-  if (sorted.length) {
-    const yms = sorted.map(invoiceYm);
+  if (sorted.length || unpaid.length) {
+    const yms = [...sorted.map(invoiceYm), ...unpaid.map(unpaidYm)];
     const lo = yms.reduce((a, b) => (a < b ? a : b)), hi = yms.reduce((a, b) => (a > b ? a : b));
     for (let ym = lo; ym <= hi; ym = addMonths(ym, 1)) {
       const here = sorted.filter((i) => invoiceYm(i) === ym);
@@ -212,14 +241,17 @@ function buildBlock(n: number, r: SubRow, invs: InvoiceRow[], refundsByPi: Map<s
       const refunded = here.reduce((s, i) => s + (i.payment_intent_id ? refundsByPi.get(i.payment_intent_id) ?? 0 : 0), 0);
       const charged = paid.reduce((s, i) => s + i.amount_paid_cents, 0);
       const first = paid.some((i) => i.billing_reason === "subscription_create");
-      const kind: CellKind = refunded > 0 ? "refunded" : first ? "first" : paid.length ? "paid" : "none";
+      const failedHere = unpaid.filter((u) => unpaidYm(u) === ym);
+      const kind: CellKind = refunded > 0 ? "refunded" : first ? "first" : paid.length ? "paid" : failedHere.length ? "failed" : "none";
       const title = kind === "none" ? `${monYear(ym)}: no charge`
+        : kind === "failed" ? `${monYear(ym)}: not paid (${money(failedHere[0].amount_due_cents)} due)`
         : kind === "refunded" ? `${monYear(ym)}: paid ${money(charged)}, refunded ${money(refunded)}`
         : `${monYear(ym)}: ${first ? "first charge" : "paid"} ${money(charged)}`;
       strip.push({ ym, label: mon(ym), kind, title });
     }
   }
   const noCharge = strip.filter((c) => c.kind === "none").length;
+  const notPaid = strip.filter((c) => c.kind === "failed").length;
 
   const events: HistEvent[] = [];
   // 1. Joined
@@ -250,10 +282,30 @@ function buildBlock(n: number, r: SubRow, invs: InvoiceRow[], refundsByPi: Map<s
       sub: `From the ${monYear(invoiceYm(cycles[i]))} charge (includes tax)`,
     });
   }
+  // 2b. Failed payments (0262): retried then paid, and not paid
+  for (const v of sorted) {
+    const a = v.attempt_count ?? 0;
+    if (a <= 1 || v.amount_paid_cents <= 0) continue;
+    const what = v.billing_reason === "subscription_create" ? "First charge" : "Renewal";
+    events.push({ key: `retried-${v.created_at_utc}`, tone: "amber", title: `${what} failed ${times(a - 1)}, then paid`, sub: `${monYear(invoiceYm(v))} · ${money(v.amount_paid_cents)}` });
+  }
+  for (const u of unpaid) {
+    const a = u.attempt_count ?? 0;
+    const what = u.billing_reason === "subscription_create" ? "First charge" : `${monthName(unpaidYm(u))} renewal`;
+    const why = failureWords(u.last_failure_code);
+    const state = u.status === "open"
+      ? (ms(u.next_payment_attempt_utc) != null ? `Stripe retries next on ${dateCT(u.next_payment_attempt_utc)}` : "Stripe has stopped retrying")
+      : u.status === "uncollectible" ? "Stripe marked it uncollectible" : "The invoice was voided";
+    events.push({
+      key: `unpaid-${u.created_at_utc}`, tone: "red",
+      title: a > 0 ? `${what} failed ${times(a)}, not paid` : `${what} not paid yet`,
+      sub: [`${money(u.amount_due_cents)} due`, why ? `last: ${why}` : null, state].filter(Boolean).join(" · "),
+    });
+  }
   // 3. Renewals, on a membership still running
   if (state === "active" || state === "cancelling" || state === "past_due") {
     const next = isLive && state === "active" && live?.renews ? ` · next ${boundaryDay(live.renews)}` : "";
-    const missed = noCharge ? `${plural(noCharge, "month")} with no charge` : "none missed";
+    const missed = [noCharge ? `${plural(noCharge, "month")} with no charge` : null, notPaid ? `${plural(notPaid, "month")} not paid` : null].filter(Boolean).join(", ") || "none missed";
     if (regular != null) {
       events.push({ key: "renews", tone: "green", title: `Renews monthly at ${money(regular)}`, sub: `${plural(cycles.length, "renewal")} paid, ${missed}${next}` });
     } else if (state === "active") {
@@ -304,8 +356,7 @@ function buildBlock(n: number, r: SubRow, invs: InvoiceRow[], refundsByPi: Map<s
       ? { key: "ending", tone: "grey", title: `Runs to ${boundaryDay(live.renews)}`, sub: "Still active at MatchDay until the end of the paid period." }
       : { key: "ending", tone: "grey", title: "Runs to the end of the paid period", sub: "Still active at MatchDay; the period end isn't in our records." });
   } else if (state === "past_due") {
-    const due = lastPaidYm ? `The ${monthName(addMonths(lastPaidYm, 1))} renewal hasn't been paid.` : "A renewal hasn't been paid.";
-    events.push({ key: "pastdue", tone: "red", title: "Payment overdue", sub: `${due} Failed payment attempts aren't shown.` });
+    events.push({ key: "pastdue", tone: "red", title: "Payment overdue", sub: pastDueLine(lastPaidYm, unpaid) });
   } else if (state === "comp") {
     events.push({ key: "comp", tone: "grey", title: "Added by staff as a comp", sub: "Never charged: there is no Stripe subscription behind it." });
   }
@@ -315,6 +366,7 @@ function buildBlock(n: number, r: SubRow, invs: InvoiceRow[], refundsByPi: Map<s
     ? `${start} to ${end ? (end.source === "stripe" ? stripeEndDay(end.iso) : end.exact ? dateCT(end.iso) : `about ${firstOf(ymUtc(end.iso))}`) : "an unknown date"}`
     : `${start} to now`;
   return {
+    unpaid,
     block: { n, membershipId: r.membership_id, state, badge: BADGE[state] || (r.status ?? "").toUpperCase(), range, strip, events, end, activation: r.activation_date },
     lastPaidYm, regular, canceledAt: r.canceled_at, reason: r.cancel_reason,
   };
@@ -342,17 +394,21 @@ export function buildMembershipHistory(input: {
   rows: SubRow[];
   invoices: InvoiceRow[];
   refunds: RefundRow[];
+  /** 0262; omitted = none on record. */
+  unpaid?: UnpaidRow[];
   live: LiveMembership;
   now: Date;
   syncedAt: string | null;
 }): History {
   const { invoices, refunds, live, now } = input;
+  const unpaidAll = input.unpaid ?? [];
   const rows = [...input.rows].sort((a, b) =>
     (ms(a.activation_date) ?? 0) - (ms(b.activation_date) ?? 0) || a.membership_id - b.membership_id);
   const refundsByPi = new Map<string, number>();
   for (const f of refunds) refundsByPi.set(f.payment_intent_id, (refundsByPi.get(f.payment_intent_id) ?? 0) + Math.abs(f.cents));
 
-  const built = rows.map((r, i) => buildBlock(i + 1, r, invoices.filter((v) => Number(v.md_membership_id) === Number(r.membership_id)), refundsByPi, live));
+  const built = rows.map((r, i) => buildBlock(i + 1, r, invoices.filter((v) => Number(v.md_membership_id) === Number(r.membership_id)), refundsByPi, live,
+    unpaidAll.filter((u) => Number(u.md_membership_id) === Number(r.membership_id))));
 
   // ── summary ──
   const mine = new Set(rows.map((r) => Number(r.membership_id)));
@@ -430,11 +486,23 @@ export function buildMembershipHistory(input: {
     },
     items,
     notices,
-    footer: `From MatchDay's membership records and paid Stripe invoices. Failed payments aren't shown yet. End dates come from Stripe; where Stripe's isn't on record, they are estimated from the last paid month.${asOf}`,
+    footer: `From MatchDay's membership records and Stripe's invoices, paid and unpaid. End dates come from Stripe; where Stripe's isn't on record, they are estimated from the last paid month.${asOf}`,
   };
 }
 
+/** Past due: the open renewal's attempts and next retry when Stripe's invoice is on record. */
+function pastDueLine(lastPaidYm: string | null, unpaid: UnpaidRow[]): string {
+  const open = [...unpaid].reverse().find((u) => u.status === "open") ?? null;
+  const month = open ? monthName(open.billing_reason === "subscription_cycle" ? ymUtc(open.created_at_utc) : ymChicago(open.created_at_utc))
+    : lastPaidYm ? monthName(addMonths(lastPaidYm, 1)) : null;
+  const head = month ? `The ${month} renewal` : "A renewal";
+  if (!open) return `${head} hasn't been paid. No failed attempt is on record yet.`;
+  const a = open.attempt_count ?? 0;
+  const why = failureWords(open.last_failure_code);
+  const next = ms(open.next_payment_attempt_utc) != null ? `Stripe retries next on ${dateCT(open.next_payment_attempt_utc)}.` : "Stripe has stopped retrying.";
+  return `${head} failed ${times(a)}${why ? ` (last: ${why})` : ""}. ${next}`;
+}
+
 function pastDueSub(b: Built | null): string {
-  const due = b?.lastPaidYm ? `The ${monthName(addMonths(b.lastPaidYm, 1))} renewal hasn't been paid.` : "A renewal hasn't been paid.";
-  return `${due} Failed payment attempts aren't shown.`;
+  return pastDueLine(b?.lastPaidYm ?? null, b?.unpaid ?? []);
 }
