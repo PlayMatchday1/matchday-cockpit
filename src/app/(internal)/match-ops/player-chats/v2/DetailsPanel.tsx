@@ -3,7 +3,8 @@
 // PLAYER DETAILS, docked on the right at 400px (Figma 20855:44); a full-screen panel with a back
 // arrow below 1024px (Ryan 2026-11-06 — the old Info button did nothing there).
 //
-// Tabs: Activity, Matches, Payments, Credits, Account. Everything comes from the one context read
+// Tabs: Activity, Membership, Matches, Payments, Credits, Account. Membership is the history Player
+// Lookup shows, compact (Figma 20865:183), from the same read (MembershipHistoryView). Everything comes from the one context read
 // the strip already made (useThreadContext) and the App activity read Player Lookup uses
 // (useAppActivity, app_request_log). Activity shows only what that log holds.
 //
@@ -20,12 +21,15 @@ import { fmtUsd } from "@/lib/creditsModel";
 import { MATCH_STATE_LABEL, MATCH_STATE_TONE, chargeLabel } from "@/lib/matchHistory";
 import { membershipLevel } from "@/lib/inbox2Model";
 import CopyPhone from "@/components/CopyPhone";
+import { MembershipHistoryCompact, useMembershipHistory, useBuiltHistory } from "@/components/MembershipHistoryView";
+import { neverMemberLine, type LiveMembership } from "@/lib/membershipHistory";
+import { FULL_EDITOR_ENV } from "@/lib/matchEnv";
 import { CreditBox, Empty, Fact, Line, LinkAccount, PANE_TONE, Search, dayOf, monthYear } from "../components/ContextPane";
 import type { ThreadContext } from "./useThreadContext";
 
-export type DetailsTab = "activity" | "matches" | "payments" | "credits" | "account";
+export type DetailsTab = "activity" | "membership" | "matches" | "payments" | "credits" | "account";
 const TABS: { key: DetailsTab; label: string }[] = [
-  { key: "activity", label: "Activity" }, { key: "matches", label: "Matches" }, { key: "payments", label: "Payments" },
+  { key: "activity", label: "Activity" }, { key: "membership", label: "Membership" }, { key: "matches", label: "Matches" }, { key: "payments", label: "Payments" },
   { key: "credits", label: "Credits" }, { key: "account", label: "Account" },
 ];
 const INK = "#13241d", MUTED = "#5e6b66", FAINT = "#7c8782", LINE = "#e3e3db";
@@ -76,6 +80,7 @@ export default function DetailsPanel({ threadId, phone, playerId, name, ctx, tab
               : <Empty>No linked account, so there is no app activity to show. Link one on the Account tab.</Empty>
             : <Empty>App activity needs <b>VIEW ACTIVITY</b>.</Empty>
         )}
+        {ctx.data && tab === "membership" && (!prof ? <Unread /> : <MembershipTab prof={prof} />)}
         {ctx.data && tab === "matches" && (
           !prof ? <Unread /> : (
             <>
@@ -175,6 +180,24 @@ export default function DetailsPanel({ threadId, phone, playerId, name, ctx, tab
         )}
       </div>
     </aside>
+  );
+}
+
+type Prof = NonNullable<NonNullable<ThreadContext["data"]>["profile"]>;
+
+// ── MEMBERSHIP: one read of our records (the Player Lookup card's read), joined with the live
+// membership this panel already has from the profile. Read-only here; changes stay on Player Lookup.
+function MembershipTab({ prof }: { prof: Prof }) {
+  const m = prof.membership;
+  const read = useMembershipHistory(FULL_EDITOR_ENV, prof.player.id);
+  const live: LiveMembership = useMemo(() => (m ? { id: m.id ?? null, statusRaw: m.statusRaw ?? null, canceledAt: m.canceledAt, renews: m.renews, priceCents: m.price } : null), [m]);
+  const history = useBuiltHistory(read, live);
+  const firstPlayed = prof.matches.filter((x) => x.state === "played").map((x) => x.startDate).filter((d): d is string => !!d).sort()[0] ?? null;
+  return (
+    <div data-testid="details-membership">
+      <MembershipHistoryCompact read={read} history={history} neverLine={neverMemberLine(prof.player.matchesPlayed, firstPlayed)} />
+      <LookupLink id={prof.player.id} label="Change it in Player Lookup ›" />
+    </div>
   );
 }
 

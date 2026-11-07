@@ -79,6 +79,10 @@ const NODE_SUITES = [
   // comes from a shipped bug elsewhere — the Expenses page had a chip, a column total and a footer
   // summing three different windows and nothing caught it.
   "scripts/membership-chart-test.ts",
+  // MEMBERSHIP HISTORY (Player Lookup's Membership card, the Chats Membership tab): what a player is
+  // told they paid, when a membership ended and why. Fixtures shaped like the three production players
+  // of 2026-11-07, plus Retool, undated, PAST_DUE and never a member; every absence has a control.
+  "scripts/membership-history-test.ts",
   "scripts/recurring-window-test.ts",
   "scripts/partner-payout-parity-test.ts",
   // THE FOURTH PAYOUT MODEL, and the third kept intact beside it as the way back. Pins Ryan's

@@ -18,6 +18,8 @@ import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { useAuth, canEditMatches, canManagePlayers, canEditCredits, canEditMemberships, canViewActivity } from "@/lib/useAuth";
 import AppActivityCard from "./AppActivityCard";
+import { MembershipHistoryFull, useMembershipHistory, useBuiltHistory } from "./MembershipHistoryView";
+import { neverMemberLine, type LiveMembership } from "@/lib/membershipHistory";
 import { memKind, actionsFor, isComp, centsFromDollars, dollarsFromCents, addPathFor, COMP_ADD_ENABLED, COMP_DISABLED_REASON, type MemFacts, type AddKind } from "@/lib/membershipAdminModel";
 import PlayerFinder from "./PlayerFinder";
 import MatchManagersPanel from "./MatchManagersPanel";
@@ -597,7 +599,8 @@ function ProfileView({ p, fields, canEdit, canManage, canCredit, canMember, canA
         canCredit={canCredit} onBalance={setLiveCredits} />
 
       <MembershipPanel m={p.membership} playerId={pl.id} playerName={pl.name} playerCity={pl.city}
-        canEdit={canMember} onChanged={onReload} />
+        canEdit={canMember} onChanged={onReload} played={pl.matchesPlayed}
+        firstPlayed={p.matches.filter((x) => x.state === "played").map((x) => x.startDate).filter((d): d is string => !!d).sort()[0] ?? null} />
 
       <StrikePanel s={p.strikes} isMember={!!p.membership} playerId={pl.id} playerName={pl.name}
         canManage={canManage} onRemoved={onReload} />
@@ -1007,14 +1010,27 @@ function MatchHistoryPanel({ matches, counts, canEdit, onOpenMatch, onAdd, onRem
  *   stripe.subscriptions.cancel() and ends it the moment it is pressed, with no refund. Shipping
  *   End without splitting that sentence would put a false reassurance on screen.
  */
-function MembershipPanel({ m, playerId, playerName, playerCity, canEdit, onChanged }: {
+function MembershipPanel({ m, playerId, playerName, playerCity, canEdit, onChanged, played, firstPlayed }: {
   m: Membership; playerId: number; playerName: string; playerCity: string | null;
   canEdit: boolean; onChanged: () => void;
+  /** For the never-a-member line: matches played and the first one's wall-clock start. */
+  played: number; firstPlayed: string | null;
 }) {
   const [dlg, setDlg] = useState<null | "price" | "end" | "add">(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  const [menu, setMenu] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
+
+  /* THE HISTORY (Figma 20865:45). Our own records, read once per player; the live membership from
+   * the profile supplies what only the API knows (status now, price, period end). A write below
+   * re-reads both. The writes, their guards and their dialogs are UNCHANGED — they moved into the
+   * Actions menu, nothing else. */
+  const read = useMembershipHistory(ENV, playerId, reloadKey);
+  const live: LiveMembership = useMemo(() => (m ? { id: m.id, statusRaw: m.statusRaw, canceledAt: m.canceledAt, renews: m.renews, priceCents: m.price } : null),
+    [m]);
+  const history = useBuiltHistory(read, live);
 
   const facts: MemFacts | null = m ? {
     id: m.id, statusRaw: m.statusRaw, stripeSubscriptionId: m.stripeSubscriptionId,
@@ -1035,31 +1051,17 @@ function MembershipPanel({ m, playerId, playerName, playerCity, canEdit, onChang
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok) { setErr(j?.error || `Failed (${res.status})`); return; }
-      setDlg(null);
+      setDlg(null); setMenu(false);
       /* THE SERVER'S SENTENCE, NOT OURS. It read the MatchDay row AND Stripe and reports them as
        * two facts; nothing here re-derives a verdict from a status code. */
       setNote(j?.message || (j?.status === "LANDED" ? ok : `Reported ${j?.status ?? "UNKNOWN"} — the panel below is a fresh read.`));
       onChanged();
+      setReloadKey((k) => k + 1);
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); }
   };
 
-  if (!m) return (
-    <div className="panel" data-testid="mempanel" data-kind="none">
-      <div className="ptitle"><h3>MEMBERSHIP</h3></div>
-      <div className="nomem"><b>Not a member</b></div>
-      <div className="acts" data-testid="acts">
-        {canEdit && <button className="rm" data-testid="act-add" disabled={busy} onClick={() => setDlg("add")}>Add membership</button>}
-        <span className="whynot" data-testid="add-why">No membership on file.</span>
-      </div>
-      {err && <p className="pfoot" data-testid="mem-err" style={{ color: "var(--bad)" }}>{err}</p>}
-      {note && <p className="pfoot" data-testid="mem-note">{note}</p>}
-      {dlg === "add" && <AddDialog playerName={playerName} playerCity={playerCity} playerId={playerId} plan={m} busy={busy}
-        onCancel={() => setDlg(null)} onGo={(k) => run(`/api/matchday/${ENV}/memberships/add`, { kind: k }, "Membership added.")} />}
-    </div>
-  );
-
-  const st = (m.status || "").toLowerCase();
+  const st = (m?.status || "").toLowerCase();
   /* THE BADGE READ `m.status` ALONE, AND `m.status` DOES NOT CHANGE WHEN SOMEBODY CANCELS.
    *
    * A subscription cancelled at period end stays status ACTIVE until the period runs out. Measured
@@ -1069,70 +1071,100 @@ function MembershipPanel({ m, playerId, playerName, playerCity, canEdit, onChang
    * That is not a cosmetic defect. The conversation this page gets opened during is a player saying
    * they cancelled and were charged anyway; an operator reading ACTIVE concludes the player is
    * confused. The player is right. So the CANCELLATION, not the status word, decides the badge. */
-  const endsAt = m.canceledAt ? m.renews : null;
+  const endsAt = m?.canceledAt ? m.renews : null;
   const stillRunning = Boolean(endsAt) && Date.parse(endsAt as string) > Date.now();
-  const label = comped ? (["comp", "COMPED"] as const)
+  const label = !m ? (["none", "NOT A MEMBER"] as const)
+    : comped ? (["comp", "COMPED"] as const)
     : kind === "ended" ? (["none", "ENDED"] as const)
     : m.canceledAt || st.includes("cancel")
     ? (["none", stillRunning ? `CANCELLED, RUNS TO ${fmtDayUTC(endsAt).toUpperCase()}` : "CANCELLED"] as const)
     : st.includes("past") || st.includes("due") || st.includes("unpaid") ? (["susp", "PAST DUE"] as const)
     : (["ok", "ACTIVE"] as const);
 
+  /* THE ACTIONS MENU: the live record's ids and notes, and the three writes exactly as they were. */
+  const actions = (
+    <div className="memmenu">
+      <button type="button" className="rm" data-testid="mem-actions" aria-expanded={menu} onClick={() => setMenu((v) => !v)}>Actions ▾</button>
+      {menu && (
+        <div className="memmenu-pop" data-testid="mem-actions-pop">
+          <div className="ptitle" style={{ borderBottom: "none", background: "transparent", padding: "0 0 8px" }}>
+            <h3>LIVE RECORD</h3><span className="note"><span className={`tag ${label[0]}`} data-testid="mem-badge">{label[1]}</span></span>
+          </div>
+          {m ? (
+            <div className="memgrid" style={{ padding: 0 }}>
+              {/* TWO IDS, ON PURPOSE. The numeric one is what every write is keyed on; the Stripe one is
+                  what Payments reconciles against. Showing only `number` hid the first behind the second. */}
+              {m.id != null && <Fact k="MEMBERSHIP ID" v={String(m.id)} />}
+              <Fact k="SUBSCRIPTION" v={m.stripeSubscriptionId ?? "none in Stripe"} />
+              <Fact k="STATUS" v={`${m.statusRaw || m.status || "—"}${m.canceledAt && !st.includes("cancel") ? " at MatchDay" : ""}`} />
+              {m.canceledAt && <Fact k="CANCELLED" v={fmtDateCT(m.canceledAt)} />}
+              {m.renews && <Fact k={m.canceledAt ? "ENDS" : "RENEWS"} v={fmtDate(m.renews)} />}
+              {m.price != null && <Fact k="PRICE" v={money(m.price)} />}
+              {m.city && <Fact k="CITY" v={m.city} />}
+            </div>
+          ) : <p className="whynot" style={{ margin: 0 }}>No membership on file at MatchDay.</p>}
+
+          {comped && (
+            <p className="warn" data-testid="comp-note"><b>This membership has never been charged.</b>{" "}
+              It was added by an admin, so there is no Stripe subscription behind it. The price above is what
+              the record says the plan is worth, <b>not money collected</b>. It does not count toward paid members,
+              and it does not appear on any Membership page.</p>
+          )}
+          {!comped && kind === "free" && (
+            <p className="warn" data-testid="zero-note"><b>A real Stripe subscription at $0.00.</b>{" "}
+              Unlike a comp this one exists in Stripe: it renews on schedule and can fail, it simply charges
+              nothing. It does <b>not count toward paid members</b>, which require a price above zero.</p>
+          )}
+          {m && kind === "ended" && (
+            <p className="memsum" data-testid="ended-admin">Ended by an admin {fmtDayCT(m.canceledAt)}, <b>immediately</b>.{" "}
+              Stripe was cancelled the same moment, and the rest of the paid period was not refunded.</p>
+          )}
+          {m && kind === "selfcancel" && stillRunning && (
+            <p className="memsum" data-testid="ended-player">
+              Cancelled by the player {fmtDayCT(m.canceledAt)}, already paid to {fmtDayUTC(m.renews)}.{" "}
+              <b>Nothing further will be charged</b>, and they keep the membership until then.
+            </p>
+          )}
+
+          <div className="acts" data-testid="acts" style={{ marginLeft: 0, marginTop: 10 }}>
+            {m ? (
+              <>
+                {canEdit && allowed.price && <button className="rm" data-testid="act-price" disabled={busy} onClick={() => setDlg("price")}>Change price</button>}
+                {canEdit && allowed.end && <button className="rm danger" data-testid="act-end" disabled={busy} onClick={() => setDlg("end")}>End membership</button>}
+                {canEdit && allowed.add && <button className="rm" data-testid="act-add" disabled={busy} onClick={() => setDlg("add")}>Add membership</button>}
+                {allowed.why && <span className="whynot" data-testid="add-why">{allowed.why}</span>}
+                {canEdit && allowed.price && comped && <span className="whynot" data-testid="price-why">Changing the price on a comp changes the record, not a charge.</span>}
+              </>
+            ) : (
+              <>
+                {canEdit && <button className="rm" data-testid="act-add" disabled={busy} onClick={() => setDlg("add")}>Add membership</button>}
+                <span className="whynot" data-testid="add-why">No membership on file.</span>
+              </>
+            )}
+            {!canEdit && <span className="whynot" data-testid="mem-noedit">Changing a membership needs EDIT MEMBERSHIPS.</span>}
+          </div>
+          <p className="pfoot" style={{ padding: "8px 0 0", margin: 0 }}>Every change here is written to the change log with your name and a reason.</p>
+        </div>
+      )}
+    </div>
+  );
+
+  const notes = (err || note) ? (
+    <div className="mt-3">
+      {err && <p className="pfoot" data-testid="mem-err" style={{ color: "var(--bad)", padding: 0 }}>{err}</p>}
+      {note && <p className="pfoot" data-testid="mem-note" style={{ padding: 0 }}>{note}</p>}
+    </div>
+  ) : null;
+
   return (
-    <div className="panel" data-testid="mempanel" data-kind={kind}>
-      <div className="ptitle"><h3>MEMBERSHIP</h3><span className="note"><span className={`tag ${label[0]}`} data-testid="mem-badge">{label[1]}</span></span></div>
-      <div className="memgrid">
-        {/* TWO IDS, ON PURPOSE. The numeric one is what every write is keyed on; the Stripe one is
-            what Payments reconciles against. Showing only `number` hid the first behind the second. */}
-        {m.id != null && <Fact k="MEMBERSHIP ID" v={String(m.id)} />}
-        <Fact k="SUBSCRIPTION" v={m.stripeSubscriptionId ?? "none in Stripe"} />
-        <Fact k="STATUS" v={`${m.statusRaw || m.status || "—"}${m.canceledAt && !st.includes("cancel") ? " at MatchDay" : ""}`} />
-        {m.since && <Fact k="SINCE" v={fmtDate(m.since)} />}
-        {m.canceledAt && <Fact k="CANCELLED" v={fmtDateCT(m.canceledAt)} />}
-        {m.renews && <Fact k={m.canceledAt ? "ENDS" : "RENEWS"} v={fmtDate(m.renews)} />}
-        {m.price != null && <Fact k="PRICE" v={money(m.price)} />}
-        {m.city && <Fact k="CITY" v={m.city} />}
-      </div>
+    <div data-testid="mempanel" data-kind={m ? kind : "none"}>
+      <MembershipHistoryFull read={read} history={history} neverLine={neverMemberLine(played, firstPlayed)} actions={actions} notes={notes} />
 
-      {comped && (
-        <p className="warn" data-testid="comp-note"><b>This membership has never been charged.</b>{" "}
-          It was added by an admin, so there is no Stripe subscription behind it. The price above is what
-          the record says the plan is worth, <b>not money collected</b>. It does not count toward paid members,
-          and it does not appear on any Membership page.</p>
-      )}
-      {!comped && kind === "free" && (
-        <p className="warn" data-testid="zero-note"><b>A real Stripe subscription at $0.00.</b>{" "}
-          Unlike a comp this one exists in Stripe: it renews on schedule and can fail, it simply charges
-          nothing. It does <b>not count toward paid members</b>, which require a price above zero.</p>
-      )}
-      {kind === "ended" && (
-        <p className="memsum" data-testid="ended-admin">Ended by an admin {fmtDayCT(m.canceledAt)}, <b>immediately</b>.{" "}
-          Stripe was cancelled the same moment, and the rest of the paid period was not refunded.</p>
-      )}
-      {kind === "selfcancel" && stillRunning && (
-        <p className="memsum" data-testid="ended-player">
-          Cancelled by the player {fmtDayCT(m.canceledAt)}, already paid to {fmtDayUTC(m.renews)}.{" "}
-          <b>Nothing further will be charged</b>, and they keep the membership until then.
-        </p>
-      )}
-
-      <div className="acts" data-testid="acts">
-        {canEdit && allowed.price && <button className="rm" data-testid="act-price" disabled={busy} onClick={() => setDlg("price")}>Change price</button>}
-        {canEdit && allowed.end && <button className="rm danger" data-testid="act-end" disabled={busy} onClick={() => setDlg("end")}>End membership</button>}
-        {canEdit && allowed.add && <button className="rm" data-testid="act-add" disabled={busy} onClick={() => setDlg("add")}>Add membership</button>}
-        {allowed.why && <span className="whynot" data-testid="add-why">{allowed.why}</span>}
-        {canEdit && allowed.price && comped && <span className="whynot" data-testid="price-why">Changing the price on a comp changes the record, not a charge.</span>}
-      </div>
-
-      {err && <p className="pfoot" data-testid="mem-err" style={{ color: "var(--bad)" }}>{err}</p>}
-      {note && <p className="pfoot" data-testid="mem-note">{note}</p>}
-      <p className="pfoot">From MatchDay subscriptions. Every change here is written to the change log with your name and a reason.</p>
-
-      {dlg === "price" && m.id != null && (
+      {dlg === "price" && m && m.id != null && (
         <PriceDialog m={m} comped={comped} busy={busy} onCancel={() => setDlg(null)}
           onGo={(cents) => run(`/api/matchday/${ENV}/memberships/${m.id}/price`, { cents }, "Price changed.")} />
       )}
-      {dlg === "end" && m.id != null && (
+      {dlg === "end" && m && m.id != null && (
         <EndDialog m={m} comped={comped} playerName={playerName} busy={busy} onCancel={() => setDlg(null)}
           onGo={(reason) => run(`/api/matchday/${ENV}/memberships/${m.id}/end`, { reason }, "Membership ended.")} />
       )}
@@ -1785,6 +1817,8 @@ const CSS = `
 .pl .f .k{display:block;font-size:10px;font-weight:800;letter-spacing:.11em;color:var(--ink3);margin-bottom:3px}
 .pl .f .v{display:block;font-size:14px;overflow-wrap:anywhere}
 .pl .f .v.big{font-size:19px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+.pl .memmenu{position:relative}
+.pl .memmenu-pop{position:absolute;right:0;top:calc(100% + 6px);z-index:30;width:min(520px,calc(100vw - 48px));background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:0 12px 32px rgba(16,36,29,.14);padding:14px;text-align:left}
 .pl .memgrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:13px;padding:14px 16px}
 /* The one-line answer to the question the card gets opened for, in the words an operator would
    use on the phone. Sits between the facts and the footnote so it reads as the conclusion. */

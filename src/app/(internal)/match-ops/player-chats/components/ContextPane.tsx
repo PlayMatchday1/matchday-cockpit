@@ -72,7 +72,9 @@ export type Profile = {
     status: "ok" | "suspended" | "expelled"; banReason: string | null; banExpiredAt: string | null;
     matchesPlayed: number; upcoming: number;
   };
-  membership: { status: string; number: string | null; since: string | null; renews: string | null; canceledAt: string | null; price: number | null; city: string | null } | null;
+  membership: { status: string; number: string | null; since: string | null; renews: string | null; canceledAt: string | null; price: number | null; city: string | null;
+    /** Both come from the same /api/lookup route (playerProfile.ts); optional so older fixtures still type. */
+    id?: number | null; statusRaw?: string | null } | null;
   matches: ProfileMatch[];
   strikes: { activeCount: number; limit: number; isSuspended: boolean; suspendedTo: string | null };
   accountHistory: { action: "suspend" | "expel"; reason: string | null; when: string | null; until: string | null; by: string | null }[];

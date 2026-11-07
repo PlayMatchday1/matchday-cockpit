@@ -101,7 +101,7 @@ const rel = (p: string) => p.replace("src/app/api/", "");
 // EXACTLY the intended routes are on the read gate — no more (a further move must edit this test).
 // Round 1 moved 3; round 2 moved 9 more (6 reads + the 3 dual-gate routes whose GET moved and whose
 // write stayed) — the ban route is on the read gate too, but with a MANAGE PLAYERS check on top.
-is("authenticateMatchOpsRead is imported by EXACTLY the 22 intended routes", importsMatchOpsRead.map(rel).sort(), [
+is("authenticateMatchOpsRead is imported by EXACTLY the 23 intended routes", importsMatchOpsRead.map(rel).sort(), [
   /* 0195 — THE THREE MEMBERSHIP WRITES. On this gate, like the strikes and ban routes, because a
    * confined operator must be refused against the SERVER's copy of the player rather than merely
    * finding the control missing from a page — and this gate is what hands the route its scope.
@@ -180,6 +180,10 @@ is("authenticateMatchOpsRead is imported by EXACTLY the 22 intended routes", imp
   "lookup/[env]/ban/route.ts",
   // App activity (0257): Match Ops read, then VIEW ACTIVITY re-read fresh, confined accounts refused.
   "lookup/[env]/activity/route.ts",
+  // Membership history (2026-11-07): READ ONLY, our own tables (mdapi_subscriptions,
+  // stripe_member_invoices, fin_txn), no MatchDay or Stripe call. The Membership card's permission:
+  // Match Ops read, and a confined account only for a player in its city (the profile route's union).
+  "lookup/[env]/membership-history/route.ts",
   // Removing a strike. The same shape as the ban write and deliberately on the same authority:
   // Match Ops read gate, an explicit MANAGE PLAYERS check before any outbound call, and
   // requires:"manage" at the write chokepoint. A penalty on a player, like suspend / expel / lift.
