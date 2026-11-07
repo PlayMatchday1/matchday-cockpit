@@ -90,10 +90,10 @@ function Strip({ cells, labels }: { cells: MembershipBlock["strip"]; labels: boo
 function Block({ b, compact }: { b: MembershipBlock; compact: boolean }) {
   return (
     <section data-testid="mh-block" data-state={b.state} className={`rounded-xl border bg-white ${compact ? "px-3 py-3" : "px-4 py-4"}`} style={{ borderColor: LINE }}>
-      <div className={`flex ${compact ? "flex-wrap" : ""} items-center gap-x-2 gap-y-1`}>
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
         <span className={`${compact ? "text-[13.5px]" : "text-[14.5px]"} font-bold`} style={{ color: INK }}>Membership {b.n}</span>
         <Badge text={b.badge} />
-        <span className={`${compact ? "basis-full sm:basis-auto sm:ml-auto" : "ml-auto"} text-[12px]`} style={{ color: MUTED }}>{b.range}</span>
+        <span className={`${compact ? "basis-full sm:basis-auto sm:ml-auto" : "basis-full sm:basis-auto sm:ml-auto"} whitespace-nowrap text-[12px]`} style={{ color: MUTED }}>{b.range}</span>
       </div>
       <Strip cells={b.strip} labels={!compact} />
       <ul className="mt-3 flex flex-col gap-3">

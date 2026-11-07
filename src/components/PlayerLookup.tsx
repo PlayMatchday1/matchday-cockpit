@@ -1084,7 +1084,7 @@ function MembershipPanel({ m, playerId, playerName, playerCity, canEdit, onChang
   /* THE ACTIONS MENU: the live record's ids and notes, and the three writes exactly as they were. */
   const actions = (
     <div className="memmenu">
-      <button type="button" className="rm" data-testid="mem-actions" aria-expanded={menu} onClick={() => setMenu((v) => !v)}>Actions ▾</button>
+      <button type="button" className="rm memact" data-testid="mem-actions" aria-expanded={menu} onClick={() => setMenu((v) => !v)}>Actions ▾</button>
       {menu && (
         <div className="memmenu-pop" data-testid="mem-actions-pop">
           <div className="ptitle" style={{ borderBottom: "none", background: "transparent", padding: "0 0 8px" }}>
@@ -1818,6 +1818,8 @@ const CSS = `
 .pl .f .v{display:block;font-size:14px;overflow-wrap:anywhere}
 .pl .f .v.big{font-size:19px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
 .pl .memmenu{position:relative}
+/* A MENU, not a destructive control: .rm turns red on hover, this does not. */
+.pl .rm.memact:hover:not(:disabled){border-color:var(--line);color:var(--ink);background:#f3f6f4}
 .pl .memmenu-pop{position:absolute;right:0;top:calc(100% + 6px);z-index:30;width:min(520px,calc(100vw - 48px));background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:0 12px 32px rgba(16,36,29,.14);padding:14px;text-align:left}
 .pl .memgrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:13px;padding:14px 16px}
 /* The one-line answer to the question the card gets opened for, in the words an operator would
