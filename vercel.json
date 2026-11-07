@@ -41,6 +41,10 @@
       "schedule": "50 * * * *"
     },
     {
+      "path": "/api/sync/stripe-people/sub-ends",
+      "schedule": "15 9 * * *"
+    },
+    {
       "path": "/api/sync/fin-txn/catchup/1",
       "schedule": "30 12 * * *"
     },

@@ -2,6 +2,9 @@
  *
  *   ?job=customers|invoices|charges&month=2026-09   one Central month, for the back-fill
  *   ?job=customers|invoices&days=3                  a recent window
+ *   ?job=sub-ends&limit=600                         Stripe's end date per CANCELED membership (0261,
+ *                                                   lib/stripeSubEnds): paced, no retries, first error
+ *                                                   stops; run again until `remaining` is 0
  *
  * AUTH IS fin-txn's: Bearer CRON_SECRET (service role), or a signed-in session whose email is in
  * app_users, read fresh. Every Stripe call is a GET. The two tables it writes are service role only,
@@ -13,6 +16,7 @@ import { runWithLog, type TriggeredBy } from "@/lib/syncLogging";
 import { windowDaysBack, windowForMonth } from "@/lib/finTxnSync";
 import { backfillChargeCustomers, peopleLogPatch, syncMemberInvoices, syncStripeCustomers, type PeopleJob } from "@/lib/stripePeopleSync";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
+import { syncSubEnds, subEndsLogPatch } from "@/lib/stripeSubEnds";
 import { refuseUnlessAdmin } from "@/lib/adminSession";
 
 export const maxDuration = 300;
@@ -23,7 +27,7 @@ const constantTimeMatch = (a: string, b: string) => {
   return ab.length === bb.length && timingSafeEqual(ab, bb);
 };
 
-export async function runStripePeopleSync(req: Request, forced?: { jobs: PeopleJob[]; days: number }) {
+export async function runStripePeopleSync(req: Request, forced?: { jobs: PeopleJob[]; days: number } | { subEnds: { limit: number } }) {
   const url = new URL(req.url);
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
   const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY?.trim();
@@ -54,10 +58,37 @@ export async function runStripePeopleSync(req: Request, forced?: { jobs: PeopleJ
     actor = userData.user.email ?? "unknown";
   }
 
+  /* STRIPE END DATES (0261). Its own branch: no window, a row budget instead. The client has NO network
+   * retries — the first failure stops the run and the next run resumes where it stopped. */
+  const subEndsLimit = forced && "subEnds" in forced ? forced.subEnds.limit
+    : url.searchParams.get("job") === "sub-ends" ? Math.max(1, Math.min(800, Number(url.searchParams.get("limit") ?? 300) || 300)) : null;
+  if (subEndsLimit != null) {
+    const once = new Stripe(apiKey, { maxNetworkRetries: 0 });
+    const run = await runWithLog("stripe-sub-ends", triggeredBy, admin, (sb) => syncSubEnds(sb, once, { limit: subEndsLimit }), subEndsLogPatch);
+    if (!run.ok) return Response.json({ error: run.error, job: "sub-ends", outcome: "FAILED" }, { status: 500 });
+    const r = run.result;
+    if (triggeredBy === "manual") {
+      await recordWrite(
+        {
+          env: "prod", source: "stripe-people-sync", actorName: actor, actorEmail: actor,
+          saveId: `stripe-sub-ends-${Date.now()}`, matchId: null,
+          method: "POST", path: url.pathname,
+          body: { job: "sub-ends", limit: subEndsLimit },
+          keys: [], label: (k) => k,
+          applied: () => true,
+          changes: [{ key: "sub-ends", field: "sub-ends", before: "", after: `${r.asked} asked, ${r.written} written, ${r.remaining} left${r.stoppedOn ? `, stopped: ${r.stoppedOn}` : ""}` }],
+        },
+        { readResource: async () => ({}), write: async () => r, now: () => new Date().toISOString() },
+        supabaseLogStore(),
+      ).catch(() => {});
+    }
+    return Response.json({ outcome: r.stoppedOn ? "STOPPED" : "LANDED", triggeredBy, results: [r] }, { status: r.stoppedOn ? 502 : 200 });
+  }
+
   let jobs: PeopleJob[];
   let w: { since: Date; until: Date };
   let label: string;
-  if (forced) {
+  if (forced && "jobs" in forced) {
     jobs = forced.jobs; w = windowDaysBack(forced.days); label = `last ${forced.days} days`;
   } else {
     const job = url.searchParams.get("job");

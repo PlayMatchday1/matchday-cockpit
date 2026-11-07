@@ -58,7 +58,9 @@ export type SourceName =
   | "asc-analytics"
   // Stripe customers and paid membership invoices (lib/stripePeopleSync). In the DB CHECK since 0236.
   | "stripe-customers"
-  | "stripe-member-invoices";
+  | "stripe-member-invoices"
+  // Stripe's end date per CANCELED membership (lib/stripeSubEnds syncSubEnds). In the DB CHECK since 0261.
+  | "stripe-sub-ends";
 
 // fin_sync_log columns the orchestrator/manual routes write on
 // success. Stripe-specific columns (charges_*) stay null for mdapi

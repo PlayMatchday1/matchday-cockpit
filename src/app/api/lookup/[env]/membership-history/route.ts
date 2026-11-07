@@ -9,6 +9,7 @@
 //   mdapi_subscriptions     the player's membership rows (no email, phone or name is selected)
 //   stripe_member_invoices  their paid invoices (service role only, 0236)
 //   fin_txn                 Membership refunds, linked charge → payment intent → invoice
+//   mdapi_subscription_stripe_end  Stripe's end date per CANCELED membership (0261), when asked
 //
 // GATE: the same as the Membership card today — the Player Lookup profile read (Match Ops read,
 // authenticateMatchOpsRead), and for a confined account the same city union the profile route
@@ -57,16 +58,24 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string }> 
     if (!allowed) return Response.json({ error: CONFINED_CITY_ERROR }, { status: 403 });
   }
 
-  const [subs, invs] = await Promise.all([
+  const [subs, invs, ends] = await Promise.all([
     sb.from("mdapi_subscriptions")
       .select("membership_id, status, price, activation_date, canceled_at, cancel_reason, synced_at", { count: "exact" })
       .eq("user_id", uid).order("membership_id").limit(MAX),
     sb.from("stripe_member_invoices")
       .select("md_membership_id, amount_paid_cents, billing_reason, created_at_utc, payment_intent_id", { count: "exact" })
       .eq("md_user_id", uid).order("created_at_utc").limit(MAX),
+    sb.from("mdapi_subscription_stripe_end")
+      .select("membership_id, stripe_status, stripe_ended_at, match_method")
+      .eq("user_id", uid).limit(MAX),
   ]);
   if (subs.error) return Response.json({ ok: false, error: `Membership records could not be read: ${subs.error.message}` }, { status: 502 });
   if (invs.error) return Response.json({ ok: false, error: `Invoices could not be read: ${invs.error.message}` }, { status: 502 });
+  if (ends.error) return Response.json({ ok: false, error: `Stripe end dates could not be read: ${ends.error.message}` }, { status: 502 });
+  /* ONLY A MATCHED ROW SPEAKS. "unmatched" (no subscription, or Stripe's metadata naming another
+   * membership) leaves the card on its estimate. */
+  const endOf = new Map((ends.data ?? []).filter((e) => e.match_method === "stripe_metadata")
+    .map((e) => [Number(e.membership_id), { status: e.stripe_status as string | null, ended: e.stripe_ended_at as string | null }]));
   if ((subs.count ?? 0) > MAX || (invs.count ?? 0) > MAX) {
     return Response.json({ ok: false, error: "More rows than this read takes; nothing was shown rather than a partial history." }, { status: 502 });
   }
@@ -94,6 +103,8 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string }> 
   const rows: SubRow[] = (subs.data ?? []).map((r) => ({
     membership_id: Number(r.membership_id), status: r.status as string | null, price: r.price == null ? null : Number(r.price),
     activation_date: r.activation_date as string | null, canceled_at: r.canceled_at as string | null, cancel_reason: r.cancel_reason as string | null,
+    stripe_status: endOf.get(Number(r.membership_id))?.status ?? null,
+    stripe_ended_at: endOf.get(Number(r.membership_id))?.ended ?? null,
   }));
   const invoices: InvoiceRow[] = (invs.data ?? []).map((v) => ({
     md_membership_id: Number(v.md_membership_id), amount_paid_cents: Number(v.amount_paid_cents), billing_reason: v.billing_reason as string | null,

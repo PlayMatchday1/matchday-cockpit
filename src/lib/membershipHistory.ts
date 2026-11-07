@@ -24,8 +24,12 @@
 //     shown in America/Chicago.
 //   Match dates' wall-clock-labelled-Z model is NOT used anywhere in this file.
 //
-// END DATES ARE ESTIMATES. MatchDay records no end date. A cancelled membership "ended about" the 1st
-// of the month after its last paid month, and every line that says so says "(estimated)".
+// END DATES, in this order (Ryan, 2026-11-07):
+//   1. Removed by staff in Retool → the removal date (canceled_at). Retool's unsubscribe cancels the
+//      Stripe subscription at once (backend cancelSubscriptionsForAdmin), so it ended that day.
+//   2. Stripe's ended_at, where mdapi_subscription_stripe_end (0261) holds it → exact.
+//   3. Otherwise "ended about" the 1st of the month after the last paid month, "(estimated)". MatchDay
+//      records no end date, so this is only ever a fallback.
 
 export type SubRow = {
   membership_id: number;
@@ -34,6 +38,9 @@ export type SubRow = {
   activation_date: string | null;
   canceled_at: string | null;
   cancel_reason: string | null;
+  /** From mdapi_subscription_stripe_end (0261) when Stripe has been asked; absent otherwise. */
+  stripe_ended_at?: string | null;
+  stripe_status?: string | null;
 };
 export type InvoiceRow = {
   md_membership_id: number;
@@ -66,10 +73,11 @@ export type MembershipBlock = {
   range: string;
   strip: StripCell[];
   events: HistEvent[];
-  /** The 1st of the estimated end month, YYYY-MM, for ended rows with an invoice; else null. */
-  estEndYm: string | null;
+  /** How an ended membership ended: an instant, whether it is exact, and the words for it. */
+  end: BlockEnd | null;
   activation: string | null;
 };
+export type BlockEnd = { iso: string; exact: boolean; source: "retool" | "stripe" | "estimate"; label: string };
 export type HistItem = { type: "membership"; block: MembershipBlock } | { type: "gap"; text: string };
 export type NowTone = "ok" | "warn" | "bad" | "none";
 export type History = {
@@ -237,26 +245,38 @@ function buildBlock(n: number, r: SubRow, invs: InvoiceRow[], refundsByPi: Map<s
       events.push({ key: "renews", tone: "green", title: "Renews monthly", sub: `No renewal paid yet${next}` });
     }
   }
-  // 4. Cancellation
-  if (r.canceled_at) {
-    if (isRetool(r.cancel_reason)) {
-      events.push({ key: "cancel", tone: "red", title: `Removed by staff in Retool · ${dateCT(r.canceled_at)}`, sub: "No reason was recorded." });
-    } else {
-      const reason = (r.cancel_reason ?? "").trim();
-      events.push(reason
-        ? { key: "cancel", tone: "red", title: `Asked to cancel · ${dateCT(r.canceled_at)}`, quote: reason }
-        : { key: "cancel", tone: "red", title: `Asked to cancel · ${dateCT(r.canceled_at)}`, sub: "No reason given." });
-    }
-  } else if (state === "ended") {
+  // 4. How it ended (see END DATES in the header)
+  const retool = state === "ended" && !!r.canceled_at && isRetool(r.cancel_reason);
+  const stripeEnd = state === "ended" && !retool && ms(r.stripe_ended_at) != null ? (r.stripe_ended_at as string) : null;
+  let end: BlockEnd | null = null;
+  if (retool) end = { iso: r.canceled_at as string, exact: true, source: "retool", label: `Removed by staff in Retool on ${dateCT(r.canceled_at)}` };
+  else if (stripeEnd) end = { iso: stripeEnd, exact: true, source: "stripe", label: `Ended ${dateCT(stripeEnd)}` };
+  else if (state === "ended" && lastPaidYm) {
+    const ym = addMonths(lastPaidYm, 1);
+    end = { iso: `${ym}-01T12:00:00.000Z`, exact: false, source: "estimate", label: `Ended about ${firstOf(ym)}` };
+  }
+
+  // 5. Cancellation
+  if (retool) {
+    events.push({ key: "cancel", tone: "red", title: end!.label, sub: "No reason was recorded." });
+  } else if (r.canceled_at) {
+    const reason = (r.cancel_reason ?? "").trim();
+    events.push(reason
+      ? { key: "cancel", tone: "red", title: `Asked to cancel · ${dateCT(r.canceled_at)}`, quote: reason }
+      : { key: "cancel", tone: "red", title: `Asked to cancel · ${dateCT(r.canceled_at)}`, sub: "No reason given." });
+  } else if (state === "ended" && !stripeEnd) {
     events.push({ key: "cancel", tone: "grey", title: "Cancelled, with no date on record", sub: "MatchDay records no cancel date or reason when Stripe ends a membership." });
   }
-  // 5. How it stands now
-  let estEndYm: string | null = null;
-  if (state === "ended") {
-    if (lastPaidYm) {
-      estEndYm = addMonths(lastPaidYm, 1);
+  // 6. How it stands now
+  if (state === "ended" && !retool) {
+    if (end?.source === "stripe") {
       events.push({
-        key: "ended", tone: "grey", title: `Ended about ${firstOf(estEndYm)} (estimated)`,
+        key: "ended", tone: "grey", title: end.label,
+        sub: r.canceled_at ? "Date from Stripe" : "Date from Stripe. MatchDay has no cancel date or reason for this membership.",
+      });
+    } else if (end && lastPaidYm) {
+      events.push({
+        key: "ended", tone: "grey", title: `${end.label} (estimated)`,
         sub: r.canceled_at
           ? `Last paid month was ${monthName(lastPaidYm)}; MatchDay doesn't record the end date`
           : `No cancel date on record, so this is estimated the same way: last paid month was ${monthName(lastPaidYm)} ${lastPaidYm.slice(0, 4)}`,
@@ -277,27 +297,29 @@ function buildBlock(n: number, r: SubRow, invs: InvoiceRow[], refundsByPi: Map<s
 
   const start = dateCT(r.activation_date);
   const range = state === "ended"
-    ? `${start} to ${estEndYm ? `about ${firstOf(estEndYm)}` : "an unknown date"}`
+    ? `${start} to ${end ? (end.exact ? dateCT(end.iso) : `about ${firstOf(ymUtc(end.iso))}`) : "an unknown date"}`
     : `${start} to now`;
   return {
-    block: { n, membershipId: r.membership_id, state, badge: BADGE[state] || (r.status ?? "").toUpperCase(), range, strip, events, estEndYm, activation: r.activation_date },
+    block: { n, membershipId: r.membership_id, state, badge: BADGE[state] || (r.status ?? "").toUpperCase(), range, strip, events, end, activation: r.activation_date },
     lastPaidYm, regular, canceledAt: r.canceled_at, reason: r.cancel_reason,
   };
 }
 
 function gapText(prev: Built, cur: Built): string | null {
-  if (prev.block.state !== "ended" || !prev.block.estEndYm) return null;
+  const end = prev.block.end;
+  if (prev.block.state !== "ended" || !end) return null;
   const curT = ms(cur.block.activation);
   if (curT == null) return null;
-  const endT = Date.UTC(Number(prev.block.estEndYm.slice(0, 4)), Number(prev.block.estEndYm.slice(5, 7)) - 1, 1);
+  const endT = Date.parse(end.iso);
   const days = (curT - endT) / 86_400_000;
-  if (days < 0) return "Joined again before the last membership's estimated end";
+  if (days < 0) return end.exact ? "Joined again before the last membership ended" : "Joined again before the last membership's estimated end";
   const months = Math.round(days / 30.44);
   if (months < 1) return "Joined again within a month of the last membership ending";
   const p = partsIn(cur.block.activation as string, TZ);
   const curYm = ymOf(p.y, p.m);
   const part = p.d <= 10 ? "early" : p.d <= 20 ? "mid" : "late";
-  const from = prev.block.estEndYm.slice(0, 4) === curYm.slice(0, 4) ? mon(prev.block.estEndYm) : monYear(prev.block.estEndYm);
+  const endYm = end.exact ? ymChicago(end.iso) : ymUtc(end.iso);
+  const from = endYm.slice(0, 4) === curYm.slice(0, 4) ? mon(endYm) : monYear(endYm);
   return `Not a member for about ${plural(months, "month")} (${from} to ${part}-${monYear(curYm)})`;
 }
 
@@ -349,13 +371,13 @@ export function buildMembershipHistory(input: {
     nowLine = { title: "Active in our records", tone: "warn", badge: null, sub: "MatchDay's live record shows no current membership.", sub2: null };
   } else if (newest) {
     const b = newest.block;
-    const cancelLine = !newest.canceledAt ? "No cancel date or reason on record."
-      : isRetool(newest.reason) ? `Removed by staff in Retool on ${dateCT(newest.canceledAt)}. No reason was recorded.`
+    const cancelLine = b.end?.source === "retool" ? "No reason was recorded."
+      : !newest.canceledAt ? (b.end?.source === "stripe" ? "Ended in Stripe. MatchDay has no cancel date or reason." : "No cancel date or reason on record.")
       : (newest.reason ?? "").trim() ? `Asked to cancel on ${dateCT(newest.canceledAt)}: “${(newest.reason ?? "").trim()}”`
       : `Asked to cancel on ${dateCT(newest.canceledAt)}. No reason given.`;
     const paidHere = b.strip.filter((c) => c.kind !== "none").length;
     nowLine = {
-      title: b.estEndYm ? `Ended about ${firstOf(b.estEndYm)}` : "Ended", tone: "none", badge: "ENDED", sub: cancelLine,
+      title: b.end?.label ?? "Ended", tone: "none", badge: "ENDED", sub: cancelLine,
       sub2: paidHere ? `${plural(paidHere, "month")} paid${newest.regular != null ? ` at ${money(newest.regular)}` : ""}` : null,
     };
   } else {
@@ -393,7 +415,7 @@ export function buildMembershipHistory(input: {
     },
     items,
     notices,
-    footer: `From MatchDay's membership records and paid Stripe invoices. Failed payments aren't shown yet, and end dates are estimated from the last paid month.${asOf}`,
+    footer: `From MatchDay's membership records and paid Stripe invoices. Failed payments aren't shown yet. End dates come from Stripe; where Stripe's isn't on record, they are estimated from the last paid month.${asOf}`,
   };
 }
 

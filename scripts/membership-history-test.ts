@@ -14,6 +14,8 @@ import {
   buildMembershipHistory, invoiceYm, ymChicago, isRetool, neverMemberLine,
   type History, type InvoiceRow, type LiveMembership, type RefundRow, type SubRow, type MembershipBlock,
 } from "../src/lib/membershipHistory";
+import { planSubEnds, endRowFrom, NO_SUBSCRIPTION, STRIPE_MISSING } from "../src/lib/stripeSubEnds";
+import type Stripe from "stripe";
 
 let pass = 0, fail = 0;
 const is = (name: string, got: unknown, want: unknown) => {
@@ -68,8 +70,8 @@ is("renews, with none missed and the next date", [ev(a1, "renews")?.title, ev(a1
 is("no price change on a constant charge (control: fixture 3 finds one)", a1.events.filter((e) => e.key.startsWith("price")).length, 0);
 is("no gap line on one membership (control: fixture 3 has one)", gaps(A).length, 0);
 is("badge and range", [a1.badge, a1.range], ["ACTIVE", "Jan 31, 2026 to now"]);
-is("the footer says failed payments aren't shown and end dates are estimated",
-  /Failed payments aren't shown yet/.test(A.footer) && /end dates are estimated/.test(A.footer), true);
+is("the footer says failed payments aren't shown, and that end dates come from Stripe or are estimated",
+  /Failed payments aren't shown yet/.test(A.footer) && /End dates come from Stripe; where Stripe's isn't on record, they are estimated/.test(A.footer), true);
 
 // a membership with a month that carried no charge
 const A2 = build([row(5, "ACTIVE", 66, "2026-05-02T18:00:00Z")],
@@ -144,7 +146,7 @@ const gross = C_INV.reduce((s, v) => s + v.amount_paid_cents, 0);
 is("total paid takes off the linked refund, and ignores a refund on someone else's payment", [C.summary.totalPaidCents, C.summary.refundedCents], [gross - 7199, 7199]);
 is("the caption says refunds are taken off", C.summary.totalCaption, "incl. tax, refunds taken off");
 
-// ── 4. a Retool cancellation ───────────────────────────────────────────────────────────────────
+// ── 4. a Retool cancellation (Ryan 2026-11-07: the removal date IS the end date, no estimate) ───────────────────────────────────────────────────────────────────
 console.log("\n— 4. cancelled in Retool —");
 const R = build(
   [row(500, "CANCELED", 49, "2025-05-03T15:00:00Z", "2025-07-03T15:00:00Z", "Removed by Retool")],
@@ -152,11 +154,21 @@ const R = build(
   null,
 );
 const r1 = blocks(R)[0];
-is("shown as removed by staff in Retool, no reason recorded", [ev(r1, "cancel")?.title, ev(r1, "cancel")?.sub, ev(r1, "cancel")?.quote],
-  ["Removed by staff in Retool · Jul 3, 2025", "No reason was recorded.", undefined]);
+is("shown as removed by staff in Retool on the date, no reason recorded", [ev(r1, "cancel")?.title, ev(r1, "cancel")?.sub, ev(r1, "cancel")?.quote],
+  ["Removed by staff in Retool on Jul 3, 2025", "No reason was recorded.", undefined]);
+is("no estimate on a Retool end (control: fixture 2's player cancel has one)", [ev(r1, "ended"), JSON.stringify(R).includes("(estimated)"), JSON.stringify(B).includes("(estimated)")], [null, false, true]);
+is("the range ends on the removal date", r1.range, "May 3, 2025 to Jul 3, 2025");
+is("…even when Stripe holds an end date for it",
+  blocks(build([row(501, "CANCELED", 49, "2025-05-03T15:00:00Z", "2025-07-03T15:00:00Z", "Removed by Retool")].map((x) => ({ ...x, stripe_ended_at: "2025-07-03T15:00:01Z" })), [], null))[0].range,
+  "May 3, 2025 to Jul 3, 2025");
 is("…and never quoted as if the player said it (control: fixture 2 quotes)", JSON.stringify(R).includes("“Removed by Retool”"), false);
-is("the state card (frame 20865:285)", [R.now.title, R.now.badge, R.now.sub, R.now.sub2],
-  ["Ended about Aug 1, 2025", "ENDED", "Removed by staff in Retool on Jul 3, 2025. No reason was recorded.", "3 months paid at $53.04"]);
+is("the state card: the removal date as the end", [R.now.title, R.now.badge, R.now.sub, R.now.sub2],
+  ["Removed by staff in Retool on Jul 3, 2025", "ENDED", "No reason was recorded.", "3 months paid at $53.04"]);
+{
+  const RJ = build([row(510, "CANCELED", 49, "2025-05-03T15:00:00Z", "2025-07-03T15:00:00Z", "Removed by Retool"), row(511, "ACTIVE", 49, "2025-10-24T15:00:00Z")],
+    [inv(510, 5304, "subscription_create", "2025-05-03T15:00:04Z"), cyc(510, 5304, "2025-06"), cyc(510, 5304, "2025-07"), inv(511, 5304, "subscription_create", "2025-10-24T15:00:04Z")], null);
+  is("a gap after a Retool end runs from the removal date", gaps(RJ), ["Not a member for about 4 months (Jul to late-Oct 2025)"]);
+}
 
 // ── 5. cancelled with no date ──────────────────────────────────────────────────────────────────
 console.log("\n— 5. cancelled with no date —");
@@ -172,6 +184,23 @@ is("the end month is inferred the same way, and says so", [ev(u1, "ended")?.titl
 is("the state card says there is no date or reason", [U.now.title, U.now.sub], ["Ended about Jul 1, 2026", "No cancel date or reason on record."]);
 const U0 = build([row(601, "CANCELED", 66, "2026-05-08T16:00:00Z")], [], null);
 is("with no invoice at all the end is unknown, not guessed", [ev(blocks(U0)[0], "ended")?.title, U0.now.title], ["End date unknown", "Ended"]);
+
+// ── 4b. Stripe's end date (0261) ──────────────────────────────────────────────────────────────
+console.log("\n— 4b. Stripe's end date, where we have it —");
+const BS = build(
+  [{ ...row(11253, "CANCELED", 49, "2025-05-03T15:00:00Z", "2025-06-07T20:00:00Z", "Not enough time"), stripe_ended_at: "2025-08-01T05:00:00Z", stripe_status: "canceled" }],
+  [inv(11253, 5304, "subscription_create", "2025-05-03T15:00:04Z"), cyc(11253, 5304, "2025-06"), cyc(11253, 5304, "2025-07")], null);
+const bs1 = blocks(BS)[0];
+is("a player cancel with Stripe's date is exact: no 'about', no '(estimated)'", [ev(bs1, "ended")?.title, ev(bs1, "ended")?.sub, bs1.range, BS.now.title],
+  ["Ended Aug 1, 2025", "Date from Stripe", "May 3, 2025 to Aug 1, 2025", "Ended Aug 1, 2025"]);
+is("CONTROL: the same membership without Stripe's date is estimated", ev(b1, "ended")?.title, "Ended about Aug 1, 2025 (estimated)");
+const US = build([{ ...row(600, "CANCELED", 66, "2026-05-08T16:00:00Z"), stripe_ended_at: "2026-06-14T09:30:00Z", stripe_status: "canceled" }],
+  [inv(600, 5341, "subscription_create", "2026-05-08T16:00:02Z"), cyc(600, 7199, "2026-06")], null);
+const us1 = blocks(US)[0];
+is("an undated cancellation with Stripe's date: exact, and says MatchDay has none", [ev(us1, "ended")?.title, ev(us1, "ended")?.sub, US.now.sub],
+  ["Ended Jun 14, 2026", "Date from Stripe. MatchDay has no cancel date or reason for this membership.", "Ended in Stripe. MatchDay has no cancel date or reason."]);
+is("…and drops the 'no date on record' line (control: fixture 5 keeps it)", [ev(us1, "cancel"), ev(u1, "cancel")?.title], [null, "Cancelled, with no date on record"]);
+is("an ACTIVE row is never given an end, whatever Stripe says", blocks(build([{ ...row(801, "ACTIVE", 66, "2026-03-02T16:00:00Z"), stripe_ended_at: "2026-06-14T09:30:00Z" }], [], null))[0].end, null);
 
 // ── 6. PAST_DUE ────────────────────────────────────────────────────────────────────────────────
 console.log("\n— 6. past due —");
@@ -205,6 +234,45 @@ const x1 = blocks(X)[0];
 is("now: cancelling, runs to the period end", [X.now.title, X.now.badge, X.now.sub], ["Cancelling", "CANCELLING", "$66.50 plan · runs to Dec 1"]);
 is("the block says it runs to the period end, not that it ended", [x1.badge, ev(x1, "ending")?.title, ev(x1, "ended")], ["CANCELLING", "Runs to Dec 1", null]);
 is("…and the renewals line carries no next date on a cancelling membership", ev(x1, "renews")?.sub, "8 renewals paid, none missed");
+
+// ── the backfill's plan and rows (lib/stripeSubEnds, pure halves) ───────────────────────────
+console.log("\n— the Stripe end-date backfill: who is asked, and what is stored —");
+{
+  const subs = [
+    { membership_id: 3, user_id: 30, status: "CANCELED" }, { membership_id: 1, user_id: 10, status: "CANCELED" },
+    { membership_id: 2, user_id: 20, status: "ACTIVE" }, { membership_id: 4, user_id: 40, status: "CANCELED" },
+    { membership_id: 5, user_id: 50, status: "CANCELED" }, { membership_id: 6, user_id: 60, status: "CANCELED" },
+    { membership_id: 7, user_id: 70, status: "PAST_DUE" },
+  ];
+  const invs = [
+    { md_membership_id: 1, subscription_id: "sub_old", created_at_utc: "2025-01-01T00:00:00Z" },
+    { md_membership_id: 1, subscription_id: "sub_new", created_at_utc: "2025-03-01T00:00:00Z" },
+    { md_membership_id: 3, subscription_id: "sub_3", created_at_utc: "2025-03-01T00:00:00Z" },
+    { md_membership_id: 5, subscription_id: "sub_5", created_at_utc: "2025-03-01T00:00:00Z" },
+    { md_membership_id: 6, subscription_id: "sub_6", created_at_utc: "2025-03-01T00:00:00Z" },
+    { md_membership_id: 2, subscription_id: "sub_2", created_at_utc: "2025-03-01T00:00:00Z" },
+  ];
+  const existing = [
+    { membership_id: 5, stripe_status: "canceled", fetched_at: "2026-11-01T00:00:00Z" },  // final: never again
+    { membership_id: 6, stripe_status: "active", fetched_at: "2026-11-07T12:00:00Z" },    // not final, 6h old: not yet
+  ];
+  const plan = planSubEnds(subs, invs, existing, NOW);
+  is("asks CANCELED rows not yet asked, oldest membership first; skips ACTIVE, PAST_DUE, a final answer and a fresh non-final one",
+    plan.map((c) => c.membership_id), [1, 3, 4]);
+  is("CONTROL: a non-final answer a day old IS asked again",
+    planSubEnds(subs, invs, existing, new Date("2026-11-09T00:00:00Z")).map((c) => c.membership_id), [1, 3, 4, 6]);
+  is("two subscription ids: the latest invoice's first, both counted", plan[0].subIds, ["sub_new", "sub_old"]);
+  const t = new Date("2026-11-07T18:00:00Z");
+  const noSub = endRowFrom(plan[2], null, null, t);
+  is("no invoice, no subscription: stored unmatched, said why, never asked", [noSub.match_method, noSub.lookup_error, noSub.stripe_subscription_id], ["unmatched", NO_SUBSCRIPTION, null]);
+  const sub = { status: "canceled", canceled_at: 1754006400, ended_at: 1754020800, start_date: 1746288000, trial_end: null, metadata: { userSubscriptionId: "1" } } as unknown as Stripe.Subscription;
+  const ok1 = endRowFrom(plan[0], sub, null, t);
+  is("Stripe's answer, seconds to ISO", [ok1.match_method, ok1.stripe_status, ok1.stripe_ended_at, ok1.candidate_count, ok1.lookup_error],
+    ["stripe_metadata", "canceled", "2025-08-01T04:00:00.000Z", 2, null]);
+  const other = endRowFrom(plan[1], sub, null, t);
+  is("metadata naming another membership is not believed", [other.match_method, other.lookup_error], ["unmatched", "stripe metadata names membership 1"]);
+  is("a subscription Stripe does not hold is a row, not a stop", endRowFrom(plan[1], null, STRIPE_MISSING, t).lookup_error, STRIPE_MISSING);
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

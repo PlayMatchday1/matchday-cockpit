@@ -221,3 +221,152 @@ export async function probeLowPricePlans(sb: SupabaseClient) {
   }
   return { probe: "low_plans", total: rows.length, rows };
 }
+
+/* ═══ THE BACKFILL AND THE NIGHTLY ADDITION (0261, 2026-11-07) ═══════════════════════════════════
+ *
+ * WRITES mdapi_subscription_stripe_end, one row per CANCELED membership: Stripe's status, canceled_at
+ * and ended_at. Every Stripe call is a GET (subscriptions.retrieve).
+ *
+ * WHERE THE STRIPE ID COMES FROM. Not MatchDay (GET /admin/players/{id} returns no CANCELED row, probe
+ * of 2026-10-14) and not an email match: our own stripe_member_invoices carries `subscription_id` on
+ * every paid invoice, keyed by md_membership_id, which the invoice sync read from the subscription's
+ * metadata.userSubscriptionId. Measured 2026-11-07: 2,604 of 2,619 CANCELED memberships have one, all
+ * 621 undated paying cancellations among them; 3 have two subscription ids (the latest invoice's wins,
+ * candidate_count says so). So match_method is "stripe_metadata".
+ *
+ * PACED, NO RETRIES, FIRST ERROR STOPS. One retrieve every STRIPE_GAP_MS on a client with
+ * maxNetworkRetries 0. An answer that the subscription does not exist is a row (unmatched, said why);
+ * any other failure ends the run with nothing written for that membership, and the next run resumes,
+ * because a row that is not written is still a candidate.
+ *
+ * A membership with no invoice at all was never billed (Ryan, 2026-10-14): stored "unmatched",
+ * lookup_error "no stripe subscription", with no Stripe call. */
+import type Stripe from "stripe";
+
+export type EndRow = {
+  membership_id: number; user_id: number; stripe_subscription_id: string | null;
+  match_method: "stripe_metadata" | "unmatched"; candidate_count: number;
+  stripe_status: string | null; stripe_canceled_at: string | null; stripe_ended_at: string | null;
+  stripe_start_date: string | null; stripe_trial_end: string | null; lookup_error: string | null;
+  fetched_at: string;
+};
+export type EndCandidate = { membership_id: number; user_id: number; subIds: string[] };
+type ExistingEnd = { membership_id: number; stripe_status: string | null; fetched_at: string | null };
+type SubIdInvoice = { md_membership_id: number; subscription_id: string | null; created_at_utc: string };
+
+/** Stripe statuses after which nothing changes again. Anything else is re-read, at most daily. */
+export const FINAL_STRIPE_STATUSES = new Set(["canceled", "incomplete_expired"]);
+export const NO_SUBSCRIPTION = "no stripe subscription";
+export const STRIPE_MISSING = "stripe: no such subscription";
+
+/** PURE. Which CANCELED memberships to ask Stripe about, oldest membership first:
+ *  never asked; or asked, but Stripe's status was not final and the answer is a day old.
+ *  A final answer, and a row with no subscription to ask about, are never asked again. */
+export function planSubEnds(
+  subs: { membership_id: number; user_id: number; status: string | null }[],
+  invoices: SubIdInvoice[],
+  existing: ExistingEnd[],
+  now: Date,
+): EndCandidate[] {
+  const have = new Map(existing.map((e) => [Number(e.membership_id), e]));
+  const byMembership = new Map<number, SubIdInvoice[]>();
+  for (const v of invoices) {
+    if (!v.subscription_id) continue;
+    const k = Number(v.md_membership_id);
+    (byMembership.get(k) ?? byMembership.set(k, []).get(k)!).push(v);
+  }
+  const out: EndCandidate[] = [];
+  for (const s of [...subs].sort((a, b) => Number(a.membership_id) - Number(b.membership_id))) {
+    if (s.status !== "CANCELED") continue;
+    const e = have.get(Number(s.membership_id));
+    if (e) {
+      if (e.stripe_status == null || FINAL_STRIPE_STATUSES.has(e.stripe_status)) continue;
+      const age = now.getTime() - (Date.parse(e.fetched_at ?? "") || 0);
+      if (age < 86_400_000) continue;
+    }
+    const invs = [...(byMembership.get(Number(s.membership_id)) ?? [])].sort((a, b) => b.created_at_utc.localeCompare(a.created_at_utc));
+    const subIds = [...new Set(invs.map((v) => v.subscription_id as string))];
+    out.push({ membership_id: Number(s.membership_id), user_id: Number(s.user_id), subIds });
+  }
+  return out;
+}
+
+const isoOf = (s: number | null | undefined) => (typeof s === "number" ? new Date(s * 1000).toISOString() : null);
+
+/** PURE. The row for one candidate from Stripe's answer (or the lack of one). */
+export function endRowFrom(c: EndCandidate, sub: Stripe.Subscription | null, error: string | null, now: Date): EndRow {
+  const base = {
+    membership_id: c.membership_id, user_id: c.user_id, stripe_subscription_id: c.subIds[0] ?? null,
+    candidate_count: c.subIds.length, fetched_at: now.toISOString(),
+    stripe_status: null, stripe_canceled_at: null, stripe_ended_at: null, stripe_start_date: null, stripe_trial_end: null,
+  };
+  if (!c.subIds.length) return { ...base, match_method: "unmatched", lookup_error: NO_SUBSCRIPTION };
+  if (!sub) return { ...base, match_method: "unmatched", lookup_error: error ?? STRIPE_MISSING };
+  const meta = Number(String((sub.metadata ?? {}).userSubscriptionId ?? "").trim());
+  const mismatch = Number.isSafeInteger(meta) && meta > 0 && meta !== c.membership_id;
+  return {
+    ...base,
+    match_method: mismatch ? "unmatched" : "stripe_metadata",
+    stripe_status: sub.status ?? null,
+    stripe_canceled_at: isoOf(sub.canceled_at),
+    stripe_ended_at: isoOf(sub.ended_at),
+    stripe_start_date: isoOf(sub.start_date),
+    stripe_trial_end: isoOf(sub.trial_end),
+    lookup_error: mismatch ? `stripe metadata names membership ${meta}` : null,
+  };
+}
+
+export type SubEndsResult = {
+  job: "sub-ends"; candidates: number; asked: number; written: number; noSubscription: number;
+  missingInStripe: number; remaining: number; stoppedOn: string | null; sinceIso: string; untilIso: string;
+};
+
+export async function syncSubEnds(sb: SupabaseClient, stripe: Stripe, opts: { limit: number; gapMs?: number; now?: Date }): Promise<SubEndsResult> {
+  const started = opts.now ?? new Date();
+  const gap = opts.gapMs ?? STRIPE_GAP_MS;
+  const [subs, invoices, existing] = await Promise.all([
+    selectAll<{ membership_id: number; user_id: number; status: string | null }>(() =>
+      sb.from("mdapi_subscriptions").select("membership_id,user_id,status").order("membership_id")),
+    selectAll<SubIdInvoice>(() =>
+      sb.from("stripe_member_invoices").select("md_membership_id,subscription_id,created_at_utc").order("invoice_id")),
+    selectAll<ExistingEnd>(() =>
+      sb.from("mdapi_subscription_stripe_end").select("membership_id,stripe_status,fetched_at").order("membership_id")),
+  ]);
+  const plan = planSubEnds(subs, invoices, existing, started);
+  const batch = plan.slice(0, Math.max(0, opts.limit));
+  const rows: EndRow[] = [];
+  let asked = 0, noSub = 0, missing = 0, written = 0;
+  let stoppedOn: string | null = null;
+  const flush = async () => {
+    if (!rows.length) return;
+    const { error } = await sb.from("mdapi_subscription_stripe_end").upsert(rows.splice(0), { onConflict: "membership_id" });
+    if (error) throw new Error(`mdapi_subscription_stripe_end upsert: ${error.message}`);
+  };
+  for (const c of batch) {
+    if (!c.subIds.length) { rows.push(endRowFrom(c, null, null, new Date())); noSub++; written++; }
+    else {
+      if (asked > 0) await sleep(gap);
+      asked++;
+      try {
+        const sub = await stripe.subscriptions.retrieve(c.subIds[0]);
+        rows.push(endRowFrom(c, sub, null, new Date())); written++;
+      } catch (e) {
+        const code = (e as { code?: string })?.code;
+        if (code === "resource_missing") { rows.push(endRowFrom(c, null, STRIPE_MISSING, new Date())); missing++; written++; }
+        else { stoppedOn = `membership ${c.membership_id}: ${e instanceof Error ? e.message.slice(0, 160) : "Stripe request failed"}`; break; }
+      }
+    }
+    if (rows.length >= 25) await flush();
+  }
+  await flush();
+  return {
+    job: "sub-ends", candidates: plan.length, asked, written, noSubscription: noSub, missingInStripe: missing,
+    remaining: plan.length - written, stoppedOn, sinceIso: started.toISOString(), untilIso: new Date().toISOString(),
+  };
+}
+
+export const subEndsLogPatch = (r: SubEndsResult) => ({
+  rows_imported: r.written,
+  charges_fetched: r.asked,
+  ...(r.stoppedOn ? { error_message: `stopped at first error, ${r.remaining} left: ${r.stoppedOn}` } : {}),
+});
