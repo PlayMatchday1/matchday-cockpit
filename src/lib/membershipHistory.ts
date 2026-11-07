@@ -356,7 +356,8 @@ function buildBlock(n: number, r: SubRow, invs: InvoiceRow[], refundsByPi: Map<s
       ? { key: "ending", tone: "grey", title: `Runs to ${boundaryDay(live.renews)}`, sub: "Still active at MatchDay until the end of the paid period." }
       : { key: "ending", tone: "grey", title: "Runs to the end of the paid period", sub: "Still active at MatchDay; the period end isn't in our records." });
   } else if (state === "past_due") {
-    events.push({ key: "pastdue", tone: "red", title: "Payment overdue", sub: pastDueLine(lastPaidYm, unpaid) });
+    // With Stripe's open invoice on record the line above already says it, attempts and all.
+    if (!unpaid.some((u) => u.status === "open")) events.push({ key: "pastdue", tone: "red", title: "Payment overdue", sub: pastDueLine(lastPaidYm, unpaid) });
   } else if (state === "comp") {
     events.push({ key: "comp", tone: "grey", title: "Added by staff as a comp", sub: "Never charged: there is no Stripe subscription behind it." });
   }
@@ -380,6 +381,13 @@ function gapText(prev: Built, cur: Built): string | null {
   const endT = Date.parse(end.iso);
   const days = (curT - endT) / 86_400_000;
   if (days < 0) return end.exact ? "Joined again before the last membership ended" : "Joined again before the last membership's estimated end";
+  // Two exact dates under 60 days apart: say the days, not "about 1 month (Oct to late-Oct)".
+  if (end.exact && days < 60) {
+    const d = Math.round(days);
+    const short = (iso: string) => new Date(Date.parse(iso)).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: end.source === "stripe" && isBillingBoundary(iso) ? "UTC" : TZ });
+    return d < 1 ? "Joined again the day the last membership ended"
+      : `Not a member for ${d} day${d === 1 ? "" : "s"} (${short(end.iso)} to ${dateCT(cur.block.activation)})`;
+  }
   const months = Math.round(days / 30.44);
   if (months < 1) return "Joined again within a month of the last membership ending";
   const p = partsIn(cur.block.activation as string, TZ);

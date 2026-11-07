@@ -8778,3 +8778,36 @@ PostgREST reads of `mdapi_subscription_stripe_end`, `mdapi_subscriptions` and `s
   `ended_at` in Central (`isBillingBoundary`).
 - **Kept current by** the nightly `/api/sync/stripe-people/sub-ends` (09:15 UTC, up to 300 rows): new
   CANCELED rows, and any whose Stripe status was not final a day earlier.
+
+## Failed membership payments: what the 0262 backfill found (2026-11-07)
+
+**Evidence: 0262 applied by Ryan (verdict: attempt_count_column, unpaid_table, source_ok, kept_sub_ends,
+no_browser_access all true); the paid-invoice job re-run for every Central month 2024-02 → 2026-11 and the
+unpaid job for every month 2024-02 → 2026-11, on production, one request at a time, all landed (two client
+connection drops were settled from `fin_sync_log`: both runs had completed server-side); then read-only reads
+of `stripe_member_invoices`, `stripe_member_unpaid_invoices`, `mdapi_subscriptions`.**
+
+- **Paid membership invoices, 10,631, by Stripe `attempt_count`:** 1 = 8,828; 2 = 191; 3 = 113; 4 or more =
+  260; 0 = 1,239. So **564 renewals were paid only after at least one failure.** What `attempt_count` 0 on a
+  paid invoice means here (a $0 invoice, paid out of band) is not checked: UNKNOWN.
+- **Unpaid membership invoices, 1,601:** open 1,006 (1,005 attempted; 51 still have a next retry), void 595
+  (53 attempted). Every row carries `md_membership_id`.
+- **Last failure codes on the attempted ones:** insufficient_funds 533, transaction_not_allowed 105,
+  do_not_honor 101, generic_decline 60, invalid_account 31, try_again_later 30, smaller ones below 10, and
+  **163 with no code** (the payment intent had no `last_payment_error` when read; why is UNKNOWN).
+- **Every PAST_DUE membership has an open invoice: 53 of 53.**
+- **The 621 undated cancellations were failed renewals: 620 of 621 have an attempted, unpaid invoice.**
+  With the Stripe end dates (a median 7 days after the 1st), that is Stripe's retries running out and
+  Stripe cancelling, which MatchDay records with no date and no reason. 213 DATED cancellations also have
+  one (a player who asked to cancel and whose last renewal then failed). 950 CANCELED memberships in all
+  carry a failed unpaid invoice — most of the 1,006 open ones sit on memberships that already ended, left
+  open by Stripe after it stopped retrying.
+- **The sync, and a timeout it caused.** The first version listed EVERY open invoice in the account from
+  inside the hourly `stripe-people/recent` route and timed it out at 300 s three hours running (14:50,
+  15:50, 16:50 UTC, 0 unpaid rows; the customers and paid-invoice jobs before it still completed). It now has
+  its own hourly route, `/api/sync/stripe-people/unpaid` at :55, lists open invoices from the last 45 days
+  (a month on a backfill), writes the listed rows before the payment-intent reads, and stops those at 200 s.
+  First hourly run after the fix: 17:55:18 → 17:56:38, 131 rows.
+- **A retried renewal paid late is no longer missed.** The paid sync's hourly window is invoices CREATED in the
+  last 3 days, so a renewal created on the 1st and paid on the 6th after retries fell outside it. The unpaid
+  sync reads back any open row Stripe stops listing as open and moves a paid one to `stripe_member_invoices`.

@@ -168,6 +168,10 @@ is("the state card: the removal date as the end", [R.now.title, R.now.badge, R.n
   const RJ = build([row(510, "CANCELED", 49, "2025-05-03T15:00:00Z", "2025-07-03T15:00:00Z", "Removed by Retool"), row(511, "ACTIVE", 49, "2025-10-24T15:00:00Z")],
     [inv(510, 5304, "subscription_create", "2025-05-03T15:00:04Z"), cyc(510, 5304, "2025-06"), cyc(510, 5304, "2025-07"), inv(511, 5304, "subscription_create", "2025-10-24T15:00:04Z")], null);
   is("a gap after a Retool end runs from the removal date", gaps(RJ), ["Not a member for about 4 months (Jul to late-Oct 2025)"]);
+  const SG = build([{ ...row(512, "CANCELED", 66, "2026-09-30T15:00:00Z", "2026-10-02T15:00:00Z", "Moving"), stripe_ended_at: "2026-10-08T14:00:00Z" }, row(513, "ACTIVE", 66, "2026-10-30T15:00:00Z")],
+    [inv(512, 7199, "subscription_create", "2026-09-30T15:00:04Z"), inv(513, 233, "subscription_create", "2026-10-30T15:00:04Z")], null);
+  is("a short gap between two exact dates says the days and the dates", gaps(SG), ["Not a member for 22 days (Oct 8 to Oct 30, 2026)"]);
+  is("CONTROL: an estimated end keeps 'about N months'", gaps(C), ["Not a member for about 2 months (Mar to mid-Apr 2026)"]);
 }
 
 // ── 5. cancelled with no date ──────────────────────────────────────────────────────────────────
@@ -242,8 +246,10 @@ console.log("\n— 6b. failed payments —");
   is("…and the renewals line counts it", ev(f1, "renews")?.sub, "5 renewals paid, 1 month not paid · next Dec 1");
   is("an unpaid month is not a paid month, and nothing due is counted as paid", [F.summary.monthsPaid, F.summary.totalPaidCents], [6, 6 * 7199]);
   const PD = buildMembershipHistory({ rows: P_ROWS, invoices: P_INV, refunds: [], unpaid: [unp(700, { attempt_count: 3, last_failure_code: "insufficient_funds" })], live: null, now: NOW, syncedAt: null });
-  is("past due shows its attempts, the reason and the next retry", [PD.now.sub, ev(blocks(PD)[0], "pastdue")?.sub],
-    Array(2).fill("The November renewal failed 3 times (last: insufficient funds). Stripe retries next on Nov 9, 2026."));
+  is("past due shows its attempts, the reason and the next retry", PD.now.sub,
+    "The November renewal failed 3 times (last: insufficient funds). Stripe retries next on Nov 9, 2026.");
+  is("…said once in the block: the open invoice's line, no repeated 'Payment overdue' (control: fixture 6 without one keeps it)",
+    [ev(blocks(PD)[0], "pastdue"), blocks(PD)[0].events.filter((e) => e.key.startsWith("unpaid")).length, ev(p1, "pastdue")?.title], [null, 1, "Payment overdue"]);
   const PS = buildMembershipHistory({ rows: P_ROWS, invoices: P_INV, refunds: [], unpaid: [unp(700, { attempt_count: 4, next_payment_attempt_utc: null, last_failure_code: "weird_new_code" })], live: null, now: NOW, syncedAt: null });
   is("…says when Stripe has stopped, and keeps an unknown code in its own words", PS.now.sub, "The November renewal failed 4 times (last: weird new code). Stripe has stopped retrying.");
   const V0 = buildMembershipHistory({ rows: [row(901, "CANCELED", 66, "2026-05-02T18:00:00Z")], invoices: [inv(901, 7199, "subscription_create", "2026-05-02T18:00:00Z")], refunds: [],
