@@ -80,7 +80,7 @@ export default function OfferResults({ campaigns, matches, fields }: { campaigns
             </div>
             {page.offers.length === 0 && <div data-testid="offers-results-empty" className="border-b py-5 text-center text-[13px]" style={{ borderColor: O.line, color: O.muted }}>No offer launched in this range.</div>}
             {page.offers.map((o) => {
-              const [deal, where] = dealLines(o, campaigns, matches, fields);
+              const [deal, where] = dealLines(o, campaigns, fields);
               const st = steps(o.funnel);
               const rate = o.funnel.chosen > 0 ? Math.round((o.funnel.used / o.funnel.chosen) * 100) : null;
               return (
@@ -91,7 +91,7 @@ export default function OfferResults({ campaigns, matches, fields }: { campaigns
                   </div>
                   <div className="flex min-w-0 flex-col gap-0.5 md:w-[150px] md:shrink-0">
                     <div className="text-[13px] font-semibold" style={{ color: O.ink }}>{deal}</div>
-                    {where && <div className="truncate text-[11px]" style={{ color: O.muted }}>{where}</div>}
+                    <div className="truncate text-[11px]" style={{ color: O.muted }}>{where}</div>
                   </div>
                   <div className="flex min-w-0 flex-1 gap-2">
                     {st.map((s) => (

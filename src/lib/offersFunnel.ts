@@ -4,15 +4,16 @@
 // that section's: GET /admin/offers/campaigns/funnel?from=&to= (offers launched in [from, to), totals, planner) and
 // GET /admin/offers/campaigns/:id/players-without-app. Step rates are the page's to work out, guarded against 0.
 //
-// The funnel's offer rows carry no match or fields; the Deal column's second line joins the row to the same campaign
-// in the page's own list (GET /admin/offers/page) by id, and is left out when the campaign isn't there.
+// Each offer row carries matchId (null for any-match and field offers) and endedAt (UTC; null while live, scheduled or
+// paused before its end), backend d44fb4c. The row has no fields, so a field offer's Deal line still comes from the
+// same campaign in the page's own list, by id.
 
-import { dealText, matchTitle, scopeFieldsLine, wallMs, type Campaign, type CampaignState, type DealType, type FieldOpt, type MatchOpt } from "./offersModel";
+import { dealText, scopeFieldsLine, wallMs, type Campaign, type CampaignState, type DealType, type FieldOpt } from "./offersModel";
 
 export type Funnel = { chosen: number; canGetIt: number; canGetItPushesOn: number; estimated: boolean; snapshotAt: string | null; saw: number; used: number };
 export type FunnelOffer = {
   id: number; name: string; status: string; state: CampaignState; dealType: DealType; dealAmount: number;
-  launchedAt: string | null; startsLocal: string; endsLocal: string | null; funnel: Funnel;
+  launchedAt: string | null; startsLocal: string; endsLocal: string | null; matchId: number | null; endedAt: string | null; funnel: Funnel;
 };
 export type FunnelTotals = { chosen: number; canGetIt: number; canGetItPushesOn: number; saw: number; used: number; offers: number; estimatedOffers: number };
 export type Planner = { used: number; chosen: number; useRate: number | null; minUsed: number; enoughData: boolean };
@@ -65,30 +66,47 @@ export function plannerView(p: Planner, need: number): PlannerView {
   return { ready: true, choose: Math.ceil(Math.max(0, need) / p.useRate), rate: `${rate.toLocaleString("en-US")}% use rate` };
 }
 
+// A wall-clock time read as America/Chicago, as an instant. The start has no zone (each player's city); Chicago is the
+// Clubhouse's display zone, so a start elsewhere can be a few hours off, which can move "ran N days" by one at most.
+export function chicagoWallMs(wall: string): number {
+  const guess = wallMs(wall);
+  if (!Number.isFinite(guess)) return NaN;
+  const offsetAt = (ms: number) => {
+    const p = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" })
+      .formatToParts(new Date(ms)).map((x) => [x.type, x.value]));
+    return Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, +p.second) - ms;
+  };
+  const first = guess - offsetAt(guess);
+  return guess - offsetAt(first);
+}
+// How long it ran, in whole days rounded up (at least 1): from the later of launchedAt and the start, to endedAt.
+export function ranDays(o: Pick<FunnelOffer, "launchedAt" | "startsLocal" | "endedAt">): number | null {
+  if (!o.endedAt) return null;
+  const end = Date.parse(o.endedAt);
+  const launched = o.launchedAt ? Date.parse(o.launchedAt) : NaN;
+  const start = chicagoWallMs(o.startsLocal);
+  const from = Math.max(...[launched, start].filter(Number.isFinite));
+  if (!Number.isFinite(end) || !Number.isFinite(from)) return null;
+  return Math.max(1, Math.ceil((end - from) / DAY));
+}
 // A row's status line: "Ended · ran 1 day", "Live · ends Sun, Nov 9", "Paused", "Scheduled".
 const DAY = 86400_000;
-export function statusLine(o: Pick<FunnelOffer, "state" | "startsLocal" | "endsLocal">): string {
+export function statusLine(o: Pick<FunnelOffer, "state" | "startsLocal" | "endsLocal" | "launchedAt" | "endedAt">): string {
   const label = { DRAFT: "Draft", SCHEDULED: "Scheduled", LIVE: "Live", PAUSED: "Paused", ENDED: "Ended" }[o.state] ?? o.state;
-  const start = wallMs(o.startsLocal), end = o.endsLocal ? wallMs(o.endsLocal) : NaN;
-  if (o.state === "ENDED" && Number.isFinite(start) && Number.isFinite(end)) {
-    const d = Math.max(1, Math.ceil((end - start) / DAY));
-    return `${label} · ran ${d} ${d === 1 ? "day" : "days"}`;
-  }
+  const ran = ranDays(o);
+  if (o.state === "ENDED") return ran === null ? label : `${label} · ran ${ran} ${ran === 1 ? "day" : "days"}`;
+  const end = o.endsLocal ? wallMs(o.endsLocal) : NaN;
   if (o.state === "LIVE" && Number.isFinite(end)) {
-    const d = new Date(end);
-    return `${label} · ends ${new Intl.DateTimeFormat("en-US", { timeZone: "UTC", weekday: "short", month: "short", day: "numeric" }).format(d)}`;
+    return `${label} · ends ${new Intl.DateTimeFormat("en-US", { timeZone: "UTC", weekday: "short", month: "short", day: "numeric" }).format(new Date(end))}`;
   }
   return label;
 }
-// The Deal column: "50% off" over "Match 20705" (or the match's name when the page has it), the fields, or Any match.
-export function dealLines(o: Pick<FunnelOffer, "id" | "dealType" | "dealAmount">, campaigns: Campaign[], matches: MatchOpt[], fields: FieldOpt[]): [string, string | null] {
+// The Deal column: "50% off" over "Match 20705" (the row's matchId), a field offer's fields, or Any match.
+export function dealLines(o: Pick<FunnelOffer, "id" | "dealType" | "dealAmount" | "matchId">, campaigns: Campaign[], fields: FieldOpt[]): [string, string] {
+  const deal = dealText(o.dealType, o.dealAmount);
+  if (o.matchId !== null) return [deal, `Match ${o.matchId}`];
   const c = campaigns.find((x) => x.id === o.id);
-  if (!c) return [dealText(o.dealType, o.dealAmount), null];
-  if (c.matchScoped && c.matchIds[0]) {
-    const m = matches.find((x) => x.id === c.matchIds[0]);
-    return [dealText(o.dealType, o.dealAmount), m ? matchTitle(m) : `Match ${c.matchIds[0]}`];
-  }
-  return [dealText(o.dealType, o.dealAmount), c.appliesFieldIds?.length ? scopeFieldsLine(c, fields) : "Any match"];
+  return [deal, c?.appliesFieldIds?.length ? scopeFieldsLine(c, fields) : "Any match"];
 }
 
 // "Add message push" hands the players to the Push Notifications editor through this browser's session storage (a list

@@ -126,7 +126,7 @@ export const fixture = {
   // The Offer results funnel (Figma 20864:72's numbers), shaped as the contract says.
   funnel(): FunnelPage {
     const f = (chosen: number, canGetIt: number, saw: number, used: number) => ({ chosen, canGetIt, canGetItPushesOn: Math.round(canGetIt / 3), estimated: true, snapshotAt: null, saw, used });
-    const o = (id: number, name: string, fn: ReturnType<typeof f>) => ({ id, name, status: "LAUNCHED", state: "ENDED" as const, dealType: "PERCENT_OFF" as const, dealAmount: 50, launchedAt: iso(20), startsLocal: "2026-11-06 14:50:00", endsLocal: "2026-11-06 20:00:00", funnel: fn });
+    const o = (id: number, name: string, fn: ReturnType<typeof f>) => ({ id, name, status: "LAUNCHED", state: "ENDED" as const, dealType: "PERCENT_OFF" as const, dealAmount: 50, launchedAt: iso(20), startsLocal: "2026-11-06 14:50:00", endsLocal: "2026-11-06 20:00:00", matchId: 20700 + id, endedAt: "2026-11-07T02:00:00.000Z", funnel: fn });
     return {
       from: iso(24 * 30), to: iso(0),
       totals: { chosen: 101, canGetIt: 28, canGetItPushesOn: 9, saw: 11, used: 0, offers: 3, estimatedOffers: 3 },
