@@ -18,13 +18,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FIRST_NAME_TOKEN, isAdminAccount, MAX_TEST_IDS, SECTION_ADD, addSection, autoCopy, canReset, copyAfterType, isRemovable, staleLines, staleSections, writtenForOnLoad, removeSection, resetCopy, sectionCollapsed, copyAfterHide, hideUpload, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, MAX_USES_PER_PLAYER, notFoundLine, parsePlayerIds, playerLine, PREVIEW_FIRST_NAME, amountText, limitLine, stepLimit, stepUses, usesLine, audienceBody, buttonMatchNote, buttonOf, opensText, chicagoWallNow, copyOf, createBody, defaultRun, endsTicket, formOf, formProblem, fromInput, matchInfo,
-  newForm, contractIncomplete, on188Line, heldBackLine, playersHoldoutOn, PLAYERS_HOLDOUT_MIN, patchBody, playedAtSuggestions, mergeMatches, withCovers, endNote, pauseNote, ranUntil, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, countWanted, lockedSummary, endHasPassed, launchProblem, offerWallNow, offerZones, setPriceAnyWarning, setPriceProblem, pickedMatch, startLabel, STEPPER, summary, toInput, wallLabel,
+  newForm, contractIncomplete, holdoutFor, on188Line, heldBackLine, playersHoldoutOn, PLAYERS_HOLDOUT_MIN, patchBody, playedAtSuggestions, mergeMatches, withCovers, endNote, pauseNote, ranUntil, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, countWanted, lockedSummary, endHasPassed, launchProblem, offerWallNow, offerZones, setPriceAnyWarning, setPriceProblem, pickedMatch, startLabel, STEPPER, summary, toInput, wallLabel,
   photoTiles, photoTileOf, suggestedPhotoTiles, suggestedPhotoLabel, photoReason, photoRowName, lockScreenDate, popupOffBlock, pushOnlyPrefix,
   type Campaign, type City, type Count, type FieldOpt, type Lookup, type UploadedPhoto, type CopyKey, type ListChange, type DealType, type Form, type MatchOpt, type WrittenFor,
 } from "@/lib/offersModel";
 import MatchPicker from "./MatchPicker";
 import WhoGetsIt, { type SampleAnswer } from "@/components/audience/WhoGetsIt";
-import { OFFERS_FILTERS, OFFERS_HINTS, OFFERS_MEMBERSHIP, audienceOf, countLine, entriesOf, newRow, offerOfSpec, removeToken, specOfAudience, specOfOffer, specProblem, tagText, toContract, todayWall, type AudienceSpec, type TokenLookup } from "@/lib/audienceModel";
+import { WEEKLY_CAP_DEFAULT } from "@/lib/pushesModel";
+import { OFFERS_FILTERS, OFFERS_HINTS, OFFERS_MEMBERSHIP, audienceOf, capFlagLine, countLine, entriesOf, newRow, offerOfSpec, removeToken, specOfAudience, specOfOffer, specProblem, tagText, toContract, todayWall, type AudienceSpec, type TokenLookup } from "@/lib/audienceModel";
 import PhotoPicker from "./PhotoPicker";
 import OfferPreview, { type PreviewTab } from "./OfferPreview";
 import { PushReach, PushSection, SendsTo } from "./OfferPush";
@@ -559,6 +560,26 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
     : lookupFor !== entriesKey || !lookup || f.playerIds.join(",") !== [...new Set(lookup.players.map((p) => p.id))].join(",") ? "Still looking the players up." : null;
   const nothingOn = popupOffBlock(f, pushOn && pf.enabled);
   const launchWhy = matchUnread ? matchUnreadText(matchRead) : problem ?? audWhy ?? pushProb ?? idsWhy ?? nothingOn ?? launchProblem(f, offerWall()) ?? COUNT_BLOCK[countNow];
+
+  // ── THE CAP FLAG (Figma 20842:72), only while the offer's push is on: popups aren't limited, pushes are. Offers' own
+  // count has no atCap, so the shared count (POST /admin/audiences/count, backend e9e90a7) is asked about the same
+  // audience, debounced, one at a time behind the page's other reads. Any failure just leaves the flag off.
+  const capWanted = pushOn && pf.enabled && !matchUnread && wantCount && !audWhy && !idsWhy && !contractIncomplete(f.audienceFilters) && (f.audienceMode !== "PLAYERS" || f.playerIds.length > 0);
+  const capBody = JSON.stringify({ audience: audienceOf(aud, f.playerIds), holdoutPercent: holdoutFor(f) });
+  const [capAnswer, setCapAnswer] = useState<{ for: string; atCap: number | null; weeklyCap: number | null } | null>(null);
+  useEffect(() => {
+    if (!capWanted) return;
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      const r = await authed("/api/audiences/count", { method: "POST", body: capBody });
+      if (cancelled) return;
+      const j = r.json as { atCap?: unknown; weeklyCap?: unknown };
+      if (!r.ok) console.error(`[offers] cap count: ${String(r.json.error)}`);
+      setCapAnswer({ for: capBody, atCap: r.ok && typeof j.atCap === "number" ? j.atCap : null, weeklyCap: typeof j.weeklyCap === "number" ? j.weeklyCap : null });
+    }, COUNT_DEBOUNCE_MS);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [capWanted, capBody]);
+  const capFlag = capWanted && capAnswer?.for === capBody && capAnswer.atCap ? capFlagLine(capAnswer.atCap, capAnswer.weeklyCap ?? WEEKLY_CAP_DEFAULT) : null;
   const dealWarn = setPriceProblem(f, m);
   const anyWarn = setPriceAnyWarning(f, data.matches);
   const pushShown = pushOn && pf.enabled ? (() => { const t = pushText(pf, pushSugg); return { title: fillPush(t.title, m), body: fillPush(t.body, m) }; })() : null;
@@ -758,7 +779,7 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
           <WhoGetsIt spec={aud} onChange={setAud} allowed={allowed} hints={v2 ? undefined : OFFERS_HINTS} choices={v2 ? undefined : { membership: OFFERS_MEMBERSHIP }} cities={data.cities} fields={data.fields} nowWall={nowWall} disabled={dl || audLoad.unknown > 0} testId="offers-who"
             playersSub={holdoutOn ? `Only these players get it. Filters don't apply. With ${PLAYERS_HOLDOUT_MIN} or more, some are held back to measure (More options, under Runs).` : "Only these players get it. Filters don't apply and nobody is held back."}
             count={players || matchUnread || !wantCount ? { state: "off" } : countNow === "error" ? { state: "error", error: countErr ?? undefined, onRetry: retryCount }
-              : count ? { state: "ready", text: countLine({ matching: count.count, holdoutPercent: f.holdoutPercent }), extra: on188Line(count) ? <div data-testid="offers-count-on188" className="self-start text-[12px]" style={{ color: O.muted }}>{on188Line(count)}</div> : null } : { state: "counting" }}
+              : count ? { state: "ready", capFlag, text: countLine({ matching: count.count, holdoutPercent: f.holdoutPercent }), extra: on188Line(count) ? <div data-testid="offers-count-on188" className="self-start text-[12px]" style={{ color: O.muted }}>{on188Line(count)}</div> : null } : { state: "counting" }}
             onSample={async () => {
               const r = await authed("/api/audiences/sample", { method: "POST", body: JSON.stringify({ audience: audienceOf(aud, f.playerIds) }) });
               return r.ok ? (r.json as unknown as SampleAnswer) : { error: String(r.json.error) };
@@ -776,6 +797,7 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
                 <>
                   {parsed.tooMany && <div data-testid="offers-ids-too-many" className="self-start rounded-[8px] px-2.5 py-1.5 text-[12px] font-medium" style={{ background: O.warnBg, color: O.warnInk }}>One offer takes up to {MAX_OFFER_PLAYER_IDS.toLocaleString("en-US")} IDs. Only the first {MAX_OFFER_PLAYER_IDS.toLocaleString("en-US")} are used.</div>}
                   {lookupErr && <div className="self-start rounded-[8px] px-2.5 py-1.5 text-[12px]" style={{ background: O.critBg, color: O.critInk }}>Couldn&apos;t look them up: {lookupErr}</div>}
+                  {capFlag && <div data-testid="offers-who-cap-flag" className="rounded-[10px] px-3.5 py-[9px] text-[13px] font-semibold" style={{ background: "#fff2d9", color: "#8c590d" }}>{capFlag}</div>}
                   {holdoutOn && f.holdoutPercent > 0 && wantCount && countNow !== "error" && count && <div data-testid="offers-players-held-back" className="self-start text-[12px] font-medium" style={{ color: O.ink }}>{heldBackLine(count.heldBack)}</div>}
                 </>
               ),

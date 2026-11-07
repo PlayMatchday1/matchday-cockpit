@@ -203,9 +203,9 @@ that looks valid while every API call returns 401. Only Match Ops › Offers say
   a backend. It is dev-only (refused under NODE_ENV=production and on Vercel).
 - Offers decide old fields or `audience` from the page's own campaigns (any one carrying `audience`). An empty offer
   list on a new backend would fall back to the old fields until the first offer exists.
-- The cap flag reads the live count's `atCap`. On a backend without it, it falls back to the saved push's
-  `.../reachable` (`capped`), and is hidden while the audience is edited. Offers' own count route has no `atCap`, so
-  the flag is on Push Notifications only.
+- The cap flag reads the shared count's `atCap` (Push Notifications, and Offers while its push is on, as a second
+  count beside Offers' own, which has no `atCap`). On a backend without it, Push Notifications falls back to the saved
+  push's `.../reachable` (`capped`); Offers shows no flag.
 - The weekly limit now has its own route with who and when (`/admin/push-notifications/settings`); the page still uses
   `/admin/offers/push-settings` (the same setting) and doesn't show who last changed it.
 - Left out on purpose for now: the "Repeating & automatic" tab, Sends > Repeats and Automatic, and the Find a match

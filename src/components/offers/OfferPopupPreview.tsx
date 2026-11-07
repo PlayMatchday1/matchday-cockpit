@@ -51,7 +51,7 @@ export default function OfferPopupPreview({ copy: raw, ends, showTicket, width =
       <div className="flex w-full flex-col items-center" style={{ gap: px(7), padding: `${px(9)} ${px(10)}` }}>
         <div className="flex flex-col items-center">
           <p data-testid="offers-preview-headline" className={`${titillium.className} whitespace-nowrap font-bold`} style={{ color: "#0b4031", fontSize: px(24), lineHeight: px(26) }}>
-            {lead}{accent ? " " : ""}{accent ? <span className="italic" style={{ color: "#1fa866" }}>{accent}</span> : null}
+            {lead}{accent ? " " : ""}{accent ? <span className="italic" style={{ color: "#2cdb87" }}>{accent}</span> : null}
           </p>
           {copy.line ? <p className={`${titillium.className} text-center font-bold`} style={{ color: "#5d7a6f", fontSize: px(8), letterSpacing: px(1.25) }}>{copy.line}</p> : null}
         </div>
