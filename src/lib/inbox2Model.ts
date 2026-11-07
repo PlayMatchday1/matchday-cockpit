@@ -152,3 +152,40 @@ export function dayDivider(iso: string, now: Date): string {
   const md = d.toLocaleDateString("en-US", { month: "short", day: "numeric", ...(d.getFullYear() !== now.getFullYear() ? { year: "numeric" } : {}) });
   return `${wd}, ${md}`.toUpperCase();
 }
+
+// ── CHAT STATS (the ⋯ menu popover) ─────────────────────────────────────────────────────────────
+// The same five numbers the old page's strip shows, from GET /api/crm/metrics, as grid cells.
+export type StatsResponse = {
+  metrics: { cohort: { conversations: number; medianFirstResponseMin: number | null; answeredWithin1h: number; answeredWithin1hPct: number | null; resolved: number } };
+  trend: { cohortMedianDeltaMin: number | null } | null;
+  awaiting: { count: number };
+};
+export type StatCell = { key: string; label: string; value: string; sub: string | null; tone: "plain" | "good" | "bad" | "amber" };
+export function fmtMinutes(min: number | null): string {
+  if (min == null) return "—";
+  if (min < 1) return "<1m";
+  if (min < 60) return `${Math.round(min)}m`;
+  const h = Math.floor(min / 60), r = Math.round(min % 60);
+  return r === 0 ? `${h}h` : `${h}h ${r}m`;
+}
+export function statsCells(d: StatsResponse | null): StatCell[] {
+  const c = d?.metrics.cohort ?? null;
+  const n = c?.conversations ?? null;
+  const delta = d?.trend?.cohortMedianDeltaMin ?? null;
+  const waiting = d?.awaiting.count ?? null;
+  return [
+    { key: "conversations", label: "Conversations", value: n == null ? "—" : String(n), sub: null, tone: "plain" },
+    { key: "median", label: "Median first reply", value: fmtMinutes(c?.medianFirstResponseMin ?? null),
+      sub: delta != null && delta !== 0 ? `${fmtMinutes(Math.abs(delta))} ${delta < 0 ? "faster" : "slower"}` : null,
+      tone: delta == null || delta === 0 ? "plain" : delta < 0 ? "good" : "bad" },
+    { key: "within1h", label: "Answered within 1h", value: c ? String(c.answeredWithin1h) : "—",
+      sub: c?.answeredWithin1hPct != null ? `${Math.round(c.answeredWithin1hPct)}%` : null, tone: "plain" },
+    { key: "resolved", label: "Resolved", value: c ? String(c.resolved) : "—", sub: n != null ? `of ${n}` : null, tone: "plain" },
+    { key: "waiting", label: "Waiting on a reply", value: waiting == null ? "—" : String(waiting), sub: waiting === 0 ? "all caught up" : null, tone: waiting ? "amber" : "good" },
+  ];
+}
+
+// ── PLAYER DETAILS, OPEN OR CLOSED, PER BROWSER (as the old page's crm:contextOpen:v1:<id>) ────
+export const detailsPrefKey = (appUserId: string) => `crm:inbox2:details:v1:${appUserId}`;
+/** "1" open, "0" closed; anything else (nothing stored) is the default, closed (Figma frame 1). */
+export const readDetailsPref = (raw: string | null): boolean => raw === "1";

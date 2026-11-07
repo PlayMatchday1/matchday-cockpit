@@ -14,7 +14,7 @@
 // src/lib/chatsInboxChoice.ts; the old page stays for everyone else.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { CircleDollarSign, X as XIcon, XCircle } from "lucide-react";
 import { useAuth, canEditCredits, canViewActivity } from "@/lib/useAuth";
 import { useCrmConversation, markThreadRead, type ThreadListRow } from "@/lib/crmConversation";
@@ -25,12 +25,11 @@ import { freshAccessToken } from "@/lib/crmSession";
 import { FULL_EDITOR_ENV } from "@/lib/matchEnv";
 import { useAppActivity } from "@/components/AppActivityCard";
 import { annotate } from "@/lib/appActivity";
-import { appendLine, bucket, dayDivider, nextMatch, waitingCount, type Inbox2Tab, type Section } from "@/lib/inbox2Model";
+import { appendLine, bucket, dayDivider, detailsPrefKey, nextMatch, readDetailsPref, waitingCount, type Inbox2Tab, type Section } from "@/lib/inbox2Model";
 import type { CrmChannel } from "@/components/ChannelChip";
 import MessageBubble, { type ConversationMessage } from "../components/MessageBubble";
 import Composer from "../components/Composer";
-import TemplateSendModal from "../components/TemplateSendModal";
-import MetricsStrip from "../components/MetricsStrip";
+import ChatStats from "./ChatStats";
 import AutoSendPanel from "../components/AutoSendPanel";
 import { ThreadCityPicker } from "../CrmClient";
 import Queue2, { FacesColumn, NO_FILTERS, cityCodeOf, filtersActive, fullNameOf, type Filters } from "./Queue2";
@@ -44,7 +43,6 @@ const INK = "#13241d", MUTED = "#5e6b66", FAINT = "#7c8782", LINE = "#e3e3db", D
 
 export default function Inbox2({ onUseOld }: { onUseOld: () => void }) {
   const { appUser } = useAuth();
-  const router = useRouter();
   const searchParams = useSearchParams();
   const {
     threads, setThreads, threadsError, threadsLoading, setThreadsLoading, counts, operators,
@@ -62,12 +60,20 @@ export default function Inbox2({ onUseOld }: { onUseOld: () => void }) {
   // page's ?view=mine / starred / awaiting still load; they show as "Showing: …" with Clear.
   const tab: Inbox2Tab = view === "closed" ? "done" : searchParams.get("tab") === "waiting" ? "waiting" : "needs";
   const legacyView = view === "mine" ? "Mine" : view === "starred" ? "Starred" : view === "awaiting" ? "Awaiting" : null;
+  // THE TABS WRITE THE URL WITH history.replaceState, NOT router.replace (2026-11-07). In a production
+  // build, router.replace to "?threadId=…&tab=waiting" committed "?threadId=…" — the tab param was
+  // dropped and the click did nothing (seen on a local `next start` and on production; `next dev` was
+  // fine). replaceState is the same mechanism the provider uses for ?threadId, Next 16 folds it into
+  // useSearchParams, and it is not a navigation. Read from window.location so ?threadId survives.
+  // THE STATE ARGUMENT MUST BE null, NOT window.history.state: Next's patched replaceState
+  // (next/dist/client/components/app-router.js) passes a state carrying its own __NA marker straight
+  // through WITHOUT syncing the router, so useSearchParams never saw the new ?tab= (the URL changed,
+  // the page didn't — seen on a local `next start`). With null, Next copies its marker in and syncs.
   const go = useCallback((next: { view?: string | null; tab?: string | null }) => {
-    const p = new URLSearchParams(searchParams.toString());
-    for (const [k, v] of Object.entries(next)) { if (v) p.set(k, v); else p.delete(k); }
-    const qs = p.toString();
-    router.replace(qs ? `/match-ops/player-chats?${qs}` : "/match-ops/player-chats", { scroll: false });
-  }, [router, searchParams]);
+    const url = new URL(window.location.href);
+    for (const [k, v] of Object.entries(next)) { if (v) url.searchParams.set(k, v); else url.searchParams.delete(k); }
+    window.history.replaceState(null, "", `${url.pathname}${url.search}`);
+  }, []);
   const setTab = (t: Inbox2Tab) => go(t === "done" ? { view: "closed", tab: null } : { view: null, tab: t === "waiting" ? "waiting" : null });
 
   // ── the same orchestration as the old page ──
@@ -151,7 +157,22 @@ export default function Inbox2({ onUseOld }: { onUseOld: () => void }) {
     : act.state.phase === "error" ? { phase: "error", error: act.state.error } : { phase: "loading" };
 
   // Player details: docked on the right; opening it collapses the queue to faces.
-  const [detailsOpen, setDetailsOpen] = useState(false);
+  // OPEN OR CLOSED IS REMEMBERED PER BROWSER (Ryan 2026-11-07), keyed on the staff id like the old
+  // page's crm:contextOpen:v1:<id>. Restored and saved at 1024px and wider only: below that the
+  // panel is a full-screen page, and reopening a thread straight into it would hide the conversation.
+  const [detailsOpen, setDetailsOpenState] = useState(false);
+  const isWide = () => typeof window !== "undefined" && window.matchMedia("(min-width: 1024px)").matches;
+  useEffect(() => {
+    if (!appUserId || !isWide()) return;
+    try { setDetailsOpenState(readDetailsPref(window.localStorage.getItem(detailsPrefKey(appUserId)))); } catch { /* private mode */ }
+  }, [appUserId]);
+  const setDetailsOpen = useCallback((next: boolean | ((o: boolean) => boolean)) => {
+    setDetailsOpenState((prev) => {
+      const v = typeof next === "function" ? next(prev) : next;
+      if (appUserId && isWide()) { try { window.localStorage.setItem(detailsPrefKey(appUserId), v ? "1" : "0"); } catch { /* private mode */ } }
+      return v;
+    });
+  }, [appUserId]);
   const [detailsTab, setDetailsTab] = useState<DetailsTab>("activity");
   const openDetails = (t?: DetailsTab) => { if (t) setDetailsTab(t); setDetailsOpen((o) => (t ? true : !o)); };
 
@@ -166,7 +187,6 @@ export default function Inbox2({ onUseOld }: { onUseOld: () => void }) {
     window.addEventListener("keydown", k);
     return () => window.removeEventListener("keydown", k);
   }, [lightbox]);
-  const [templateOpen, setTemplateOpen] = useState(false);
   const [statsOpen, setStatsOpen] = useState(false);
   const [autoSendOpen, setAutoSendOpen] = useState(false);
 
@@ -201,7 +221,6 @@ export default function Inbox2({ onUseOld }: { onUseOld: () => void }) {
       ? { key: "reply-anyway", label: "Reply anyway (back to Needs reply)", onClick: () => void actions.onSetNoReply(selectedId, "reactivate") }
       : { key: "no-reply", label: "Done · no reply needed", onClick: () => void actions.onSetNoReply(selectedId, "dismiss"), disabled: !isAwaitingReply(selectedThread), title: isAwaitingReply(selectedThread) ? undefined : "Nothing is owed on this thread" }] : []),
     { key: "dock", label: dockedThreadId === selectedId ? "Docked: follows you across Match Ops" : "Dock this chat", onClick: () => dockThread(selectedId), disabled: dockedThreadId === selectedId },
-    ...(channel === "whatsapp" ? [{ key: "template", label: "Send an approved WhatsApp template", onClick: () => setTemplateOpen(true), disabled: !appUserId }] : []),
     ...(canManageStatus && tab !== "done" ? [{ key: "select", label: selectMode ? "Leave Select mode" : "Select conversations", onClick: () => { setSelectMode((s) => !s); setSelectedIds(new Set()); } }] : []),
     { key: "stats", label: "Chat stats", onClick: () => setStatsOpen(true) },
     ...(appUser?.is_admin === true ? [{ key: "autosend", label: "Auto-send settings", onClick: () => setAutoSendOpen(true) }] : []),
@@ -334,12 +353,9 @@ export default function Inbox2({ onUseOld }: { onUseOld: () => void }) {
           </div>
         </div>
       )}
-      {selectedId && channel === "whatsapp" && (
-        <TemplateSendModal open={templateOpen} onClose={() => setTemplateOpen(false)} threadId={selectedId} initialCustomerName={firstName} onSent={onSent} />
-      )}
       {statsOpen && (
-        <Modal title="Chat stats" onClose={() => setStatsOpen(false)} wide>
-          <MetricsStrip />
+        <Modal title="Chat stats" onClose={() => setStatsOpen(false)}>
+          <ChatStats />
         </Modal>
       )}
       {autoSendOpen && appUser?.is_admin === true && (
@@ -376,12 +392,12 @@ function Modal({ title, onClose, wide, children }: { title: string; onClose: () 
   return (
     <div className="fixed inset-0 z-[60] flex items-start justify-center bg-[rgba(9,30,20,.28)] px-4 pt-[12vh]" onClick={onClose}>
       <div role="dialog" aria-label={title} onClick={(e) => e.stopPropagation()}
-        className={`max-h-[76vh] w-full overflow-auto rounded-[14px] border bg-white shadow-[0_24px_60px_rgba(9,30,20,.25)] ${wide ? "max-w-[980px]" : "max-w-[420px]"}`} style={{ borderColor: LINE }}>
+        className={`max-h-[76vh] w-full overflow-y-auto overflow-x-hidden rounded-[14px] border bg-white shadow-[0_24px_60px_rgba(9,30,20,.25)] ${wide ? "max-w-[560px]" : "max-w-[460px]"}`} style={{ borderColor: LINE }}>
         <div className="flex items-center border-b px-4 py-3" style={{ borderColor: LINE }}>
           <span className="text-[14px] font-semibold" style={{ color: INK }}>{title}</span>
           <button type="button" aria-label="Close" onClick={onClose} className="ml-auto rounded p-1 text-[#5e6b66] hover:bg-[#f3f3ef]"><XIcon aria-hidden className="h-4 w-4" /></button>
         </div>
-        <div className="overflow-x-auto">{children}</div>
+        <div data-testid="modal-body">{children}</div>
       </div>
     </div>
   );

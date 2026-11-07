@@ -73,7 +73,8 @@ export default function Queue2(props: {
 
   return (
     <aside data-testid="queue2" className="flex min-h-0 w-full flex-col bg-white lg:w-[360px] lg:shrink-0 lg:border-r" style={{ borderColor: LINE }}>
-      <div className="flex flex-col gap-3 px-[18px] pb-3 pt-[18px]">
+      {/* relative: the filter popover is placed against THIS header (the queue's width), not the button */}
+      <div className="relative flex flex-col gap-3 px-[18px] pb-3 pt-[18px]">
         <div className="flex items-center gap-1">
           {/* Below 1024px the shell's app bar already says "Player Chats". */}
           <h1 className="hidden min-w-0 flex-1 truncate text-[20px] font-bold lg:block" style={{ color: INK }}>Player Chats</h1>
@@ -82,7 +83,7 @@ export default function Queue2(props: {
             className="flex h-9 w-9 items-center justify-center rounded-[8px] hover:bg-[#f3f3ef]" style={{ color: filters.search ? DEEP : "#5e6b66" }}>
             <SearchIcon aria-hidden className="h-[18px] w-[18px]" strokeWidth={1.9} />
           </button>
-          <div className="relative">
+          <div>
             <button type="button" aria-label="Filter" data-testid="queue-filter" onClick={() => setFilterOpen((o) => !o)}
               className="relative flex h-9 w-9 items-center justify-center rounded-[8px] hover:bg-[#f3f3ef]" style={{ color: filterCount ? DEEP : "#5e6b66" }}>
               <SlidersHorizontal aria-hidden className="h-[18px] w-[18px]" strokeWidth={1.9} />
@@ -194,7 +195,7 @@ function Row({ t, tab, active, nowMs, onSelect, selectMode, checked, onCheck, mi
         </label>
       )}
       <button type="button" onClick={onSelect} data-testid="crm-thread-row" data-thread-id={t.id} data-unread={t.is_unread ? 1 : 0}
-        data-section={att?.section ?? "answered"} title={att?.reason ?? undefined} style={{ touchAction: "manipulation" }}
+        data-section={att?.section ?? "answered"} data-status={t.status} title={att?.reason ?? undefined} style={{ touchAction: "manipulation" }}
         className={`flex min-w-0 flex-1 flex-col gap-[3px] px-[18px] py-3 text-left ${active ? "" : "hover:bg-[#fafaf7]"}`}>
         <span className="flex w-full items-center gap-1.5">
           {t.is_unread && <span aria-label="Unread" className="h-[7px] w-[7px] shrink-0 rounded-full bg-[#2cdb87]" />}
@@ -266,7 +267,10 @@ function FilterPopover({ filters, setFilters, onClose }: { filters: Filters; set
     { k: "starred", label: "Starred" }, { k: "assigned", label: "Assigned to me" }, { k: "members", label: "Members only" },
   ];
   return (
-    <div ref={ref} data-testid="queue-filter-popover" className="absolute right-0 top-10 z-30 w-[280px] rounded-[12px] border bg-white p-3 shadow-[0_12px_32px_rgba(9,30,20,.16)]" style={{ borderColor: LINE }}>
+    /* INSIDE THE QUEUE COLUMN (Ryan 2026-11-07): it was right-aligned to the filter button at a fixed
+       280px, so its left edge ran under the rail and the city chips were clipped. Now it spans the
+       header with the header's own 18px insets, under the icon row, with 16px of padding inside. */
+    <div ref={ref} data-testid="queue-filter-popover" className="absolute left-[18px] right-[18px] top-[60px] z-30 rounded-[12px] border bg-white p-4 shadow-[0_12px_32px_rgba(9,30,20,.16)]" style={{ borderColor: LINE }}>
       <div className="mb-2 text-[10px] font-semibold tracking-[0.08em]" style={{ color: FAINT }}>CITY</div>
       <div className="flex flex-wrap gap-[5px]">
         {PICKABLE.map((c) => {

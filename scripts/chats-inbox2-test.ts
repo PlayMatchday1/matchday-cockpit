@@ -21,6 +21,7 @@ import { join } from "node:path";
 import {
   activityLine, appendLine, bucket, closedWindowText, creditReplyLine, dayDivider, dollars, initials, membershipLevel,
   nextMatch, presetRaw, waitTone, waitingCount, wallClockWhen, windowPill, CREDIT_PRESETS_CENTS, WHATSAPP_WINDOW_MS,
+  statsCells, fmtMinutes, detailsPrefKey, readDetailsPref,
   type Section,
 } from "../src/lib/inbox2Model";
 import { validateAdjustment } from "../src/lib/creditsModel";
@@ -165,6 +166,47 @@ is("POSITIVE CONTROL: that pattern finds them where they live", /\b(Suspend|Expe
   const choice = strip(readFileSync("src/lib/chatsInboxChoice.ts", "utf8"));
   is("the switch is per staff id, per browser, and only an explicit \"1\" turns 2.0 on",
     /`crm:inbox2:v1:\$\{appUserId\}`/.test(choice) && /=== "1"/.test(choice), true);
+}
+
+console.log("\n— fixes of 2026-11-07 (Ryan's use on production) —");
+{
+  const inbox = strip(readFileSync(join(DIR, "Inbox2.tsx"), "utf8"));
+  const goFn = inbox.slice(inbox.indexOf("const go = useCallback"), inbox.indexOf("const setTab"));
+  // 1. THE TABS. In a production build router.replace dropped ?tab= / ?view= while a thread was open,
+  //    so Waiting and Done did nothing. The tabs write the URL the way the provider writes ?threadId.
+  is("POSITIVE CONTROL: the tab writer was found", goFn.length > 50, true);
+  is("1. tabs write the URL with history.replaceState, state null (so Next syncs useSearchParams)", /window\.history\.replaceState\(null,/.test(goFn), true);
+  is("1. …never passing Next's own state through (Next skips syncing a state that carries __NA)", /replaceState\(window\.history\.state/.test(goFn), false);
+  is("POSITIVE CONTROL: that state pattern does find the provider's threadId writer", /replaceState\(window\.history\.state/.test(readFileSync("src/lib/crmConversation.tsx", "utf8")), true);
+  is("1. …and never through router.replace / router.push (the call that dropped the param)", /router\.(replace|push)\(/.test(inbox), false);
+  is("POSITIVE CONTROL: that router pattern does find the old page's call", /router\.(replace|push)\(/.test(strip(readFileSync("src/app/(internal)/match-ops/player-chats/CrmClient.tsx", "utf8"))), true);
+  is("1. …and keeps the other params (built from window.location, so ?threadId survives)", /new URL\(window\.location\.href\)/.test(goFn), true);
+  // 2. CHAT STATS: the five numbers as grid cells, the range toggle on its own row.
+  const cells = statsCells({ metrics: { cohort: { conversations: 39, medianFirstResponseMin: 8.2, answeredWithin1h: 23, answeredWithin1hPct: 59, resolved: 22 } }, trend: { cohortMedianDeltaMin: -52 }, awaiting: { count: 4 } });
+  is("2. five cells, in order", cells.map((c) => c.key), ["conversations", "median", "within1h", "resolved", "waiting"]);
+  is("2. values and subs", cells.map((c) => [c.value, c.sub]), [["39", null], ["8m", "52m faster"], ["23", "59%"], ["22", "of 39"], ["4", null]]);
+  is("2. nothing read yet is dashes, not zeros", statsCells(null).map((c) => c.value), ["—", "—", "—", "—", "—"]);
+  is("2. minutes format", [fmtMinutes(0.4), fmtMinutes(125)], ["<1m", "2h 5m"]);
+  const stats = strip(readFileSync(join(DIR, "ChatStats.tsx"), "utf8"));
+  is("2. the range toggle renders before (above) the grid, on its own row", stats.indexOf('data-testid="chat-stats-range"') > 0 && stats.indexOf('data-testid="chat-stats-range"') < stats.indexOf('data-testid="chat-stats-grid"'), true);
+  is("2. the grid is two rows of cells (2 or 3 columns), not one nowrap band", /grid grid-cols-2 [^"]*grid-cols-3/.test(stats) && !/whitespace-nowrap/.test(stats), true);
+  is("2. the popover no longer renders the full-width strip", /<MetricsStrip/.test(inbox), false);
+  is("POSITIVE CONTROL: the old page still renders it", /<MetricsStrip/.test(strip(readFileSync("src/app/(internal)/match-ops/player-chats/CrmClient.tsx", "utf8"))), true);
+  // 3. TEMPLATES LIVE IN THE COMPOSER ONLY.
+  is("3. the ⋯ menu has no template item, and the page mounts no template modal of its own", /key: "template"|TemplateSendModal|approved WhatsApp template/.test(inbox), false);
+  const comp = strip(readFileSync("src/app/(internal)/match-ops/player-chats/components/Composer.tsx", "utf8"));
+  is("POSITIVE CONTROL: the composer keeps the Template quick action and the closed-window template send", /data-testid="crm-qa-template"/.test(comp) && /data-testid="crm-send-template"/.test(comp) && /<TemplateSendModal/.test(comp), true);
+  // 4. THE FILTER POPOVER sits inside the queue column, inset, padded.
+  const q = strip(readFileSync(join(DIR, "Queue2.tsx"), "utf8"));
+  const pop = /data-testid="queue-filter-popover" className="([^"]+)"/.exec(q)?.[1] ?? "";
+  is("POSITIVE CONTROL: the popover's classes were found", pop.length > 20, true);
+  is("4. it spans the header with insets on BOTH sides and real padding", /\bleft-\[18px\]/.test(pop) && /\bright-\[18px\]/.test(pop) && /\bp-4\b/.test(pop), true);
+  is("4. …and no fixed width that can push it past the column's left edge", /\bw-\[\d+px\]/.test(pop), false);
+  is("4. …positioned against the header (relative), not the button", /className="relative flex flex-col gap-3 px-\[18px\]/.test(q), true);
+  // 5. PLAYER DETAILS, OPEN OR CLOSED, PER BROWSER.
+  is("5. the key is per staff id", detailsPrefKey("u-1"), "crm:inbox2:details:v1:u-1");
+  is("5. stored \"1\" is open, \"0\" closed, nothing stored is closed (frame 1)", [readDetailsPref("1"), readDetailsPref("0"), readDetailsPref(null)], [true, false, false]);
+  is("5. the page reads AND writes it", /getItem\(detailsPrefKey\(appUserId\)\)/.test(inbox) && /setItem\(detailsPrefKey\(appUserId\)/.test(inbox), true);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
