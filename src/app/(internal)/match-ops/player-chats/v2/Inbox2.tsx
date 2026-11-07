@@ -156,6 +156,13 @@ export default function Inbox2({ onUseOld }: { onUseOld: () => void }) {
   useEffect(() => { setCreditOpen(false); }, [selectedId]);
 
   const [lightbox, setLightbox] = useState<string | null>(null);
+  // Escape closes the image viewer wherever focus is.
+  useEffect(() => {
+    if (!lightbox) return;
+    const k = (e: KeyboardEvent) => { if (e.key === "Escape") setLightbox(null); };
+    window.addEventListener("keydown", k);
+    return () => window.removeEventListener("keydown", k);
+  }, [lightbox]);
   const [templateOpen, setTemplateOpen] = useState(false);
   const [statsOpen, setStatsOpen] = useState(false);
   const [autoSendOpen, setAutoSendOpen] = useState(false);
