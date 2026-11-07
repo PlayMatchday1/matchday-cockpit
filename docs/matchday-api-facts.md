@@ -8747,3 +8747,34 @@ history; and the mirror's `price` is whole dollars (live `amount` 6650 reads `66
   is recomputed from today's data (deleted test players drop out) while saw and used are history.
 - `GET .../:id/players-without-app` for the two staging offers with a gap returned 180 ids in all against
   `chosen - canGetIt` 200 (the contract says it can be shorter: held-back players, and players who updated).
+
+## Stripe end dates for cancelled memberships: the backfill's results (2026-11-07)
+
+**Evidence: 0261 applied by Ryan (verdict row: table_exists, source_ok, kept_member_invoices,
+no_browser_access all true, rows 0); the backfill run on production through
+`POST /api/sync/stripe-people?job=sub-ends&limit=600` as an admin session, five batches (600, 600, 600,
+600, 219 written; 2,604 `subscriptions.retrieve`, 0 errors, 0 stops, ~225 s per 600); then read-only
+PostgREST reads of `mdapi_subscription_stripe_end`, `mdapi_subscriptions` and `stripe_member_invoices`.**
+
+- **Every CANCELED membership is now covered: 2,619 rows.** 2,604 `stripe_metadata` (Stripe id from our
+  own paid invoices), all with Stripe status `canceled` and an `ended_at`; 15 `unmatched / no stripe
+  subscription` (no invoice at all, never billed, no Stripe call). Stripe answered "no such subscription"
+  0 times; no subscription's metadata named a different membership. **MatchDay CANCELED while Stripe is
+  not canceled: 0.**
+- **All 621 undated paying cancellations got an exact end date** (621 of 621 `stripe_metadata` with
+  `ended_at`).
+- **The estimate was a week early for them.** On the 608 of the 621 with a paid invoice above $0 (13 have
+  only $0 invoices), Stripe's `ended_at` minus the card's old estimate (the 1st after the last paid month):
+  median **+7 days**, p10 +7, p90 +7, min −26, max +14; 4 within ±3 days. A Stripe-side end a week into the
+  month fits a renewal that failed and was retried before Stripe cancelled, but no failed-invoice data
+  exists yet to show it (0262 is the follow-up): cause UNKNOWN.
+- **Retool removals end at once, confirmed.** 704 of the 719 "Removed by Retool" rows have a Stripe
+  `ended_at`, and **all 704 are within one hour of `canceled_at`**. The card shows the removal date for
+  them (Ryan, 2026-11-07).
+- **`ended_at` has two shapes.** 938 are a billing boundary, exactly `04:59:59Z` (665) or `05:59:59Z`
+  (273) on the 1st, a cancel that ran to the period end; 319 are another time on the UTC 1st; 1,347 are
+  mid-month. `ended_at == canceled_at` on 1,607. A boundary is the last second of the month in Central, so
+  `lib/membershipHistory.ts` prints it in UTC ("Aug 1", as `currentPeriodEnd` is printed) and every other
+  `ended_at` in Central (`isBillingBoundary`).
+- **Kept current by** the nightly `/api/sync/stripe-people/sub-ends` (09:15 UTC, up to 300 rows): new
+  CANCELED rows, and any whose Stripe status was not final a day earlier.

@@ -193,6 +193,15 @@ const BS = build(
 const bs1 = blocks(BS)[0];
 is("a player cancel with Stripe's date is exact: no 'about', no '(estimated)'", [ev(bs1, "ended")?.title, ev(bs1, "ended")?.sub, bs1.range, BS.now.title],
   ["Ended Aug 1, 2025", "Date from Stripe", "May 3, 2025 to Aug 1, 2025", "Ended Aug 1, 2025"]);
+{
+  const BB = build([{ ...row(11254, "CANCELED", 49, "2025-05-03T15:00:00Z", "2025-06-07T20:00:00Z", "x"), stripe_ended_at: "2025-08-01T04:59:59Z" }],
+    [inv(11254, 5304, "subscription_create", "2025-05-03T15:00:04Z")], null);
+  is("a period-end boundary (04:59:59Z on the 1st) names the 1st, as the renewal date does — not Jul 31 in Central",
+    [ev(blocks(BB)[0], "ended")?.title, blocks(BB)[0].range], ["Ended Aug 1, 2025", "May 3, 2025 to Aug 1, 2025"]);
+  is("…and the CST boundary (05:59:59Z) too", ev(blocks(build([{ ...row(11255, "CANCELED", 49, "2025-11-03T15:00:00Z", "2025-11-07T20:00:00Z", "x"), stripe_ended_at: "2025-12-01T05:59:59Z" }], [], null))[0], "ended")?.title, "Ended Dec 1, 2025");
+  is("CONTROL: an ended_at that is not a boundary (an evening in Central) prints in Central",
+    ev(blocks(build([{ ...row(11256, "CANCELED", 49, "2025-11-03T15:00:00Z", null, null), stripe_ended_at: "2025-12-01T03:10:00Z" }], [], null))[0], "ended")?.title, "Ended Nov 30, 2025");
+}
 is("CONTROL: the same membership without Stripe's date is estimated", ev(b1, "ended")?.title, "Ended about Aug 1, 2025 (estimated)");
 const US = build([{ ...row(600, "CANCELED", 66, "2026-05-08T16:00:00Z"), stripe_ended_at: "2026-06-14T09:30:00Z", stripe_status: "canceled" }],
   [inv(600, 5341, "subscription_create", "2026-05-08T16:00:02Z"), cyc(600, 7199, "2026-06")], null);

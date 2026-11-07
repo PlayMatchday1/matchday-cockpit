@@ -151,6 +151,21 @@ export const boundaryDay = (iso: string | null) => {
   if (t == null) return "—";
   return new Date(t).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
 };
+/* STRIPE'S ENDED_AT HAS TWO SHAPES (2,604 read 2026-11-07). 938 are a BILLING BOUNDARY, exactly
+ * 04:59:59 or 05:59:59 UTC on the 1st: a cancel that ran to the period end. That instant is the last
+ * second of the month in Central, so Central prints "Jul 31" for a membership that ran to "Aug 1" — the
+ * same trap as currentPeriodEnd, printed the same way (UTC). Every other ended_at is a moment something
+ * happened (a renewal Stripe gave up on, an immediate cancel) and prints in Central like canceled_at. */
+export const isBillingBoundary = (iso: string | null) => {
+  const t = ms(iso);
+  if (t == null) return false;
+  const d = new Date(t);
+  return d.getUTCDate() === 1 && d.getUTCSeconds() === 59 && d.getUTCMinutes() === 59 && (d.getUTCHours() === 4 || d.getUTCHours() === 5);
+};
+const stripeEndDay = (iso: string) => isBillingBoundary(iso)
+  ? new Date(Date.parse(iso)).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" })
+  : dateCT(iso);
+const stripeEndYm = (iso: string) => (isBillingBoundary(iso) ? ymUtc(iso) : ymChicago(iso));
 const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
 export const isRetool = (reason: string | null) => (reason ?? "").trim().toLowerCase() === RETOOL_REASON;
 
@@ -250,7 +265,7 @@ function buildBlock(n: number, r: SubRow, invs: InvoiceRow[], refundsByPi: Map<s
   const stripeEnd = state === "ended" && !retool && ms(r.stripe_ended_at) != null ? (r.stripe_ended_at as string) : null;
   let end: BlockEnd | null = null;
   if (retool) end = { iso: r.canceled_at as string, exact: true, source: "retool", label: `Removed by staff in Retool on ${dateCT(r.canceled_at)}` };
-  else if (stripeEnd) end = { iso: stripeEnd, exact: true, source: "stripe", label: `Ended ${dateCT(stripeEnd)}` };
+  else if (stripeEnd) end = { iso: stripeEnd, exact: true, source: "stripe", label: `Ended ${stripeEndDay(stripeEnd)}` };
   else if (state === "ended" && lastPaidYm) {
     const ym = addMonths(lastPaidYm, 1);
     end = { iso: `${ym}-01T12:00:00.000Z`, exact: false, source: "estimate", label: `Ended about ${firstOf(ym)}` };
@@ -297,7 +312,7 @@ function buildBlock(n: number, r: SubRow, invs: InvoiceRow[], refundsByPi: Map<s
 
   const start = dateCT(r.activation_date);
   const range = state === "ended"
-    ? `${start} to ${end ? (end.exact ? dateCT(end.iso) : `about ${firstOf(ymUtc(end.iso))}`) : "an unknown date"}`
+    ? `${start} to ${end ? (end.source === "stripe" ? stripeEndDay(end.iso) : end.exact ? dateCT(end.iso) : `about ${firstOf(ymUtc(end.iso))}`) : "an unknown date"}`
     : `${start} to now`;
   return {
     block: { n, membershipId: r.membership_id, state, badge: BADGE[state] || (r.status ?? "").toUpperCase(), range, strip, events, end, activation: r.activation_date },
@@ -318,7 +333,7 @@ function gapText(prev: Built, cur: Built): string | null {
   const p = partsIn(cur.block.activation as string, TZ);
   const curYm = ymOf(p.y, p.m);
   const part = p.d <= 10 ? "early" : p.d <= 20 ? "mid" : "late";
-  const endYm = end.exact ? ymChicago(end.iso) : ymUtc(end.iso);
+  const endYm = end.source === "stripe" ? stripeEndYm(end.iso) : end.exact ? ymChicago(end.iso) : ymUtc(end.iso);
   const from = endYm.slice(0, 4) === curYm.slice(0, 4) ? mon(endYm) : monYear(endYm);
   return `Not a member for about ${plural(months, "month")} (${from} to ${part}-${monYear(curYm)})`;
 }
