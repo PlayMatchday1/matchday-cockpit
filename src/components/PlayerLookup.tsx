@@ -18,6 +18,7 @@ import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { useAuth, canEditMatches, canManagePlayers, canEditCredits, canEditMemberships, canViewActivity } from "@/lib/useAuth";
 import AppActivityCard from "./AppActivityCard";
+import PlayerPushesCard from "./pushes/PlayerPushesCard";
 import { MembershipHistoryFull, useMembershipHistory, useBuiltHistory } from "./MembershipHistoryView";
 import { neverMemberLine, type LiveMembership } from "@/lib/membershipHistory";
 import { memKind, actionsFor, isComp, centsFromDollars, dollarsFromCents, addPathFor, COMP_ADD_ENABLED, COMP_DISABLED_REASON, type MemFacts, type AddKind } from "@/lib/membershipAdminModel";
@@ -594,6 +595,10 @@ function ProfileView({ p, fields, canEdit, canManage, canCredit, canMember, canA
       {/* APP ACTIVITY (0257): under the player card, above Credits. Keyed by player so Show/Hide
           never carries from one player to the next. */}
       {canActivity && <AppActivityCard key={pl.id} env={ENV} playerId={pl.id} city={pl.city} startOpen={activityStartOpen} />}
+
+      {/* PUSHES (Figma 20877:72): what this player got and whether a push can reach them. Match Ops only; the card draws
+          nothing for anyone the pushes routes refuse. */}
+      <PlayerPushesCard key={`pushes-${pl.id}`} playerId={pl.id} env={ENV} />
 
       <CreditPanel playerId={pl.id} playerName={pl.name} balanceCents={liveCredits ?? pl.credits}
         canCredit={canCredit} onBalance={setLiveCredits} />

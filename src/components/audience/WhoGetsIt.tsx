@@ -24,15 +24,25 @@ type FieldLike = { id: number; title: string; cityId: number | null };
 export type CountBar = { state: "counting" | "ready" | "error" | "off"; text?: string; error?: string; onRetry?: () => void; extra?: React.ReactNode; capFlag?: string | null };
 // POST /admin/audiences/sample: up to 50, most recent players first; names as first name and last initial.
 export type SampleAnswer = { players: { id: number; name: string | null; city: string | null; lastPlayedAt?: string | null }[]; total?: number; fixture?: boolean } | { error: string };
+// A push count tag (Figma 20877:141): grey "1 this week", or amber when the player will be skipped; why on hover.
+export type CountTag = { text: string; amber: boolean; why: string };
 export type PlayersBox = {
   hint: string; placeholder: string;
   tags: { key: string; label: string }[]; notFound: string[]; line: React.ReactNode | null; extra?: React.ReactNode;
   onRemove: (key: string) => void;
+  // With rows, the found players are drawn as the frame's list (name, #id, the count tag, ×) instead of tags.
+  rows?: { key: string; name: string; sub: string; tag: CountTag | null }[];
 };
+function TagPill({ tag, testId }: { tag: CountTag; testId: string }) {
+  return <span data-testid={testId} data-amber={tag.amber ? "1" : "0"} title={tag.why} className="inline-flex shrink-0 cursor-help whitespace-nowrap rounded-full px-2 py-[3px] text-[11px] font-semibold"
+    style={tag.amber ? { background: "#fff2d9", color: "#b7791f" } : { background: O.page, color: O.muted }}>{tag.text}</span>;
+}
 
-export default function WhoGetsIt({ spec, onChange, allowed, cities, fields, nowWall, disabled, count, onSample, players, choices, hints, filtersSub, playersSub, testId = "who" }: {
+export default function WhoGetsIt({ spec, onChange, allowed, cities, fields, nowWall, disabled, count, onSample, sampleTags, players, choices, hints, filtersSub, playersSub, testId = "who" }: {
   spec: AudienceSpec; onChange: (s: AudienceSpec) => void; allowed: Allowed; cities: Named[]; fields: FieldLike[]; nowWall: string; disabled?: boolean;
   count: CountBar; onSample?: () => Promise<SampleAnswer>; players: PlayersBox;
+  // The push count tags for the sample's players (POST .../players/status); left out where there are none (Offers).
+  sampleTags?: (ids: number[]) => Promise<Record<number, CountTag>>;
   choices?: Partial<Record<FilterKey, { value: string; label: string }[]>>; hints?: Partial<Record<FilterKey, string>>;
   filtersSub?: string; playersSub?: string; testId?: string;
 }) {
@@ -90,15 +100,33 @@ export default function WhoGetsIt({ spec, onChange, allowed, cities, fields, now
             onChange={(e) => onChange({ ...spec, playersText: e.target.value })}
             className="h-[110px] w-full rounded-[8px] border px-3 py-2.5 text-[13px] leading-[19px] outline-none disabled:cursor-not-allowed disabled:opacity-60" style={{ borderColor: O.line, color: O.ink, background: O.surface }} />
           <div className="text-[12px]" style={{ color: O.muted }}>{players.hint}</div>
-          {(players.tags.length > 0 || players.notFound.length > 0) && (
+          {players.rows && players.rows.length > 0 && (
+            <div data-testid={`${testId}-rows`} className="flex flex-col">
+              <div className="flex items-center pb-2 text-[12px]" style={{ color: O.muted }}><span className="flex-1" />{players.rows.length.toLocaleString("en-US")} {players.rows.length === 1 ? "player" : "players"}</div>
+              {players.rows.slice(0, 200).map((r, i) => (
+                <div key={r.key} data-testid={`${testId}-player-row`} className={`flex items-center gap-3 border-b py-2.5 ${i === 0 ? "border-t" : ""}`} style={{ borderColor: O.line }}>
+                  <span aria-hidden className="size-7 shrink-0 rounded-full" style={{ background: "#e3e7e3" }} />
+                  <span className="flex min-w-0 flex-1 flex-col">
+                    <span className="truncate text-[13px] font-semibold" style={{ color: O.ink }}>{r.name}</span>
+                    <span className="truncate text-[11px]" style={{ color: O.muted }}>{r.sub}</span>
+                  </span>
+                  {r.tag ? <TagPill tag={r.tag} testId={`${testId}-player-tag`} /> : <span className="text-[11px]" style={{ color: O.label }}>…</span>}
+                  {!disabled && <button type="button" aria-label={`Remove ${r.name}`} className="shrink-0 text-[14px]" style={{ color: O.muted }} onClick={() => players.onRemove(r.key)}>×</button>}
+                </div>
+              ))}
+              {players.rows.length > 200 && <div className="pt-2 text-[12px]" style={{ color: O.muted }}>+ {(players.rows.length - 200).toLocaleString("en-US")} more</div>}
+              {players.rows.some((r) => r.tag?.amber) && <div data-testid={`${testId}-rows-note`} className="pt-2 text-[11px]" style={{ color: O.muted }}>Amber players will be skipped. Hover a tag for why.</div>}
+            </div>
+          )}
+          {((!players.rows && players.tags.length > 0) || players.notFound.length > 0) && (
             <div data-testid={`${testId}-tags`} className="flex flex-wrap gap-x-2 gap-y-1.5">
-              {players.tags.slice(0, 60).map((t) => (
+              {!players.rows && players.tags.slice(0, 60).map((t) => (
                 <span key={t.key} data-testid={`${testId}-tag`} className="inline-flex items-center gap-1.5 rounded-full py-[5px] pl-2.5 pr-2 text-[12px] font-semibold" style={{ background: O.mint, color: O.chipOn }}>
                   {t.label}
                   {!disabled && <button type="button" aria-label={`Remove ${t.label}`} className="font-medium" onClick={() => players.onRemove(t.key)}>×</button>}
                 </span>
               ))}
-              {players.tags.length > 60 && <span className="self-center text-[12px] font-semibold" style={{ color: O.chipOn }}>+ {(players.tags.length - 60).toLocaleString("en-US")} more</span>}
+              {!players.rows && players.tags.length > 60 && <span className="self-center text-[12px] font-semibold" style={{ color: O.chipOn }}>+ {(players.tags.length - 60).toLocaleString("en-US")} more</span>}
               {players.notFound.length > 0 && (
                 <span data-testid={`${testId}-not-found`} title={players.notFound.join(", ")} className="inline-flex rounded-full px-2.5 py-[5px] text-[12px] font-semibold" style={{ background: "#fff2d9", color: "#8c590d" }}>
                   {players.notFound.length.toLocaleString("en-US")} not found: {players.notFound.slice(0, 3).join(", ")}{players.notFound.length > 3 ? "…" : ""}
@@ -121,7 +149,7 @@ export default function WhoGetsIt({ spec, onChange, allowed, cities, fields, now
       )}
       {filters && count.state === "ready" && count.capFlag && <div data-testid={`${testId}-cap-flag`} className="rounded-[10px] px-3.5 py-[9px] text-[13px] font-semibold" style={{ background: "#fff2d9", color: "#8c590d" }}>{count.capFlag}</div>}
       {filters && count.extra}
-      {sample && <SampleList answer={sample} onClose={() => setSample(null)} testId={testId} />}
+      {sample && <SampleList answer={sample} tagsFor={sampleTags} onClose={() => setSample(null)} testId={testId} />}
     </Card>
   );
 }
@@ -297,12 +325,20 @@ function AddMenu({ allowed, hints, used, onPick, onClose, testId }: { allowed: A
 }
 
 // SEE PLAYERS: a sample of who matches, from the backend.
-function SampleList({ answer, onClose, testId }: { answer: SampleAnswer | "loading"; onClose: () => void; testId: string }) {
+function SampleList({ answer, tagsFor, onClose, testId }: { answer: SampleAnswer | "loading"; tagsFor?: (ids: number[]) => Promise<Record<number, CountTag>>; onClose: () => void; testId: string }) {
   useEffect(() => {
     const esc = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", esc);
     return () => window.removeEventListener("keydown", esc);
   }, [onClose]);
+  const [tags, setTags] = useState<Record<number, CountTag> | null>(null);
+  const ids = answer !== "loading" && !("error" in answer) ? answer.players.map((p) => p.id).join(",") : "";
+  useEffect(() => {
+    if (!tagsFor || !ids) return;
+    let cancelled = false;
+    void tagsFor(ids.split(",").map(Number)).then((t) => { if (!cancelled) setTags(t); });
+    return () => { cancelled = true; };
+  }, [ids, tagsFor]);
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center px-4" style={{ background: "rgba(7,42,32,.18)" }} onClick={onClose}>
       <div role="dialog" aria-modal="true" aria-label="Players who match" data-testid={`${testId}-sample`} onClick={(e) => e.stopPropagation()}
@@ -325,6 +361,7 @@ function SampleList({ answer, onClose, testId }: { answer: SampleAnswer | "loadi
                     <span className="min-w-0 flex-1 truncate font-semibold" style={{ color: O.ink }}>{p.name ?? "No name"}</span>
                     <span className="shrink-0 text-[12px]" style={{ color: O.muted }}>{p.city ?? ""}</span>
                     <span className="shrink-0 text-[11px]" style={{ color: O.muted }}>{p.lastPlayedAt ? `Played ${chicagoDay(p.lastPlayedAt)}` : "Never played"}</span>
+                    {tagsFor && (tags?.[p.id] ? <TagPill tag={tags[p.id]} testId={`${testId}-sample-tag`} /> : <span className="w-[60px] shrink-0 text-right text-[11px]" style={{ color: O.label }}>…</span>)}
                   </div>
                 ))}
               </div>

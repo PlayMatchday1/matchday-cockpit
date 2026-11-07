@@ -24,7 +24,8 @@ import {
   rowOf, sentByLine, skippedLine, summaryLine, tapOpensText, PUSH_HELP,
   type Chip as ChipLabel, type ListPage, type PushForm, type PushMessage, type PushReachable, type PushResultsData, type Row, type Tab, type TapTarget,
 } from "@/lib/pushesModel";
-import WhoGetsIt, { type SampleAnswer } from "@/components/audience/WhoGetsIt";
+import WhoGetsIt, { type CountTag, type SampleAnswer } from "@/components/audience/WhoGetsIt";
+import { cantGetBreakdown, sendFirstLine, sendSecondLine, tagOf, type SendSummary, type Skipped, type StatusAnswer } from "@/lib/playerPushes";
 import SendTestBox, { type TestAnswer } from "@/components/audience/SendTestBox";
 import MatchPicker from "@/components/offers/MatchPicker";
 import { PushLockScreen } from "@/components/offers/OfferPush";
@@ -244,6 +245,19 @@ function PushEditor({ c, data, prefill, onClose, onLanded }: { c: PushMessage | 
     return () => { cancelled = true; clearTimeout(t); };
   }, [playersMode, text]);
   const playerIds = useMemo(() => [...new Set((lookup?.players ?? []).map((p) => p.id))], [lookup]);
+  // ── the push count tags (Figma 20877:141): one status read for the whole list (POST .../players/status) ──
+  const idsKey = playerIds.join(",");
+  const [statusMap, setStatusMap] = useState<{ for: string; map: Record<number, CountTag> } | null>(null);
+  useEffect(() => {
+    if (!playersMode || !idsKey || missing) return;
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      const map = await statusTags(idsKey.split(",").map(Number));
+      if (!cancelled) setStatusMap({ for: idsKey, map });
+    }, 300);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [playersMode, idsKey, missing]);
+  const tagsNow = statusMap?.for === idsKey ? statusMap.map : null;
   const lookupReady = !playersMode || (lookupFor === text && !lookupErr);
 
   // ── the live count, debounced (POST /admin/audiences/count) ──
@@ -340,10 +354,36 @@ function PushEditor({ c, data, prefill, onClose, onLanded }: { c: PushMessage | 
   };
   const testWhy = missing ? "The Push Notifications backend isn't on this server yet." : c === null ? "Save it as a draft first." : !f.title.trim() || !f.body.trim() ? "Write a title and a message first." : null;
 
-  const summary = summaryLine(f, countNow, cap);
+  // ── THE SEND BAR (Figma 20877:188): the saved push's own send summary (GET .../send-summary), as if it went now. While
+  // the audience or the holdout on screen isn't saved yet those numbers would be the old ones, so the bar says so. ──
+  const numbersStale = c === null || (!!diff && ("audience" in diff || "holdoutPercent" in diff));
+  const summaryWanted = !!c && !missing && (c.status === "DRAFT" || c.status === "PAUSED") && !numbersStale;
+  const [sendSum, setSendSum] = useState<{ for: string; s: SendSummary } | null>(null);
+  const [sendSumErr, setSendSumErr] = useState<string | null>(null);
+  const sumKey = c ? `${c.id}:${c.updatedAt ?? ""}` : "";
+  useEffect(() => {
+    if (!summaryWanted) return;
+    let cancelled = false;
+    setSendSumErr(null);
+    (async () => {
+      const r = await authed(`/api/pushes/${c!.id}/send-summary`);
+      if (cancelled) return;
+      if (r.ok) setSendSum({ for: sumKey, s: r.json as unknown as SendSummary }); else setSendSumErr(String(r.json.error));
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [summaryWanted, sumKey]);
+  const sumNow = summaryWanted && sendSum?.for === sumKey ? sendSum.s : null;
+  const whenLabel = f.at ? wallLabel(`${f.sendLocal}:00`) : null;
+  const barFirst = sumNow ? sendFirstLine(whenLabel, sumNow.willSend) : countNow ? sendFirstLine(whenLabel, countNow.willSend) : `Sends ${whenLabel ? `${whenLabel} in each player's city` : "now"} to the players who match`;
+  const barSecond = sumNow ? sendSecondLine(sumNow) : summaryWanted ? (sendSumErr ? `Couldn't count who can get it: ${sendSumErr}` : "Counting who can get it…") : "Save the draft to see who can get it and who the weekly limit skips.";
+  const summary = `${barFirst}. ${barSecond}`;
+  const [seeWho, setSeeWho] = useState(false);
   const sendWhy = missing ? "The Push Notifications backend isn't on this server yet." : problem;
   const canSend = c === null || c.status === "DRAFT" || c.status === "PAUSED";
   const tags = (lookup?.players ?? []).map((p) => ({ key: p.entry ?? String(p.id), label: tagText(p) }));
+  // The lookup carries no city, so a row's second line is the player's id.
+  const rows = (lookup?.players ?? []).map((p) => ({ key: p.entry ?? String(p.id), name: p.name ?? "No name", sub: `#${p.id}`, tag: tagsNow?.[p.id] ?? null }));
   const onSample = async (): Promise<SampleAnswer> => {
     const r = await authed("/api/audiences/sample", { method: "POST", body: JSON.stringify({ audience }) });
     return r.ok ? (r.json as unknown as SampleAnswer) : { error: String(r.json.error) };
@@ -400,10 +440,10 @@ function PushEditor({ c, data, prefill, onClose, onLanded }: { c: PushMessage | 
           <WhoGetsIt spec={f.audience} onChange={(a: AudienceSpec) => set({ audience: a })} allowed={null} cities={data.cities} fields={data.fields} nowWall={nowWall} disabled={!can("audience") || loaded.unknown > 0} testId="pushes-who"
             count={!countWanted ? { state: "off" } : countErr && countFor === countBody ? { state: "error", error: countErr, onRetry: () => setCountTry((x) => x + 1) }
               : countNow ? { state: "ready", text: countLine({ matching: countNow.matching, allowPushes: countNow.allowPushes, holdoutPercent: countNow.heldBack > 0 ? countNow.holdoutPercent : 0 }), capFlag } : { state: "counting" }}
-            onSample={onSample}
+            onSample={onSample} sampleTags={statusTags}
             players={{
               hint: "Paste player IDs, emails or phone numbers, separated by commas or new lines.", placeholder: "78, 1481, 3193\nluis@example.com\n(512) 555-0142",
-              tags, notFound: lookup?.notFound ?? [],
+              tags, rows, notFound: lookup?.notFound ?? [],
               line: lookup ? playersLine(lookup.players) : lookupErr ? null : text.trim() ? "Looking them up…" : null,
               extra: (
                 <>
@@ -472,7 +512,15 @@ function PushEditor({ c, data, prefill, onClose, onLanded }: { c: PushMessage | 
 
           <div data-testid="pushes-summary-bar" className="flex flex-col gap-3 rounded-[14px] px-5 py-4 sm:flex-row sm:items-center sm:gap-4" style={{ background: O.mint }}>
             <div className="flex min-w-0 flex-1 flex-col gap-1">
-              <div data-testid="pushes-summary" className="text-[13px] font-semibold" style={{ color: O.chipOn }}>{draft || c?.status === "PAUSED" ? summary : `${c?.state === "SCHEDULED" ? "Scheduled" : "Sent"}. ${c?.state === "SCHEDULED" ? "Pause it to stop it going; end it to stop it for good." : "End it once you're done with it; it stays in the list."}`}</div>
+              {draft || c?.status === "PAUSED" ? (
+                <>
+                  <div data-testid="pushes-summary" className="text-[14px] font-bold" style={{ color: O.ink }}>{barFirst}</div>
+                  <div data-testid="pushes-summary-2" className="text-[12px]" style={{ color: O.muted }} title={sumNow ? cantGetBreakdown(sumNow) : undefined}>
+                    {barSecond}
+                    {sumNow && sumNow.skippedAtLimit > 0 && <>{" "}<button type="button" data-testid="pushes-see-who" className="font-semibold underline" style={{ color: O.ink }} onClick={() => setSeeWho(true)}>See who</button></>}
+                  </div>
+                </>
+              ) : <div data-testid="pushes-summary" className="text-[13px] font-semibold" style={{ color: O.chipOn }}>{`${c?.state === "SCHEDULED" ? "Scheduled" : "Sent"}. ${c?.state === "SCHEDULED" ? "Pause it to stop it going; end it to stop it for good." : "End it once you're done with it; it stays in the list."}`}</div>}
               {canSend && sendWhy && <div data-testid="pushes-why" className="text-[12px]" style={{ color: O.warnInk }}>{sendWhy}</div>}
             </div>
             <div className="flex flex-wrap gap-2">
@@ -489,6 +537,7 @@ function PushEditor({ c, data, prefill, onClose, onLanded }: { c: PushMessage | 
           extra={<span style={{ color: O.muted }}>It goes once and can&apos;t be called back.{c === null || dirty ? " Your changes are saved first." : ""}</span>}
           onConfirm={async () => { const o = await move("send"); if (o.verdict === "LANDED") setConfirm(null); return o; }} onCancel={() => setConfirm(null)} />
       )}
+      {seeWho && c && <SeeWho pushId={c.id} onClose={() => setSeeWho(false)} />}
       {confirm === "pause" && c && (
         <ConfirmDialog title="Pause this push?" note="Nobody else gets it while it's paused. A send that comes due does nothing. Resume sends it again." action="Pause"
           onConfirm={async () => { const o = await move("pause"); if (o.verdict === "LANDED") setConfirm(null); return o; }} onCancel={() => setConfirm(null)} />
@@ -562,6 +611,55 @@ function Stat({ label, value, sub, testId }: { label: string; value: string; sub
       <div className="text-[12px] font-semibold" style={{ color: O.muted }}>{label}</div>
       <div className="text-[24px] font-bold" style={{ color: O.ink }}>{value}</div>
       <div className="text-[11px]" style={{ color: O.muted }}>{sub}</div>
+    </div>
+  );
+}
+
+// The tags for a list of players (POST /api/pushes/players/status), as a map; empty on any failure (the tags just don't show).
+async function statusTags(ids: number[]): Promise<Record<number, CountTag>> {
+  if (ids.length === 0) return {};
+  const r = await authed("/api/pushes/players/status", { method: "POST", body: JSON.stringify({ playerIds: ids, kind: "MESSAGE" }) });
+  if (!r.ok) { console.error(`[pushes] player status: ${String(r.json.error)}`); return {}; }
+  return Object.fromEntries((r.json as unknown as StatusAnswer).players.map((p) => [p.playerId, tagOf(p)]));
+}
+
+// "See who": the players the weekly limit skips, as if it went now (GET .../skipped?reason=AT_LIMIT). No contact details.
+function SeeWho({ pushId, onClose }: { pushId: number; onClose: () => void }) {
+  const [a, setA] = useState<Skipped | { error: string } | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const r = await authed(`/api/pushes/${pushId}/skipped?reason=AT_LIMIT`);
+      if (!cancelled) setA(r.ok ? (r.json as unknown as Skipped) : { error: String(r.json.error) });
+    })();
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", esc);
+    return () => { cancelled = true; window.removeEventListener("keydown", esc); };
+  }, [pushId, onClose]);
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center px-4" style={{ background: "rgba(7,42,32,.18)" }} onClick={onClose}>
+      <div role="dialog" aria-modal="true" aria-label="Skipped by the weekly limit" data-testid="pushes-see-who-list" onClick={(e) => e.stopPropagation()}
+        className="flex max-h-[80vh] w-full max-w-[440px] flex-col gap-3 rounded-[14px] border p-5 shadow-[0_12px_40px_rgba(7,42,32,.18)]" style={{ background: O.surface, borderColor: O.line }}>
+        <div className="flex items-start justify-between">
+          <div className="text-[16px] font-bold" style={{ color: O.ink }}>Skipped by the weekly limit</div>
+          <button type="button" aria-label="Close" onClick={onClose} className="text-[14px]" style={{ color: O.muted }}>✕</button>
+        </div>
+        {!a ? <div className="text-[13px]" style={{ color: O.muted }}>Loading…</div> : "error" in a ? <div className="text-[13px]" style={{ color: O.critInk }}>{a.error}</div> : (
+          <>
+            <div className="text-[12px]" style={{ color: O.muted }}>{a.count.toLocaleString("en-US")} {a.count === 1 ? "player has" : "players have"} already had the week&apos;s pushes{a.source === "NOW" ? ", as of now" : ""}.</div>
+            <div className="flex flex-col overflow-y-auto rounded-[10px] border" style={{ borderColor: O.line }}>
+              {a.players.map((p) => (
+                <div key={p.id} data-testid="pushes-see-who-row" className="flex items-center gap-3 border-b px-3 py-2 text-[13px] last:border-b-0" style={{ borderColor: O.line }}>
+                  <span className="w-[64px] shrink-0 font-mono text-[12px]" style={{ color: O.muted }}>#{p.id}</span>
+                  <span className="min-w-0 flex-1 truncate font-semibold" style={{ color: O.ink }}>{p.name ?? "No name"}</span>
+                  <span className="shrink-0 text-[12px]" style={{ color: O.muted }}>{p.city ?? ""}</span>
+                  <span className="shrink-0 text-[11px] font-semibold" style={{ color: "#b7791f" }}>{p.thisWeek} this week</span>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }

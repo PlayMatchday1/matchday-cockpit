@@ -76,6 +76,14 @@ export async function readPush(id: number): Promise<PushMessage | null> {
 export const readPushResults = (id: number): Promise<PushResultsData> => (fixtureOn() ? Promise.resolve(fixture.results(id)) : get<PushResultsData>(`${MESSAGES}/${id}/results`));
 export const readReachable = (id: number): Promise<PushReachable> => (fixtureOn() ? Promise.resolve(fixture.reachable(id)) : get<PushReachable>(`${MESSAGES}/${id}/reachable`));
 
+// PLAYER PUSHES (docs/push-notifications.md "Player pushes"): reads only, paced like every other.
+export const readPlayerPushes = (id: number, limit: "5" | "all") => get<import("@/lib/playerPushes").PlayerPushes>(`${PUSHES}/players/${id}?limit=${limit}`);
+export const readPlayerStatus = (auth: OffersAuth, playerIds: number[], kind: "MESSAGE" | "OFFER") =>
+  postRead<import("@/lib/playerPushes").StatusAnswer>(auth, `${PUSHES}/players/status`, { playerIds, kind });
+export const readSendSummary = (id: number) => get<import("@/lib/playerPushes").SendSummary>(`${MESSAGES}/${id}/send-summary`);
+export const SKIP_REASONS = ["AT_LIMIT", "PUSHES_OFF", "NO_DEVICE", "OLDER_APP", "HELD_BACK", "NOT_ALLOWED"] as const;
+export const readSkipped = (id: number, reason: (typeof SKIP_REASONS)[number]) => get<import("@/lib/playerPushes").Skipped>(`${MESSAGES}/${id}/skipped?reason=${reason}`);
+
 // THE SHARED AUDIENCE (POST /admin/audiences/*), for message pushes and offers alike.
 export const readCount = (auth: OffersAuth, audience: ContractAudience, holdoutPercent?: number): Promise<ContractCount> =>
   fixtureOn() ? Promise.resolve(fixture.count(audience, holdoutPercent)) : postRead<ContractCount>(auth, `${AUDIENCES}/count`, { audience, ...(holdoutPercent !== undefined ? { holdoutPercent } : {}) });

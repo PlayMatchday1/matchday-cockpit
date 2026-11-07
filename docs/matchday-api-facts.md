@@ -8811,3 +8811,22 @@ of `stripe_member_invoices`, `stripe_member_unpaid_invoices`, `mdapi_subscriptio
 - **A retried renewal paid late is no longer missed.** The paid sync's hourly window is invoices CREATED in the
   last 3 days, so a renewal created on the 1st and paid on the 6th after retries fell outside it. The unpaid
   sync reads back any open row Stripe stops listing as open and moves a paid one to `stripe_member_invoices`.
+
+## Player pushes: proven on staging (2026-11-07)
+
+**Contract:** backend docs/push-notifications.md "Player pushes" (production a71fc05). Read in `src/lib/playerPushes.ts`;
+drawn as Player Lookup › Pushes (`PlayerPushesCard`), the push count tags on Exact players and the sample, and the send
+bar's two lines.
+
+- `GET /admin/push-notifications/players/1481?limit=5` (staging): total 16, 5 items, thisWeek 3 of 3 at the limit,
+  canGetPushes true, one IOS 1.88 device, canGetOffers true, opened 3 of 15 trackable (16 in all). Player 1364:
+  canGetPushes false, reason `NO_DEVICE`, pushesOn true, no devices, canGetOffers false with appVersion null.
+  Items logged before titles were kept carry the template (`titleAsSent` false, e.g. "Stage test: {first_name}").
+- `POST .../players/status` for [1481, 1364]: 1481 `AT_LIMIT`, 1364 `NOT_ALLOWED` (staging is in allowlist mode, which
+  the send checks first; every sample player on staging reads Not allowed for the same reason).
+- `GET .../messages/46/send-summary` (an ended push to 1481): `{ audience 1, canGetIt 1, skippedAtLimit 1, heldBack 0,
+  willSend 0, weeklyLimit 3, mode allowlist }`; `.../skipped?reason=AT_LIMIT`: 1481 "Ryan M.", Austin, 3 this week.
+- **Missing:** the audiences lookup has no city, so an Exact players row's second line is the player's id, not
+  "#18233 · Austin" as in Figma 20877:141.
+- Player Lookup reads its own environment and the push routes read OFFERS_ENV's; when they differ the card says so
+  rather than reading another backend's player with the same id.
