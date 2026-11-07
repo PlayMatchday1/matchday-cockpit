@@ -8611,3 +8611,23 @@ behaviour of the drain is UNKNOWN until a drain is attached; observations will b
   max line length and the router line's exact shape are not documented — UNKNOWN until observed.
 - Parser and route: `src/lib/logplexDrain.ts`, `src/app/api/drains/heroku/[env]/route.ts`. App calls the backend does
   not serve: `docs/app-calls-unserved-routes.md`.
+
+### Observed on the live drains, first hour (2026-11-06)
+
+Evidence: `app_request_log_batches` and `app_request_log`, paged by id, staging 21:06:30–22:06:30Z, production
+21:21:54–22:21:54Z (the first hour after each token was pinned).
+
+- **Heroku's `Logplex-Msg-Count` equalled the frames parsed on every batch** (6,514 staging, 11,340 production).
+  Batches are mostly ONE message (production: 25,809 messages in 11,340 batches); the largest held 357. So the drain is
+  roughly one Vercel invocation per two log lines.
+- **Router lines arrive with an APP-NAME other than `app`**: 3,471 staging / 12,252 production dropped as `not_app`,
+  about one per stored line. Non-JSON app output (`[Nest]` lines etc.): 619 / 1,548 dropped as `not_json`. Nothing
+  dropped as `wrong_shape` or `bad_frame`.
+- **Production, first hour: 11,996 stored rows; 75.9% carry a user id.** Status 200=10,001, 201=466, 204=267,
+  401=1,208, 403=45, 404=4, 412=5. Of 1,262 rows >= 400, only 48 carry a user id: guard 401s are the bulk and are
+  anonymous, so most failures never reach a player's timeline.
+- **79% of production rows are background routes** in `src/lib/appActivity.ts` (9,475; 8,282 of them under 400).
+  1,420 rows/hour are routes the map does not cover, mostly STAFF traffic: `GET /api/v1/admin/promocodes` 534,
+  `GET /admin/matches` 530, `GET /admin/matches/:matchId/players` 170, and the Stripe webhooks.
+- **A 404 on an unserved route carries no user id** (staging, 2026-11-06: `GET /matches/2822/match-price` from a
+  signed-in player logged `route null, user_id null`). No route matched, so no guard ran.
