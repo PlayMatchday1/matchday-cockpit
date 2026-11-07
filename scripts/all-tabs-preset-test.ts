@@ -1,6 +1,7 @@
 // Offline suite: scripts/run-suites.mjs runs it with NODE_OPTIONS=--conditions=react-server.
 // THE "ALL TABS" PRESET (2026-11-07) and the per-person manager pay rule (0260).
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { can, type Capability } from "../src/lib/capabilities";
 import { matchOpsReadGate } from "../src/lib/matchOpsAuth";
 import { markStaffApp } from "../src/lib/staffAppForward";
@@ -36,5 +37,12 @@ t("ticked: on", () => assert.equal(canChangeManagerPay({ ...on, can_change_manag
 t("an admin: on without the box", () => assert.equal(canChangeManagerPay({ is_admin: true }, false), true));
 t("a confined account: off even ticked", () => assert.equal(canChangeManagerPay({ can_change_manager_pay: true }, true), false));
 t("before 0260 (column missing): off", () => assert.equal(canChangeManagerPay({ can_access_matchops: true }, false), false));
+
+console.log("\n── Additional pay on an existing row: the same people, and logged ──");
+const adj = readFileSync("src/app/api/manager-pay/adjustments/route.ts", "utf8");
+t("gated on admin OR the Manager pay box (refuseUnlessPayChanger), no longer admin-only", () => { assert.match(adj, /refuseUnlessPayChanger\(data\.user\.email\)/); assert.doesNotMatch(adj, /refuseUnlessAdmin\(/); });
+t("every save and clear goes through recordWrite into change_log", () => assert.match(adj, /recordWrite\([\s\S]*source: "Manager Pay — adjustment"[\s\S]*supabaseLogStore\(\)/));
+const sess = readFileSync("src/lib/adminSession.ts", "utf8");
+t("the pay check admits exactly is_admin or can_change_manager_pay", () => assert.match(sess, /is_admin === true \|\| row\.data\?\.can_change_manager_pay === true/));
 
 console.log(`\n${n} passed, 0 failed`);

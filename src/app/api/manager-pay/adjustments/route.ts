@@ -9,12 +9,18 @@
 //   { managerEmail: string, weekStart: "YYYY-MM-DD",
 //     amount: number, notes?: string | null, managerId?: number | null }
 //
-// Auth: dual-mode bearer (session token OR CRON_SECRET). Same pattern
-// as the other manager-pay route.
+// Auth: dual-mode bearer (session token OR CRON_SECRET). A session must be an admin OR hold the
+// Manager pay box (can_change_manager_pay, 0260; Ryan 2026-11-07), the same people the staff app lets
+// "Add someone not on the schedule".
+//
+// LOGGED (2026-11-07): every save and every clear goes through recordWrite into change_log, before
+// and after read from the table, the verdict a re-read. It was never logged before, admins included.
 
 import { timingSafeEqual } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
-import { refuseUnlessAdmin } from "@/lib/adminSession";
+import { randomUUID } from "node:crypto";
+import { refuseUnlessPayChanger } from "@/lib/adminSession";
+import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
 
 export const runtime = "nodejs";
 export const maxDuration = 10;
@@ -60,6 +66,7 @@ export async function POST(req: Request) {
     );
   }
   const cronSecret = process.env.CRON_SECRET;
+  let actor = "cron";
   if (!cronSecret || !constantTimeMatch(token, cronSecret)) {
     const sessionClient = createClient(supabaseUrl, supabaseKey, {
       global: { headers: { Authorization: `Bearer ${token}` } },
@@ -69,8 +76,9 @@ export async function POST(req: Request) {
     if (error || !data?.user) {
       return Response.json({ error: "Invalid session" }, { status: 401 });
     }
-    const adminRefusal = await refuseUnlessAdmin(data.user.email);
-    if (adminRefusal) return adminRefusal;
+    const refusal = await refuseUnlessPayChanger(data.user.email);
+    if (refusal) return refusal;
+    actor = (data.user.email ?? "").toLowerCase();
   }
 
   const supabase = createClient(supabaseUrl, serviceKey, {
@@ -117,41 +125,55 @@ export async function POST(req: Request) {
     );
   }
 
-  // amount=0 with no notes → delete (keeps the table clean).
-  if (amountNum === 0 && notes === null) {
-    const { error } = await supabase
-      .from("manager_pay_adjustments")
-      .delete()
-      .eq("manager_email", managerEmail)
-      .eq("week_start", weekStart);
-    if (error) {
-      return Response.json(
-        { error: `delete failed: ${error.message}` },
-        { status: 500 },
-      );
-    }
-    return Response.json({ deleted: true });
-  }
+  const clearing = amountNum === 0 && notes === null;
+  const readRow = async (): Promise<Record<string, unknown>> => {
+    const r = await supabase.from("manager_pay_adjustments").select("amount, notes").eq("manager_email", managerEmail).eq("week_start", weekStart).maybeSingle();
+    return { row: r.data ?? null };
+  };
+  const cur = (await readRow()).row as { amount: number; notes: string | null } | null;
+  let dbError: string | null = null;
 
-  // Upsert by (manager_email, week_start) unique constraint.
-  const { error } = await supabase.from("manager_pay_adjustments").upsert(
+  const { outcome, error } = await recordWrite(
     {
-      manager_email: managerEmail,
-      week_start: weekStart,
-      amount: amountNum,
-      notes,
-      manager_id: managerId,
-      updated_at: new Date().toISOString(),
+      env: "production", source: "Manager Pay — adjustment", actorName: actor, actorEmail: actor === "cron" ? null : actor,
+      saveId: randomUUID(), matchId: null, matchName: null,
+      method: clearing ? "DELETE" : "POST", path: `/manager-pay/adjustments/${weekStart}`,
+      // The facts and nothing else: week, person, amount, note. No phone.
+      body: { weekStart, managerEmail, amount: amountNum, notes },
+      keys: [], label: (k) => k,
+      applied: (_b, a) => {
+        const row = a.row as { amount: number; notes: string | null } | null;
+        return clearing ? row == null : !!row && Number(row.amount) === amountNum && (row.notes ?? null) === notes;
+      },
+      changes: [
+        { key: "amount", field: `Additional pay · ${managerEmail} · week of ${weekStart}`, before: cur ? Number(cur.amount) : 0, after: clearing ? 0 : amountNum },
+        { key: "notes", field: "Note", before: cur?.notes ?? "—", after: clearing ? "—" : notes ?? "—" },
+      ],
     },
-    { onConflict: "manager_email,week_start" },
+    {
+      readResource: readRow,
+      write: async () => {
+        // amount=0 with no notes → delete (keeps the table clean).
+        if (clearing) {
+          const { error: e } = await supabase.from("manager_pay_adjustments").delete().eq("manager_email", managerEmail).eq("week_start", weekStart);
+          if (e) { dbError = `delete failed: ${e.message}`; throw Object.assign(new Error(dbError), { name: "WriteFailedError" }); }
+          return { ok: true };
+        }
+        // Upsert by (manager_email, week_start) unique constraint.
+        const { error: e } = await supabase.from("manager_pay_adjustments").upsert(
+          { manager_email: managerEmail, week_start: weekStart, amount: amountNum, notes, manager_id: managerId, updated_at: new Date().toISOString() },
+          { onConflict: "manager_email,week_start" },
+        );
+        if (e) { dbError = `upsert failed: ${e.message}`; throw Object.assign(new Error(dbError), { name: "WriteFailedError" }); }
+        return { ok: true };
+      },
+      now: () => new Date().toISOString(),
+    },
+    supabaseLogStore(),
   );
-  if (error) {
-    return Response.json(
-      { error: `upsert failed: ${error.message}` },
-      { status: 500 },
-    );
-  }
 
+  if (error) return Response.json({ error: dbError ?? error.message, outcome }, { status: 500 });
+  if (clearing) return Response.json({ deleted: true });
   return Response.json({
     saved: { managerEmail, weekStart, amount: amountNum, notes },
   });

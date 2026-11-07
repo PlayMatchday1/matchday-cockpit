@@ -26,6 +26,21 @@ export async function refuseUnlessAdmin(email: string | null | undefined): Promi
   return null;
 }
 
+/** MANAGER PAY CHANGES (Ryan, 2026-11-07): null when the verified session's email is an admin, or has
+ *  the Manager pay box ticked (can_change_manager_pay, 0260); otherwise the refusal to return. The
+ *  same row check as refuseUnlessAdmin with that one more way in, and nothing else changed. */
+export async function refuseUnlessPayChanger(email: string | null | undefined): Promise<Response | null> {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim(), key = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
+  if (!url || !key) return Response.json({ ok: false, error: "Supabase env not configured" }, { status: 500 });
+  if (!email) return Response.json({ ok: false, error: "Admins only." }, { status: 403 });
+  const sb = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
+  const row = await sb.from("app_users").select("*").ilike("email", email).maybeSingle();
+  if (row.error) return Response.json({ ok: false, error: "Staff lookup failed." }, { status: 503 });
+  if (row.data?.is_service_account === true) return Response.json({ ok: false, error: "Admins only." }, { status: 403 });
+  if (row.data?.is_admin === true || row.data?.can_change_manager_pay === true) return null;
+  return Response.json({ ok: false, error: "Additional pay needs an admin or the Manager pay box on User access." }, { status: 403 });
+}
+
 /** Null when the verified session's email is on an app_users row (any staff member, not a service account). */
 export async function refuseUnlessStaff(email: string | null | undefined): Promise<Response | null> {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim(), key = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();

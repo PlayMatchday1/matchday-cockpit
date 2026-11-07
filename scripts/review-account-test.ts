@@ -149,7 +149,7 @@ const OWN_CHECK = new Set(["src/app/api/calendar/week/route.ts"]); // returns on
 for (const f of sessionRoutes) {
   const code = strip(readFileSync(f, "utf8"));
   if (OWN_CHECK.has(f)) { ok(`${f} (reads the caller's own calendar)`); continue; }
-  if (/refuseUnless(Admin|Staff)\(/.test(code)) ok(f);
+  if (/refuseUnless(Admin|Staff|PayChanger)\(/.test(code)) ok(f); // PayChanger: admin or can_change_manager_pay, read off app_users
   else bad(f, "accepts any Supabase session");
   if (/export const GET = POST\b/.test(code)) bad(f, "a GET alias that takes sessions; use cronOnlyGet(POST)");
 }
