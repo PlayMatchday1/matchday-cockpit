@@ -77,10 +77,11 @@ export default function PlayerStrip({
                 className="shrink-0 text-[#13241d] hover:text-[#0e3b2c]"><ExternalLink aria-hidden className="h-3.5 w-3.5" strokeWidth={2} /></a>
             )}
           </div>
-          <div className="mt-[2px] flex min-w-0 flex-wrap items-center gap-x-1 text-[12px]" style={{ color: MUTED }} data-testid="strip-facts">
-            <span className="truncate">{[city, membershipLevel(isMember, prof?.player.level), joined ? `joined ${joined}` : null].filter(Boolean).join(" · ")}</span>
+          {/* ONE LINE: the description truncates first; the channel and number stay whole. */}
+          <div className="mt-[2px] flex min-w-0 items-center gap-x-1 whitespace-nowrap text-[12px]" style={{ color: MUTED }} data-testid="strip-facts">
+            <span className="min-w-0 truncate">{[city, membershipLevel(isMember, prof?.player.level), joined ? `joined ${joined}` : null].filter(Boolean).join(" · ")}</span>
             {thread && (
-              <span className="inline-flex items-center gap-1">· {channelDisplay(channel)} <CopyPhoneInline value={thread.phone_number} className="min-w-0" /></span>
+              <span className="inline-flex shrink-0 items-center gap-1">· {channelDisplay(channel)} <CopyPhoneInline value={thread.phone_number} /></span>
             )}
             {thread?.match_ambiguous && (
               <span title={`This number is on more than one account. Showing ${name}; it may not be who is writing.`}

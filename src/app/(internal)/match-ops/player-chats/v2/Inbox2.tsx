@@ -102,6 +102,9 @@ export default function Inbox2({ onUseOld }: { onUseOld: () => void }) {
   const filtered = useMemo(() => {
     const needle = filters.search.trim().toLowerCase();
     return threads.filter((t) => {
+      // Each tab holds its own status. Switching between Done and the open tabs reloads the list;
+      // until it lands, the other view's rows are still in memory and must not be bucketed here.
+      if (tab === "done" ? t.status !== "closed" : t.status !== "open" && view !== "starred") return false;
       if (view === "starred" && !t.is_follow_up) return false;
       if (view === "awaiting" && !isAwaitingReply(t)) return false;
       if (filters.cities.size > 0 && !filters.cities.has(cityCodeOf(t))) return false;
@@ -111,7 +114,7 @@ export default function Inbox2({ onUseOld }: { onUseOld: () => void }) {
       if (needle && ![fullNameOf(t), t.phone_number, t.last_message_preview ?? ""].join(" ").toLowerCase().includes(needle)) return false;
       return true;
     }).map((t) => ({ ...t, awaiting: isAwaitingReply(t) }));
-  }, [threads, view, filters, appUserId]);
+  }, [threads, view, tab, filters, appUserId]);
   const live = useMemo(() => bucket(filtered, tab, sectionOf), [filtered, tab, sectionOf]);
   // Rows hold still while a pointer is down over the list, so a realtime reorder can't eat a tap.
   const [frozen, setFrozen] = useState<typeof live | null>(null);
