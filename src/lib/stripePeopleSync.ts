@@ -151,13 +151,16 @@ export async function syncMemberInvoices(sb: SupabaseClient, stripe: Stripe, w: 
 
 /* ── UNPAID MEMBERSHIP INVOICES (0262) ─────────────────────────────────────────────────────────
  * What stripe_member_invoices cannot hold: renewals Stripe has not been paid for.
- *   open           ALL currently open subscription invoices, every run (no window: an open invoice
- *                  can be any age, and the set is small)
+ *   open           open invoices created since `openSince` (hourly: the last 45 days, which covers
+ *                  Stripe's retry schedule; a month backfill: that month). NOT unbounded: listing every
+ *                  open invoice in the account timed out the hourly route three runs in a row on
+ *                  2026-11-07 (Vercel "Task timed out after 300 seconds", 0 rows written).
  *   uncollectible  in the window (Stripe gave up)
  *   void           in the window (cancelled before it was paid)
  * The last failure's code comes from the invoice's payment intent (last_payment_error), read only for
  * an invoice that has been attempted and whose attempt count moved since we last read it, at one GET
- * every 250 ms, up to PI_BUDGET a run; the rest keep what they had and are read next run.
+ * every 250 ms, up to PI_BUDGET a run and never past the run's deadline; the rest keep what they had
+ * and are read next run. The listed rows are WRITTEN FIRST, so a run cut short still lands its rows.
  *
  * RECONCILE. A row we hold as open that Stripe no longer lists as open is read back: PAID moves to
  * stripe_member_invoices (with its attempt_count) and leaves this table; anything else is updated.
@@ -193,14 +196,17 @@ function unpaidRow(inv: Stripe.Invoice, at: string, failure: Failure | null): Re
   };
 }
 
-export async function syncUnpaidInvoices(sb: SupabaseClient, stripe: Stripe, w: Window): Promise<PeopleSyncResult> {
+export async function syncUnpaidInvoices(sb: SupabaseClient, stripe: Stripe, w: Window,
+  opts: { openSince?: Date; budgetMs?: number } = {}): Promise<PeopleSyncResult> {
   const at = new Date().toISOString();
-  const list = (status: "open" | "uncollectible" | "void", windowed: boolean) => listAll<Stripe.Invoice>((after) => stripe.invoices.list({
-    status, limit: 100, expand: ["data.payments"], ...(windowed ? { created: created(w) } : {}),
+  const deadline = Date.now() + (opts.budgetMs ?? 200_000);
+  const openW: Window = { since: opts.openSince ?? w.since, until: w.until };
+  const list = (status: "open" | "uncollectible" | "void", win: Window) => listAll<Stripe.Invoice>((after) => stripe.invoices.list({
+    status, limit: 100, expand: ["data.payments"], created: created(win),
     ...(after ? { starting_after: after } : {}),
   }));
-  const open = await list("open", false);
-  const listed = [...open, ...await list("uncollectible", true), ...await list("void", true)]
+  const open = await list("open", openW);
+  const listed = [...open, ...await list("uncollectible", w), ...await list("void", w)]
     .filter((inv) => inv.parent?.subscription_details);
   const ids = listed.map((i) => i.id);
 
@@ -212,31 +218,43 @@ export async function syncUnpaidInvoices(sb: SupabaseClient, stripe: Stripe, w: 
     for (const r of data ?? []) held.set(String(r.invoice_id), r as never);
   }
 
+  // 1. Every listed row, with the failure we already hold: lands even if the reads below are cut short.
+  const keep = (inv: Stripe.Invoice): Failure | null => {
+    const b = held.get(inv.id);
+    return b ? { code: b.last_failure_code, message: b.last_failure_message } : null;
+  };
+  const rows = listed.map((inv) => unpaidRow(inv, at, keep(inv))).filter((r): r is Record<string, unknown> => r != null);
+  await upsert(sb, "stripe_member_unpaid_invoices", "invoice_id", rows);
+
+  // 2. The last failure for attempted invoices whose attempt count moved, paced, budgeted, deadlined.
   let piReads = 0;
-  const rows: Record<string, unknown>[] = [];
+  const updated: Record<string, unknown>[] = [];
   for (const inv of listed) {
+    if (piReads >= PI_BUDGET || Date.now() > deadline) break;
     const before = held.get(inv.id);
-    let failure: Failure | null = before ? { code: before.last_failure_code, message: before.last_failure_message } : null;
     const pi = idOf(inv.payments?.data?.[0]?.payment?.payment_intent as string | { id: string } | null | undefined);
     const moved = !before || before.attempt_count !== (inv.attempt_count ?? null);
-    if (pi && (inv.attempt_count ?? 0) > 0 && moved && piReads < PI_BUDGET) {
-      if (piReads > 0) await pause(PI_GAP_MS);
-      piReads++;
-      const intent = await readWithBackoff(() => stripe.paymentIntents.retrieve(pi));
-      const e = intent.last_payment_error;
-      failure = e ? { code: (e.decline_code ?? e.code ?? null) as string | null, message: e.message ? e.message.slice(0, 200) : null } : failure;
-    }
-    const row = unpaidRow(inv, at, failure);
-    if (row) rows.push(row);
+    if (!pi || (inv.attempt_count ?? 0) <= 0 || !moved) continue;
+    if (piReads > 0) await pause(PI_GAP_MS);
+    piReads++;
+    const intent = await readWithBackoff(() => stripe.paymentIntents.retrieve(pi));
+    const e = intent.last_payment_error;
+    if (!e) continue;
+    const row = unpaidRow(inv, at, { code: (e.decline_code ?? e.code ?? null) as string | null, message: e.message ? e.message.slice(0, 200) : null });
+    if (row) updated.push(row);
+    if (updated.length >= 25) await upsert(sb, "stripe_member_unpaid_invoices", "invoice_id", updated.splice(0));
   }
-  await upsert(sb, "stripe_member_unpaid_invoices", "invoice_id", rows);
+  await upsert(sb, "stripe_member_unpaid_invoices", "invoice_id", updated);
 
   // Reconcile rows we hold as open that Stripe no longer lists as open.
   const openNow = new Set(open.map((i) => i.id));
-  const { data: stale, error: staleErr } = await sb.from("stripe_member_unpaid_invoices").select("invoice_id").eq("status", "open").limit(1000);
+  // Only rows inside the open window: an older open row is outside what was listed, not evidence it moved.
+  const { data: stale, error: staleErr } = await sb.from("stripe_member_unpaid_invoices").select("invoice_id").eq("status", "open")
+    .gte("created_at_utc", openW.since.toISOString()).lt("created_at_utc", openW.until.toISOString()).limit(1000);
   if (staleErr) throw new Error(`stripe_member_unpaid_invoices read failed: ${staleErr.message}`);
   let movedToPaid = 0, reads = 0;
   for (const r of (stale ?? []).filter((x) => !openNow.has(String(x.invoice_id))).slice(0, RECONCILE_BUDGET)) {
+    if (Date.now() > deadline) break;
     if (reads > 0) await pause(PI_GAP_MS);
     reads++;
     const inv = await readWithBackoff(() => stripe.invoices.retrieve(String(r.invoice_id), { expand: ["payments"] }));

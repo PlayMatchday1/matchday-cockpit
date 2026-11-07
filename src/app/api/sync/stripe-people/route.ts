@@ -29,7 +29,7 @@ const constantTimeMatch = (a: string, b: string) => {
   return ab.length === bb.length && timingSafeEqual(ab, bb);
 };
 
-export async function runStripePeopleSync(req: Request, forced?: { jobs: PeopleJob[]; days: number } | { subEnds: { limit: number } }) {
+export async function runStripePeopleSync(req: Request, forced?: { jobs: PeopleJob[]; days: number; openDays?: number } | { subEnds: { limit: number } }) {
   const url = new URL(req.url);
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
   const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY?.trim();
@@ -114,7 +114,9 @@ export async function runStripePeopleSync(req: Request, forced?: { jobs: PeopleJ
     const run = await runWithLog(source, triggeredBy, admin, (sb) =>
       job === "customers" ? syncStripeCustomers(sb, stripe, w)
         : job === "invoices" ? syncMemberInvoices(sb, stripe, w)
-        : job === "unpaid" ? syncUnpaidInvoices(sb, stripe, w)
+        : job === "unpaid" ? syncUnpaidInvoices(sb, stripe, w, {
+          openSince: forced && "jobs" in forced && forced.openDays ? new Date(Date.now() - forced.openDays * 86_400_000) : undefined,
+        })
         : backfillChargeCustomers(sb, stripe, w), peopleLogPatch);
     if (!run.ok) return Response.json({ error: run.error, job, outcome: "FAILED", done: results }, { status: 500 });
     results.push(run.result);

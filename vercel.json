@@ -41,6 +41,10 @@
       "schedule": "50 * * * *"
     },
     {
+      "path": "/api/sync/stripe-people/unpaid",
+      "schedule": "55 * * * *"
+    },
+    {
       "path": "/api/sync/stripe-people/sub-ends",
       "schedule": "15 9 * * *"
     },
