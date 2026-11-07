@@ -17,17 +17,15 @@ import { runDraft, type StoredAction } from "@/lib/aiDraftRun";
 import { draftDataDeps } from "@/lib/aiDraftDeps";
 import { FULL_EDITOR_ENV } from "@/lib/matchEnv";
 import {
-  badAutoSendReplies, decideAutoSend, decisionConfig, draftEligibility, isAutoSendLive, isStaffReply, HUMAN_OWNS_THREAD_MS, KILL_MAX_BAD,
+  badAutoSendReplies, decideAutoSend, decisionConfig, draftEligibility, isAutoSendLive, isStaffReply, HUMAN_OWNS_THREAD_MS, KILL_MAX_BAD, GUEST_CODE_PERSON_ONLY,
   type AutoSendConfig, type DraftMsg, type DecisionResult,
 } from "@/lib/aiDraftModel";
 import { whatsappWindowExpired } from "@/lib/crmWindow";
 import { processHold, type HoldRow } from "@/lib/aiDraftAuto";
 import {
-  applyDraftAction, guestCodeApiBody, guestCodeFor, guestCodeRefusal, writeStatusFrom, AUTO_SEND_ACTOR, AUTO_SEND_SOURCE, type ActionDraft,
+  applyDraftAction, writeStatusFrom, AUTO_SEND_ACTOR, AUTO_SEND_SOURCE, type ActionDraft,
 } from "@/lib/aiDraftAction";
-import { loadGuestFacts } from "@/lib/aiDraftGuest";
 import { applyCreditAdjustment } from "@/lib/creditWrite";
-import { createPromoWrite } from "@/lib/promoWrite";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
 import { sendPushNotificationToMany, type StoredSubscription } from "@/lib/webPush";
 import { isAwaitingReply } from "@/lib/awaitingReply";
@@ -85,12 +83,10 @@ async function applyAutoAction(sb: SupabaseClient, d: HoldRow) {
     },
     // Nobody is looking: a membership refund is never automatic, whatever else lets it through.
     rightsRefusal: async (kind) => (kind === "refund_membership" ? "A membership refund is never automatic." : null),
-    async guestPreflight(playerId) {
-      const f = await loadGuestFacts({ supabase: sb, env: ENV, playerId, threadId: d.thread_id, confinedCity: null });
-      if (!f.ok) return f;
-      // No staff-message exception here: nobody is looking.
-      const no = guestCodeRefusal({ ...f.facts, staffConfirmed: false });
-      return no ? { ok: false, error: no } : { ok: true, code: guestCodeFor(f.facts.slug!) };
+    // AUTO-SEND NEVER ISSUES A GUEST CODE (Ryan 2026-11-07). decideAutoSend already refuses it; this
+    // refuses again at the write, and the tick has no promo write to call.
+    async guestPreflight() {
+      return { ok: false, error: GUEST_CODE_PERSON_ONLY };
     },
     async claim() {
       const r = await sb.from("crm_ai_drafts").update({ action_status: "applying", action_at: new Date().toISOString() }).eq("id", d.id).eq("outcome", "pending").is("action_status", null).select("id");
@@ -104,13 +100,8 @@ async function applyAutoAction(sb: SupabaseClient, d: HoldRow) {
       });
       return { status: writeStatusFrom(r.status, r.json), error: typeof r.json.error === "string" ? r.json.error : undefined };
     },
-    async writeGuestCode(code) {
-      const body = guestCodeApiBody(code, Date.now());
-      const r = await createPromoWrite({
-        env: ENV, code, body, changeAfter: `${code} — 100% off, 3 uses, ALL_USERS · TOTAL_USAGE`, source: AUTO_SEND_SOURCE, saveId: randomUUID(),
-        actor: { canEditMatches: false, canManagePlayers: false, canManagePromos: true, email: AUTO_SEND_ACTOR, userId: AUTO_SEND_ACTOR },
-      });
-      return { status: writeStatusFrom(r.status, r.json), error: typeof r.json.error === "string" ? r.json.error : undefined };
+    async writeGuestCode() {
+      return { status: "not_applied" as const, error: GUEST_CODE_PERSON_ONLY };
     },
     async finish(status, draftText) {
       const r = await sb.from("crm_ai_drafts").update({ action_status: status, ...(draftText ? { draft_text: draftText } : {}) }).eq("id", d.id);
@@ -293,19 +284,9 @@ async function draftOneThread(sb: SupabaseClient, threadId: string, channel: str
     ...deps, threadId, requestedBy: null, regenerate: false, now: () => now, hasKey: true,
     async afterDraft({ draftId, output, context, msgs: all, linkMiss }) {
       decided = true;
-      let guest = null;
-      if (output.action?.kind === "issue_guest_code" && output.action) {
-        const t = await sb.from("crm_threads").select("player_id").eq("id", threadId).maybeSingle();
-        const f = t.data?.player_id != null ? await loadGuestFacts({ supabase: sb, env: ENV, playerId: t.data.player_id as number, threadId, confinedCity: null }).catch(() => null) : null;
-        if (f?.ok) {
-          const since = f.facts.since ? Date.parse(f.facts.since) : NaN;
-          guest = {
-            active: !!f.facts.statusRaw && ["ACTIVE", "ADDED_FROM_ADMIN"].includes(f.facts.statusRaw.toUpperCase()) && !f.facts.canceledAt,
-            over24Hours: Number.isFinite(since) && now - since >= 86400e3,
-            hasActiveCode: f.facts.existingCodes.some((c) => !c.deleted_at && (!c.end_date_utc || Date.parse(c.end_date_utc) > now)),
-          };
-        }
-      }
+      // No guest facts are read: a guest code always goes to a person (decideAutoSend), so the tick
+      // has nothing to check them for and no MatchDay read to make.
+      const guest = null;
       const lastInbound = [...all].reverse().find((m) => m.direction === "inbound");
       const d = decideAutoSend(output, {
         context, guest, msgs: all, linkMiss,

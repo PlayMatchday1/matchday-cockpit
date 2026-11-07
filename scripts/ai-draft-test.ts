@@ -17,7 +17,7 @@ import { readFileSync } from "node:fs";
 import {
   draftEligibility, buildDraftContext, buildDraftRequest, scrubPii, sanitizeDraft, hasDash, guardDraft,
   classifyDraftOutcome, capReached, draftCostUsd, assertAnthropicHost, monthStartUtcIso, DRAFT_INSTRUCTIONS, DRAFT_OUTPUT_SCHEMA,
-  AUTO_ACTION_CATEGORIES, AUTO_CATEGORIES, imagesToAttach, toApiRequest, type DraftOutput,
+  AUTO_ACTION_CATEGORIES, AUTO_CATEGORIES, GUEST_CODE_PERSON_ONLY, imagesToAttach, toApiRequest, type DraftOutput,
   cancelPolicyFor, wordCount,
   decideAutoSend, decisionConfig, isAutoSendLive, autoSendAllowed, badAutoSendReplies, KILL_MAX_BAD, type AutoSendConfig, type DecisionContext, type DraftContext,
   parseDraftOutput, priorCourtesyFromLog, staffRepliesConfirmAccount, selectExamples, discardReasonText, DISCARD_CHIPS,
@@ -681,7 +681,12 @@ console.log("\nPROPOSED ACTIONS:");
   ok("a staff message confirming the membership counts", staffConfirmedMembership(["Your membership is active, you're all set"]));
   ok("the canned guest pass ask doesn't", !staffConfirmedMembership(["Send us a screenshot of the first MatchDay tab, the Home tab, showing your member number."]));
   const gb = guestCodeBody("ATX597FP", T);
-  eq("the promo request is built here, 100% off, 3 uses in total, one year", [gb.code, gb.discountType, gb.value, gb.uses, gb.who, gb.which, gb.startDateUtc, gb.endDateUtc], ["ATX597FP", "PERCENT", 100, 3, "ALL_USERS", "TOTAL_USAGE", "2026-10-31T12:00:00.000Z", "2027-10-31T12:00:00.000Z"]);
+  // ITEMISED (2026-11-07, Ryan): an EXPECTATION change, not a refactor. The start was `now` and every
+  // such create failed with PROMOCODE_START_DATE_PASSED (SATX600FP, 2026-11-07 06:09 Central). It is now
+  // the next whole minute, and the year runs from there. T is on a whole minute, so 12:00 → 12:01.
+  eq("the promo request is built here, 100% off, 3 uses in total, one year from the next whole minute", [gb.code, gb.discountType, gb.value, gb.uses, gb.who, gb.which, gb.startDateUtc, gb.endDateUtc], ["ATX597FP", "PERCENT", 100, 3, "ALL_USERS", "TOTAL_USAGE", "2026-10-31T12:01:00.000Z", "2027-10-31T12:01:00.000Z"]);
+  eq("…mid-minute rounds UP to the next minute, never back to now", guestCodeBody("X1FP", T + 31_000).startDateUtc, "2026-10-31T12:01:00.000Z");
+  ok("…and the start is always in the future", Date.parse(guestCodeBody("X1FP", T + 59_999).startDateUtc) > T + 59_999);
 
   // Outcomes with two versions.
   const two = { id: "d1", thread_id: "t1", outcome: "pending", draft_text: "We've credited $8.00.", reply_without_action: "Let me check on that credit." };
@@ -849,11 +854,25 @@ console.log("\nAUTO-SEND DECISION:");
   const member = buildDraftContext({ ...lateCancel(0, true), membership: { status: "ACTIVE", since: "2026-01-01T00:00:00Z", renews: null, canceledAt: null, price: 6650 } });
   const code = { reply: "Your code is {code}.", category: "guest_pass", flags: ["guest_pass"], action: { kind: "issue_guest_code" as const, amount_cents: null, reason: "asked" } };
   const good = { active: true, over24Hours: true, hasActiveCode: false };
-  eq("POSITIVE: guest code, active over 24 hours, no code → with action", d(code, ctx({ guest: good }, member), on).decision, "auto_send_with_action");
-  ok("guest code: not active → human", d(code, ctx({ guest: { ...good, active: false } }, member), on).decision === "human");
-  ok("guest code: under 24 hours → human, with no staff-message exception", /under 24 hours/.test(d(code, ctx({ guest: { ...good, over24Hours: false } }, member), on).reason));
-  ok("guest code: already has one → human", /already has/.test(d(code, ctx({ guest: { ...good, hasActiveCode: true } }, member), on).reason));
-  ok("guest code: facts couldn't be read → human", d(code, ctx({ guest: null }, member), on).decision === "human");
+  // ITEMISED (2026-11-07, Ryan): an EXPECTATION change. Auto-send used to issue a guest code for an
+  // active member past 24 hours with no live code ("POSITIVE … → with action"), and the three reason
+  // checks below pinned which fact stopped it. A code is now only ever issued by a person pressing the
+  // button, so EVERY case — including the one that used to pass — goes to a person with one reason.
+  for (const [label, g] of [["active, over 24 hours, no code (used to auto-send)", good], ["not active", { ...good, active: false }], ["under 24 hours", { ...good, over24Hours: false }], ["already has one", { ...good, hasActiveCode: true }], ["facts unread", null]] as const) {
+    const r = d(code, ctx({ guest: g }, member), on);
+    eq(`guest code, ${label} → a person, never auto-send`, [r.decision, r.reason], ["human", GUEST_CODE_PERSON_ONLY]);
+  }
+  eq("…even with guest_pass AND promo_code in the stored action list", d(code, ctx({ guest: good }, member), { ...on, action_categories: ["guest_pass", "promo_code", "player_cancel"] }).decision, "human");
+  eq("guest_pass and promo_code are not action categories", ["guest_pass", "promo_code"].filter((c) => AUTO_ACTION_CATEGORIES.includes(c)), []);
+  eq("POSITIVE CONTROL: the real action categories are still there", AUTO_ACTION_CATEGORIES.includes("player_cancel"), true);
+  eq("a stored row still holding them is filtered to the allowed list", decisionConfig({ ...on, action_categories: ["guest_pass", "promo_code", "player_cancel"] }).action_categories, ["player_cancel"]);
+  {
+    const tick = readFileSync("src/lib/aiDraftAutoRun.ts", "utf8").replace(/\/\/[^\n]*/g, "");
+    ok("THE TICK HAS NO PROMO WRITE: no createPromoWrite and no code builder in the auto-send path", !/createPromoWrite|guestCodeApiBody|guestCodeFor\(/.test(tick));
+    ok("  and its guest preflight and code write both refuse", /async guestPreflight\(\)\s*\{\s*return \{ ok: false, error: GUEST_CODE_PERSON_ONLY \}/.test(tick) && /async writeGuestCode\(\)\s*\{\s*return \{ status: "not_applied" as const, error: GUEST_CODE_PERSON_ONLY \}/.test(tick));
+    const btn = readFileSync("src/app/api/crm/threads/[id]/ai-draft/action/route.ts", "utf8");
+    ok("POSITIVE CONTROL: the person's button still reaches the promo route", /promoPOST/.test(btn));
+  }
 
   // Shipped state: shadow, lists empty.
   const shipped: AutoSendConfig = { auto_categories: [], action_categories: [], credit_cap_cents: 1500, hold_minutes: 3, enabled: false, shadow: true };

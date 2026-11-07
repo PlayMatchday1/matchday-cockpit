@@ -5,18 +5,23 @@
 
 import { authenticateCapability } from "@/lib/capabilityAuth";
 import { supabaseLogStore } from "@/lib/changeLog";
+import { makeServerClient } from "@/lib/supabaseServer";
+import { parseChangeLogQuery, runChangeLogQuery } from "@/lib/changeLogQuery";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 
+// Change Log 2.0 (2026-11-07): GET ?from=&before=&q=&person=&area=&outcome=&syncs=&tz=&limit= — every
+// filter applied here, over every row in the range (src/lib/changeLogQuery.ts). Same gate as before.
 export async function GET(req: Request) {
   const auth = await authenticateCapability(req, "tech");
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   try {
-    const rows = await supabaseLogStore().list(500);
-    return Response.json({ rows });
+    const page = await runChangeLogQuery(makeServerClient(), parseChangeLogQuery(new URL(req.url)));
+    return Response.json(page, { headers: { "cache-control": "no-store" } });
   } catch (e) {
-    return Response.json({ error: e instanceof Error ? e.message : String(e), rows: [] }, { status: 500 });
+    return Response.json({ error: e instanceof Error ? e.message : String(e), items: [] }, { status: 500 });
   }
 }
 

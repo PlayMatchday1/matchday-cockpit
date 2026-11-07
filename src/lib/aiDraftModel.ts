@@ -923,7 +923,10 @@ export function strikeReplyProblem(reply: string, disputing: boolean): string | 
 // strike and membership_billing can send and can never act (there's no membership action): it isn't in the action list, and the guard refuses an action on it.
 // What an admin can turn on. A category the model invents isn't here, so it can't go out on its own.
 export const AUTO_CATEGORIES = ["veo", "logistics", "booking", "age", "strike", "membership_billing", "player_cancel", "match_cancelled", "needs_credit", "guest_pass", "promo_code"];
-export const AUTO_ACTION_CATEGORIES = ["player_cancel", "match_cancelled", "needs_credit", "guest_pass", "promo_code"];
+// guest_pass and promo_code are NOT action categories (Ryan 2026-11-07): a guest code is only ever
+// issued by a person pressing the button, and auto-send applies no action in those categories.
+export const GUEST_CODE_PERSON_ONLY = "A guest code is only issued by a person pressing the button.";
+export const AUTO_ACTION_CATEGORIES = ["player_cancel", "match_cancelled", "needs_credit"];
 export const HUMAN_OWNS_THREAD_MS = 2 * 3600e3;
 export const isAutoSendLive = (c: Pick<AutoSendConfig, "enabled" | "shadow">) => c.enabled && !c.shadow;
 
@@ -932,11 +935,14 @@ export const isAutoSendLive = (c: Pick<AutoSendConfig, "enabled" | "shadow">) =>
 // While not live, an empty list is read as every category that could be turned on. A list that has
 // been set is respected. Live reads the lists exactly as they are.
 export function decisionConfig(c: AutoSendConfig): AutoSendConfig {
-  if (isAutoSendLive(c)) return c;
+  // Only the allowed action list counts, live or not, whatever the stored row still says (it held
+  // guest_pass and promo_code until 2026-11-07).
+  const allowed = (xs: string[]) => xs.filter((x) => AUTO_ACTION_CATEGORIES.includes(x));
+  if (isAutoSendLive(c)) return { ...c, action_categories: allowed(c.action_categories) };
   return {
     ...c,
     auto_categories: c.auto_categories.length ? c.auto_categories : AUTO_CATEGORIES,
-    action_categories: c.action_categories.length ? c.action_categories : AUTO_ACTION_CATEGORIES,
+    action_categories: allowed(c.action_categories.length ? c.action_categories : AUTO_ACTION_CATEGORIES),
   };
 }
 
@@ -994,17 +1000,12 @@ export function decideAutoSend(draft: DecisionDraft, ctx: DecisionContext, confi
 
   const action = draft.action;
   if (!action) return { decision: "auto_send", reason: `Category ${draft.category} is on.` };
+  // A GUEST CODE IS ONLY EVER ISSUED BY A PERSON PRESSING THE BUTTON (Ryan 2026-11-07). Checked before
+  // the config, so no category list can turn it back on.
+  if (action.kind === "issue_guest_code") return human(GUEST_CODE_PERSON_ONLY);
   if (!config.action_categories.includes(draft.category)) return human(`Actions aren't turned on for ${draft.category}.`);
   if (!ctx.context.account_confirmed) return human("An action needs a confirmed account.");
 
-  if (action.kind === "issue_guest_code") {
-    const g = ctx.guest;
-    if (!g) return human("The membership and codes couldn't be checked.");
-    if (!g.active) return human("A guest code needs an active membership.");
-    if (!g.over24Hours) return human("The membership is under 24 hours old.");
-    if (g.hasActiveCode) return human("This player already has an active code.");
-    return { decision: "auto_send_with_action", reason: "Active member past 24 hours with no active code." };
-  }
   const amount = action.amount_cents;
   if (amount == null || amount <= 0) return human("The credit has no amount.");
   const usd = (n: number) => `$${(n / 100).toFixed(2)}`;

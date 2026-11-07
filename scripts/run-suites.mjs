@@ -293,6 +293,11 @@ const NODE_SUITES = [
   // screenshot cannot show: Give credit writes through the guarded route once, Cancel spot is a link,
   // the new files never send on their own, one context read per thread.
   "scripts/chats-inbox2-test.ts",
+  // CHANGE LOG 2.0 (2026-11-07). One identity per person (keyed on actor_email), a label for every
+  // stored source (the old From filter showed 0 for all), TEST rows listed but never counted, syncs
+  // hidden by default, the minute collapse (×N, and one player's removals across matches), the plain
+  // sentences, server-side filters and Load older paging.
+  "scripts/change-log-2-test.ts",
   // ONE PLAYER'S MATCH HISTORY. Two things a screenshot cannot catch: "cancelled" meaning both
   // "he pulled out" and "we called it off" (opposite implications for money, only one carries a
   // strike), and a Stripe charge joining on a key that is not what its field is named — a

@@ -138,12 +138,18 @@ export function guestCodeRefusal(f: GuestFacts): string | null {
 }
 
 // The whole request to /api/promos/create. Built here from the slug; the model supplies none of it.
+// THE START IS THE NEXT WHOLE MINUTE (Ryan 2026-11-07). Starting at `now` failed every time:
+// MatchDay refuses a start that is already past (403 PROMOCODE_START_DATE_PASSED), and by the time the
+// request lands `now` is. change_log shows the Promo Codes form doing the same thing three times and
+// landing each code seconds later with a start a minute ahead; SATX600FP failed this way 2026-11-07.
+export const guestCodeStart = (now: number) => Math.floor(now / 60_000) * 60_000 + 60_000;
 export function guestCodeBody(code: string, now: number) {
-  const end = new Date(now);
+  const start = guestCodeStart(now);
+  const end = new Date(start);
   end.setUTCFullYear(end.getUTCFullYear() + 1);
   return {
     code, discountType: "PERCENT", value: GUEST_CODE_DISCOUNT_PERCENT, uses: GUEST_CODE_USES, who: "ALL_USERS", which: "TOTAL_USAGE",
-    startDateUtc: new Date(now).toISOString(), endDateUtc: end.toISOString(), source: DRAFT_ACTION_SOURCE,
+    startDateUtc: new Date(start).toISOString(), endDateUtc: end.toISOString(), source: DRAFT_ACTION_SOURCE,
   };
 }
 
