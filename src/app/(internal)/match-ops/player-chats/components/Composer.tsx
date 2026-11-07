@@ -44,7 +44,9 @@ import {
   useState,
 } from "react";
 import {
+  ArrowRight,
   ArrowUp,
+  Clock,
   FileText,
   LayoutTemplate,
   MessageSquareText,
@@ -65,6 +67,8 @@ import { formatBytes, maybeCompressImage } from "@/lib/imageCompression";
 import TemplatesPicker from "./TemplatesPicker";
 import TemplateSendModal from "./TemplateSendModal";
 import AiDraftCard from "./AiDraftCard";
+import { WHATSAPP_TEMPLATES } from "@/lib/whatsappTemplates";
+import { closedWindowText, windowPill } from "@/lib/inbox2Model";
 
 const GSM7_RX =
   /^[\n\rA-Za-z0-9 @£$¥èéùìòÇØøÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ!"#¤%&'()*+,\-./:;<=>?¡ÄÖÑÜ§¿äöñüà€\\[\]{}|~^]*$/;
@@ -122,6 +126,10 @@ export default function Composer({
   compact = false,
   onOpenInFullPane,
   draftMessages,
+  variant,
+  quickActions,
+  aboveBox,
+  latestInboundAt,
 }: {
   threadId: string;
   appUserId: string | null;
@@ -151,6 +159,15 @@ export default function Composer({
   onOpenInFullPane?: () => void;
   // The thread's messages, for the Claude draft card (full pane only). Omitted → no card.
   draftMessages?: ConversationMessage[];
+  // PLAYER CHATS 2.0 (Figma 20851:225, 20852:322). The same composer — the same submitText,
+  // submitMedia, template modal and every guard — laid out as the frame: the Suggested reply card,
+  // anything the page puts above the box (Give credit), then one box with the quick actions under
+  // the text, the WhatsApp window pill and Send. A closed window replaces the box with the template
+  // picker and frame 3's explanation, never a free-text box that fails on send.
+  variant?: "v2";
+  quickActions?: React.ReactNode;
+  aboveBox?: React.ReactNode;
+  latestInboundAt?: string | null;
 }) {
   const [internalBody, setInternalBody] = useState("");
   const controlled = onBodyChange !== undefined;
@@ -530,6 +547,188 @@ export default function Composer({
     [canSendMedia, onFileSelected],
   );
 
+  // THE DRAFT CARD, defined once so the old layout and 2.0 render the SAME element (one onUse).
+  const draftCard = !compact && draftMessages ? (
+    <AiDraftCard
+      threadId={threadId}
+      channel={channel}
+      messages={draftMessages}
+      usedDraftId={usedDraftId}
+      variant={variant}
+      // FILLS THE BOX, NEVER SENDS. The staff member reads it, edits it, and presses Send.
+      onUse={(text, draftId) => {
+        setBody(text);
+        setUsedDraftId(draftId);
+        setTimeout(() => taRef.current?.focus(), 0);
+      }}
+      onDiscarded={(draftId) => {
+        if (usedDraftId === draftId) {
+          setUsedDraftId(null);
+          setBody("");
+        }
+      }}
+    />
+  ) : null;
+
+  // ---------------- render: Player Chats 2.0 ----------------
+  if (variant === "v2") {
+    const pill = windowPill(channel, windowExpired ? 0 : windowClosesInMs ?? null);
+    const templates = Object.values(WHATSAPP_TEMPLATES);
+    const chip = "inline-flex h-[26px] items-center gap-1.5 rounded-[8px] bg-[#f3f3ef] px-[10px] text-[12px] font-medium text-[#13241d] transition hover:bg-[#e9ebe4] disabled:cursor-not-allowed disabled:opacity-45";
+    return (
+      <div
+        data-testid="crm-composer-v2"
+        className="relative flex flex-col gap-[10px] border-t border-[#e3e3db] bg-white px-4 pb-[calc(16px+var(--sab))] pt-3 min-[900px]:px-6"
+        onDragEnter={onDragEnter}
+        onDragOver={onDragOver}
+        onDragLeave={onDragLeave}
+        onDrop={onDrop}
+      >
+        {dragActive && canSendMedia && (
+          <div className="pointer-events-none absolute inset-1 z-10 flex items-center justify-center rounded-[12px] border-2 border-dashed border-[#2cdb87] bg-white/95 text-sm font-medium text-[#0e3b2c]">
+            Drop file here
+          </div>
+        )}
+        {!windowExpired && draftCard}
+        {aboveBox}
+
+        {windowExpired ? (
+          // FRAME 3: the box becomes a template picker. The approved template is the one path past a
+          // closed window; Send template opens the existing modal to fill its variables and send.
+          <div data-testid="crm-window-expired" className="flex flex-col gap-[10px] rounded-[12px] border border-[#e3e3db] bg-white px-4 py-[14px]">
+            <div className="flex items-center gap-[10px] rounded-[10px] bg-[#fff4d6] px-3 py-[10px] text-[13px] text-[#5c3d00]">
+              <Clock aria-hidden className="h-4 w-4 shrink-0" strokeWidth={1.8} />
+              <span data-testid="crm-window-expired-text">{closedWindowText(customerName, latestInboundAt ?? null, Date.now())}</span>
+            </div>
+            {isWhatsApp ? (
+              <div className="flex flex-wrap items-center gap-[10px]">
+                <label className="flex min-w-[220px] flex-1 items-center gap-2 rounded-[10px] border border-[#cfd6d2] px-3 py-[9px] text-[13px] text-[#13241d]">
+                  <LayoutTemplate aria-hidden className="h-3.5 w-3.5 shrink-0" strokeWidth={1.8} />
+                  <select data-testid="crm-template-select" aria-label="Approved template" className="min-w-0 flex-1 bg-transparent outline-none">
+                    {templates.map((t) => (
+                      <option key={t.name} value={t.name}>Template: {t.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  data-testid="crm-send-template"
+                  onClick={() => (compact && onOpenInFullPane ? onOpenInFullPane() : setTemplateSendOpen(true))}
+                  disabled={!appUserId}
+                  className="rounded-[8px] bg-[#2cdb87] px-[14px] py-[9px] text-[13px] font-semibold text-[#0e3b2c] disabled:opacity-40"
+                >
+                  Send template
+                </button>
+              </div>
+            ) : null}
+            {/* Give credit and Cancel spot don't depend on the window, so they stay. */}
+            {quickActions && <div className="flex flex-wrap items-center gap-2" data-testid="crm-qa-closed">{quickActions}</div>}
+          </div>
+        ) : file && kind ? (
+          <MediaPreview
+            file={file}
+            previewUrl={previewUrl}
+            kind={kind}
+            caption={caption}
+            sending={sending}
+            error={error}
+            originalSize={originalSize}
+            onCaptionChange={setCaption}
+            onCancel={cancelMedia}
+            onSend={() => void submitMedia()}
+            onPaste={onPaste}
+          />
+        ) : (
+          <div className="flex flex-col gap-[10px] rounded-[12px] border border-[#cfd6d2] px-[14px] pb-[10px] pt-3 focus-within:border-[#0e3b2c]">
+            <textarea
+              ref={taRef}
+              data-testid="crm-composer"
+              value={body}
+              rows={2}
+              disabled={disabled}
+              onChange={(e) => setBody(e.target.value)}
+              onKeyDown={onKeyDown}
+              onPaste={onPaste}
+              placeholder={
+                !appUserId || !canSendMessages ? placeholder
+                  : `Reply to ${customerName.trim() || "the player"}… Enter sends, Shift+Enter is a new line.`
+              }
+              // 16px below 900px: iOS zooms into any input under 16px.
+              className="block w-full resize-none border-0 bg-transparent p-0 text-base text-[#13241d] outline-none placeholder:text-[#9aa39f] disabled:text-[#9aa39f] min-[900px]:text-[14px]"
+              style={{ minHeight: 44, maxHeight: 240 }}
+            />
+            <div className="flex flex-wrap items-center gap-2">
+              {quickActions}
+              <span className="relative">
+                <button type="button" data-testid="crm-qa-template" onClick={() => setTemplatesOpen((o) => !o)} aria-pressed={templatesOpen}
+                  disabled={sending || !appUserId} className={chip} title="Saved replies">
+                  <MessageSquareText aria-hidden className="h-3.5 w-3.5" strokeWidth={1.8} /> <span className="max-[519px]:sr-only">Template</span>
+                </button>
+                <TemplatesPicker
+                  open={templatesOpen}
+                  onClose={() => setTemplatesOpen(false)}
+                  canSendMedia={canSendMedia}
+                  showImageGate={!canSendMedia}
+                  onPickText={(text) => {
+                    setBody(text);
+                    setTimeout(() => taRef.current?.focus(), 0);
+                  }}
+                  onPickImage={(picked, captionText) => {
+                    void (async () => {
+                      await onFileSelected(picked);
+                      setCaption(captionText);
+                    })();
+                  }}
+                />
+              </span>
+              <button type="button" data-testid="crm-qa-attach" onClick={openFilePicker} disabled={sending || !appUserId || !canSendMedia}
+                className={chip}
+                title={canSendMedia ? "Attach a photo, video, audio or document" : "Attachments go out on WhatsApp only, inside the 24-hour window"}>
+                <Paperclip aria-hidden className="h-3.5 w-3.5" strokeWidth={1.8} /> <span className="max-[519px]:sr-only">Attach</span>
+              </button>
+              <span className="ml-auto flex items-center gap-2">
+              {pill && (
+                <span data-testid="crm-window-pill" data-open={pill.open ? 1 : 0}
+                  className="rounded-full bg-[#e3f7ed] px-2 py-[3px] text-[11px] font-semibold text-[#0e3b2c]">{pill.text}</span>
+              )}
+              <button
+                type="button"
+                data-testid="crm-send"
+                onClick={() => void submitText()}
+                disabled={sending || !body.trim() || !appUserId || !canSendMessages || windowExpired}
+                aria-label={sending ? "Sending message" : "Send message"}
+                className="inline-flex items-center gap-1.5 rounded-[8px] bg-[#2cdb87] px-[14px] py-[7px] text-[13px] font-semibold text-[#0e3b2c] transition hover:brightness-95 disabled:opacity-40"
+              >
+                {sending ? "Sending…" : "Send"}
+                <ArrowRight aria-hidden className="h-3.5 w-3.5" strokeWidth={2.2} />
+              </button>
+              </span>
+            </div>
+            {(channel === "sms" && body.length > 0) || error ? (
+              <div className="text-[11px] text-[#7c8782]">
+                {channel === "sms" && body.length > 0 && (
+                  <span>{body.length} chars · {budget.encoding === "gsm7" ? "GSM-7 (160/seg)" : "UCS-2 (70/seg)"} · {budget.segments} seg{budget.segments === 1 ? "" : "s"}</span>
+                )}
+                {error && <span className="ml-2 text-coral-hover" data-testid="crm-send-error">{error}</span>}
+              </div>
+            ) : null}
+          </div>
+        )}
+
+        <input ref={fileInputRef} type="file" accept={COMPOSER_ACCEPT_ATTR} hidden onChange={onFilePicked} />
+        {isWhatsApp && (
+          <TemplateSendModal
+            open={templateSendOpen}
+            onClose={() => setTemplateSendOpen(false)}
+            threadId={threadId}
+            initialCustomerName={customerName}
+            onSent={onSent}
+          />
+        )}
+      </div>
+    );
+  }
+
   // ---------------- render ----------------
   return (
     <div
@@ -590,26 +789,7 @@ export default function Composer({
         </div>
       ) : null}
 
-      {!compact && draftMessages && (
-        <AiDraftCard
-          threadId={threadId}
-          channel={channel}
-          messages={draftMessages}
-          usedDraftId={usedDraftId}
-          // FILLS THE BOX, NEVER SENDS. The staff member reads it, edits it, and presses Send.
-          onUse={(text, draftId) => {
-            setBody(text);
-            setUsedDraftId(draftId);
-            setTimeout(() => taRef.current?.focus(), 0);
-          }}
-          onDiscarded={(draftId) => {
-            if (usedDraftId === draftId) {
-              setUsedDraftId(null);
-              setBody("");
-            }
-          }}
-        />
-      )}
+      {draftCard}
 
       {file && kind ? (
         <MediaPreview

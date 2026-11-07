@@ -188,5 +188,13 @@ is("(control) an ordinary always-visible container is NOT flagged",
 // the keyboard affordances 4f7c3fd hid are STILL hidden — that part was right
 is("bulk-select (a desktop power tool) stays desktop-only", /hidden min-\[900px\]:block/.test(crm), true);
 
+// PLAYER CHATS 2.0 (2026-11-06): the new page renders the bell in its queue header. Same rule, same
+// detector: it must render, and nothing around it may hide it until a breakpoint.
+const Q2 = readFileSync("src/app/(internal)/match-ops/player-chats/v2/Queue2.tsx", "utf8");
+is("the bell renders in the 2.0 queue", Q2.includes("<EnablePushNotificationsButton />"), true);
+const anc2 = ancestorClasses(Q2, "<EnablePushNotificationsButton />");
+is("…the 2.0 ancestor walk finds containers (not a vacuous [])", anc2.length > 0, true);
+is("…and no ancestor of the 2.0 bell is a width-gated `hidden` container", anc2.filter(widthGatedHidden), []);
+
 console.log(`\n${PASS} passed, ${FAIL} failed`);
 process.exit(FAIL === 0 ? 0 : 1);

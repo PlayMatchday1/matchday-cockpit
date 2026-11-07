@@ -110,7 +110,7 @@ const PICKABLE_CITIES = CITY_IDENTIFIERS;
 
 // THE THREAD'S CITY, set by a person. It decides who sees the thread and who is pushed; a person's
 // choice is never overwritten by a draft or a link. Saved through PATCH /api/crm/threads/{id}/city.
-function ThreadCityPicker({ threadId, code, source }: { threadId: string; code: string | null; source: string | null }) {
+export function ThreadCityPicker({ threadId, code, source }: { threadId: string; code: string | null; source: string | null }) {
   const [value, setValue] = useState(code ?? "");
   const [state, setState] = useState<"idle" | "saving" | "error">("idle");
   useEffect(() => { setValue(code ?? ""); setState("idle"); }, [threadId, code]);
@@ -144,7 +144,7 @@ function computeWhatsAppExpired(detail: ThreadDetail | null): boolean {
 
 // ---------------- main ----------------
 
-export default function CrmClient() {
+export default function CrmClient({ onTryNew }: { onTryNew?: () => void } = {}) {
   const { appUser } = useAuth();
   const [infoOpen, setInfoOpen] = useState(false);
   // AUTO-SENDING starts collapsed: there's nothing to do there unless someone wants to stop one.
@@ -853,6 +853,16 @@ export default function CrmClient() {
                 </button>
               </span>
             </div>
+            {/* PLAYER CHATS 2.0, per browser (src/lib/chatsInboxChoice.ts). On its own line so the
+                title row keeps its width; the new page carries "Back to the old one". */}
+            {onTryNew && (
+              <div className="flex-none px-4 pt-1">
+                <button type="button" data-testid="chats-try-new" onClick={onTryNew}
+                  className="text-[12px] font-bold underline-offset-2 hover:underline" style={{ color: "#12704a" }}>
+                  Try the new inbox ›
+                </button>
+              </div>
+            )}
             {infoOpen && appUser?.is_admin === true && (
               <div className="relative">
                 <div data-testid="chats-info-menu" className="absolute right-0 top-1 z-30 rounded-lg border bg-white shadow-lg" style={{ borderColor: "#d9e4dd" }}>

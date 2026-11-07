@@ -80,6 +80,7 @@ export default function AiDraftCard({
   usedDraftId,
   onUse,
   onDiscarded,
+  variant,
 }: {
   threadId: string;
   channel: string;
@@ -88,6 +89,10 @@ export default function AiDraftCard({
   usedDraftId: string | null;
   onUse: (text: string, draftId: string) => void;
   onDiscarded: (draftId: string) => void;
+  /** PLAYER CHATS 2.0 (Figma 20851:226): the "Suggested reply" card — Use and × on the right, the
+   *  rest (the action, Regenerate, staff notes, the link suggestion, the discard reasons) in a quiet
+   *  row under it. Same state, same requests, same rules. Omitted → the old card. */
+  variant?: "v2";
 }) {
   const [view, setView] = useState<View>({ kind: "hidden" });
   const [busy, setBusy] = useState(false);
@@ -218,6 +223,106 @@ export default function AiDraftCard({
       {linkMsg && <span data-testid="ai-draft-link-result" className="font-semibold">{linkMsg}</span>}
     </div>
   );
+
+  if (variant === "v2") {
+    const d = view.kind === "draft" ? view.draft : null;
+    const actionOpen = !!d?.action && !ACTION_DONE.has(d.action_status ?? "");
+    return (
+      <div data-testid="ai-draft-card" data-variant="v2" className="rounded-[10px] border border-dashed border-[#e3e3db] bg-[#f7f7f3] px-[14px] py-[10px] text-[#13241d]">
+        <div className="flex items-start gap-3">
+          <Sparkles aria-hidden className="mt-[13px] h-4 w-4 shrink-0 text-[#5e6b66]" strokeWidth={1.8} />
+          <div className="min-w-0 flex-1">
+            {d?.decision === "human" && (
+              <div data-testid="ai-draft-needs-you" className="mb-1 text-[12px] font-[700]" style={{ color: "var(--color-attn)" }}>
+                Needs you: {d.decision_reason ?? "this one needs a person"}
+              </div>
+            )}
+            <div className="text-[10px] font-semibold tracking-[0.06em] text-[#7c8782]" title="Nothing is sent until you press Send">SUGGESTED REPLY</div>
+            {view.kind === "loading" && <div data-testid="ai-draft-loading" className="mt-[3px] text-[13px] text-[#7c8782]">Drafting a reply…</div>}
+            {view.kind === "info" && <div data-testid="ai-draft-info" className="mt-[3px] text-[13px] text-[#5e6b66]">{view.message}</div>}
+            {d && (d.text
+              ? <p data-testid="ai-draft-text" className="mt-[3px] whitespace-pre-wrap text-[13px] leading-[1.4]">{shown(d.text)}</p>
+              : <p className="mt-[3px] text-[13px] italic text-[#5e6b66]">Claude suggests no reply to this one.</p>)}
+            {d && actionOpen && d.text_without_action && (
+              <p data-testid="ai-draft-text-without" className="mt-1 text-[12px] text-[#5e6b66]"><span className="font-semibold">Use alone: </span>{d.text_without_action}</p>
+            )}
+          </div>
+          {d?.text && (
+            <button
+              type="button"
+              data-testid="ai-draft-use"
+              disabled={busy}
+              onClick={() => {
+                // With an action not pressed, the box gets the version that doesn't claim it.
+                const done = d.action_status === "landed";
+                onUse(d.action && !done ? d.text_without_action ?? "" : d.text, d.id);
+              }}
+              className="mt-[7px] shrink-0 rounded-[8px] border border-[#e3e3db] bg-white px-3 py-[6px] text-[12px] font-semibold disabled:opacity-40"
+            >
+              {usedDraftId === d.id ? "In the box" : "Use"}
+            </button>
+          )}
+          {view.kind === "info" && view.canRegenerate && (
+            <button type="button" onClick={() => void request(true)} className="mt-[7px] inline-flex shrink-0 items-center gap-1 rounded-[8px] border border-[#e3e3db] bg-white px-3 py-[6px] text-[12px] font-semibold">
+              <RefreshCw aria-hidden className="h-3.5 w-3.5" /> Regenerate
+            </button>
+          )}
+          {d && (
+            <button type="button" data-testid="ai-draft-discard" aria-label="Discard this suggestion" title="Discard (asks why)" disabled={busy}
+              onClick={() => setDiscarding((v) => !v)} className="mt-[9px] shrink-0 rounded p-0.5 text-[#7c8782] hover:bg-white disabled:opacity-40">
+              <X aria-hidden className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
+        {d && (
+          <div className="pl-7">
+            {(d.flags.length > 0 || d.staff_notes.length > 0) && (
+              <div data-testid="ai-draft-notes" className="mt-1.5 text-[12px] text-[#5e6b66]">
+                <span className="font-semibold">Staff only: </span>
+                {d.flags.map((f) => (
+                  <span key={f} className="mr-1 inline-block rounded-full border border-coral/40 bg-coral-soft px-1.5 text-[11px] font-semibold text-coral-hover">{FLAG_LABEL[f] ?? f}</span>
+                ))}
+                {d.staff_notes.length > 0 && <span>{d.staff_notes.join(" · ")}</span>}
+              </div>
+            )}
+            <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                {d.action && !d.action_status && (
+                  <button type="button" data-testid="ai-draft-action" disabled={busy || !!actionRefusal} title={actionRefusal ?? undefined}
+                    onClick={() => void applyAction(d)}
+                    className="rounded-[8px] border border-[#0e3b2c] bg-white px-2.5 py-[4px] text-[12px] font-semibold text-[#0e3b2c] disabled:opacity-40">
+                    {actionLabel(d.action)}
+                  </button>
+                )}
+                <button type="button" data-testid="ai-draft-regenerate" disabled={busy || ACTION_DONE.has(d.action_status ?? "")}
+                  title={ACTION_DONE.has(d.action_status ?? "") ? "The action on this draft was pressed, so it can't be replaced." : undefined}
+                  onClick={() => void request(true)} className="inline-flex items-center gap-1 text-[12px] font-semibold text-[#5e6b66] hover:text-[#13241d] disabled:opacity-40">
+                  <RefreshCw aria-hidden className="h-3 w-3" /> Regenerate
+                </button>
+              </div>
+            {actionRefusal && !d.action_status && d.action && (
+              <p data-testid="ai-draft-action-refusal" className="mt-1 text-[12px] text-[#5e6b66]">{actionRefusal}</p>
+            )}
+            {actionMsg && (
+              <p data-testid="ai-draft-action-result" data-ok={actionMsg.ok} className={`mt-1 text-[12px] font-semibold ${actionMsg.ok ? "text-[#0e3b2c]" : "text-coral-hover"}`}>{actionMsg.text}</p>
+            )}
+            {discarding && (
+              <div data-testid="ai-draft-discard-chips" className="mt-2 flex flex-wrap items-center gap-1.5">
+                <span className="text-[12px] text-[#5e6b66]">Why?</span>
+                {DISCARD_CHIPS.map((chip) => (
+                  <button key={chip} type="button" disabled={busy} onClick={() => void discard(d.id, chip, discardNote)} className="rounded-full border border-[#e3e3db] bg-white px-2.5 py-0.5 text-[11px] font-semibold disabled:opacity-40">
+                    {chip}
+                  </button>
+                ))}
+                <input type="text" value={discardNote} onChange={(e) => setDiscardNote(e.target.value)} maxLength={300}
+                  placeholder="Anything to add? (optional)" className="min-w-[180px] flex-1 rounded-[8px] border border-[#e3e3db] bg-white px-2 py-1 text-[12px]" />
+              </div>
+            )}
+          </div>
+        )}
+        {suggestionRow && <div className="pl-7">{suggestionRow}</div>}
+      </div>
+    );
+  }
 
   return (
     <div data-testid="ai-draft-card" className="mb-2 rounded-lg border border-deep-green/15 bg-cream-soft px-3 py-2 text-sm text-deep-green">

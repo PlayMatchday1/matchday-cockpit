@@ -287,6 +287,12 @@ const NODE_SUITES = [
   // player has no red anywhere), keeps the pane from linking a thread, and pins that the pane and
   // Player Lookup share ONE profile mapping so they cannot quote different balances.
   "scripts/context-pane-test.ts",
+  // PLAYER CHATS 2.0 (2026-11-06). The new inbox's computed rules — Needs reply holds only threads
+  // waiting on us, the wait colours, the WhatsApp window pill and closed-window sentence, the credit
+  // presets through the shared validator, the next match on the WALL CLOCK — and the boundaries a
+  // screenshot cannot show: Give credit writes through the guarded route once, Cancel spot is a link,
+  // the new files never send on their own, one context read per thread.
+  "scripts/chats-inbox2-test.ts",
   // ONE PLAYER'S MATCH HISTORY. Two things a screenshot cannot catch: "cancelled" meaning both
   // "he pulled out" and "we called it off" (opposite implications for money, only one carries a
   // strike), and a Stripe charge joining on a key that is not what its field is named — a

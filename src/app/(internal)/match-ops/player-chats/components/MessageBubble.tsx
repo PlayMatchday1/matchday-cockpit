@@ -94,8 +94,15 @@ function formatTime(iso: string): string {
 export default function MessageBubble({
   msg,
   className,
+  variant,
+  onOpenImage,
 }: {
   msg: ConversationMessage;
+  // PLAYER CHATS 2.0 (Figma 20851:45): compact bubbles — the player's white with a border, ours
+  // neutral grey — with sender, time and delivery under ours, and images as ~280px thumbnails that
+  // open in the page's viewer (onOpenImage) instead of a new tab. Omitted → the old look, unchanged.
+  variant?: "v2";
+  onOpenImage?: (src: string) => void;
   // Parent-supplied margin class. The conversation list uses
   // direction-aware spacing (mt-3 same-direction, mt-6 direction-
   // switch, mt-0 right after a date divider). Defaults to mt-3.
@@ -112,12 +119,19 @@ export default function MessageBubble({
   // Asymmetric rounding produces a "tail" corner pointing at the
   // sender side. Inbound tail bottom-left, outbound tail bottom-
   // right. The other three corners stay fully rounded (rounded-2xl).
-  const bubbleShape = isInbound
-    ? "rounded-2xl rounded-bl-md"
-    : "rounded-2xl rounded-br-md";
-  const bubbleColor = isInbound
-    ? "border border-cream-line bg-white text-deep-green"
-    : "bg-mint text-deep-green";
+  const v2 = variant === "v2";
+  const bubbleShape = v2
+    ? "rounded-[12px]"
+    : isInbound
+      ? "rounded-2xl rounded-bl-md"
+      : "rounded-2xl rounded-br-md";
+  const bubbleColor = v2
+    ? isInbound
+      ? "border border-[#e3e3db] bg-white text-[#13241d]"
+      : "bg-[#e9efec] text-[#13241d]"
+    : isInbound
+      ? "border border-cream-line bg-white text-deep-green"
+      : "bg-mint text-deep-green";
 
   const hasSignedUrl = typeof msg.signed_media_url === "string";
   const isImage = msg.media_kind === "image" && hasSignedUrl;
@@ -134,7 +148,23 @@ export default function MessageBubble({
 
   // Time/sender/status footer is shared by both render paths
   // (bubble + sticker) so extract it once.
-  const footer = (
+  // 2.0: "MatchDay · automatic · 5:45 PM" for an automatic message (Figma 20851:214).
+  const v2Sender = !isInbound && msg.is_auto_reply && !isAgent ? "MatchDay · automatic" : senderLabel;
+  const footer = v2 ? (
+    <div className="mt-[3px] text-[11px] text-[#9aa39f]" data-testid="crm-message-meta">
+      {!isInbound && v2Sender && (
+        <span className="mr-1" data-testid={isAgent ? "crm-agent-sender" : undefined} style={isAgent ? { color: AGENT_GREEN } : undefined}>
+          {isAgent && <Sparkles aria-hidden className="mr-0.5 inline h-2.5 w-2.5 -translate-y-px" strokeWidth={2.2} />}
+          {v2Sender} ·
+        </span>
+      )}
+      <span>{formatTime(msg.sent_at)}</span>
+      {!isInbound && msg.channel === "sms" && msg.segment_count > 1 && (
+        <span> · {msg.segment_count} segments</span>
+      )}
+      {!isInbound && <DeliveryStatusLabel status={msg.delivery_status} />}
+    </div>
+  ) : (
     <div className="mt-1 px-1 text-[10px] text-deep-green/50">
       {!isInbound && senderLabel && (
         <span className="mr-1 font-medium" data-testid={isAgent ? "crm-agent-sender" : undefined} style={isAgent ? { color: AGENT_GREEN } : undefined}>
@@ -186,11 +216,12 @@ export default function MessageBubble({
       data-delivery={msg.delivery_status ?? ""}
       className={`flex flex-col ${isInbound ? "items-start" : "items-end"} ${className ?? "mt-3"}`}
     >
-      <div className={`max-w-[80%] overflow-hidden ${bubbleShape} ${bubbleColor}`}>
+      <div className={`${v2 ? "max-w-[min(560px,85%)]" : "max-w-[80%]"} overflow-hidden ${bubbleShape} ${bubbleColor}`}>
         {isImage && (
           <MediaImage
             src={msg.signed_media_url as string}
             alt="Image attachment"
+            onOpen={v2 ? onOpenImage : undefined}
           />
         )}
         {isVideo && <MediaVideo src={msg.signed_media_url as string} />}
@@ -208,7 +239,7 @@ export default function MessageBubble({
           />
         )}
         {showBody && (
-          <div className="px-3 py-2 text-sm leading-relaxed whitespace-pre-wrap">
+          <div className={v2 ? "px-3 py-2 text-[14px] leading-[1.45] whitespace-pre-wrap" : "px-3 py-2 text-sm leading-relaxed whitespace-pre-wrap"}>
             <Linkify options={LINKIFY_OPTIONS}>{msg.body}</Linkify>
           </div>
         )}
@@ -221,13 +252,24 @@ export default function MessageBubble({
 // Inline image inside a bubble. Wrapping <a> opens the full-size
 // image in a new tab. onError flips to a text fallback so a stale or
 // 403 signed URL doesn't leave a broken-image icon.
-function MediaImage({ src, alt }: { src: string; alt: string }) {
+function MediaImage({ src, alt, onOpen }: { src: string; alt: string; onOpen?: (src: string) => void }) {
   const [errored, setErrored] = useState(false);
+  const [loaded, setLoaded] = useState(false);
   if (errored) {
     return (
       <div className="px-3 py-2 text-xs italic text-deep-green/55">
         Image (failed to load)
       </div>
+    );
+  }
+  if (onOpen) {
+    // 2.0: a ~280px thumbnail; clicking opens the page's viewer.
+    return (
+      <button type="button" onClick={() => onOpen(src)} className="block" aria-label="Enlarge image" data-testid="crm-image-thumb">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={src} alt={alt} loading="lazy" onLoad={() => setLoaded(true)} onError={() => setErrored(true)}
+          className={`block w-[280px] max-w-full ${loaded ? "h-auto" : "h-[180px] bg-[#f3f3ef] object-cover"}`} />
+      </button>
     );
   }
   return (

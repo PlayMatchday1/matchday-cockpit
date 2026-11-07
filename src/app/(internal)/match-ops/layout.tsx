@@ -30,6 +30,7 @@ import { useSectionNav } from "@/components/SectionNav";
 import { visibleSections, tabForPath } from "./sections";
 import { CrmConversationProvider } from "@/lib/crmConversation";
 import CrmDock from "@/components/crm/CrmDock";
+import { useInbox2Choice } from "@/lib/chatsInboxChoice";
 
 const COLLAPSE_KEY = "matchops:rail-collapsed";
 
@@ -75,12 +76,21 @@ export default function MatchOpsLayout({
       return next;
     });
 
+  /* PLAYER CHATS 2.0 (Figma 20851:45): on that page only, the rail is a 64px icon rail. The stored
+   * collapse preference is left alone, so every other Match Ops page keeps its own width. The rail's
+   * own button still works there: it opens the rail for this visit (peek) without saving it. */
+  const { on: inbox2On } = useInbox2Choice(appUser?.id ?? null);
+  const narrowRail = isPlayerChats && inbox2On === true;
+  const [peek, setPeek] = useState(false);
+  useEffect(() => { if (!narrowRail) setPeek(false); }, [narrowRail]);
+
   const hasRail = visibleSections(appUser).length > 0;
   /* THE CURRENT TAB'S SCREENS, published to the shell's one app bar. The tab is derived from the
    * route, so there is no tab state to fall out of sync with where the operator actually is. */
   const barItems = useMemo(() => visibleSections(appUser, tabForPath(pathname)), [appUser, pathname]);
   useSectionNav(hasRail ? { items: barItems, label: "Match Ops", showSwitch: true } : null);
-  const railW = collapsed ? "60px" : "212px";
+  const railCollapsed = narrowRail ? !peek : collapsed;
+  const railW = narrowRail && !peek ? "64px" : collapsed && !narrowRail ? "60px" : "212px";
 
   return (
     <>
@@ -94,7 +104,7 @@ export default function MatchOpsLayout({
             transition: "width .18s ease-out",
           }}
         >
-          <ChatsRail collapsed={collapsed} onToggle={toggle} />
+          <ChatsRail collapsed={railCollapsed} onToggle={narrowRail ? () => setPeek((p) => !p) : toggle} />
         </div>
       )}
       <div

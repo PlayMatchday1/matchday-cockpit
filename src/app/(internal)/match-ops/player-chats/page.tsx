@@ -2,7 +2,7 @@ import { Suspense } from "react";
 import type { Metadata } from "next";
 import PagePermissionGuard from "@/components/PagePermissionGuard";
 import MobileBottomNav from "@/components/MobileBottomNav";
-import CrmClient from "./CrmClient";
+import PlayerChatsSwitch from "./PlayerChatsSwitch";
 
 // Player Chat. PagePermissionGuard checks canAccess(appUser,
 // "chats"); the API routes enforce the same check via authenticateCrm
@@ -47,7 +47,7 @@ export default function PlayerChatPage() {
             that calls useSearchParams (CrmClient owns ?threadId,
             ?cities, ?status). */}
         <Suspense fallback={null}>
-          <CrmClient />
+          <PlayerChatsSwitch />
         </Suspense>
         {/* Inline bottom nav: last flex child of the 100dvh shell, so
             iOS-handled flex layout positions it at the visible bottom

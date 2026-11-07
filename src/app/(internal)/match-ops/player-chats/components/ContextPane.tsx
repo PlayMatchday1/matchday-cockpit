@@ -49,7 +49,7 @@ type RecentMatch = {
   venue: string | null; start_date: string | null; start_date_utc: string | null;
   city_identifier: string | null; status: "Played" | "Upcoming" | "No-show" | "Canceled";
 };
-type ProfileMatch = {
+export type ProfileMatch = {
   umId: number | null; matchId: number | null; name: string;
   /** WALL CLOCK — display only, printed in UTC. */
   startDate: string | null;
@@ -60,12 +60,12 @@ type ProfileMatch = {
   price: number | null; charged: number | null; userStatus: string | null;
   state: MatchState; mirrorOnly: boolean; charge?: ChargeOnRow | null;
 };
-type PaymentRow = {
+export type PaymentRow = {
   id: string; description: string; created: string; card: string | null;
   status: "succeeded" | "pending" | "refunded" | "failed" | "disputed";
   amount: number; matchId: string | null; isMembership: boolean;
 };
-type Profile = {
+export type Profile = {
   player: {
     id: number | null; name: string; email: string | null; phone: string | null; city: string | null;
     level: number | null; registered: string | null; credits: number;
@@ -77,7 +77,7 @@ type Profile = {
   strikes: { activeCount: number; limit: number; isSuspended: boolean; suspendedTo: string | null };
   accountHistory: { action: "suspend" | "expel"; reason: string | null; when: string | null; until: string | null; by: string | null }[];
 };
-type ContextResponse = {
+export type ContextResponse = {
   player: { first_name: string | null; last_name: string | null; preferable_city_normalized: string | null;
     preferable_city_name: string | null; is_member: boolean | null; created_at: string | null;
     email?: string | null; } | null;
@@ -91,9 +91,9 @@ const INK = "#12241d", MUTED = "#6d7b74", FAINT = "#93a49b", LINE = "#e6ebe8";
 const TONE_COLOR: Record<Tone, string> = { plain: MUTED, amber: "#8a6300", red: "#a83b1c", info: "#4a539a" };
 /* NEITHER CANCELLATION IS RED. "He cancelled" is amber — it may carry a strike. "We cancelled" is
  * informational: he did nothing wrong, and it is the row an operator points at about money. */
-const PANE_TONE: Record<MatchTone, Tone> = { plain: "plain", amber: "amber", info: "info" };
+export const PANE_TONE: Record<MatchTone, Tone> = { plain: "plain", amber: "amber", info: "info" };
 
-async function authFetch(path: string, init?: RequestInit): Promise<Response> {
+export async function authFetch(path: string, init?: RequestInit): Promise<Response> {
   const token = await freshAccessToken();
   return fetch(path, { ...init, cache: "no-store",
     headers: { ...(init?.headers ?? {}), ...(token ? { Authorization: `Bearer ${token}` } : {}), "Content-Type": "application/json" } });
@@ -101,7 +101,7 @@ async function authFetch(path: string, init?: RequestInit): Promise<Response> {
 
 const initialsOf = (f: string | null, l: string | null) =>
   (((f ?? "").trim()[0] ?? "") + ((l ?? "").trim()[0] ?? "") || "?").toUpperCase();
-const monthYear = (iso: string | null) => {
+export const monthYear = (iso: string | null) => {
   if (!iso || !Number.isFinite(Date.parse(iso))) return null;
   return new Date(Date.parse(iso)).toLocaleDateString("en-US", { month: "short", year: "numeric", timeZone: "UTC" });
 };
@@ -110,7 +110,7 @@ const monthYear = (iso: string | null) => {
  * UTC, the characters come back out as they went in. The GENUINE UTC field must never be used for
  * a date here: Jose's cancelled Parmer match is 2026-09-05T20:00 local, 2026-09-06T01:00Z, and
  * preferring the UTC field printed it as Sunday Sep 6 for a match played on Saturday. */
-const dayOf = (iso: string | null) => {
+export const dayOf = (iso: string | null) => {
   if (!iso || !Number.isFinite(Date.parse(iso))) return "";
   return new Date(Date.parse(iso)).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" });
 };
@@ -406,18 +406,18 @@ function Section({ id, summary, open, onToggle, children }: {
   );
 }
 
-const Empty = ({ children }: { children: React.ReactNode }) => (
+export const Empty = ({ children }: { children: React.ReactNode }) => (
   <p className="py-1 text-[11.5px]" style={{ color: MUTED }}>{children}</p>
 );
 
-const Fact = ({ k, v }: { k: string; v: string }) => (
+export const Fact = ({ k, v }: { k: string; v: string }) => (
   <div className="flex items-baseline justify-between gap-3 py-[3px]">
     <span className="text-[11px] font-semibold" style={{ color: FAINT }}>{k}</span>
     <span className="text-[12px] font-[650]" style={{ color: INK }}>{v}</span>
   </div>
 );
 
-function Line({ left, sub, right, tone }: { left: string; sub: string; right: string; tone: Tone }) {
+export function Line({ left, sub, right, tone }: { left: string; sub: string; right: string; tone: Tone }) {
   return (
     <div className="flex items-center gap-2 border-t py-[6px] first:border-t-0" style={{ borderColor: "#eff3f1" }}>
       <span className="min-w-0 flex-1">
@@ -434,7 +434,7 @@ function Line({ left, sub, right, tone }: { left: string; sub: string; right: st
  * this inbox. Every guard the Player Lookup panel carries comes with it, unchanged: a reason is
  * required, the amount is capped, one attempt with no retry on any outcome, and the route re-checks
  * the permission and the balance server-side against a fresh read. */
-function CreditBox({ playerId, playerName, balanceCents, canCredit, onBalance }: {
+export function CreditBox({ playerId, playerName, balanceCents, canCredit, onBalance }: {
   playerId: number | null; playerName: string; balanceCents: number; canCredit: boolean; onBalance: (c: number) => void;
 }) {
   const [amt, setAmt] = useState("");
@@ -522,7 +522,7 @@ function CreditBox({ playerId, playerName, balanceCents, canCredit, onBalance }:
  * (2026-10-21): it changes who every future message on the number is attributed to, and it is the
  * one action here that can show one player another player's membership and match history, so it is
  * a separate control, a separate route and its own change-log row. */
-function Search({ compact }: { compact: boolean }) {
+export function Search({ compact }: { compact: boolean }) {
   const [openBox, setOpenBox] = useState(!compact);
   const [q, setQ] = useState("");
   const [rows, setRows] = useState<SearchRow[] | null>(null);
@@ -614,7 +614,7 @@ function Search({ compact }: { compact: boolean }) {
  * Searches by phone (any format, digits only) or name, under the Player Chats access rule. */
 type LinkRow = { id: number; name: string; city: string | null; phone_last4: string | null; is_member: boolean; joined: string | null };
 
-function LinkAccount({ threadId, linked }: { threadId: string; linked: boolean }) {
+export function LinkAccount({ threadId, linked }: { threadId: string; linked: boolean }) {
   const [openBox, setOpenBox] = useState(false);
   const [q, setQ] = useState("");
   const [rows, setRows] = useState<LinkRow[] | null>(null);
