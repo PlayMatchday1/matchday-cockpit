@@ -25,7 +25,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { makeServerClient } from "@/lib/supabaseServer";
 import { parseBody, type DropReason, type LogLine } from "@/lib/logplexDrain";
-import { isBackgroundRoute, isStaffKey, rollupRoute } from "@/lib/appActivity";
+import { isAlwaysRow, isBackgroundRoute, isStaffKey, rollupRoute } from "@/lib/appActivity";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -111,9 +111,14 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string }>
   return EMPTY();
 }
 
+const toRow = (l: LogLine) => ({
+  ts: l.ts, req_id: l.reqId, method: l.method, path: l.path, route: l.route, status: l.status,
+  duration_ms: l.durationMs, user_id: l.userId, error_code: l.errorCode, ip: l.ip, match_id: l.matchId,
+});
+
 const hourOf = (iso: string) => { const d = new Date(iso); d.setUTCMinutes(0, 0, 0); return d.toISOString(); };
 
-/** 0258's rules, in order: staff/webhook → route rollup; no user id → route rollup; a background route that
+/** 0258's rules, in order: PUT /admin/user-matches is always a row (isAlwaysRow); staff/webhook → route rollup; no user id → route rollup; a background route that
  *  succeeded → the player's hourly rollup; everything else (every failure included) → a row. Each rollup array is
  *  aggregated so a key appears once per call (ON CONFLICT cannot update a row twice in one statement). */
 function splitLines(lines: LogLine[]) {
@@ -122,6 +127,7 @@ function splitLines(lines: LogLine[]) {
   const routes = new Map<string, { hour: string; kind: "staff" | "anonymous"; method: string; route: string; status: number; n: number }>();
   let rolledBackground = 0, rolledAnonymous = 0, rolledStaff = 0;
   for (const l of lines) {
+    if (isAlwaysRow(l.method, l.route)) { rows.push(toRow(l)); continue; }
     const staff = isStaffKey(l.route, l.path);
     if (staff || l.userId == null) {
       const kind = staff ? "staff" : "anonymous";
@@ -140,10 +146,7 @@ function splitLines(lines: LogLine[]) {
       else bg.set(k, { user_id: l.userId, hour, n: 1, last_seen_at: l.ts });
       continue;
     }
-    rows.push({
-      ts: l.ts, req_id: l.reqId, method: l.method, path: l.path, route: l.route, status: l.status,
-      duration_ms: l.durationMs, user_id: l.userId, error_code: l.errorCode, ip: l.ip, match_id: l.matchId,
-    });
+    rows.push(toRow(l));
   }
   return { rows, bg: [...bg.values()], routes: [...routes.values()], rolledBackground, rolledAnonymous, rolledStaff };
 }

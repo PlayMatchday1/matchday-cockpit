@@ -150,6 +150,12 @@ for (const k of [
 // disagree about what a background request is. 0259 carries a generated copy of the background list for its
 // one-time move; regenerate it from ROUTE_WORDS if this map changes before 0259 runs.
 const STAFF_PREFIXES = ["/admin/", "/api/v1/admin/", "/stripe/webhook"];
+/** ALWAYS A ROW, whoever calls it (Ryan, 2026-11-06): the player app moves and re-statuses a player in a match
+ *  through this admin route (app http/api.ts:370, setUserStatusForMatch), and it is rare. Checked before the
+ *  staff and no-user-id rules. */
+export function isAlwaysRow(method: string, route: string | null): boolean {
+  return method === "PUT" && route === "/admin/user-matches";
+}
 /** Staff and webhook traffic: never a player's timeline. Judged on the route, or the path when no route matched. */
 export function isStaffKey(route: string | null, path: string): boolean {
   const k = route ?? path;

@@ -2,7 +2,9 @@
 -- app_request_log_ingest() is READY (until then the old drain keeps storing these lines as rows, and anything it
 -- stores after this runs would be left behind). Safe to run again: each step moves what matches and deletes it.
 --
--- The classification is the drain's (src/lib/appActivity.ts: isStaffKey, isBackgroundRoute, rollupRoute), in order:
+-- The classification is the drain's (src/lib/appActivity.ts: isAlwaysRow, isStaffKey, isBackgroundRoute, rollupRoute),
+-- in order. PUT /admin/user-matches is ALWAYS kept as a row (Ryan, 2026-11-06: the player app's moves), so it is
+-- excluded from steps 1 and 2:
 --   staff/webhook (route, or path when no route, under /admin/, /api/v1/admin/, /stripe/webhook)  → route rollup 'staff'
 --   no user id                                                                                     → route rollup 'anonymous'
 --   a background route with status < 400                                                           → bg rollup
@@ -59,23 +61,26 @@ insert into public.app_request_route_hourly as t (env, hour, kind, method, route
 select env, date_trunc('hour', ts), 'staff', method,
        coalesce(route, '(no route) ' || regexp_replace(path, '/[0-9]+(?=/|$)', '/:n', 'g')), status, count(*)
 from public.app_request_log
-where coalesce(route, path) like '/admin/%' or coalesce(route, path) like '/api/v1/admin/%'
-   or coalesce(route, path) like '/stripe/webhook%'
+where (coalesce(route, path) like '/admin/%' or coalesce(route, path) like '/api/v1/admin/%'
+   or coalesce(route, path) like '/stripe/webhook%')
+  and not (method = 'PUT' and route is not distinct from '/admin/user-matches')
 group by 1, 2, 3, 4, 5, 6
 on conflict (env, hour, kind, method, route, status) do update set n = t.n + excluded.n;
 delete from public.app_request_log
-where coalesce(route, path) like '/admin/%' or coalesce(route, path) like '/api/v1/admin/%'
-   or coalesce(route, path) like '/stripe/webhook%';
+where (coalesce(route, path) like '/admin/%' or coalesce(route, path) like '/api/v1/admin/%'
+   or coalesce(route, path) like '/stripe/webhook%')
+  and not (method = 'PUT' and route is not distinct from '/admin/user-matches');
 
 -- 2) anonymous
 insert into public.app_request_route_hourly as t (env, hour, kind, method, route, status, n)
 select env, date_trunc('hour', ts), 'anonymous', method,
        coalesce(route, '(no route) ' || regexp_replace(path, '/[0-9]+(?=/|$)', '/:n', 'g')), status, count(*)
 from public.app_request_log
-where user_id is null
+where user_id is null and not (method = 'PUT' and route is not distinct from '/admin/user-matches')
 group by 1, 2, 3, 4, 5, 6
 on conflict (env, hour, kind, method, route, status) do update set n = t.n + excluded.n;
-delete from public.app_request_log where user_id is null;
+delete from public.app_request_log where user_id is null
+  and not (method = 'PUT' and route is not distinct from '/admin/user-matches');
 
 -- 3) successful background requests
 insert into public.app_request_bg_hourly as t (env, user_id, hour, bg_count, last_seen_at)
@@ -94,9 +99,12 @@ commit;
 
 -- ── VERDICT — one row: the first three must be 0 ─────────────────────────────────────────────────
 select
-  (select count(*) from public.app_request_log where coalesce(route, path) like '/admin/%'
-     or coalesce(route, path) like '/api/v1/admin/%' or coalesce(route, path) like '/stripe/webhook%') as staff_rows_left,
-  (select count(*) from public.app_request_log where user_id is null)                                as anonymous_rows_left,
+  (select count(*) from public.app_request_log where (coalesce(route, path) like '/admin/%'
+     or coalesce(route, path) like '/api/v1/admin/%' or coalesce(route, path) like '/stripe/webhook%')
+     and not (method = 'PUT' and route is not distinct from '/admin/user-matches'))                  as staff_rows_left,
+  (select count(*) from public.app_request_log where user_id is null
+     and not (method = 'PUT' and route is not distinct from '/admin/user-matches'))                  as anonymous_rows_left,
+  (select count(*) from public.app_request_log where method = 'PUT' and route = '/admin/user-matches') as user_matches_rows_kept,
   (select count(*) from public.app_request_log where status < 400 and (method, route) in (
      ('GET', '/player/profile'), ('GET', '/matches'), ('GET', '/matches/my-matches')))               as common_bg_rows_left,
   (select count(*) from public.app_request_log)                                                      as rows_kept,
