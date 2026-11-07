@@ -32,6 +32,10 @@ export type ActivityRow = {
 
 export type Category = "booking" | "payment" | "account" | "other";
 
+/** One player-hour of SUCCESSFUL background requests (app_request_bg_hourly, 0258). They are not stored one by
+ *  one, so the card can say how many and when the last was, not which. */
+export type BackgroundHour = { hour: string; count: number; lastSeen: string };
+
 type RouteWords = { title: string; fail?: string; cat: Category; bg?: string; detail?: string };
 
 // ── ROUTE → WORDS. Keyed `${METHOD} ${route}`, from the backend's controllers (survey 2026-11-06).
@@ -141,6 +145,24 @@ for (const k of [
   "/leaderboard/matches/global", "/leaderboard/goals", "/leaderboard/goals/global", "/leaderboard/my-stats",
   "/leaderboard/my-stats/global",
 ]) R[`GET ${k}`] = { title: "Loaded the leaderboard", cat: "other", bg: "loading screens" };
+
+// ── WHAT THE DRAIN STORES (0258, Ryan 2026-11-06). Shared with the drain so the card and the ingest can never
+// disagree about what a background request is. 0259 carries a generated copy of the background list for its
+// one-time move; regenerate it from ROUTE_WORDS if this map changes before 0259 runs.
+const STAFF_PREFIXES = ["/admin/", "/api/v1/admin/", "/stripe/webhook"];
+/** Staff and webhook traffic: never a player's timeline. Judged on the route, or the path when no route matched. */
+export function isStaffKey(route: string | null, path: string): boolean {
+  const k = route ?? path;
+  return STAFF_PREFIXES.some((p) => k.startsWith(p));
+}
+/** A background route by the map (a recheck of the same match is decided per player on the card, not here). */
+export function isBackgroundRoute(method: string, route: string | null): boolean {
+  return !!route && !!R[`${method} ${route}`]?.bg;
+}
+/** The route rollup's key: the pattern, or '(no route) ' + the path with all-digit segments replaced by :n. */
+export function rollupRoute(route: string | null, path: string): string {
+  return route ?? `(no route) ${path.replace(/\/[0-9]+(?=\/|$)/g, "/:n")}`;
+}
 
 // A repeat of GET /matches/:id for the SAME match within this long of the previous one is the app
 // rechecking it (it polls every 30 s while a reserved spot is unpaid, MatchDetails.tsx:156), not the
@@ -318,13 +340,16 @@ export function passes(i: Item, f: Filter): boolean {
   return isAction(i) && i.cat === f;
 }
 
-export function summarize(items: Item[]) {
+export function summarize(items: Item[], hours: BackgroundHour[] = []) {
   const actions = items.filter(isAction);
+  const rolled = hours.reduce((n, h) => n + h.count, 0);
+  const lastHour = hours.reduce<string | null>((m, h) => (m == null || h.lastSeen > m ? h.lastSeen : m), null);
+  const lastRow = items[0]?.ts ?? null;
   const counts = Object.fromEntries(FILTERS.map((f) => [f.key, f.key === "all" ? actions.length : items.filter((i) => passes(i, f.key)).length])) as Record<Filter, number>;
   return {
-    lastSeen: items[0]?.ts ?? null,
+    lastSeen: lastRow && lastHour ? (Date.parse(lastRow) >= Date.parse(lastHour) ? lastRow : lastHour) : (lastRow ?? lastHour),
     actions: actions.length,
-    background: items.length - actions.length,
+    background: items.length - actions.length + rolled,
     failures: counts.failures,
     counts,
     latestFailure: items.find((i) => i.failed) ?? null,
@@ -338,7 +363,10 @@ export function recentFailure(items: Item[], now = Date.now()): Item | null {
 }
 
 // ── DAYS AND FOLDING (in the player's city zone)
-export type Line = { kind: "item"; item: Item } | { kind: "bg"; key: string; items: Item[]; labels: string[] };
+export type Line =
+  | { kind: "item"; item: Item }
+  | { kind: "bg"; key: string; items: Item[]; labels: string[] }   // background ROWS (rechecks of a match)
+  | { kind: "bgsum"; key: string; count: number };                 // rolled-up background hours (0258)
 export type Day = { ymd: string; label: string; lines: Line[] };
 
 export function ymdIn(iso: string, tz: string): string {
@@ -371,12 +399,25 @@ export function shortStamp(iso: string, tz: string, now = new Date()): string {
   return `${head} ${t}`;
 }
 
-export function groupDays(items: Item[], tz: string, filter: Filter, now = new Date()): Day[] {
+export function groupDays(items: Item[], tz: string, filter: Filter, now = new Date(), hours: BackgroundHour[] = []): Day[] {
   const days: Day[] = [];
-  for (const it of items) {
-    if (filter !== "all" && !passes(it, filter)) continue;
-    const ymd = ymdIn(it.ts, tz);
+  // Rolled-up hours sit at their last request's time and show under "All" only. Consecutive ones merge.
+  type Entry = { t: string; it?: Item; h?: BackgroundHour };
+  const entries: Entry[] = items.map((it) => ({ t: it.ts, it }));
+  if (filter === "all") for (const h of hours) entries.push({ t: h.lastSeen, h });
+  entries.sort((a, b) => Date.parse(b.t) - Date.parse(a.t));
+  for (const e of entries) {
+    const ymd = ymdIn(e.t, tz);
     let day = days[days.length - 1];
+    if (e.h) {
+      if (!day || day.ymd !== ymd) { day = { ymd, label: dayLabel(ymd, tz, now), lines: [] }; days.push(day); }
+      const last = day.lines[day.lines.length - 1];
+      if (last && last.kind === "bgsum") last.count += e.h.count;
+      else day.lines.push({ kind: "bgsum", key: `bh-${e.h.hour}`, count: e.h.count });
+      continue;
+    }
+    const it = e.it!;
+    if (filter !== "all" && !passes(it, filter)) continue;
     if (!day || day.ymd !== ymd) { day = { ymd, label: dayLabel(ymd, tz, now), lines: [] }; days.push(day); }
     if (filter === "all" && it.background != null) {
       const last = day.lines[day.lines.length - 1];

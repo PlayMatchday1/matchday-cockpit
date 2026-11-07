@@ -16,7 +16,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import {
   annotate, summarize, groupDays, recentFailure, matchLine, timeIn, shortStamp, engineeringText, FILTERS,
-  type ActivityRow, type Filter, type Item, type MatchInfo,
+  type ActivityRow, type BackgroundHour, type Filter, type Item, type MatchInfo,
 } from "@/lib/appActivity";
 import { zoneOfCity } from "@/lib/matchTimezone";
 
@@ -35,7 +35,7 @@ async function authFetch(path: string): Promise<Response> {
   return fetch(path, { headers: token ? { Authorization: `Bearer ${token}` } : {}, cache: "no-store" });
 }
 
-export type ActivityData = { rows: ActivityRow[]; matches: Record<number, MatchInfo>; truncated: boolean; isAdmin: boolean; notes: string[] };
+export type ActivityData = { rows: ActivityRow[]; background?: BackgroundHour[]; matches: Record<number, MatchInfo>; truncated: boolean; isAdmin: boolean; notes: string[] };
 type Load = { phase: "loading" } | { phase: "error"; error: string } | { phase: "ok"; data: ActivityData; since: string };
 
 export function useAppActivity(env: string, playerId: number | null, days: number) {
@@ -78,9 +78,10 @@ export default function AppActivityCard({ env, playerId, city, startOpen }: {
   const tzNote = zone ? `Times in ${city} time` : `Times in Central time${city ? ` (no zone for ${city})` : " (no city on file)"}`;
 
   const items = useMemo(() => (state.phase === "ok" ? annotate(state.data.rows) : []), [state]);
-  const sum = useMemo(() => summarize(items), [items]);
+  const hours = useMemo(() => (state.phase === "ok" ? state.data.background ?? [] : []), [state]);
+  const sum = useMemo(() => summarize(items, hours), [items, hours]);
   const recent = useMemo(() => recentFailure(items), [items]);
-  const days = useMemo(() => groupDays(items, tz, filter), [items, tz, filter]);
+  const days = useMemo(() => groupDays(items, tz, filter, new Date(), hours), [items, tz, filter, hours]);
   const matches = state.phase === "ok" ? state.data.matches : {};
 
   // First load decides the default: expanded if a failure in the last 7 days, else collapsed.
@@ -140,11 +141,17 @@ export default function AppActivityCard({ env, playerId, city, startOpen }: {
             ))}
           </div>
           {state.data.notes.map((n) => <p key={n} className="aa-note">{n}</p>)}
-          {days.length === 0 && <p className="aa-empty">{items.length ? "Nothing in this filter." : `No app activity in the last ${spanLabel}.`}</p>}
+          {days.length === 0 && <p className="aa-empty">{items.length || hours.length ? "Nothing in this filter." : `No app activity in the last ${spanLabel}.`}</p>}
           {days.map((d) => (
             <div key={d.ymd} className="aa-day">
               <div className="aa-dayh">{d.label.toUpperCase()}</div>
-              {d.lines.map((ln) => ln.kind === "bg" ? (
+              {d.lines.map((ln) => ln.kind === "bgsum" ? (
+                <div key={ln.key} className="aa-bg" data-testid="aa-bgsum">
+                  <div className="aa-bgrow">
+                    <span>{ln.count} background request{ln.count === 1 ? "" : "s"} · loading screens, refreshing sign-in and similar</span>
+                  </div>
+                </div>
+              ) : ln.kind === "bg" ? (
                 <div key={ln.key} className="aa-bg" data-testid="aa-bg">
                   <div className="aa-bgrow">
                     <span>{ln.items.length} background request{ln.items.length === 1 ? "" : "s"} · {ln.labels.join(", ")}</span>
@@ -165,7 +172,7 @@ export default function AppActivityCard({ env, playerId, city, startOpen }: {
             </div>
           ))}
           <div className="aa-foot">
-            <span>{`From MatchDay's own server logs, kept ${KEPT_DAYS} days. Match chat messages don't appear here. Only what the app sent to our servers.${state.data.truncated ? " Showing the newest 3,000 requests in this range." : ""}`}</span>
+            <span>{`From MatchDay's own server logs, kept ${KEPT_DAYS} days. Match chat messages don't appear here. Only what the app sent to our servers. Background requests that succeeded are counted by the hour, not kept one by one.${state.data.truncated ? " Showing the newest 3,000 requests in this range." : ""}`}</span>
             <button className="aa-btn" data-testid="aa-older" onClick={loadOlder} disabled={spanDays >= KEPT_DAYS}
               title={spanDays >= KEPT_DAYS ? `Nothing older than ${KEPT_DAYS} days is kept` : undefined}>
               {spanDays >= KEPT_DAYS ? `All ${KEPT_DAYS} days shown` : "Load older"}

@@ -33,6 +33,12 @@ const yes = (m: string, c: boolean, d = "") => (c ? ok(m) : bad(m, d));
  * Each needs a REASON, not just a name. Adding a line here is a decision to leave a control broken
  * for a confined operator, and the reason is where that decision is recorded. */
 const KNOWN_REFUSED: Record<string, string> = {
+  /* ── NOT A REQUEST. src/lib/appActivity.ts (App activity, 0258) holds this string as a route PREFIX: the
+   * drain's staff classifier matches backend request-log routes under /api/v1/admin/ and rolls them up instead
+   * of storing them. The Clubhouse never fetches it; the scan finds the literal because Player Lookup imports
+   * that file. */
+  "/api/v1/admin/":
+    "Not a request: a backend route prefix in appActivity.ts's staff classifier (isStaffKey). Nothing fetches it.",
   /* ── FIELDS: the venue and cost half. fin_venues is US finance data (rates, costs, the mapping to
    * revenue). FieldsView does not request it for a confined account (loadVenue returns at once) and
    * does not draw the Venue and cost section, the Venue column or the Unmapped chip. */

@@ -12,15 +12,20 @@
 //      dropped and counted, with the token recorded so it can be pinned.
 //
 // NEVER A 5xx FOR BAD INPUT. Malformed bodies, router lines, non-JSON and wrong-shape lines are
-// dropped and counted in app_request_log_batches. The one 503 is a failed INSERT: Heroku then
-// resends the same batch, and the unique (env, req_id) index makes the resend a no-op for the
-// lines that did land.
+// dropped and counted. The one 503 is a failed ingest: the whole batch is ONE call to
+// app_request_log_ingest() (0258), one transaction keyed on (env, Logplex-Frame-Id), so nothing of
+// a failed batch lands and Heroku's resend (same frame id) applies it exactly once.
+//
+// WHAT IS STORED (0258, Ryan 2026-11-06): staff/webhook routes and lines with no user id go to an
+// hourly route rollup; successful background requests to a per-player hourly rollup; the rest,
+// including every failed request, to app_request_log. See splitLines.
 //
 // NO BODY IS EVER LOGGED HERE. The lines carry a player's id and IP; console output carries counts.
 
 import { createHash, timingSafeEqual } from "node:crypto";
 import { makeServerClient } from "@/lib/supabaseServer";
-import { parseBody, type DropReason } from "@/lib/logplexDrain";
+import { parseBody, type DropReason, type LogLine } from "@/lib/logplexDrain";
+import { isBackgroundRoute, isStaffKey, rollupRoute } from "@/lib/appActivity";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -53,8 +58,6 @@ function passwordOk(header: string | null): boolean {
   return timingSafeEqual(sha(decoded.slice(colon + 1)), sha(want));
 }
 
-const CHUNK = 500;
-
 export async function POST(req: Request, ctx: { params: Promise<{ env: string }> }) {
   const { env } = await ctx.params;
   if (env !== "staging" && env !== "production") return new Response(null, { status: 404, headers: { "Content-Length": "0" } });
@@ -73,50 +76,74 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string }>
     return new Response(null, { status: 503, headers: { "Content-Length": "0" } });
   }
 
-  let parsed = 0, stored = 0;
+  let parsed = 0;
   let dropped: Partial<Record<DropReason | "unpinned_drain_token", number>> = {};
+  let lines: LogLine[] = [];
   try {
-    const body = Buffer.from(await req.arrayBuffer());
-    const p = parseBody(body);
+    const p = parseBody(Buffer.from(await req.arrayBuffer()));
     parsed = p.parsed;
     dropped = p.dropped;
-
-    if (!token || !DRAIN_TOKENS[env].includes(token)) {
-      // Whole batch dropped: every message, kept or not, is counted under the one reason.
-      dropped = { unpinned_drain_token: p.parsed + (p.dropped.bad_frame ?? 0) };
-    } else {
-      for (let i = 0; i < p.lines.length; i += CHUNK) {
-        const rows = p.lines.slice(i, i + CHUNK).map((l) => ({
-          env, ts: l.ts, req_id: l.reqId, method: l.method, path: l.path, route: l.route, status: l.status,
-          duration_ms: l.durationMs, user_id: l.userId, error_code: l.errorCode, ip: l.ip, match_id: l.matchId,
-        }));
-        const ins = await sb.from("app_request_log")
-          .upsert(rows, { onConflict: "env,req_id", ignoreDuplicates: true })
-          .select("id");
-        if (ins.error) {
-          console.error(`[drain] ${env} insert failed after ${stored} stored: ${ins.error.message}`);
-          await recordBatch(sb, { env, frameId, token, msgCount, parsed, stored, dropped: { ...dropped, insert_failed: p.lines.length - i } });
-          return new Response(null, { status: 503, headers: { "Content-Length": "0" } });
-        }
-        stored += ins.data?.length ?? 0;
-      }
-    }
+    lines = p.lines;
   } catch (e) {
     // A body we could not even read. Counted, never a 5xx.
     console.warn(`[drain] ${env} unreadable body: ${(e as Error).name}`);
     dropped = { ...dropped, bad_frame: (dropped.bad_frame ?? 0) + 1 };
   }
+  if (!token || !DRAIN_TOKENS[env].includes(token)) {
+    // Whole batch dropped: every message, kept or not, is counted under the one reason.
+    dropped = { unpinned_drain_token: parsed + (dropped.bad_frame ?? 0) };
+    lines = [];
+  }
 
-  await recordBatch(sb, { env, frameId, token, msgCount, parsed, stored, dropped });
+  const s = splitLines(lines);
+  const r = await sb.rpc("app_request_log_ingest", {
+    p: {
+      env, frame_id: frameId, drain_token: token, msg_count: msgCount, parsed, dropped,
+      rows: s.rows, bg: s.bg, routes: s.routes,
+      rolled_background: s.rolledBackground, rolled_anonymous: s.rolledAnonymous, rolled_staff: s.rolledStaff,
+    },
+  });
+  if (r.error) {
+    // One transaction: nothing of this batch landed. Heroku resends it with the same frame id.
+    console.error(`[drain] ${env} ingest failed (${lines.length} lines): ${r.error.message}`);
+    return new Response(null, { status: 503, headers: { "Content-Length": "0" } });
+  }
   return EMPTY();
 }
 
-async function recordBatch(
-  sb: ReturnType<typeof makeServerClient>,
-  b: { env: Env; frameId: string | null; token: string | null; msgCount: number | null; parsed: number; stored: number; dropped: Record<string, number | undefined> },
-) {
-  const r = await sb.from("app_request_log_batches").insert({
-    env: b.env, frame_id: b.frameId, drain_token: b.token, msg_count: b.msgCount, parsed: b.parsed, stored: b.stored, dropped: b.dropped,
-  });
-  if (r.error) console.warn(`[drain] ${b.env} batch record failed: ${r.error.message}`);
+const hourOf = (iso: string) => { const d = new Date(iso); d.setUTCMinutes(0, 0, 0); return d.toISOString(); };
+
+/** 0258's rules, in order: staff/webhook → route rollup; no user id → route rollup; a background route that
+ *  succeeded → the player's hourly rollup; everything else (every failure included) → a row. Each rollup array is
+ *  aggregated so a key appears once per call (ON CONFLICT cannot update a row twice in one statement). */
+function splitLines(lines: LogLine[]) {
+  const rows: Record<string, unknown>[] = [];
+  const bg = new Map<string, { user_id: number; hour: string; n: number; last_seen_at: string }>();
+  const routes = new Map<string, { hour: string; kind: "staff" | "anonymous"; method: string; route: string; status: number; n: number }>();
+  let rolledBackground = 0, rolledAnonymous = 0, rolledStaff = 0;
+  for (const l of lines) {
+    const staff = isStaffKey(l.route, l.path);
+    if (staff || l.userId == null) {
+      const kind = staff ? "staff" : "anonymous";
+      if (staff) rolledStaff++; else rolledAnonymous++;
+      const hour = hourOf(l.ts), route = rollupRoute(l.route, l.path);
+      const k = `${hour}|${kind}|${l.method}|${route}|${l.status}`;
+      const cur = routes.get(k);
+      if (cur) cur.n++; else routes.set(k, { hour, kind, method: l.method, route, status: l.status, n: 1 });
+      continue;
+    }
+    if (l.status < 400 && isBackgroundRoute(l.method, l.route)) {
+      rolledBackground++;
+      const hour = hourOf(l.ts), k = `${l.userId}|${hour}`;
+      const cur = bg.get(k);
+      if (cur) { cur.n++; if (l.ts > cur.last_seen_at) cur.last_seen_at = l.ts; }
+      else bg.set(k, { user_id: l.userId, hour, n: 1, last_seen_at: l.ts });
+      continue;
+    }
+    rows.push({
+      ts: l.ts, req_id: l.reqId, method: l.method, path: l.path, route: l.route, status: l.status,
+      duration_ms: l.durationMs, user_id: l.userId, error_code: l.errorCode, ip: l.ip, match_id: l.matchId,
+    });
+  }
+  return { rows, bg: [...bg.values()], routes: [...routes.values()], rolledBackground, rolledAnonymous, rolledStaff };
 }

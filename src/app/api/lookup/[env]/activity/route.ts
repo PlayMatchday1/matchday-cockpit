@@ -13,7 +13,7 @@
 
 import { authenticateMatchOpsRead } from "@/lib/matchOpsAuth";
 import { apiGet, type MatchdayEnv } from "@/lib/matchdayStageApi";
-import { matchIdOf, type ActivityRow, type MatchInfo } from "@/lib/appActivity";
+import { matchIdOf, type ActivityRow, type BackgroundHour, type MatchInfo } from "@/lib/appActivity";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -66,6 +66,16 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string }> 
   }
   const truncated = rows.length >= MAX_ROWS;
 
+  // SUCCESSFUL BACKGROUND REQUESTS ARE NOT ROWS (0258): one rollup row per player per hour. The card's
+  // "last seen in the app" and its folded background counts read these.
+  let bgq = auth.supabase.from("app_request_bg_hourly").select("hour, bg_count, last_seen_at")
+    .eq("env", env).eq("user_id", Number(id)).gte("last_seen_at", since);
+  if (until) bgq = bgq.lt("hour", until);
+  const bgr = await bgq.order("hour", { ascending: false }).limit(90 * 24);
+  if (bgr.error) return Response.json({ error: `app_request_bg_hourly read failed: ${bgr.error.message}` }, { status: 500 });
+  const background: BackgroundHour[] = ((bgr.data ?? []) as { hour: string; bg_count: number; last_seen_at: string }[])
+    .map((b) => ({ hour: b.hour, count: b.bg_count, lastSeen: b.last_seen_at }));
+
   const out: ActivityRow[] = rows.map((r) => ({
     id: r.id, ts: r.ts, reqId: r.req_id, method: r.method, path: r.path, route: r.route, status: r.status,
     durationMs: r.duration_ms, errorCode: r.error_code, matchId: r.match_id,
@@ -98,5 +108,5 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string }> 
     }
   }
 
-  return Response.json({ env, playerId: Number(id), since, until, rows: out, truncated, matches, isAdmin, notes });
+  return Response.json({ env, playerId: Number(id), since, until, rows: out, background, truncated, matches, isAdmin, notes });
 }
