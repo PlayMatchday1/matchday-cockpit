@@ -28,6 +28,7 @@ export type AppUser = {
   can_manage_promos?: boolean;     // Phase 18b — the promo-code WRITE permission (create/edit/delete)
   can_edit_credits?: boolean;      // Phase 27 — adjust a player's credit balance. MOVES MONEY; not tied to Match Ops
   can_edit_memberships?: boolean;  // 0195 — add, price and end a membership. MOVES MONEY; not tied to Match Ops
+  can_change_manager_pay?: boolean; // 0260 — the staff app's manager pay changes, ticked per person; admins have it without the box
   can_send_messages?: boolean;     // Phase 19 — the chat SEND permission (read is can_access_chats)
   can_view_activity?: boolean;     // 0257 — read a player's app activity (API request log). Read only
   is_service_account?: boolean;    // the Clubhouse E2E account (never holds a write permission)

@@ -99,3 +99,11 @@ export async function mapLimit<T, R>(items: readonly T[], limit: number, fn: (t:
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
   return out;
 }
+
+/** STAFF APP MANAGER PAY CHANGES (0260, Ryan 2026-11-07): an admin, or a non-admin whose
+ *  can_change_manager_pay box is ticked; never a city-confined account. The me route reports it and
+ *  /api/app/manager-pay POST enforces it. A missing column (before 0260) reads as off. */
+export function canChangeManagerPay(row: AppRow, confined: boolean): boolean {
+  if (confined) return false;
+  return row.is_admin === true || (row as Record<string, unknown>).can_change_manager_pay === true;
+}

@@ -47,6 +47,9 @@ export async function POST(req: Request, ctx: Ctx) {
     method: "POST", body: { confirmName: body?.confirmName, reason: body?.reason, note: body?.note, source: "Staff app · cancel", saveId: randomUUID() },
   }, { env: g.env, id: g.id });
   clearToday(g.env);
+  // MATCHDAY REFUSED: the sheet shows MatchDay's own words, not the request line around them.
+  const md = !c.ok && typeof c.json?.matchdayMessage === "string" ? c.json.matchdayMessage : null;
+  if (md) return Response.json({ ...c.json, error: `MatchDay refused the cancel: “${md}”` }, { status: c.status });
   return passThrough(c);
 }
 

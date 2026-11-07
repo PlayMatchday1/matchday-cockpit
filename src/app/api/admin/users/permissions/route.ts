@@ -43,6 +43,8 @@ const BOOLEAN_KEYS = [
   "can_access_membership",
   "can_access_matchops", "can_access_chats", "can_access_tech", "can_access_org",
   "can_manage_promos", "can_edit_matches", "can_edit_credits", "can_edit_memberships", "can_send_messages",
+  // 0260: the staff app's manager pay changes, per person.
+  "can_change_manager_pay",
 ] as const;
 const TEXT_KEYS = ["full_name"] as const;
 
@@ -55,6 +57,7 @@ const LABEL: Record<string, string> = {
   can_manage_promos: "Manage promos", can_edit_matches: "Edit matches",
   can_edit_credits: "Edit credits", can_edit_memberships: "Edit memberships",
   can_send_messages: "Send messages",
+  can_change_manager_pay: "Manager pay (staff app)",
   full_name: "Name",
 };
 

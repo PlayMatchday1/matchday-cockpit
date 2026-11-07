@@ -10,6 +10,7 @@ import { authenticateApp } from "@/lib/appAuth";
 import { cityNameFor } from "@/lib/cityScope";
 import { can } from "@/lib/capabilities";
 import { canViewAs } from "@/lib/viewAs";
+import { canChangeManagerPay } from "@/lib/appModel";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -51,7 +52,9 @@ export async function GET(req: Request) {
     canEditCredits: can(row, "editCredits", auth.email) && row.is_service_account !== true,
     canManagePlayers: can(row, "managePlayers", auth.email),
     // Manager Schedule pay changes: the app refuses them to a city-confined account.
-    canChangeManagerPay: !auth.confined,
+    // PER PERSON SINCE 0260 (Ryan, 2026-11-07): an admin, or a non-admin with the box ticked, and
+    // never a city-confined account. Before the migration the column reads undefined: off.
+    canChangeManagerPay: canChangeManagerPay(row, auth.confined),
     // The Growth tab (2026 Daily Matches); /api/app/growth is refused without it.
     canReadGrowth: can(row, "growth", auth.email),
   });

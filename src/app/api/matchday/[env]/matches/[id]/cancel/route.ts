@@ -27,6 +27,7 @@ import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
 import { refreshMatchMirror } from "@/lib/mirrorWriteThrough";
 import { REASON_LABEL, reasonProblem, surfaceOf, type StaffReason } from "@/lib/cancelReasons";
 import { sameMatchName } from "@/lib/matchName";
+import { matchdayMessage } from "@/lib/matchdayMessage";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -174,7 +175,8 @@ function errToResponse(e: unknown): Response {
   if (e instanceof DeniedEndpointError) return Response.json({ error: e.message }, { status: 403 });
   if (e instanceof DeniedFieldError) return Response.json({ error: e.message }, { status: 400 });
   if (e instanceof StageHostGuardError) return Response.json({ error: e.message }, { status: 500 });
-  if (e instanceof WriteFailedError) return Response.json({ error: e.message }, { status: e.status >= 400 && e.status < 600 ? e.status : 400 });
+  // matchdayMessage: MatchDay's own words, for a screen to show (the staff app does). `error` is unchanged.
+  if (e instanceof WriteFailedError) return Response.json({ error: e.message, matchdayMessage: matchdayMessage(e.bodySnippet) }, { status: e.status >= 400 && e.status < 600 ? e.status : 400 });
   if (e instanceof StageConfigError) return Response.json({ error: e.message }, { status: 500 });
   return Response.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
 }

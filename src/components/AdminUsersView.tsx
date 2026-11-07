@@ -11,8 +11,10 @@ import { confinementSummary, CONFINED_RAIL_KEYS } from "@/lib/cityConfinement";
 // The city rail's own list — the count in the sentence is its length, so the two cannot disagree.
 import { CITY_SECTIONS } from "@/app/(internal)/city/citySections";
 import { holdsCityManagerPreset } from "@/lib/cityManagerPreset";
+import { holdsAllTabsPreset, allTabsPresetRefusal } from "@/lib/allTabsPreset";
 
 type PermissionKey =
+  | "can_change_manager_pay"
   | "can_send_messages"
   | "can_manage_promos"
   | "can_edit_credits"
@@ -209,11 +211,15 @@ export default function AdminUsersView() {
 
   // THE "CITY MANAGER" PRESET (cityManagerPreset.ts): the staff app's city grants in one update,
   // through its own guarded route. The grid then shows what the server re-read.
-  async function applyCityManagerPreset(user: AppUser) {
+  async function applyCityManagerPreset(user: AppUser) { return applyPreset(user, "/api/admin/users/city-manager-preset"); }
+  // THE "ALL TABS" PRESET (allTabsPreset.ts): every staff app tab across all cities, plus Edit
+  // matches and Send messages. It only turns boxes on; per-person grants are left as they are.
+  async function applyAllTabsPreset(user: AppUser) { return applyPreset(user, "/api/admin/users/all-tabs-preset"); }
+  async function applyPreset(user: AppUser, route: string) {
     setPermErr((e) => (e?.id === user.id ? null : e));
     const { data: sess } = await supabase.auth.getSession();
     try {
-      const res = await fetch("/api/admin/users/city-manager-preset", {
+      const res = await fetch(route, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...(sess.session ? { Authorization: `Bearer ${sess.session.access_token}` } : {}) },
         body: JSON.stringify({ userId: user.id }),
@@ -491,6 +497,12 @@ export default function AdminUsersView() {
                                   <ToggleBox on={!!u.can_edit_credits} disabled={!!u.is_service_account} onClick={() => togglePermission(u, "can_edit_credits")} label={`EDIT CREDITS (write) for ${u.email}`} />
                                   <ToggleBox on={!!u.can_edit_memberships} disabled={!!u.is_service_account} onClick={() => togglePermission(u, "can_edit_memberships")} label={`EDIT MEMBERSHIPS (write) for ${u.email}`} />
                                 </div>
+                                {/* MANAGER PAY (staff app), 0260: off unless ticked per person.
+                                    Admins have it without the box; the desktop page is unaffected. */}
+                                <div className="flex items-center gap-1 pl-3" title={u.is_service_account ? "Service accounts hold no permissions" : u.city_identifier ? "City accounts can't change manager pay" : "MANAGER PAY — the staff app's Additional pay and Add someone not on the schedule. Desktop Manager Pay is unaffected."}>
+                                  <span className="text-[8px] leading-none text-deep-green/40">↳ pay</span>
+                                  <ToggleBox on={!!(u as unknown as Record<string, unknown>).can_change_manager_pay} disabled={!!u.is_service_account || !!u.city_identifier} onClick={() => togglePermission(u, "can_change_manager_pay")} label={`MANAGER PAY (staff app) for ${u.email}`} />
+                                </div>
                                 {permErr?.id === u.id && (
                                   <span className="mt-1 max-w-[160px] text-[10px] leading-tight text-coral" data-testid="perm-error">{permErr.msg}</span>
                                 )}
@@ -557,6 +569,20 @@ export default function AdminUsersView() {
                                 title="Match Ops, Edit matches, Chats, Send messages, Player Lifecycle and Growth for their own city in the staff app. No credits, memberships, promos or desktop pages."
                                 className="rounded-md border border-cream-line bg-white px-2 py-0.5 text-[10px] font-semibold text-deep-green hover:bg-cream">
                                 Apply City manager preset
+                              </button>
+                            )
+                          )}
+                          {/* ALL TABS: for a person with no city who is not a city manager. */}
+                          {!u.is_city_manager && allTabsPresetRefusal(u as unknown as Record<string, unknown>) === null && (
+                            holdsAllTabsPreset(u as unknown as Record<string, unknown>) ? (
+                              <span className="max-w-[120px] text-[9px] leading-tight text-deep-green/55" data-testid="all-tabs-preset-on">
+                                All tabs preset
+                              </span>
+                            ) : (
+                              <button type="button" data-testid="all-tabs-preset-apply" onClick={() => applyAllTabsPreset(u)}
+                                title="Every staff app tab across all cities (Match Ops, Chats, Growth, Player Lifecycle) plus Edit matches and Send messages. Only turns boxes on: Admin, credits, memberships, manage players, promos and manager pay stay per person."
+                                className="rounded-md border border-cream-line bg-white px-2 py-0.5 text-[10px] font-semibold text-deep-green hover:bg-cream">
+                                Apply All tabs preset
                               </button>
                             )
                           )}

@@ -19,6 +19,7 @@ import { authenticateApp, readRefusal } from "@/lib/appAuth";
 import { computeTiles } from "@/lib/managerPayView";
 import type { ManagerPayWeekPayload } from "@/lib/managerPayCompute";
 import { scopeWeekToCity } from "@/lib/appManagerPayScope";
+import { canChangeManagerPay } from "@/lib/appModel";
 import { callDesktop, passThrough } from "@/lib/appCall";
 import { GET as weekGet } from "@/app/api/manager-pay/week/route";
 import { GET as aliasesGet } from "@/app/api/manager-pay/aliases/route";
@@ -75,6 +76,7 @@ export async function POST(req: Request) {
   const refused = readRefusal(auth);
   if (refused) return Response.json({ error: refused.error }, { status: refused.status });
   if (auth.confined) return Response.json({ error: "Manager pay changes need an account without a city boundary." }, { status: 403 });
+  if (!canChangeManagerPay(auth.row, auth.confined)) return Response.json({ error: "Manager pay changes aren't turned on for your account. Ask an admin to tick Manager pay on User access." }, { status: 403 });
   const body = (await req.json().catch(() => null)) as Row | null;
   const email = typeof body?.managerEmail === "string" ? body.managerEmail.trim().toLowerCase() : "";
   const weekStart = typeof body?.weekStart === "string" ? body.weekStart : "";

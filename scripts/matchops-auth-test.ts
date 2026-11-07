@@ -284,7 +284,7 @@ is("authenticateAdmin guards the User access screen and the Fields mapping admin
     // +1 admin/staff-credits (2026-10-21) — Credits given by staff, READ-ONLY. is_admin because
     // Ryan made it admins only: it names which staff member gave which player money, and why.
     "admin/staff-credits/route.ts",
-    "admin/users/auth-status/route.ts", "admin/users/city-manager-preset/route.ts", "admin/users/city-manager/route.ts", "admin/users/delete/route.ts",
+    "admin/users/all-tabs-preset/route.ts", "admin/users/auth-status/route.ts", "admin/users/city-manager-preset/route.ts", "admin/users/city-manager/route.ts", "admin/users/delete/route.ts",
     "admin/users/match-permissions/route.ts", "admin/users/permissions/route.ts",
     "admin/users/resend-invite/route.ts",
     // +1 admin/users/phone (2026-10-29) — a staff member's mobile number for staff app sign-in by
@@ -337,7 +337,7 @@ is("the promo USES route is gated on MANAGE PROMOS, not the Match Ops read gate 
 is("...and the admin-user routes are exactly these five",
   importsAdmin.map(rel).filter((f) => /admin\/users\//.test(f)).sort(),
   // NOT invite/ — that one is gated on isProvisioningOwner (stricter than admin), deliberately.
-  ["admin/users/auth-status/route.ts", "admin/users/city-manager-preset/route.ts", "admin/users/city-manager/route.ts", "admin/users/delete/route.ts",
+  ["admin/users/all-tabs-preset/route.ts", "admin/users/auth-status/route.ts", "admin/users/city-manager-preset/route.ts", "admin/users/city-manager/route.ts", "admin/users/delete/route.ts",
    "admin/users/match-permissions/route.ts", "admin/users/permissions/route.ts",
    "admin/users/resend-invite/route.ts", "admin/users/phone/route.ts"].sort());
 
