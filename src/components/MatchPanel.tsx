@@ -22,6 +22,7 @@
 // one shared engine, so they can never disagree about what is sent (that is the whole point of the
 // model; never re-implement it).
 
+import CreditTextBox from "@/components/CreditTextBox";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useCancelMatch, cancelStakes } from "@/lib/useCancelMatch";
 import CancelReasonPicker from "@/components/CancelReasonPicker";
@@ -2474,26 +2475,13 @@ export default function MatchPanel({ matchId, env = DRAWER_ENV, onDirtyChange, o
                     </div>
                   ))}
                 </div>
-                {/* THE TEXT IS A SEPARATE TICK, OFF BY DEFAULT. It reaches real phones, so it is a
-                    thing somebody chose rather than a default. */}
-                <label className="mp-credit-tick" data-testid="creditall-notify-row">
-                  <input type="checkbox" data-testid="creditall-notify"
-                    checked={creditAll.notify}
-                    disabled={!canText || !creditAll.preview.notifyAvailable}
-                    onChange={(e) => creditAll.setNotify(e.target.checked)} />
-                  <span>Text the players
-                    <small>{!canText
-                      ? "Texting needs SEND MESSAGES."
-                      : !creditAll.preview.notifyAvailable
-                        ? "Off until the wording is approved. Cancelling sends its own text; this does not."
-                        : "Cancelling sends its own text; this does not."}</small>
-                  </span>
-                </label>
+                <CreditTextBox preview={creditAll.preview} notify={creditAll.notify} setNotify={creditAll.setNotify}
+                  message={creditAll.message} setMessage={creditAll.setMessage} problem={creditAll.textProblem} canText={canText} tickClass="mp-credit-tick" />
                 <div className="mp-credit-acts">
                   {/* DISABLES ON CLICK: busy is set before the fetch and cleared only when it
                       resolves. Writes never retry. */}
                   <button type="button" className="mp-creditbtn mp-nowrap" data-testid="creditall-yes"
-                    disabled={creditAll.busy} onClick={() => void creditAll.run()}>
+                    disabled={creditAll.busy || !!creditAll.textProblem} onClick={() => void creditAll.run()}>
                     {creditAll.busy ? "Crediting…" : `Yes, credit ${creditAll.preview.plan.pay.length}`}
                   </button>
                   <button type="button" className="mp-btn mp-nowrap" data-testid="creditall-no"
@@ -2512,6 +2500,9 @@ export default function MatchPanel({ matchId, env = DRAWER_ENV, onDirtyChange, o
                   {creditAll.result.aborted > 0 && <> · {creditAll.result.aborted} aborted</>}
                   {creditAll.result.failed > 0 && <> · {creditAll.result.failed} failed</>}
                   {creditAll.result.refusedPlayers > 0 && <> · {creditAll.result.refusedPlayers} outside your city</>}
+                  {creditAll.result.notified && (creditAll.result.notified.sent + creditAll.result.notified.failed + creditAll.result.notified.skipped) > 0 && (
+                    <span data-testid="creditall-text-result"> · texts: {creditAll.result.notified.sent} sent, {creditAll.result.notified.failed} failed, {creditAll.result.notified.skipped} skipped{creditAll.result.notified.reasons.length ? ` (${creditAll.result.notified.reasons.map((r) => `${r.count} ${r.reason}`).join(", ")})` : ""}</span>
+                  )}
                 </p>
                 <ul className="mp-credit-res" data-testid="creditall-results">
                   {creditAll.result.results.map((r) => (

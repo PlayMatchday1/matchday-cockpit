@@ -53,17 +53,32 @@ import { makeServerClient } from "@/lib/supabaseServer";
 import { MAX_RUN_CENTS, MAX_RUN_PLAYERS, fmtUsd, planCreditRun, raceCheck, type CreditPlan, type MoneyRosterRow } from "@/lib/creditsModel";
 import type { Change } from "@/lib/changeLogModel";
 import { createClient } from "@supabase/supabase-js";
+import Telnyx from "telnyx";
+import { can } from "@/lib/capabilities";
+import { localModeOn } from "@/lib/localMode";
+import { normalizePhone } from "@/lib/phone";
+import { phoneDigits10 } from "@/lib/aiDraftModel";
+import { textOptOuts, type ChatMsg, type ChatThread } from "@/lib/signupExport";
+import { creditTextProblem, fillCreditText, planCreditTexts, scrubDigits, type TextCandidate } from "@/lib/creditText";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 const SOURCE = "Match editor · credit everyone who paid";
-/* THE MESSAGE IS NOT APPROVED YET, so notify cannot be turned on. Ryan has to read the wording
- * before a sentence reaches a real phone; the proposal is in the report. Flipping this to true is
- * the whole change once he has. A control that looks live and does nothing is worse than a disabled
- * one, so the checkbox is DISABLED on screen and this refuses it here as well. */
-const NOTIFY_ENABLED = false;
+/* TEXT THE PLAYERS — ON (Ryan, 2026-11-07: wording approved, src/lib/creditText.ts).
+ *   • ONLY players whose credit LANDED in this run are texted, each with their own amount.
+ *   • THE SAME SEND AS THE MATCH PANEL'S "Text the players" (/api/match-chats/[chatId]/notify): one
+ *     Telnyx message per player. The cancel's own text is NOT this path — it is a server-side effect
+ *     of MatchDay's PATCH /cancel and Clubhouse cannot send different words through it.
+ *   • OPT-OUTS: a player whose Player Chats thread holds a STOP-type reply (textOptOuts, no later
+ *     START) is skipped and counted; so is one with no phone, or a phone already texted this run.
+ *     A Telnyx refusal is recorded as failed. Carrier-level opt-outs live at Telnyx, not here.
+ *   • SEND MESSAGES is required, read fresh from app_users, as well as EDIT CREDITS.
+ *   • LOGGED under the credit run's save id: the message AS STAFF WROTE IT (placeholders, no player
+ *     data) and the sent / failed / skipped counts. No phone, no name, no filled text — CLAUDE.md:
+ *     a message body is never logged; the template is not a body. */
+const NOTIFY_ENABLED = true;
 
 const isEnv = (x: string): x is MatchdayEnv => x === "staging" || x === "production";
 const balanceOf = (p: Record<string, unknown>): number => {
@@ -104,6 +119,12 @@ async function alreadyCredited(env: string, matchId: number): Promise<number[]> 
 
 type View = {
   matchId: number; name: string; cancelled: boolean;
+  /** For the message preview and the placeholders: the field and the WALL-CLOCK start. */
+  field: string | null; startDate: string | null;
+  /** The first player who would be credited, for the live preview. Never sent to MatchDay. */
+  textPreview: { firstName: string | null; cents: number } | null;
+  /** How many distinct players would be texted if every credit lands (before opt-outs and phones). */
+  textRecipients: number;
   plan: CreditPlan; alreadyCreditedCount: number;
   refused: string | null;
   cancelCredited: { count: number; totalCents: number } | null;
@@ -120,8 +141,19 @@ async function buildView(env: MatchdayEnv, id: string): Promise<View> {
    * the players it credits. */
   const perPlayer = Number(match.registrationPrice) || 0;
   const creditable = players.filter((p) => !(p.isFakePlayer === true || p.user?.isFakePlayer === true) && !(p.isCancelled === true || p.canceledAt != null)).length;
+  const firstOf = (uid: number) => {
+    const row = players.find((p) => Number(p.userId ?? p.user?.id) === uid) as (MoneyRosterRow & { user?: { firstName?: string | null } }) | undefined;
+    return row?.user?.firstName ?? null;
+  };
+  const owedBy = new Map<number, number>();
+  for (const t of plan.pay) owedBy.set(t.userId, (owedBy.get(t.userId) ?? 0) + t.cents);
+  const first = plan.pay[0];
+  const field = ((match.field as Record<string, unknown> | undefined)?.title as string | undefined) ?? null;
   return {
     matchId, name: (match.name as string) ?? "", cancelled, plan,
+    field, startDate: typeof match.startDate === "string" ? match.startDate : null,
+    textPreview: first ? { firstName: firstOf(first.userId), cents: owedBy.get(first.userId) ?? first.cents } : null,
+    textRecipients: owedBy.size,
     alreadyCreditedCount: already.length,
     /* THE REFUSAL SAYS WHAT THE CANCEL ALREADY DID, and says it differently when there was nobody
      * to credit — "credited 0 players $0.00 and texted them" implies a text that never went. */
@@ -159,10 +191,20 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
   if (!isEnv(env)) return Response.json({ error: `unknown environment ${JSON.stringify(env)}` }, { status: 400 });
   if (!/^\d+$/.test(id)) return Response.json({ error: "match id must be numeric" }, { status: 400 });
 
-  const body = (await req.json().catch(() => null)) as { notify?: unknown } | null;
+  const body = (await req.json().catch(() => null)) as { notify?: unknown; message?: unknown } | null;
   const notify = body?.notify === true;
+  const message = typeof body?.message === "string" ? body.message : "";
   if (notify && !NOTIFY_ENABLED) {
     return Response.json({ error: "Texting is not switched on yet — the wording has not been approved." }, { status: 400 });
+  }
+  // REFUSED BEFORE ANY CREDIT, so a bad message never leaves a run half texted.
+  if (notify) {
+    const problem = creditTextProblem(message);
+    if (problem) return Response.json({ error: problem }, { status: 400 });
+    const me = await makeServerClient().from("app_users").select("*").eq("id", auth.appUserId).maybeSingle();
+    if (!can(me.data as never, "sendMessages", auth.email)) {
+      return Response.json({ error: "Texting needs SEND MESSAGES. Untick Text the players to credit without texting." }, { status: 403 });
+    }
   }
 
   try {
@@ -176,6 +218,8 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
 
     const saveId = randomUUID();   // one run, one save id, N rows in the log
     const results: { userId: number; cents: number; verdict: "LANDED" | "ABORTED" | "FAILED" | "REFUSED"; detail?: string }[] = [];
+    // Who each player is, from the same live read the credit uses — for the text only, never logged.
+    const contact = new Map<number, { firstName: string | null; phone: string | null }>();
 
     for (const target of view.plan.pay) {
       const playerPath = `/admin/players/${target.userId}`;
@@ -196,6 +240,8 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
           continue;
         }
         before = balanceOf(player);
+        const pd = ((player as Record<string, unknown>)?.data ?? player) as Record<string, unknown>;
+        contact.set(target.userId, { firstName: typeof pd.firstName === "string" ? pd.firstName : null, phone: typeof pd.phoneNumber === "string" ? pd.phoneNumber : null });
       } catch (e) {
         results.push({ userId: target.userId, cents: target.cents, verdict: "FAILED", detail: e instanceof Error ? e.message : String(e) });
         continue;
@@ -255,6 +301,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
     }
 
     const landed = results.filter((r) => r.verdict === "LANDED");
+    const notified = notify ? await textLanded({ env, saveId, auth, view, message, landed, contact }) : null;
     return Response.json({
       ok: true,
       ran: results.length,
@@ -266,10 +313,87 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
       // The per-player verdict, by id. No names leave this route.
       results,
       skipped: view.plan.skips,
-      notified: 0,
+      notified: notified ?? { sent: 0, failed: 0, skipped: 0, reasons: [] },
       matchId: view.matchId, name: view.name,
     });
   } catch (e) { return errToResponse(e); }
+}
+
+/* THE TEXT, after the credits. One Telnyx message per player whose credit landed, the match panel's
+ * send exactly (from TELNYX_FROM_NUMBER, Promise.allSettled, one attempt each, never retried). */
+async function textLanded(a: {
+  env: string; saveId: string; auth: { email: string }; view: View; message: string;
+  landed: { userId: number; cents: number }[];
+  contact: Map<number, { firstName: string | null; phone: string | null }>;
+}): Promise<{ sent: number; failed: number; skipped: number; reasons: { reason: string; count: number }[] }> {
+  const cents = new Map<number, number>();
+  for (const r of a.landed) cents.set(r.userId, (cents.get(r.userId) ?? 0) + r.cents);
+  const ids = [...cents.keys()];
+  const sb = makeServerClient();
+  // OPT-OUTS: the threads of these players (by account or by phone), and their inbound STOP / START.
+  const phones = ids.map((id) => normalizePhone(a.contact.get(id)?.phone ?? null)).filter((p): p is string => !!p);
+  let opt = { phones: new Set<string>(), players: new Set<number>() };
+  let optRead = true;
+  if (ids.length) {
+    const t = await sb.from("crm_threads").select("id, phone_number, player_id").or(`player_id.in.(${ids.join(",")})${phones.length ? `,phone_number.in.(${phones.map((p) => `"${p}"`).join(",")})` : ""}`);
+    const threads = (t.data ?? []) as ChatThread[];
+    if (t.error) optRead = false;
+    if (threads.length) {
+      const m = await sb.from("crm_messages").select("thread_id, body, sent_at").eq("direction", "inbound").in("thread_id", threads.map((x) => x.id));
+      if (m.error) optRead = false;
+      opt = textOptOuts((m.data ?? []) as ChatMsg[], threads);
+    }
+  }
+  const key = (p: string | null) => { const d = (p ?? "").replace(/\D/g, ""); return d ? phoneDigits10(d) ?? d : null; };
+  const cands: TextCandidate[] = ids.map((id) => {
+    const c = a.contact.get(id);
+    const e164 = normalizePhone(c?.phone ?? null);
+    const k = key(e164);
+    // If the opt-out read failed, nobody is texted: "couldn't check" is not "didn't opt out".
+    return { userId: id, cents: cents.get(id) ?? 0, firstName: c?.firstName ?? null, phoneE164: e164, optedOut: !optRead || opt.players.has(id) || (k != null && opt.phones.has(k)) };
+  });
+  const plan = planCreditTexts(cands);
+  const apiKey = process.env.TELNYX_API_KEY?.trim();
+  const from = process.env.TELNYX_FROM_NUMBER?.trim();
+  let sent = 0, failed = 0;
+  const errors: string[] = [];
+  if (plan.send.length && (!apiKey || !from || localModeOn())) {
+    failed = plan.send.length;
+    errors.push(localModeOn() ? "Texting is off in local mode." : "Texting isn't configured (TELNYX_API_KEY / TELNYX_FROM_NUMBER).");
+  } else if (plan.send.length) {
+    const telnyx = new Telnyx({ apiKey: apiKey! });
+    const settled = await Promise.allSettled(plan.send.map((c) => telnyx.messages.send({
+      from: from!, to: c.phoneE164!,
+      text: fillCreditText(a.message, { firstName: c.firstName, cents: c.cents, field: a.view.field, startDate: a.view.startDate }),
+    })));
+    for (const s of settled) {
+      if (s.status === "fulfilled") sent++;
+      else { failed++; errors.push(scrubDigits(s.reason instanceof Error ? s.reason.message : String(s.reason))); }
+    }
+  }
+  const reasonCounts = new Map<string, number>();
+  for (const k of plan.skipped) reasonCounts.set(k.reason, (reasonCounts.get(k.reason) ?? 0) + 1);
+  if (!optRead) reasonCounts.set("opt-outs couldn't be checked", plan.skipped.filter((k) => k.reason === "opted out").length);
+  const reasons = [...reasonCounts].map(([reason, count]) => ({ reason, count })).filter((r) => r.count > 0);
+  const skipped = plan.skipped.length;
+  /* LOGGED UNDER THE CREDIT RUN (same save id): the message as written and the counts. No phones,
+   * names or filled texts. Best effort, like recordWrite: a logging outage never undoes a send. */
+  try {
+    await supabaseLogStore().insert({
+      saveId: a.saveId, at: new Date().toISOString(), actorName: a.auth.email, actorEmail: a.auth.email,
+      source: SOURCE, env: a.env, matchId: a.view.matchId, matchName: a.view.name,
+      method: "POST", endpoint: "/sms/credit-text",
+      body: { message: a.message, players: ids.length, sent, failed, skipped, skipped_reasons: reasons },
+      outcome: failed > 0 ? "failed" : "landed",
+      serverSaid: errors.length ? errors.slice(0, 3).join(" | ") : null,
+      changes: [
+        { key: "text", field: "Text the players", before: "—", after: `${sent} sent · ${failed} failed · ${skipped} skipped` },
+        { key: "message", field: "Message (as written)", before: "—", after: a.message },
+      ],
+    });
+  } catch (e) { console.error("[credit-all] text log insert failed (texts already sent):", e instanceof Error ? e.message : e); }
+  console.log(`[credit-all] text match=${a.view.matchId} players=${ids.length} sent=${sent} failed=${failed} skipped=${skipped}`);
+  return { sent, failed, skipped, reasons };
 }
 
 function errToResponse(e: unknown): Response {

@@ -26,6 +26,7 @@ import { useCallback, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { errorText } from "@/lib/errorText";
 import { fmtUsd, type CreditPlan } from "@/lib/creditsModel";
+import { DEFAULT_CREDIT_TEXT, creditTextProblem } from "@/lib/creditText";
 
 export type CreditPreview = {
   matchId: number;
@@ -37,6 +38,9 @@ export type CreditPreview = {
   cancelCredited: { count: number; totalCents: number } | null;
   notifyAvailable: boolean;
   caps: { maxRunCents: number; maxRunPlayers: number };
+  field: string | null; startDate: string | null;
+  textPreview: { firstName: string | null; cents: number } | null;
+  textRecipients: number;
 };
 
 export type CreditRunResult = {
@@ -44,6 +48,7 @@ export type CreditRunResult = {
   totalCreditedCents: number;
   results: { userId: number; cents: number; verdict: string; detail?: string }[];
   skipped: { reason: string; count: number; cents: number }[];
+  notified?: { sent: number; failed: number; skipped: number; reasons: { reason: string; count: number }[] };
 };
 
 async function authFetch(path: string, init?: RequestInit): Promise<Response> {
@@ -59,6 +64,9 @@ export function useCreditEveryone({ env, matchId }: { env: string; matchId: stri
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [notify, setNotify] = useState(false);   // OFF unless somebody turns it on
+  // The message, pre-filled with the approved default; staff edit it freely before sending.
+  const [message, setMessage] = useState(DEFAULT_CREDIT_TEXT);
+  const textProblem = notify ? creditTextProblem(message) : null;
 
   const base = `/api/matchday/${env}/matches/${matchId}/credit-all`;
 
@@ -83,11 +91,12 @@ export function useCreditEveryone({ env, matchId }: { env: string; matchId: stri
 
   const run = useCallback(async () => {
     if (busy) return;
+    if (notify && creditTextProblem(message)) return; // the button is disabled too; the route refuses it as well
     setBusy(true);
     try {
       const res = await authFetch(base, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ notify }),
+        body: JSON.stringify({ notify, ...(notify ? { message } : {}) }),
       });
       const j = await res.json();
       if (!res.ok) { setError(j?.error ?? `The run failed (${res.status})`); return; }
@@ -96,9 +105,9 @@ export function useCreditEveryone({ env, matchId }: { env: string; matchId: stri
       setError(null);
     } catch (e) { setError(errorText(e, "The run failed.")); }
     finally { setBusy(false); }
-  }, [base, busy, notify]);
+  }, [base, busy, notify, message]);
 
-  return { preview, result, error, busy, notify, setNotify, open, abort, run, reload: load };
+  return { preview, result, error, busy, notify, setNotify, message, setMessage, textProblem, open, abort, run, reload: load };
 }
 
 /** The confirm's headline: a count and a number, live. */

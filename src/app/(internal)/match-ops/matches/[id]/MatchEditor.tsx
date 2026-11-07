@@ -15,6 +15,7 @@
 // shown but never sent — changing them moves notifications/fake-spot/auto-cancel
 // timing, so that becomes its own action.
 
+import CreditTextBox from "@/components/CreditTextBox";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
@@ -1277,25 +1278,11 @@ export default function MatchEditor({ id, mode = "edit", sourceId, fieldId: from
                       </div>
                     ))}
                   </div>
-                  {/* THE TEXT IS A SEPARATE TICK, OFF BY DEFAULT. It reaches real phones, so it is a
-                      thing somebody chose. DISABLED until Ryan has read the wording — a control that
-                      looks live and does nothing is worse than one that is plainly off. */}
-                  <label className="tick" data-testid="creditall-notify-row">
-                    <input type="checkbox" data-testid="creditall-notify"
-                      checked={creditAll.notify}
-                      disabled={!canText || !creditAll.preview.notifyAvailable}
-                      onChange={(e) => creditAll.setNotify(e.target.checked)} />
-                    <span>Text them
-                      <small>{!canText
-                        ? "Texting needs SEND MESSAGES."
-                        : !creditAll.preview.notifyAvailable
-                          ? "Off until the wording is approved. Cancelling sends its own text; this does not."
-                          : "Cancelling sends its own text; this does not."}</small>
-                    </span>
-                  </label>
+                  <CreditTextBox preview={creditAll.preview} notify={creditAll.notify} setNotify={creditAll.setNotify}
+                    message={creditAll.message} setMessage={creditAll.setMessage} problem={creditAll.textProblem} canText={canText} tickClass="tick" />
                   <div className="cancelrow">
                     <button className="secondary nowrap" data-testid="creditall-abort" onClick={creditAll.abort}>No</button>
-                    <button className="cbtn nowrap" data-testid="creditall-do" disabled={creditAll.busy}
+                    <button className="cbtn nowrap" data-testid="creditall-do" disabled={creditAll.busy || !!creditAll.textProblem}
                       onClick={() => void creditAll.run()}>
                       {creditAll.busy ? "Crediting…" : `Yes, credit ${creditAll.preview.plan.pay.length}`}
                     </button>
@@ -1312,6 +1299,9 @@ export default function MatchEditor({ id, mode = "edit", sourceId, fieldId: from
                 {creditAll.result.aborted > 0 && <> · {creditAll.result.aborted} aborted, balance moved</>}
                 {creditAll.result.failed > 0 && <> · {creditAll.result.failed} failed</>}
                 {creditAll.result.refusedPlayers > 0 && <> · {creditAll.result.refusedPlayers} outside your city</>}
+                {creditAll.result.notified && (creditAll.result.notified.sent + creditAll.result.notified.failed + creditAll.result.notified.skipped) > 0 && (
+                  <span data-testid="creditall-text-result"> · texts: {creditAll.result.notified.sent} sent, {creditAll.result.notified.failed} failed, {creditAll.result.notified.skipped} skipped{creditAll.result.notified.reasons.length ? ` (${creditAll.result.notified.reasons.map((r) => `${r.count} ${r.reason}`).join(", ")})` : ""}</span>
+                )}
               </div>
             )}
             </div></section>

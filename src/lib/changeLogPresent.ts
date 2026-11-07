@@ -75,6 +75,7 @@ export function areaOf(r: { source: string; env: string; method: string; endpoin
   if (e.startsWith("/admin/strikes")) return "Strikes";
   if (e.startsWith("/admin/subscriptions")) return "Memberships";
   if (/^\/api\/(crm|whatsapp)\//.test(e) || e.startsWith("/crm/") || /^crm-/.test(s)) return "Chats";
+  if (e === "/sms/credit-text") return "Credits"; // the text sent under a Credit everyone who paid run
   if (/^\/admin\/players\/\d+\/profile$/.test(e)) return (r.changes ?? []).some((c) => c.key === "creditAmount") ? "Credits" : "Other";
   if (/^Match panel · (teams|reduce|convert|team size)/.test(s)) return "Roster";
   if (/^\/admin\/(matches\/user-matches|user-matches)/.test(e) || /^\/admin\/matches\/\d+\/(players|fake-players|batch\/fake-players)/.test(e)) return "Roster";
@@ -217,6 +218,20 @@ export function describe(e: LogEntry, en: Enrich): Described {
   }
   const fk = find("fakes");
   if (fk) return { kind: "other", what: `Set fake players${at} from ${str(fk.before)} to ${str(fk.after)}`, sub: m.when || null, player: null, link: matchLink };
+
+  // Credit everyone who paid: one save, one row per player and (if ticked) one text row.
+  const textRow = find("text");
+  const credits = ch.filter((c) => c.key === "creditAmount");
+  if (/^Match editor · credit everyone who paid$/.test(e.source) && (credits.length > 1 || textRow)) {
+    const total = credits.reduce((t, c) => t + Math.max(0, (num(c.after) ?? 0) - (num(c.before) ?? 0)), 0);
+    const n = credits.length;
+    return {
+      kind: "credit",
+      what: `Credited ${n} player${n === 1 ? "" : "s"} ${dollars(total)} for ${m.field || "a match"}${textRow ? " and texted them" : ""}`,
+      sub: [m.when, textRow ? `Texts: ${str(textRow.after)}` : null].filter(Boolean).join(" · ") || null,
+      player: null, link: matchLink,
+    };
+  }
 
   // Credits
   const cr = find("creditAmount");

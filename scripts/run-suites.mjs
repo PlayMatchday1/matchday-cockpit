@@ -157,6 +157,11 @@ const NODE_SUITES = [
   // decides a refund (card charge + the wallet credit they spent), the exclusions, the caps, and
   // the second-run skip that stops a player being paid twice.
   "scripts/credit-all-test.ts",
+  // TEXT THE PLAYERS on Credit everyone who paid (2026-11-07): the approved wording, {amount} as 9.00,
+  // unknown placeholders and empty messages block, wall-clock day and time, only LANDED credits are
+  // texted, STOP replies skipped, the message checked before any credit, and the log holds the
+  // message as written with counts — never a phone or a filled text.
+  "scripts/credit-text-test.ts",
   "scripts/write-routes-logged-test.ts",
   /* EVERY SCHEDULED PATH MUST ANSWER THE VERB VERCEL SENDS. Cron issues a GET; a route exporting
    * only POST answers 405 every night and NOTHING says so — the cron dashboard shows the job
