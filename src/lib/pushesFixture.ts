@@ -5,6 +5,7 @@ import "server-only";
 // memory, and reaches no player and no change_log row. Delete it once the backend is on staging.
 
 import type { ContractAudience, ContractCount, TokenLookup } from "@/lib/audienceModel";
+import type { FunnelPage, WithoutApp } from "@/lib/offersFunnel";
 import type { ListItem, ListPage, PushGroup, PushMessage, PushReachable, PushResultsData, PushState } from "@/lib/pushesModel";
 
 const iso = (hoursAgo: number) => new Date(Date.now() - hoursAgo * 3600_000).toISOString();
@@ -122,4 +123,16 @@ export const fixture = {
     if (m[2] === "end") return c.status === "ENDED" ? { error: "It has already ended." } : put({ ...c, status: "ENDED", state: "ENDED", endedAt: now });
     return put({ ...c, ...fields(b), tap: "tapTarget" in b || "tapMatchId" in b || "tapFieldId" in b ? tapOf(b, c) : c.tap });
   },
+  // The Offer results funnel (Figma 20864:72's numbers), shaped as the contract says.
+  funnel(): FunnelPage {
+    const f = (chosen: number, canGetIt: number, saw: number, used: number) => ({ chosen, canGetIt, canGetItPushesOn: Math.round(canGetIt / 3), estimated: true, snapshotAt: null, saw, used });
+    const o = (id: number, name: string, fn: ReturnType<typeof f>) => ({ id, name, status: "LAUNCHED", state: "ENDED" as const, dealType: "PERCENT_OFF" as const, dealAmount: 50, launchedAt: iso(20), startsLocal: "2026-11-06 14:50:00", endsLocal: "2026-11-06 20:00:00", funnel: fn });
+    return {
+      from: iso(24 * 30), to: iso(0),
+      totals: { chosen: 101, canGetIt: 28, canGetItPushesOn: 9, saw: 11, used: 0, offers: 3, estimatedOffers: 3 },
+      planner: { used: 0, chosen: 101, useRate: 0, minUsed: 5, enoughData: false },
+      offers: [o(40, "11/06 Bob Jones · 50% Discount (stand-in)", f(42, 12, 4, 0)), o(39, "11/06 Saginaw · 50% Discount (stand-in)", f(29, 9, 3, 0)), o(38, "11/06 Keswick Park · 50% Discount (stand-in)", f(30, 7, 4, 0))],
+    };
+  },
+  withoutApp(id: number): WithoutApp { return { campaignId: id, count: 3, playerIds: [78 + id, 1481, 3193].slice(0, 3) }; },
 };

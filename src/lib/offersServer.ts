@@ -207,6 +207,19 @@ export const readAudienceCount = (auth: OffersAuth, body: Record<string, unknown
 });
 
 // One match, read when an offer that names it is opened (GET /api/offers/matches/{id}), never on page load.
+// OFFER RESULTS (backend docs/offers/M3-ENDPOINTS.md "Funnel"): the page's funnel for a range, and the players an
+// offer chooses now who aren't on 1.88+ (for "Add message push"). Paced reads, like every other.
+export const readFunnel = (from: string | null) => offersGet<import("@/lib/offersFunnel").FunnelPage>(`${CAMPAIGNS}/funnel`, from ? { from } : undefined);
+export const readWithoutApp = (id: number) => offersGet<import("@/lib/offersFunnel").WithoutApp>(`${CAMPAIGNS}/${id}/players-without-app`);
+// A backend from before the funnel: its GET /admin/offers/campaigns/:id takes "funnel" as an id (400 "numeric string is
+// expected"), and players-without-app is a route it doesn't have (404 with no errorCode).
+export const FUNNEL_MISSING = "Offer results aren't on this backend yet.";
+export function funnelMissing(e: unknown): boolean {
+  if (!(e instanceof WriteFailedError)) return false;
+  if (e.status === 400 && /numeric string is expected/.test(e.bodySnippet)) return true;
+  if (e.status === 404) { try { return !JSON.parse(e.bodySnippet).errorCode; } catch { return true; } }
+  return false;
+}
 export const readMatch = async (id: number): Promise<MatchOpt> => matchOpt(await offersGet<ApiMatch>(`/admin/matches/${id}`));
 
 // ── THE WRITE ───────────────────────────────────────────────────────────────────────────────────

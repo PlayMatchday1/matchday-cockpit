@@ -18,6 +18,7 @@ import {
 import OfferPanel, { type MatchRead } from "./OfferPanel";
 import { PushResultsRow, PushSettingsCard } from "./OfferPush";
 import ShowAgainRow from "./OfferShowAgain";
+import OfferResults from "./OfferResults";
 import { Banner, Btn, NotFound, O, StateChip, authed, type WriteOutcome } from "./offersUi";
 import { useOffersAccessState } from "./useOffersAccess";
 
@@ -144,6 +145,7 @@ export default function OffersView() {
           results={current && current.state !== "DRAFT" ? <ResultsCard c={current} nowWall={nowWall} pushes={!!view.pushes} onLanded={landed} /> : null} />
       ) : (
         <div className="flex flex-col gap-5">
+          <OfferResults campaigns={view.campaigns} matches={view.matches} fields={view.fields} />
           <div data-testid="offers-list" className="overflow-hidden rounded-[12px] border" style={{ background: O.surface, borderColor: O.line }}>
             <div className="flex items-center justify-between px-4 py-3.5">
               <div className="text-[16px] font-bold" style={{ color: O.ink }}>Offers</div>

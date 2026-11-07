@@ -30,6 +30,7 @@ import MatchPicker from "@/components/offers/MatchPicker";
 import { PushLockScreen } from "@/components/offers/OfferPush";
 import { Banner, Btn, Card, Chip, ConfirmDialog, NotFound, O, VerdictLine, authed, inputCls, inputStyle, outcomeOf, type WriteOutcome } from "@/components/offers/offersUi";
 import { useOffersAccessState } from "@/components/offers/useOffersAccess";
+import { PREFILL_KEY, type Prefill } from "@/lib/offersFunnel";
 
 type Data = {
   list: ListPage | null; backend: "ready" | "missing"; backendError: string | null; fixture: boolean;
@@ -47,6 +48,19 @@ export default function PushesView() {
   const [newN, setNewN] = useState(0);
   const [tab, setTab] = useState<Tab>("live");
   const [banner, setBanner] = useState<WriteOutcome | null>(null);
+  // ?prefill=1: Offer results' "Add message push" handed over a player list (session storage, read once). It opens a
+  // new push with them as Exact players; nothing is saved until Save draft.
+  const [prefill, setPrefill] = useState<Prefill | null>(null);
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("prefill") !== "1") return;
+    try {
+      const raw = sessionStorage.getItem(PREFILL_KEY);
+      sessionStorage.removeItem(PREFILL_KEY);
+      const p = raw ? (JSON.parse(raw) as Prefill) : null;
+      if (p && Array.isArray(p.playerIds) && p.playerIds.length) { setPrefill(p); setOpen("new"); setNewN((x) => x + 1); }
+    } catch { /* nothing handed over */ }
+    window.history.replaceState(null, "", window.location.pathname);
+  }, []);
   useEffect(() => {
     if (accessState !== "yes") return;
     let cancelled = false;
@@ -97,7 +111,7 @@ export default function PushesView() {
       {err ? (
         <div data-testid="pushes-error" className="rounded-[10px] border px-3 py-2.5 text-[12.5px]" style={{ background: O.critBg, borderColor: O.critLine, color: O.critInk }}>Could not load: {err}</div>
       ) : !data ? <div className="py-6 text-[13px]" style={{ color: O.muted }}>Loading…</div> : editing ? (
-        <PushEditor key={`${open}:${open === "new" ? newN : current?.updatedAt ?? ""}`} c={current} data={data} onClose={() => setOpen(null)} onLanded={landed} />
+        <PushEditor key={`${open}:${open === "new" ? newN : current?.updatedAt ?? ""}`} c={current} data={data} prefill={open === "new" ? prefill : null} onClose={() => { setOpen(null); setPrefill(null); }} onLanded={landed} />
       ) : typeof open === "number" ? (
         <div className="py-6 text-[13px]" style={{ color: openErr ? O.critInk : O.muted }}>{openErr ? <>Couldn&apos;t open it: {openErr} <button type="button" className="underline" onClick={() => setOpen(null)}>Back</button></> : "Loading…"}</div>
       ) : (
@@ -197,9 +211,13 @@ function ListRow({ r, onOpen }: { r: Row; onOpen: () => void }) {
 }
 
 // ── THE EDITOR ───────────────────────────────────────────────────────────────────────────────────
-function PushEditor({ c, data, onClose, onLanded }: { c: PushMessage | null; data: Data; onClose: () => void; onLanded: (o: WriteOutcome, after: PushMessage | null) => void }) {
+function PushEditor({ c, data, prefill, onClose, onLanded }: { c: PushMessage | null; data: Data; prefill: Prefill | null; onClose: () => void; onLanded: (o: WriteOutcome, after: PushMessage | null) => void }) {
   const nowWall = chicagoWallNow();
-  const loaded = useMemo(() => (c ? pushFormOf(c, nowWall) : { form: newPushForm(nowWall), unknown: 0 }), [c, nowWall]);
+  const loaded = useMemo(() => {
+    if (c) return pushFormOf(c, nowWall);
+    const form = newPushForm(nowWall);
+    return { form: prefill ? { ...form, audience: { mode: "PLAYERS" as const, filters: [], playersText: prefill.playerIds.join(", ") } } : form, unknown: 0 };
+  }, [c, nowWall, prefill]);
   const [f, setF] = useState<PushForm>(loaded.form);
   const set = (p: Partial<PushForm>) => setF((x) => ({ ...x, ...p }));
   const missing = data.backend === "missing";
@@ -346,6 +364,7 @@ function PushEditor({ c, data, onClose, onLanded }: { c: PushMessage | null; dat
         </div>
       </div>
       {outcome && <VerdictLine outcome={outcome} />}
+      {prefill && c === null && <div data-testid="pushes-prefill-note" className="rounded-[10px] px-3 py-2 text-[12px]" style={{ background: O.mint, color: O.chipOn }}>{prefill.playerIds.length.toLocaleString("en-US")} players from {prefill.from} who can&apos;t get offers yet (older app) are in Who gets it as Exact players. Message pushes reach every app version.</div>}
       {lockNote && <div data-testid="pushes-lock-note" className="rounded-[10px] px-3 py-2 text-[12px]" style={{ background: O.subtle, color: O.muted }}>{lockNote}</div>}
 
       <div className="grid gap-7 min-[1100px]:grid-cols-[430px_minmax(0,1fr)]">

@@ -8726,3 +8726,24 @@ Also measured the same day, for whoever builds on this: 456 of 1,885 non-staff p
 followed by a later row (rejoin is row succession); the live `GET /admin/players/{id}` returned **only the current
 membership** (a cancelled-only player: 0 entries; a rejoined player: only the newer row), so it cannot supply
 history; and the mirror's `price` is whole dollars (live `amount` 6650 reads `66`).
+
+## Offer results funnel: proven on staging (2026-11-07)
+
+**Contract:** backend docs/offers/M3-ENDPOINTS.md "Funnel" (feature/offer-funnel, 97be675). The Clubhouse reads it in
+`src/lib/offersFunnel.ts` and draws it as the Offer results card on Offers (`OfferResults.tsx`).
+
+- Until ~14:00 CT on 2026-11-07 staging answered `GET /admin/offers/campaigns/funnel` with 400 "Validation failed
+  (numeric string is expected)": a backend without the route reads "funnel" as a campaign id. Production answers the
+  same until the funnel is deployed there; the card then says "Offer results aren't on this backend yet."
+  (`funnelMissing`, src/lib/offersServer.ts), never an error.
+- Staging, no `from` (the default 30 days): `from` 2026-10-08T14:06:36Z, `to` now; totals `{ chosen: 216, canGetIt:
+  16, canGetItPushesOn: 15, saw: 6, used: 5, estimatedOffers: 37, offers: 38 }`; planner `{ used: 5, chosen: 216,
+  useRate: 0.0231, minUsed: 5, enoughData: true }` (10 needed: choose about 432). Offer rows carry
+  id, name, status, state, dealType, dealAmount, launchedAt, startsLocal, endsLocal, funnel; **no match, fields or
+  end time**. The Deal column's match comes from the same campaign in GET /admin/offers/page, by id.
+- **Missing for "ran N days":** an offer ended by hand has `endsLocal` null and the row has no `endedAt`, so its
+  status line is just "Ended". The backend's own ZZ funnel offer (59) is one.
+- **Estimated rows can show more saw or used than chosen** ("1 of 0"): for offers launched before snapshots, chosen
+  is recomputed from today's data (deleted test players drop out) while saw and used are history.
+- `GET .../:id/players-without-app` for the two staging offers with a gap returned 180 ids in all against
+  `chosen - canGetIt` 200 (the contract says it can be shorter: held-back players, and players who updated).
