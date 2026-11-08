@@ -4,13 +4,17 @@
 // Reads across threads, so a city-confined account is refused rather than filtered. The Disagree chips
 // are the discard chips, and a Disagree needs one.
 import { authenticateCrm } from "@/lib/crmAuth";
-import { discardReasonText } from "@/lib/aiDraftModel";
+import { discardReasonText, WOULD_HAVE_SENT } from "@/lib/aiDraftModel";
 import { reviewMasked } from "@/lib/reviewAccount";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const WEEK_MS = 7 * 86400e3;
+
+// WHAT CAN BE REVIEWED: a shadow decision, or a DRAFT-ONLY one that would have gone out on its own with its
+// category on (decideAutoSend's WOULD_HAVE_SENT, Ryan 2026-11-08: a day on draft only, then check the answers).
+const REVIEWABLE = `decision_shadow.eq.true,decision_reason.like."*${WOULD_HAVE_SENT.replace(/:$/, "")}*"`;
 
 async function getRoute(req: Request) {
   const auth = await authenticateCrm(req);
@@ -20,7 +24,7 @@ async function getRoute(req: Request) {
   const since = new Date(Date.now() - WEEK_MS).toISOString();
   const r = await supabase.from("crm_ai_drafts")
     .select("id, thread_id, based_on_message_id, created_at, category, draft_text, reply_without_action, action, error, decision, decision_reason, sent_message_id, review_verdict, review_reason")
-    .eq("decision_shadow", true).not("decision", "is", null).gte("created_at", since).order("created_at", { ascending: false }).limit(300);
+    .or(REVIEWABLE).not("decision", "is", null).gte("created_at", since).order("created_at", { ascending: false }).limit(300);
   if (r.error) return Response.json({ error: "Couldn't read the decisions." }, { status: 500 });
   const rows = r.data ?? [];
   const threadIds = [...new Set(rows.map((d) => d.thread_id as string))];
@@ -53,7 +57,7 @@ export async function POST(req: Request) {
   if (b.verdict === "disagree" && !reason) return Response.json({ error: "Pick a reason." }, { status: 400 });
   const u = await auth.supabase.from("crm_ai_drafts")
     .update({ review_verdict: b.verdict, review_reason: b.verdict === "disagree" ? reason : null, review_by_user_id: auth.appUserId, review_at: new Date().toISOString() })
-    .eq("id", draftId).eq("decision_shadow", true).select("id");
+    .eq("id", draftId).or(REVIEWABLE).select("id");
   if (u.error) return Response.json({ error: "Couldn't save that." }, { status: 500 });
   if ((u.data ?? []).length !== 1) return Response.json({ error: "That isn't a shadow decision." }, { status: 404 });
   return Response.json({ ok: true });

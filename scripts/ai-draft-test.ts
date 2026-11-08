@@ -17,7 +17,7 @@ import { readFileSync } from "node:fs";
 import {
   draftEligibility, buildDraftContext, buildDraftRequest, scrubPii, sanitizeDraft, hasDash, guardDraft,
   classifyDraftOutcome, capReached, draftCostUsd, assertAnthropicHost, monthStartUtcIso, DRAFT_INSTRUCTIONS, DRAFT_OUTPUT_SCHEMA,
-  AUTO_ACTION_CATEGORIES, AUTO_CATEGORIES, GUEST_CODE_PERSON_ONLY, imagesToAttach, toApiRequest, type DraftOutput,
+  AUTO_ACTION_CATEGORIES, AUTO_CATEGORIES, DIAL_CATEGORIES, WOULD_HAVE_SENT, categoryMode, GUEST_CODE_PERSON_ONLY, imagesToAttach, toApiRequest, type DraftOutput,
   cancelPolicyFor, wordCount,
   decideAutoSend, decisionConfig, isAutoSendLive, autoSendAllowed, badAutoSendReplies, KILL_MAX_BAD, type AutoSendConfig, type DecisionContext, type DraftContext,
   parseDraftOutput, priorCourtesyFromLog, staffRepliesConfirmAccount, selectExamples, discardReasonText, DISCARD_CHIPS,
@@ -27,11 +27,15 @@ import { runDraft, CONFIRMED_BY_STAFF_NOTE, AUTO_LINKED_NOTE, REFUND_WITHOUT_ACT
 import {
   stallPhrase, isHoldingReply, waitingOnLookup, WAITING_ON_LOOKUP, membershipRefundEligibility, membershipChargeFor, matchesPlayedSince, policyExplainedBefore,
   priorMembershipRefundFromLog, MEMBERSHIP_REFUND_REASON_PREFIX, complainsCutShort, cutShortProblem, NOT_MARKED_CUT_SHORT, nextThreadCity, cityPushRecipients, ESCALATE_AFTER_MS,
-  liveRefundRefusal, type LiveCharge, type RefundFacts, type RefundEligibility,
+  liveRefundRefusal, tickSeesDrafts, STAFF_DRAFT_IDLE_MS, type LiveCharge, type RefundFacts, type RefundEligibility,
 } from "../src/lib/aiDraftPolicy";
+import { decideGuestPass, guestPassForModel, guestReplyProblem, guestCodeToFill, type GuestPassFacts } from "../src/lib/guestPass";
+import { agentScoreboard, type ScoreMsg } from "../src/lib/agentScoreboard";
+import { isOverdue } from "../src/lib/awaitingReply";
+import { bucket } from "../src/lib/inbox2Model";
 import { applyDraftAction, creditReason, guestCodeBody, guestCodeFor, guestCodeRefusal, staffConfirmedMembership, writeStatusFrom, type ActionIO } from "../src/lib/aiDraftAction";
 import { buildRecordedFields, type CameraRow } from "../src/lib/aiDraftCamera";
-import { attentionFor, rowAttention, humanPushDue, humanPushPath, STRIKE_DISPUTE_NOTE, type AttentionDraft } from "../src/lib/crmAttention";
+import { attentionFor, rowAttention, humanPushDue, humanPushPath, STRIKE_DISPUTE_NOTE, TEAM_FOLLOW_UP_NOTE, type AttentionDraft } from "../src/lib/crmAttention";
 import { downscaleForModel } from "../src/lib/aiDraftImage";
 import { processHold, holdStopReason, type HoldIO, type HoldRow } from "../src/lib/aiDraftAuto";
 import { draftOutcomePatch, discardPatch } from "../src/lib/aiDraftOutcome";
@@ -201,6 +205,113 @@ function fake(over: Partial<DraftDeps> & { msgs?: DraftMsg[]; ctx?: DraftContext
     ...over,
   };
   return { deps, calls };
+}
+
+// ── SUPPORT AGENT (Ryan 2026-11-08): guest passes, the dial, the tick, the scoreboard, overdue ─────────
+console.log("\nSUPPORT AGENT: GUEST PASSES (src/lib/guestPass):");
+{
+  const NOWG = Date.parse("2026-11-08T18:00:00Z");
+  const mem = { statusRaw: "ACTIVE", price: 6650, canceledAt: null, since: "2026-11-02T17:40:00Z" };
+  const base: GuestPassFacts = { accountConfirmed: true, membership: mem, slug: "SATX600", codes: [], staffConfirmed: false, now: NOWG };
+  const live = (code: string, used: number | null, end = "2027-11-08T05:59:00Z") => ({ api_id: 1, code, end_date_utc: end, deleted_at: null, used });
+  eq("POSITIVE: active paying member, no code anywhere → create {slug}FP", decideGuestPass(base), { kind: "create", code: "SATX600FP" });
+  eq("unknown account → ask for the phone number (never a screenshot)", decideGuestPass({ ...base, accountConfirmed: false }).kind, "ask_phone");
+  eq("no membership → not_member", decideGuestPass({ ...base, membership: null }).kind, "not_member");
+  eq("a CANCELED membership row → not_member", decideGuestPass({ ...base, membership: { ...mem, statusRaw: "CANCELED" } }).kind, "not_member");
+  eq("a comp (ADDED_FROM_ADMIN) → a person", decideGuestPass({ ...base, membership: { ...mem, statusRaw: "ADDED_FROM_ADMIN" } }).kind, "person");
+  eq("a $0 or unread price → a person", [decideGuestPass({ ...base, membership: { ...mem, price: 0 } }).kind, decideGuestPass({ ...base, membership: { ...mem, price: null } }).kind], ["person", "person"]);
+  eq("cancelled but still active → a person", decideGuestPass({ ...base, membership: { ...mem, canceledAt: "2026-11-05T00:00:00Z" } }).kind, "person");
+  eq("  but a cancelled member who already holds a code is told about it", decideGuestPass({ ...base, membership: { ...mem, canceledAt: "2026-11-05T00:00:00Z" }, codes: [live("HOU498FP", 3)] }).kind, "used_up");
+  eq("  and so is a comp", decideGuestPass({ ...base, membership: { ...mem, statusRaw: "ADDED_FROM_ADMIN" }, codes: [live("SATX600FP", 1)] }).kind, "existing");
+  eq("codes couldn't be read → a person (never create on a failed read)", decideGuestPass({ ...base, codes: null }).kind, "person");
+  eq("a live code with uses left → existing, with the count and end", decideGuestPass({ ...base, codes: [live("SATX600FP", 1)] }), { kind: "existing", code: "SATX600FP", usesLeft: 2, endsOn: "Nov 7, 2027" });
+  eq("A NEW MEMBERSHIP EARNS NO NEW USES: the old slug's live code, all used → used_up, no create", decideGuestPass({ ...base, codes: [live("SATX521FP", 3)] }), { kind: "used_up", code: "SATX521FP", resetsOn: "Nov 7, 2027" });
+  eq("over-redeemed (uses aren't enforced) is still used_up", decideGuestPass({ ...base, codes: [live("SATX600FP", 5)] }).kind, "used_up");
+  eq("uses couldn't be counted → a person", decideGuestPass({ ...base, codes: [live("SATX600FP", null)] }).kind, "person");
+  eq("two live codes → a person", decideGuestPass({ ...base, codes: [live("SATX600FP", 0), live("SATX521FP", 0)] }).kind, "person");
+  eq("an ENDED code with this exact name → a person (a create would be a duplicate)", decideGuestPass({ ...base, codes: [live("SATX600FP", 3, "2026-01-01T00:00:00Z")] }).kind, "person");
+  eq("POSITIVE CONTROL: an ended code under an OLD slug doesn't block a new one", decideGuestPass({ ...base, codes: [live("SATX521FP", 3, "2026-01-01T00:00:00Z")] }).kind, "create");
+  eq("a deleted code with this name → a person", decideGuestPass({ ...base, codes: [{ ...live("SATX600FP", 0), deleted_at: "2026-10-01T00:00:00Z" }] }).kind, "person");
+  eq("membership under 24 hours → a person", decideGuestPass({ ...base, membership: { ...mem, since: "2026-11-08T10:00:00Z" } }).kind, "person");
+  eq("  unless a staff message confirmed it", decideGuestPass({ ...base, membership: { ...mem, since: "2026-11-08T10:00:00Z" }, staffConfirmed: true }).kind, "create");
+  eq("no readable slug → a person", decideGuestPass({ ...base, slug: null }).kind, "person");
+  ok("the model never sees a code", !JSON.stringify(guestPassForModel({ kind: "existing", code: "SATX600FP", usesLeft: 2, endsOn: "x" })).includes("SATX600FP") && !JSON.stringify(guestPassForModel({ kind: "create", code: "SATX600FP" })).includes("SATX600FP"));
+  ok("POSITIVE CONTROL: the create line is Ryan's words", /Your friends enter it on their own profile while logged in, good for 3 uses\./.test(guestPassForModel({ kind: "create", code: "X" })!.say));
+  const c = { kind: "create" as const, code: "SATX600FP" }, ex = { kind: "existing" as const, code: "SATX600FP", usesLeft: 2, endsOn: "x" };
+  eq("reply check: create needs the action and one {code}", [guestReplyProblem(c, "Your code is {code}.", "issue_guest_code"), !!guestReplyProblem(c, "Your code is {code}.", null), !!guestReplyProblem(c, "Code {code} {code}", "issue_guest_code")], [null, true, true]);
+  ok("reply check: a code the model wrote itself is refused", !!guestReplyProblem(c, "Your code is SATX600FP.", "issue_guest_code") && !!guestReplyProblem(ex, "Use ATX12FP", null));
+  eq("reply check: existing takes {code}, no action", [guestReplyProblem(ex, "It's {code}, 2 uses left.", null), !!guestReplyProblem(ex, "It's {code}.", "issue_guest_code")], [null, true]);
+  ok("reply check: not_member carries no code", !!guestReplyProblem({ kind: "not_member" }, "Here's {code}", null) && guestReplyProblem({ kind: "not_member" }, "Guest passes come with a membership.", null) === null);
+  eq("the server fills existing and used_up, never create", [guestCodeToFill(ex), guestCodeToFill(c), guestCodeToFill({ kind: "used_up", code: "A1FP", resetsOn: "x" })], ["SATX600FP", null, "A1FP"]);
+}
+
+console.log("\nSUPPORT AGENT: THE DIAL (auto / draft / off):");
+{
+  const on: AutoSendConfig = { auto_categories: ["veo"], action_categories: [], off_categories: ["booking"], credit_cap_cents: 1500, hold_minutes: 3, enabled: true, shadow: false };
+  const dctx: DecisionContext = { context: buildDraftContext(lateCancel(0)), windowClosed: false, humanRepliedRecently: false, guestPass: null };
+  const plain = { reply: "Videos go up within 24 to 48 hours.", category: "veo", flags: [] as string[], action: null };
+  eq("POSITIVE CONTROL: veo on auto → auto_send", decideAutoSend(plain, dctx, on).decision, "auto_send");
+  eq("OFF → a person, with why", decideAutoSend({ ...plain, category: "booking" }, dctx, on).reason, "The agent is off for booking.");
+  eq("  even if also on the auto list (off wins)", decideAutoSend({ ...plain, category: "booking" }, dctx, { ...on, auto_categories: ["veo", "booking"] }).decision, "human");
+  const dr = decideAutoSend({ ...plain, category: "logistics" }, dctx, on);
+  ok("DRAFT ONLY → a person, saying it would have sent on its own", dr.decision === "human" && dr.reason.startsWith("Category logistics isn't turned on.") && dr.reason.includes(WOULD_HAVE_SENT));
+  const dr2 = decideAutoSend({ ...plain, category: "logistics", flags: ["escalate"] }, dctx, on);
+  ok("  and not when it wouldn't have (the flag stops it first)", dr2.decision === "human" && !dr2.reason.includes(WOULD_HAVE_SENT));
+  eq("categoryMode reads the two lists", ["veo", "booking", "logistics"].map((x) => categoryMode(on, x)), ["auto", "off", "draft"]);
+  eq("before 0263 (no off list) nothing is off", categoryMode({ auto_categories: [] }, "booking"), "draft");
+  ok("every auto category is on the dial, and so are the always-a-person ones", AUTO_CATEGORIES.every((x) => DIAL_CATEGORIES.includes(x)) && ["complaint", "other", "refund"].every((x) => DIAL_CATEGORIES.includes(x)));
+  ok("field_rental can be turned on", AUTO_CATEGORIES.includes("field_rental"));
+}
+
+console.log("\nSUPPORT AGENT: WHICH MESSAGES THE TICK DECIDES (tickSeesDrafts):");
+{
+  const T = Date.parse("2026-11-07T03:30:00Z");
+  const staff = (minAgo: number, outcome = "pending") => ({ requested_by_user_id: "u1", created_at: new Date(T - minAgo * 60e3).toISOString(), outcome });
+  eq("no draft yet → draft", tickSeesDrafts([], T), "draft");
+  eq("THE PRINCE CASE: a person opened it and walked away → the tick decides", tickSeesDrafts([staff(STAFF_DRAFT_IDLE_MS / 60e3 + 1)], T), "draft");
+  eq("a person opened it moments ago → leave it to them for now", tickSeesDrafts([staff(1)], T), "staff_looking");
+  eq("the tick already drafted it → has_draft", tickSeesDrafts([{ requested_by_user_id: null, created_at: new Date(T).toISOString(), outcome: "pending" }], T), "has_draft");
+  eq("a person sent or threw away a draft → has_draft", [tickSeesDrafts([staff(30, "sent_edited")], T), tickSeesDrafts([staff(30, "discarded")], T)], ["has_draft", "has_draft"]);
+  eq("POSITIVE CONTROL: superseded drafts alone don't count as acted on", tickSeesDrafts([staff(30, "superseded")], T), "draft");
+}
+
+console.log("\nSUPPORT AGENT: THE WEEKLY LINE (src/lib/agentScoreboard):");
+{
+  const N = Date.parse("2026-11-08T20:00:00Z");
+  let k = 0;
+  const m = (thread: string, dir: "inbound" | "outbound", at: string, over: Partial<ScoreMsg> = {}): ScoreMsg => ({ id: `m${++k}`, thread_id: thread, direction: dir, sent_at: at, body: dir === "inbound" ? "When is the video up?" : "x", is_auto_reply: false, auto_sent_draft_id: null, sent_by_user_id: dir === "outbound" ? "u1" : null, media_kind: null, ...over });
+  const rows = [
+    m("a", "inbound", "2026-11-07T15:00:00Z"), m("a", "outbound", "2026-11-07T15:04:00Z", { auto_sent_draft_id: "d1", sent_by_user_id: null }),
+    m("b", "inbound", "2026-11-07T16:00:00Z"), m("b", "outbound", "2026-11-07T16:10:00Z", { auto_sent_draft_id: "d2", sent_by_user_id: null }), m("b", "outbound", "2026-11-07T17:00:00Z"),
+    m("c", "inbound", "2026-11-07T18:00:00Z"), m("c", "outbound", "2026-11-07T18:20:00Z", { id: "sentdraft" }),
+    m("d", "inbound", "2026-11-07T19:00:00Z"), m("d", "outbound", "2026-11-07T19:00:30Z", { is_auto_reply: true, sent_by_user_id: null }), m("d", "outbound", "2026-11-07T20:00:00Z"),
+    m("e", "inbound", "2026-11-08T19:00:00Z"),
+    m("f", "inbound", "2026-11-08T19:30:00Z", { body: "thanks" }),
+    m("g", "inbound", "2026-10-01T15:00:00Z"), m("g", "outbound", "2026-10-01T15:05:00Z"),
+  ];
+  const s = agentScoreboard(rows, new Set(["sentdraft"]), N);
+  eq("counts: requests, resolved by the agent, answered by it, drafted, by a person, open", [s.requests, s.resolvedByAgent, s.answeredByAgent, s.drafted, s.byPerson, s.open], [5, 1, 2, 1, 1, 1]);
+  eq("median first reply in support minutes (4, 10, 20, 60 → 15); the auto-reply isn't the first reply", s.medianFirstReplyMin, 15);
+  eq("POSITIVE CONTROL: with no rows everything is zero and the median is unknown", agentScoreboard([], new Set(), N), { requests: 0, resolvedByAgent: 0, answeredByAgent: 0, drafted: 0, byPerson: 0, open: 0, medianFirstReplyMin: null });
+}
+
+console.log("\nSUPPORT AGENT: OVERDUE (2 support hours, src/lib/awaitingReply):");
+{
+  eq("2h10m inside support hours → overdue", isOverdue("2026-11-06T16:00:00Z", Date.parse("2026-11-06T18:10:00Z")), true);
+  eq("POSITIVE CONTROL: 1h50m → not yet", isOverdue("2026-11-06T16:00:00Z", Date.parse("2026-11-06T17:50:00Z")), false);
+  eq("8:55pm Central to 7am next day is 5 support minutes → not overdue", isOverdue("2026-11-07T02:55:00Z", Date.parse("2026-11-07T13:00:00Z")), false);
+  eq("no start → not overdue", isOverdue(null, Date.now()), false);
+  const rowsQ = [{ id: "young", last_message_at: "2026-11-06T17:30:00Z", waiting_since: "2026-11-06T17:30:00Z" }, { id: "old", last_message_at: "2026-11-06T15:00:00Z", waiting_since: "2026-11-06T15:00:00Z" }];
+  eq("the queue puts the overdue chat first", bucket(rowsQ, "needs", () => "human", Date.parse("2026-11-06T18:00:00Z")).rows.map((r) => r.id), ["old", "young"]);
+}
+
+console.log("\nSUPPORT AGENT: A HANDOFF STAYS WITH A PERSON (team_follow_up):");
+{
+  const held = (flags: string): AttentionDraft => ({ id: "d", thread_id: "t", based_on_message_id: "m", created_at: "2026-11-08T00:00:00Z", outcome: "sent_unchanged", error: null, decision: "auto_send", decision_reason: null, decision_shadow: false, hold_status: "sent", hold_note: null, hold_until: null, action_status: null, staff_notes: `[flags: ${flags}]\n- Field rental`, action: null });
+  eq("a field rental the agent handed off stays in Needs a human", attentionFor({ awaiting: false, draft: held("team_follow_up"), humanRepliedSinceDraft: false }), { section: "human", reason: TEAM_FOLLOW_UP_NOTE, hold_until: null });
+  eq("  until a person replies", attentionFor({ awaiting: false, draft: held("team_follow_up"), humanRepliedSinceDraft: true }), null);
+  eq("POSITIVE CONTROL: the strike holding line keeps its own reason", attentionFor({ awaiting: false, draft: held("strike_dispute"), humanRepliedSinceDraft: false })?.reason, STRIKE_DISPUTE_NOTE);
+  ok("the model can set the flag", (DRAFT_OUTPUT_SCHEMA.properties.flags.items.enum as readonly string[]).includes("team_follow_up"));
 }
 
 // tsx runs this file as CJS, which has no top-level await: the async sections run inside main().
@@ -801,7 +912,11 @@ console.log("\nDISCARD REASONS AND STALENESS:");
   ok("POSITIVE CONTROL: the stale check still exists, in runDraft", /staleDraftReason\(prior/.test(strip(readFileSync("src/lib/aiDraftRun.ts", "utf8"))));
   const tick = strip(readFileSync("src/lib/aiDraftAutoRun.ts", "utf8"));
   ok("POSITIVE CONTROL: the tick drafts", /runDraft\(\{/.test(tick));
-  ok("the tick never regenerates: only a thread with no draft for this message, regenerate false", /regenerate: false/.test(tick) && !/regenerate: true/.test(tick) && /if \(\(any\.data \?\? \[\]\)\.length\) return "has_draft"/.test(tick));
+  // ITEMISED (2026-11-08, Ryan): an EXPECTATION change. The tick used to skip any message with a draft at all,
+  // so a chat a person only opened was never decided (26 of 150 person-handled requests Oct 31 to Nov 8).
+  // Now tickSeesDrafts decides (asserted at runtime in SUPPORT AGENT below); this pins that the tick obeys it
+  // and regenerates only past it.
+  ok("the tick skips unless tickSeesDrafts says draft, and regenerates only then", /const seen = tickSeesDrafts\(/.test(tick) && /if \(seen !== "draft"\) return seen;/.test(tick) && /regenerate: \(any\.data \?\? \[\]\)\.length > 0/.test(tick) && !/regenerate: true/.test(tick));
   const card = strip(readFileSync("src/app/(internal)/match-ops/player-chats/components/AiDraftCard.tsx", "utf8"));
   ok("the card holds its request while the tab is hidden", /visibilityState === "visible"\) \{ void request\(false\)/.test(card));
   ok("the tick's cron is every minute", /"\/api\/crm\/auto-send\/tick",\s*"schedule": "\* \* \* \* \*"/.test(readFileSync("vercel.json", "utf8")));
@@ -812,7 +927,7 @@ console.log("\nDISCARD REASONS AND STALENESS:");
 console.log("\nAUTO-SEND DECISION:");
 {
   const on: AutoSendConfig = { auto_categories: ["veo", "player_cancel", "guest_pass", "booking"], action_categories: ["player_cancel", "guest_pass"], credit_cap_cents: 1500, hold_minutes: 3, enabled: true, shadow: false };
-  const ctx = (over: Partial<DecisionContext> = {}, c: DraftContext = buildDraftContext(lateCancel(0))): DecisionContext => ({ context: c, windowClosed: false, humanRepliedRecently: false, guest: null, ...over });
+  const ctx = (over: Partial<DecisionContext> = {}, c: DraftContext = buildDraftContext(lateCancel(0))): DecisionContext => ({ context: c, windowClosed: false, humanRepliedRecently: false, guestPass: null, ...over });
   const plain = { reply: "Videos go up within 24 to 48 hours.", category: "veo", flags: [] as string[], action: null };
   const credit = (amount: number) => ({ reply: "We've credited it.", category: "player_cancel", flags: [] as string[], action: { kind: "credit" as const, amount_cents: amount, reason: "late cancel" } });
   const d = decideAutoSend;
@@ -851,25 +966,28 @@ console.log("\nAUTO-SEND DECISION:");
   const club = buildDraftContext({ ...lateCancel(0), matches: [{ ...lateCancel(0).matches[0], state: "club_cancelled" }] });
   ok("a club-cancelled match, already credited → human", /already cancelled/.test(d(credit(1200), ctx({}, club), on).reason));
   // Guest code.
+  // ITEMISED (2026-11-08, Ryan): an EXPECTATION change, reversing 2026-11-07. The agent may create a guest
+  // code again, but only in guest_pass, only when the guest pass check (src/lib/guestPass) says create,
+  // and only with guest_pass on as an action category. The 2026-11-07 cases that pinned "every guest code
+  // goes to a person" are replaced by the cases below; the tick's real preflight and write are pinned too.
   const member = buildDraftContext({ ...lateCancel(0, true), membership: { status: "ACTIVE", since: "2026-01-01T00:00:00Z", renews: null, canceledAt: null, price: 6650 } });
   const code = { reply: "Your code is {code}.", category: "guest_pass", flags: ["guest_pass"], action: { kind: "issue_guest_code" as const, amount_cents: null, reason: "asked" } };
-  const good = { active: true, over24Hours: true, hasActiveCode: false };
-  // ITEMISED (2026-11-07, Ryan): an EXPECTATION change. Auto-send used to issue a guest code for an
-  // active member past 24 hours with no live code ("POSITIVE … → with action"), and the three reason
-  // checks below pinned which fact stopped it. A code is now only ever issued by a person pressing the
-  // button, so EVERY case — including the one that used to pass — goes to a person with one reason.
-  for (const [label, g] of [["active, over 24 hours, no code (used to auto-send)", good], ["not active", { ...good, active: false }], ["under 24 hours", { ...good, over24Hours: false }], ["already has one", { ...good, hasActiveCode: true }], ["facts unread", null]] as const) {
-    const r = d(code, ctx({ guest: g }, member), on);
-    eq(`guest code, ${label} → a person, never auto-send`, [r.decision, r.reason], ["human", GUEST_CODE_PERSON_ONLY]);
-  }
-  eq("…even with guest_pass AND promo_code in the stored action list", d(code, ctx({ guest: good }, member), { ...on, action_categories: ["guest_pass", "promo_code", "player_cancel"] }).decision, "human");
-  eq("guest_pass and promo_code are not action categories", ["guest_pass", "promo_code"].filter((c) => AUTO_ACTION_CATEGORIES.includes(c)), []);
+  const create = { kind: "create" as const, code: "SATX600FP" };
+  eq("POSITIVE: guest_pass, check says create, action category on → auto_send_with_action", d(code, ctx({ guestPass: create }, member), on).decision, "auto_send_with_action");
+  ok("HUMAN: guest_pass on but its action off", /Actions aren't turned on for guest_pass/.test(d(code, ctx({ guestPass: create }, member), { ...on, action_categories: ["player_cancel"] }).reason));
+  eq("HUMAN: the check didn't run", d(code, ctx({ guestPass: null }, member), on).decision, "human");
+  eq("HUMAN: the check says a person, with its reason", d(code, ctx({ guestPass: { kind: "person", reason: "Guest passes: comp." } }, member), on).reason, "Guest passes: comp.");
+  eq("HUMAN: a code action when the check says existing", d(code, ctx({ guestPass: { kind: "existing", code: "SATX600FP", usesLeft: 2, endsOn: "Nov 7, 2027" } }, member), on).reason, GUEST_CODE_PERSON_ONLY);
+  eq("POSITIVE: existing code, no action → auto_send", d({ ...code, reply: "Your guest code is SATX600FP, 2 uses left.", action: null }, ctx({ guestPass: { kind: "existing", code: "SATX600FP", usesLeft: 2, endsOn: "Nov 7, 2027" } }, member), on).decision, "auto_send");
+  eq("HUMAN: a guest code proposed under promo_code", d({ ...code, category: "promo_code" }, ctx({ guestPass: create }, member), { ...on, auto_categories: [...on.auto_categories, "promo_code"], action_categories: ["guest_pass", "promo_code"] }).reason, GUEST_CODE_PERSON_ONLY);
+  eq("guest_pass is an action category, promo_code is not", ["guest_pass", "promo_code"].filter((c) => AUTO_ACTION_CATEGORIES.includes(c)), ["guest_pass"]);
   eq("POSITIVE CONTROL: the real action categories are still there", AUTO_ACTION_CATEGORIES.includes("player_cancel"), true);
-  eq("a stored row still holding them is filtered to the allowed list", decisionConfig({ ...on, action_categories: ["guest_pass", "promo_code", "player_cancel"] }).action_categories, ["player_cancel"]);
+  eq("a stored row holding promo_code is filtered to the allowed list", decisionConfig({ ...on, action_categories: ["guest_pass", "promo_code", "player_cancel"] }).action_categories, ["guest_pass", "player_cancel"]);
   {
     const tick = readFileSync("src/lib/aiDraftAutoRun.ts", "utf8").replace(/\/\/[^\n]*/g, "");
-    ok("THE TICK HAS NO PROMO WRITE: no createPromoWrite and no code builder in the auto-send path", !/createPromoWrite|guestCodeApiBody|guestCodeFor\(/.test(tick));
-    ok("  and its guest preflight and code write both refuse", /async guestPreflight\(\)\s*\{\s*return \{ ok: false, error: GUEST_CODE_PERSON_ONLY \}/.test(tick) && /async writeGuestCode\(\)\s*\{\s*return \{ status: "not_applied" as const, error: GUEST_CODE_PERSON_ONLY \}/.test(tick));
+    ok("THE TICK'S GUEST WRITE re-reads the membership live and re-decides before writing", /async guestPreflight\(playerId\)[\s\S]{0,200}liveGuestMembership\(ENV, playerId\)[\s\S]{0,900}decideGuestPass\(facts\)[\s\S]{0,120}a\.kind === "create"/.test(tick));
+    ok("  and writes through createPromoWrite with the Promo Codes body, as the support agent", /async writeGuestCode\(code\)[\s\S]{0,120}createPromoWrite\(\{[\s\S]{0,120}guestCodeApiBody\(code, Date\.now\(\)\)[\s\S]{0,200}email: AUTO_SEND_ACTOR/.test(tick));
+    ok("  and calls createPromoWrite in exactly one place", (tick.match(/createPromoWrite\(/g) ?? []).length === 1);
     const btn = readFileSync("src/app/api/crm/threads/[id]/ai-draft/action/route.ts", "utf8");
     ok("POSITIVE CONTROL: the person's button still reaches the promo route", /promoPOST/.test(btn));
   }
@@ -984,7 +1102,7 @@ console.log("\nAUTO-SEND DECISION:");
 console.log("\nREPLY LENGTH:");
 {
   const on: AutoSendConfig = { auto_categories: ["veo"], action_categories: [], credit_cap_cents: 1500, hold_minutes: 3, enabled: true, shadow: false };
-  const dctx: DecisionContext = { context: buildDraftContext(lateCancel(0)), windowClosed: false, humanRepliedRecently: false, guest: null };
+  const dctx: DecisionContext = { context: buildDraftContext(lateCancel(0)), windowClosed: false, humanRepliedRecently: false, guestPass: null };
   const words = (n: number) => Array.from({ length: n }, (_, i) => `word${i}`).join(" ");
   eq("wordCount counts words", [wordCount(words(40)), wordCount(`  ${words(3)}\n`)], [40, 3]);
   eq("a reply of exactly 40 words can send", decideAutoSend({ reply: words(40), category: "veo", flags: [], action: null }, dctx, on).decision, "auto_send");
@@ -1038,7 +1156,7 @@ console.log("\nMEMBERSHIP AUTO-REPLIES:");
   const context = buildDraftContext({ ...lateCancel(0, true), membership: { status: "ACTIVE", since: "2026-01-01T00:00:00Z", renews: null, canceledAt: null, price: 6650 } });
   const reply = "You can cancel in the app: Profile tab, Membership Details, scroll down, Cancel Membership.";
   const decide = (msgs: DraftMsg[], over: Record<string, unknown> = {}, c: DraftContext = context, cfg = on) =>
-    decideAutoSend({ reply, category: "membership_billing", flags: [], action: null, ...over }, { context: c, windowClosed: false, humanRepliedRecently: false, guest: null, msgs }, cfg);
+    decideAutoSend({ reply, category: "membership_billing", flags: [], action: null, ...over }, { context: c, windowClosed: false, humanRepliedRecently: false, guestPass: null, msgs }, cfg);
   const inb = (b: string, ago = 1 * H) => msg("inbound", b, ago);
   const out = (b: string, extra: Partial<DraftMsg> = {}) => msg("outbound", b, 3 * H, extra);
   eq("POSITIVE: a member's first how-to-cancel on a confirmed account auto-sends", decide([inb("How do I cancel my membership?")]).decision, "auto_send");
@@ -1073,7 +1191,7 @@ console.log("\nMEMBERSHIP AUTO-REPLIES:");
   eq("HUMAN: flag escalate", decide([inb("how do I cancel")], { flags: ["escalate"] }).reason, "Escalate");
   eq("HUMAN: flag refund_pushback", decide([inb("how do I cancel")], { flags: ["refund_pushback"] }).reason, "Refund pushback");
   ok("HUMAN: a membership reply with an action", /can't carry an action/.test(decide([inb("how do I cancel")], { action: { kind: "credit", amount_cents: 1200, reason: "x" } }).reason));
-  ok("HUMAN: no conversation to check, fails closed", decideAutoSend({ reply, category: "membership_billing", flags: [], action: null }, { context, windowClosed: false, humanRepliedRecently: false, guest: null }, on).decision === "human");
+  ok("HUMAN: no conversation to check, fails closed", decideAutoSend({ reply, category: "membership_billing", flags: [], action: null }, { context, windowClosed: false, humanRepliedRecently: false, guestPass: null }, on).decision === "human");
 }
 
 // ── 2026-11-02: no stalling, auto-link, the refund rule, cut short, the thread's city ─────────
@@ -1081,7 +1199,7 @@ console.log("\nNO STALLING:");
 {
   const on: AutoSendConfig = { auto_categories: ["veo", "booking", "match_cancelled", "logistics", "strike"], action_categories: ["match_cancelled"], credit_cap_cents: 1500, hold_minutes: 3, enabled: true, shadow: false };
   const c = buildDraftContext(lateCancel(0));
-  const dc = (msgs?: DraftMsg[], over: Partial<DecisionContext> = {}): DecisionContext => ({ context: c, windowClosed: false, humanRepliedRecently: false, guest: null, msgs, ...over });
+  const dc = (msgs?: DraftMsg[], over: Partial<DecisionContext> = {}): DecisionContext => ({ context: c, windowClosed: false, humanRepliedRecently: false, guestPass: null, msgs, ...over });
   const plain = { reply: "Videos go up within 24 to 48 hours.", category: "veo", flags: [] as string[], action: null };
   eq("POSITIVE CONTROL: a plain answer still auto-sends", decideAutoSend(plain, dc([msg("inbound", "where's my video", 1 * H)]), on).decision, "auto_send");
   // Every one of these went out on its own between Oct 31 and Nov 2.
@@ -1144,7 +1262,7 @@ console.log("\nAUTO-LINK FROM A TYPED NUMBER:");
     await runDraft(f.deps);
     eq(`${label} → nothing linked`, calls, []);
     eq(`  the decision gets the miss (${kind})`, (miss as { kind?: string } | null)?.kind, kind);
-    const d = decideAutoSend({ reply: "Thanks!", category: "veo", flags: [], action: null }, { context: buildDraftContext({ ...lateCancel(0), linked: false }), windowClosed: false, humanRepliedRecently: false, guest: null, linkMiss: miss as LinkSuggestion }, on);
+    const d = decideAutoSend({ reply: "Thanks!", category: "veo", flags: [], action: null }, { context: buildDraftContext({ ...lateCancel(0), linked: false }), windowClosed: false, humanRepliedRecently: false, guestPass: null, linkMiss: miss as LinkSuggestion }, on);
     ok(`  → human, saying why`, d.decision === "human" && (kind === "many" ? /on 2 accounts/ : /No account found/).test(d.reason), d.reason);
   }
   // A link that didn't land: drafted as unconfirmed, nothing claimed.
@@ -1193,7 +1311,7 @@ console.log("\nMEMBERSHIP REFUND RULE:");
   const on: AutoSendConfig = { auto_categories: ["membership_billing"], action_categories: [], credit_cap_cents: 1500, hold_minutes: 3, enabled: true, shadow: false };
   const mctx = (refund: RefundEligibility | null) => buildDraftContext({ ...lateCancel(0, true), membership: { status: "ACTIVE", since: "2026-06-01T00:00:00Z", renews: "2026-12-01T00:00:00Z", canceledAt: null, price: 7199 }, membershipRefund: refund });
   const ask = [msg("inbound", "I forgot to cancel, can I get a refund for Nov 1?", 1 * H)];
-  const dm = (reply: string, refund: RefundEligibility | null) => decideAutoSend({ reply, category: "membership_billing", flags: [], action: null }, { context: mctx(refund), windowClosed: false, humanRepliedRecently: false, guest: null, msgs: ask }, on);
+  const dm = (reply: string, refund: RefundEligibility | null) => decideAutoSend({ reply, category: "membership_billing", flags: [], action: null }, { context: mctx(refund), windowClosed: false, humanRepliedRecently: false, guestPass: null, msgs: ask }, on);
   eq("eligible → never auto: a person with EDIT MEMBERSHIPS", dm("We've refunded your $71.99 charge and ended your membership.", { eligible: true, amountCents: 7199 }), { decision: "human", reason: "Membership refund eligible: $71.99" });
   eq("not eligible → the policy answer auto-sends", dm("The Nov 1 charge stands under our 25-day policy. Cancel in the app: Profile tab, Membership Details, Cancel Membership.", { eligible: false, reason: "Asked after the 5th." }).decision, "auto_send");
   ok("not eligible and the reply promises a refund anyway → human", dm("We'll refund that for you.", { eligible: false, reason: "Asked after the 5th." }).decision === "human");
@@ -1299,11 +1417,11 @@ console.log("\nMATCHES CUT SHORT:");
   const ctxPlain = buildDraftContext({ ...lateCancel(0, false, true), matches: [played] });
   const complaint = [msg("inbound", "the lights went out halfway through tonight, can I get a credit?", 1 * H)];
   const credit = { reply: "Sorry the lights cut it short, we've credited $12.00.", category: "match_cancelled", flags: [] as string[], action: { kind: "credit" as const, amount_cents: 1200, reason: "cut short, lights" } };
-  const dd = (c: DraftContext, draft = credit) => decideAutoSend(draft, { context: c, windowClosed: false, humanRepliedRecently: false, guest: null, msgs: complaint }, on);
+  const dd = (c: DraftContext, draft = credit) => decideAutoSend(draft, { context: c, windowClosed: false, humanRepliedRecently: false, guestPass: null, msgs: complaint }, on);
   eq("MARKED cut short → credit the match price on its own, no courtesy rule (this player had one)", dd(ctxCut).decision, "auto_send_with_action");
   eq("UNMARKED + a lights complaint → human, check with the city manager", dd(ctxPlain), { decision: "human", reason: NOT_MARKED_CUT_SHORT });
   eq("  a plain reply too", dd(ctxPlain, { ...credit, action: null as never, reply: "Sorry about the lights." }).reason, NOT_MARKED_CUT_SHORT);
-  ok("marked, but over the cap → human", decideAutoSend(credit, { context: ctxCut, windowClosed: false, humanRepliedRecently: false, guest: null, msgs: complaint }, { ...on, credit_cap_cents: 1000 }).decision === "human");
+  ok("marked, but over the cap → human", decideAutoSend(credit, { context: ctxCut, windowClosed: false, humanRepliedRecently: false, guestPass: null, msgs: complaint }, { ...on, credit_cap_cents: 1000 }).decision === "human");
   eq("the model sees the mark", ctxCut.recent_matches[0].cut_short, { reason: "lights", minutes_played: 25 });
   for (const t of ["the lights went out", "lights were off at 9", "no lights tonight", "game got called for lightning, ended early", "rain stopped the match", "we only played 20 minutes", "the match was cut short"]) ok(`complaint: "${t}"`, complainsCutShort(t));
   for (const t of ["is tonight still on with the rain?", "what time does it start", "lights look great"]) ok(`not a complaint: "${t}"`, !complainsCutShort(t));
@@ -1383,7 +1501,7 @@ console.log("\nNEEDS A HUMAN SECTION:");
 console.log("\nSTRIKE HOLDING REPLIES:");
 {
   const on: AutoSendConfig = { auto_categories: ["strike", "veo"], action_categories: [], credit_cap_cents: 1500, hold_minutes: 3, enabled: true, shadow: false };
-  const ctx: DecisionContext = { context: buildDraftContext(lateCancel(0)), windowClosed: false, humanRepliedRecently: false, guest: null };
+  const ctx: DecisionContext = { context: buildDraftContext(lateCancel(0)), windowClosed: false, humanRepliedRecently: false, guestPass: null };
   const hold = "Thanks for letting us know! I need to check with the match manager on that one, and we'll get back to you as soon as we hear.";
   const dispute = (reply: string, over: Record<string, unknown> = {}) => decideAutoSend({ reply, category: "strike", flags: ["strike_dispute"], action: null, ...over }, ctx, on);
   eq("POSITIVE: the holding line can send", dispute(hold).decision, "auto_send");
@@ -1441,7 +1559,7 @@ console.log("\nIMAGES:");
   ok("POSITIVE CONTROL: a member number is fine", guardDraft(contact("That's member ATX597, you're all set."), { courtesy_credit_eligible: false, imagesAttached: true }).ok);
 
   const on: AutoSendConfig = { auto_categories: ["veo"], action_categories: [], credit_cap_cents: 1500, hold_minutes: 3, enabled: true, shadow: false };
-  const dctx: DecisionContext = { context: buildDraftContext(lateCancel(0)), windowClosed: false, humanRepliedRecently: false, guest: null };
+  const dctx: DecisionContext = { context: buildDraftContext(lateCancel(0)), windowClosed: false, humanRepliedRecently: false, guestPass: null };
   eq("an image-led message follows its category", decideAutoSend({ reply: "Videos go up in 24 to 48 hours.", category: "veo", flags: [], action: null, image_unreadable: false }, dctx, on).decision, "auto_send");
   eq("the model couldn't read it → human, Image unreadable", decideAutoSend({ reply: "The team will check.", category: "veo", flags: [], action: null, image_unreadable: true }, dctx, on), { decision: "human", reason: "Image unreadable" });
   const broken: DraftOutput[] = [];

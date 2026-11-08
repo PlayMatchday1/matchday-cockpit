@@ -69,7 +69,7 @@ import ChannelChip, {
 import PlayerAvatar from "@/components/PlayerAvatar";
 import type { MatchStatus } from "@/components/MatchStatusPill";
 import { type StatusFilter } from "./components/FilterBar";
-import { isAwaitingReply, awaitingAgeLabel } from "@/lib/awaitingReply";
+import { isAwaitingReply, awaitingAgeLabel, isOverdue } from "@/lib/awaitingReply";
 import AssignDropdown from "./components/AssignDropdown";
 import MessageBubble, {
   AGENT_GREEN,
@@ -77,6 +77,7 @@ import MessageBubble, {
 } from "./components/MessageBubble";
 import Composer from "./components/Composer";
 import AutoSendPanel from "./components/AutoSendPanel";
+import AgentScoreLine from "./components/AgentScoreLine";
 import AutoSendCountdown from "./components/AutoSendCountdown";
 import { rowAttention } from "@/lib/crmAttention";
 import MetricsStrip from "./components/MetricsStrip";
@@ -385,7 +386,10 @@ export default function CrmClient({ onTryNew }: { onTryNew?: () => void } = {}) 
       Date.parse(b.last_message_at) - Date.parse(a.last_message_at);
     if (view === "open" || view === "mine") {
       const sectionOf = (t: ThreadListRow) => rowAttention({ ...t, awaiting: isAwaiting(t) })?.section ?? null;
-      const needsHuman = filteredThreads.filter((t) => sectionOf(t) === "human").sort(byOldest);
+      // OVERDUE FIRST (2 support hours with no reply, Ryan 2026-11-08), then the oldest.
+      const now = Date.now();
+      const late = (t: ThreadListRow) => (isOverdue(t.waiting_since ?? t.last_message_at, now) ? 0 : 1);
+      const needsHuman = filteredThreads.filter((t) => sectionOf(t) === "human").sort((a, b) => late(a) - late(b) || byOldest(a, b));
       const autoSending = filteredThreads.filter((t) => sectionOf(t) === "auto_sending").sort(byOldest);
       const answered = filteredThreads.filter((t) => sectionOf(t) === null).sort(byNewest);
       const groups: { key: string; label: string | null; tone: "await" | "quiet" | "auto"; rows: ThreadListRow[] }[] = [];
@@ -984,6 +988,7 @@ export default function CrmClient({ onTryNew }: { onTryNew?: () => void } = {}) 
                   )}
                 </div>
               )}
+              {(view === "open" || view === "mine") && <AgentScoreLine />}
               {!showCaughtUp &&
                 renderGroups.map((g) => (
                   <div key={g.key} className="mb-1">
@@ -1419,11 +1424,15 @@ function MistInboxRow({
         </span>
         )}
         {autoSending && <AutoSendCountdown threadId={thread.id} holdUntil={attention?.hold_until ?? null} onDone={onHoldChanged} />}
-        {waiting && !autoSending && (
+        {waiting && !autoSending && (isOverdue(thread.waiting_since ?? thread.last_message_at, nowMs) ? (
+          <span data-testid="crm-overdue" className="mt-1.5 inline-flex rounded-[6px] border px-[7px] py-0.5 text-[10px] font-[750]" style={{ background: "#fbe4df", borderColor: "#e3a194", color: "#a82a18" }}>
+            Overdue · waiting {awaitingAgeLabel(thread.waiting_since ?? thread.last_message_at, nowMs)}
+          </span>
+        ) : (
           <span className="mt-1.5 inline-flex rounded-[6px] border px-[7px] py-0.5 text-[10px] font-[750]" style={{ background: "#fdf1d0", borderColor: "#e3c369", color: "#8a6300" }}>
             Waiting {awaitingAgeLabel(thread.waiting_since ?? thread.last_message_at, nowMs)}
           </span>
-        )}
+        ))}
       </span>
     </button>
   );

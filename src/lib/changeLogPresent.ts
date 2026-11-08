@@ -35,7 +35,9 @@ export const EMPTY_ENRICH: Enrich = { staffByEmail: {}, staffById: {}, players: 
 // ── WHO ─────────────────────────────────────────────────────────────────────────────────────────
 export type Actor = { key: string; name: string; initials: string; system: boolean };
 const SYSTEM_ACTORS: [RegExp, string][] = [
-  [/^auto-send(@clubhouse\.system)?$/i, "Auto-send"],
+  // The support agent (Ryan 2026-11-08: "support agent" as the actor). Stored as auto-send@clubhouse.system,
+  // as it always was, so its history stays one identity; shown under this name.
+  [/^auto-send(@clubhouse\.system)?$/i, "Support agent"],
   [/^system \(out-of-hours auto-reply\)$/i, "Out-of-hours auto-reply"],
   [/^Field backfill\b/i, "Field backfill"],
   [/^Claude \(seeded by script/i, "Script"],

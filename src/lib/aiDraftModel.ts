@@ -20,6 +20,7 @@
 import { whatsappWindowExpired } from "@/lib/crmWindow";
 import { STRIKE_DISPUTE_NOTE } from "@/lib/crmAttention";
 import { dayAndTime, lateReplyProblem, unscheduledTimes, FALLBACK_TZ, type DraftClock, type ScheduleEntry } from "@/lib/aiDraftClock";
+import { guestPassForModel, guestReplyProblem, type GuestPassAnswer } from "@/lib/guestPass";
 import { stallPhrase, waitingOnLookup, complainsCutShort, WAITING_ON_LOOKUP, NOT_MARKED_CUT_SHORT, type CutShort, type RefundEligibility } from "@/lib/aiDraftPolicy";
 
 export const AI_DRAFT_MODEL = "claude-opus-5-5";
@@ -48,7 +49,7 @@ export type DraftMsg = {
   media_url?: string | null;
 };
 
-export type SkipReason = "no_messages" | "latest_not_player" | "stop" | "greeting" | "window_closed";
+export type SkipReason = "no_messages" | "latest_not_player" | "stop" | "greeting" | "window_closed" | "agent_off";
 export type Eligibility = { ok: true; basedOn: DraftMsg; pending: DraftMsg[] } | { ok: false; reason: SkipReason };
 
 export const SKIP_REASON_TEXT: Record<SkipReason, string> = {
@@ -57,6 +58,7 @@ export const SKIP_REASON_TEXT: Record<SkipReason, string> = {
   stop: "The player asked to stop. No reply.",
   greeting: "Just a greeting or a thanks. No draft needed.",
   window_closed: "The WhatsApp window is closed, so a free-text reply can't be sent.",
+  agent_off: "The agent is off for this kind of request.",
 };
 
 // Not a reply and not a request: an out-of-hours auto-reply we sent, and a player's emoji reaction.
@@ -176,7 +178,7 @@ export type DraftContextIn = {
   city: string | null;
   isMember: boolean | null;
   /** id: the MatchDay userSubscriptions row, for ending it with a refund. Never sent to the model. */
-  membership: { status: string | null; since: string | null; renews: string | null; canceledAt: string | null; price: number | null; id?: number | null } | null;
+  membership: { status: string | null; since: string | null; renews: string | null; canceledAt: string | null; price: number | null; id?: number | null; /** The payload's own status, never defaulted (ADDED_FROM_ADMIN is a comp). Never sent to the model. */ statusRaw?: string | null } | null;
   creditsCents: number | null;
   matchesPlayed: number | null;
   strikes: { active: number; limit: number; suspended: boolean } | null;
@@ -193,6 +195,8 @@ export type DraftContextIn = {
   cityUnknown?: boolean;
   /** The city codes a city_guess may name. */
   knownCities?: readonly { code: string; name: string }[];
+  /** What a guest pass ask gets (src/lib/guestPass.ts). Omitted = not worked out (no guest words in what they sent). */
+  guestPass?: GuestPassAnswer | null;
 };
 
 // One field in the player's city with a camera on at least one match. Read from the camera marker
@@ -263,6 +267,7 @@ export function buildDraftContext(c: DraftContextIn) {
       membership_refund: null,
       city_unknown: c.cityUnknown === true,
       known_cities: c.knownCities ?? [],
+      guest_pass: c.guestPass ? guestPassForModel({ kind: "ask_phone" }) : null,
     };
   }
   const member = c.isMember === true || (c.membership != null && /active|added_from_admin/i.test(c.membership.status ?? "") && !c.membership.canceledAt);
@@ -305,6 +310,7 @@ export function buildDraftContext(c: DraftContextIn) {
       : null,
     city_unknown: c.cityUnknown === true,
     known_cities: c.knownCities ?? [],
+    guest_pass: guestPassForModel(c.guestPass),
   };
 }
 
@@ -342,6 +348,7 @@ How to write the reply:
 - When a player asks for a refund, give the credit answer directly and positively: where the money goes (their MatchDay account, as credit) and how they use it (it applies automatically on their next booking). Don't escalate on the first ask. Escalate (flag "escalate" and "refund_pushback") only if they push back after hearing it.
 - A match in recent_matches with cut_short set was stopped early on our side (lights, weather, injury). Treat a question about it like a match we cancelled: category match_cancelled, propose a credit of its match_price. If the player says a match was stopped early (lights out, weather) and no match in recent_matches has cut_short, don't promise anything: say the team will confirm with the city manager.
 - MEMBERSHIP REFUNDS follow membership_refund in PLAYER CONTEXT and nothing else. eligible true: write the reply as done ("We've refunded your $71.99 charge and ended your membership."); staff refund it before sending. eligible false or null: no refund, and don't apologize for the policy. If they already cancelled, confirm there are no more charges and they can play through membership.cancel_policy.last_day_to_play. If they haven't, give the in-app cancel steps and say, from membership.cancel_policy, whether one more charge comes on charge_date. Firm and friendly. Never promise a membership refund when eligible isn't true.
+- GUEST PASSES follow guest_pass in PLAYER CONTEXT and nothing else: do what its "say" says, category guest_pass. Never write a guest code yourself; the code only ever appears as the literal placeholder {code}, which the server fills in. If guest_pass is null and they ask about guest passes, say a teammate will send it and propose no action.
 - CITY: if city_unknown is true and the player hasn't said where they play, end the reply with one short question asking which city or field they play at. Set city_guess to one code from known_cities only when the conversation makes their city clear, otherwise "".
 - If the conversation is not something a reply can handle (a safety problem, a legal threat, a refund demand after the credit answer), write a short kind holding reply and set the flag.
 
@@ -351,8 +358,8 @@ Output fields:
 - action: one proposed action, only for these categories: needs_credit, player_cancel, match_cancelled, membership_billing, guest_pass, promo_code. kind is "credit" (amount_cents is the match price in cents), "issue_guest_code" (amount_cents is null; the server builds the code, so never write one: put the literal placeholder {code} in reply and say it's live in a few minutes), or "none" (amount_cents is null, reason is ""). reason is one line for the audit log, with no name, phone or email in it.
 - staff_notes: at most 3 short bullets for staff only, never shown to the player, most important first, plain words. Never repeat a line, and never restate that the account is unconfirmed or unlinked: when it is, the system adds that line itself as the first bullet and it counts as one of the 3. Name any action needed (with amounts) and anything you could not verify. Use the exact phrases the playbook requires ("Hold requested: tell Ryan", "Strike dispute: check with the match manager", "Guest passes: confirm the membership, then issue the code", "Under 16"). No recap of the conversation unless it changes what staff should do.
 - match_ids: the match_id of every SCHEDULE match the reply mentions. Empty if none.
-- category: one short label for the request type, like "membership_billing", "match_cancelled", "player_cancel", "needs_credit", "veo", "promo_code", "guest_pass", "strike", "booking", "logistics", "payment", "account", "age", "complaint", "other".
-- flags: any of "escalate", "urgent", "hold_requested", "strike_dispute", "guest_pass", "under_16", "refund_pushback", "needs_credit". Empty if none.
+- category: one short label for the request type, like "membership_billing", "match_cancelled", "player_cancel", "needs_credit", "veo", "promo_code", "guest_pass", "strike", "booking", "logistics", "field_rental" (a private field rental or event), "refund", "payment", "account", "age", "complaint", "other".
+- flags: any of "escalate", "urgent", "hold_requested", "strike_dispute", "guest_pass", "under_16", "refund_pushback", "needs_credit", "team_follow_up" (the reply tells the player the team will confirm something, like a field rental once every detail is in). Empty if none.
 - offers_courtesy_credit: true only if the reply offers a courtesy credit for a late cancel.
 - image_unreadable: true only if an image is attached and you couldn't read it.
 - city_guess: a code from known_cities when the conversation shows where the player plays, otherwise "".`;
@@ -365,7 +372,7 @@ export const DRAFT_OUTPUT_SCHEMA = {
     category: { type: "string" },
     flags: {
       type: "array",
-      items: { type: "string", enum: ["escalate", "urgent", "hold_requested", "strike_dispute", "guest_pass", "under_16", "refund_pushback", "needs_credit"] },
+      items: { type: "string", enum: ["escalate", "urgent", "hold_requested", "strike_dispute", "guest_pass", "under_16", "refund_pushback", "needs_credit", "team_follow_up"] },
     },
     offers_courtesy_credit: { type: "boolean" },
     match_ids: { type: "array", items: { type: "integer" } },
@@ -584,6 +591,8 @@ export type GuardCtx = Pick<DraftContext, "courtesy_credit_eligible"> & {
   veryLate?: boolean;
   /** Text a reply may quote times from: the schedule, the conversation, the playbook. Omitted = not checked. */
   allowedTimeSources?: readonly string[];
+  /** The guest pass answer, when one was worked out. A guest_pass reply is checked against it. */
+  guestPass?: GuestPassAnswer | null;
 };
 
 export function guardDraft(raw: DraftOutput, ctx: GuardCtx): GuardResult {
@@ -602,6 +611,10 @@ export function guardDraft(raw: DraftOutput, ctx: GuardCtx): GuardResult {
   if (texts.some(hasDash) || output.staff_notes.some(hasDash)) return { ok: false, error: "Draft still contained a dash after cleanup." };
   if (output.offers_courtesy_credit && !ctx.courtesy_credit_eligible) {
     return { ok: false, error: "Draft offered a courtesy credit to a player who has already had one, or whose history couldn't be read. Not shown." };
+  }
+  if (output.category === "guest_pass" && ctx.guestPass) {
+    const g = guestReplyProblem(ctx.guestPass, output.reply, action?.kind ?? null);
+    if (g) return { ok: false, error: `${g} Not shown.` };
   }
   const actionErr = action ? actionProblem(output, action, ctx) : claimsDone(output.reply) ? "Draft said an action is done, with no action to apply." : null;
   if (actionErr) return { ok: false, error: `${actionErr} Not shown.` };
@@ -858,7 +871,16 @@ export function classifyDraftOutcome(draftText: string, sentBody: string): { out
 
 export type AutoSendConfig = {
   auto_categories: string[]; action_categories: string[]; credit_cap_cents: number; hold_minutes: number; enabled: boolean; shadow: boolean;
+  /** The dial's OFF setting (migration 0263). Absent before it is applied: nothing is off. */
+  off_categories?: string[];
 };
+export const agentOffReason = (category: string) => `The agent is off for ${category}.`;
+/** The dial, per category: auto-send, draft only, or off. */
+export type CategoryMode = "auto" | "draft" | "off";
+export function categoryMode(c: Pick<AutoSendConfig, "auto_categories" | "off_categories">, category: string): CategoryMode {
+  if (c.off_categories?.includes(category)) return "off";
+  return c.auto_categories.includes(category) ? "auto" : "draft";
+}
 export type AutoDecision = "auto_send" | "auto_send_with_action" | "human";
 export type DecisionResult = { decision: AutoDecision; reason: string };
 export type DecisionDraft = Pick<DraftOutput, "reply" | "category" | "flags" | "action" | "image_unreadable"> & { guardError?: string | null };
@@ -869,8 +891,8 @@ export type DecisionContext = {
   humanRepliedRecently: boolean;
   /** The conversation. A membership reply can't go out without it. */
   msgs?: readonly DraftMsg[];
-  /** Only needed for a guest code. Absent means it couldn't be read, which is a no. */
-  guest?: { active: boolean; over24Hours: boolean; hasActiveCode: boolean } | null;
+  /** The guest pass answer (src/lib/guestPass.ts). Absent on a guest_pass draft means it wasn't worked out: a person. */
+  guestPass?: GuestPassAnswer | null;
   /** The player typed a number and it matched several accounts or none, so nothing was linked. */
   linkMiss?: LinkSuggestion | null;
 };
@@ -922,11 +944,16 @@ export function strikeReplyProblem(reply: string, disputing: boolean): string | 
 }
 // strike and membership_billing can send and can never act (there's no membership action): it isn't in the action list, and the guard refuses an action on it.
 // What an admin can turn on. A category the model invents isn't here, so it can't go out on its own.
-export const AUTO_CATEGORIES = ["veo", "logistics", "booking", "age", "strike", "membership_billing", "player_cancel", "match_cancelled", "needs_credit", "guest_pass", "promo_code"];
-// guest_pass and promo_code are NOT action categories (Ryan 2026-11-07): a guest code is only ever
-// issued by a person pressing the button, and auto-send applies no action in those categories.
-export const GUEST_CODE_PERSON_ONLY = "A guest code is only issued by a person pressing the button.";
-export const AUTO_ACTION_CATEGORIES = ["player_cancel", "match_cancelled", "needs_credit"];
+export const AUTO_CATEGORIES = ["veo", "logistics", "booking", "age", "strike", "membership_billing", "player_cancel", "match_cancelled", "needs_credit", "guest_pass", "promo_code", "field_rental"];
+/** Every category the dial lists. The always-a-person ones can be draft only or off, never auto-send. */
+export const DIAL_CATEGORIES = [...AUTO_CATEGORIES, "refund", "complaint", "payment", "account", "other"];
+// GUEST CODES (Ryan 2026-11-08, replacing 2026-11-07's "only a person pressing the button"): the agent may
+// create one, but only for guest_pass, only when guestPass says "create" (an active, paying member with no
+// live code under any slug they've held), and only once an admin turns guest_pass on as an ACTION
+// category. The stored row did not hold guest_pass when this shipped, so nothing changed on deploy.
+// promo_code never acts.
+export const GUEST_CODE_PERSON_ONLY = "A guest code is only created by the agent for guest_pass, with the guest pass check saying create.";
+export const AUTO_ACTION_CATEGORIES = ["player_cancel", "match_cancelled", "needs_credit", "guest_pass"];
 export const HUMAN_OWNS_THREAD_MS = 2 * 3600e3;
 export const isAutoSendLive = (c: Pick<AutoSendConfig, "enabled" | "shadow">) => c.enabled && !c.shadow;
 
@@ -960,6 +987,8 @@ function pendingText(msgs: readonly DraftMsg[]): string {
 
 export function decideAutoSend(draft: DecisionDraft, ctx: DecisionContext, config: AutoSendConfig): DecisionResult {
   if (draft.guardError) return human(`The draft failed a check: ${draft.guardError}`);
+  // OFF (the dial's bottom setting): the agent stays out of this category. The card shows no draft.
+  if (config.off_categories?.includes(draft.category)) return human(agentOffReason(draft.category));
   if (draft.image_unreadable) return human("Image unreadable");
   // ONE HOLDING LINE PER BURST (2026-11-02). We held them last time and they wrote again: a person.
   if (ctx.msgs && waitingOnLookup(ctx.msgs)) return human(WAITING_ON_LOOKUP);
@@ -993,18 +1022,39 @@ export function decideAutoSend(draft: DecisionDraft, ctx: DecisionContext, confi
     const why = membershipHumanReason(ctx.msgs);
     if (why) return human(why);
   }
+  if (draft.category === "guest_pass") {
+    const g = ctx.guestPass;
+    if (!g) return human("Guest passes: the guest pass check didn't run.");
+    if (g.kind === "person") return human(g.reason);
+    if (g.kind !== "create" && draft.action) return human(GUEST_CODE_PERSON_ONLY);
+  } else if (draft.action?.kind === "issue_guest_code") return human(GUEST_CODE_PERSON_ONLY);
   if (ctx.windowClosed) return human("The WhatsApp window is closed.");
   if (ctx.humanRepliedRecently) return human("A person replied in this thread in the last 2 hours.");
   if (!ctx.context.account_confirmed && statesAccountFact(draft.reply)) return human("The account is unconfirmed and the reply states an account fact.");
-  if (!config.auto_categories.includes(draft.category)) return human(disputing ? STRIKE_DISPUTE_NOTE : `Category ${draft.category} isn't turned on.`);
+  // DRAFT ONLY (the dial's middle setting): a person sends it. The rest is still worked out, so the review
+  // can show what the agent would have done with the category on (Ryan 2026-11-08: one day on draft only).
+  const draftOnly = !config.auto_categories.includes(draft.category);
+  if (draftOnly && disputing) return human(STRIKE_DISPUTE_NOTE);
+  const r = decideCategoryOn(draft, ctx, config);
+  if (!draftOnly) return r;
+  const lead = `Category ${draft.category} isn't turned on.`;
+  return human(r.decision === "human" ? `${lead} ${r.reason}` : `${lead} ${WOULD_HAVE_SENT} ${r.reason}`);
+}
 
+/** Leads a draft-only decision whose category, turned on, would have gone out on its own. */
+export const WOULD_HAVE_SENT = "Would have sent on its own:";
+
+function decideCategoryOn(draft: DecisionDraft, ctx: DecisionContext, config: AutoSendConfig): DecisionResult {
   const action = draft.action;
   if (!action) return { decision: "auto_send", reason: `Category ${draft.category} is on.` };
-  // A GUEST CODE IS ONLY EVER ISSUED BY A PERSON PRESSING THE BUTTON (Ryan 2026-11-07). Checked before
-  // the config, so no category list can turn it back on.
-  if (action.kind === "issue_guest_code") return human(GUEST_CODE_PERSON_ONLY);
   if (!config.action_categories.includes(draft.category)) return human(`Actions aren't turned on for ${draft.category}.`);
   if (!ctx.context.account_confirmed) return human("An action needs a confirmed account.");
+  if (action.kind === "issue_guest_code") {
+    // Checked above: guest_pass, and the check said create. The tick re-reads every fact before the write.
+    return ctx.guestPass?.kind === "create"
+      ? { decision: "auto_send_with_action", reason: `Guest code ${ctx.guestPass.code}: active paying member, no live code on any of their slugs.` }
+      : human(GUEST_CODE_PERSON_ONLY);
+  }
 
   const amount = action.amount_cents;
   if (amount == null || amount <= 0) return human("The credit has no amount.");

@@ -61,9 +61,12 @@ numbers or codes appear.
    requested: tell Ryan"**.
 10. **Strike disputes.** An honest, friendly reply that we need to check with the match manager.
     Promise nothing (no "I'll remove it"). Flag it in the staff notes.
-11. **Guest passes.** The reply says we're processing the guest passes for them. The staff notes
-    say to issue the codes after confirming the membership. Members get **3 guest passes a
-    year** as one promo code with 3 uses. A new membership does not earn new codes.
+11. **Guest passes (Ryan, 2026-11-08).** Members get **3 guest passes a year** as one code: city
+    code + member number + "FP" (SATX600FP), 3 uses in total, live for a year. Friends enter it on
+    their own profile while logged in. A new membership does not earn new uses. The system checks
+    all of this before the draft is written and puts the answer in `guest_pass`: do what its `say`
+    says. Never write a code; use the placeholder `{code}`. Never ask for a screenshot: if we don't
+    know the account, ask for the phone number on it.
 12. **Members and matches we cancel.** Members have unlimited matches, so there is **no credit**
     to give. Send a warm apology and help them find another match.
 13. **Age.** This is adult soccer. Players are typically **16+**, and anyone **under 18 needs a
@@ -475,23 +478,31 @@ appeals go to staff.
 - Membership was checked only from the player's screenshot. Nobody checked whether a code had
   already been issued that year.
 
-**Suggested answer (member)**
-> Your guest code is {code}, it works 3 times and goes live in a few minutes. Your friends enter
-> it at checkout while logged into their own MatchDay account.
+**What the system checks, in order (src/lib/guestPass.ts), before the draft is written**
+1. Which account is writing (the WhatsApp phone). Not known: `ask_phone`, ask for the phone number on
+   their MatchDay account. Never a screenshot.
+2. An active, paying membership. None: `not_member`. A comp (added from admin), a cancelled one or
+   a price we can't read: a person decides.
+3. A live code under any member number this player, or another account on their phone, has held,
+   and how many of its 3 uses are spent (standing bookings in our copy, up to a day behind). Uses
+   left: `existing`. All spent: `used_up`, with the day they reset (the code's end date).
+4. No live code: `create`, the code is made the same way the Promo Codes form makes it. A membership
+   under 24 hours old with no staff message confirming it goes to a person.
 
-Rule 11. Propose it as an `issue_guest_code` action. The server builds the code and fills in
-`{code}`; the draft never invents or quotes one. The server refuses if the player already has an
-active code, or if the membership is under 24 hours old with no staff message confirming it. The
-reply without the action:
-> We're processing your guest passes for you now.
+**Suggested answer (create)**, with the `issue_guest_code` action:
+> Your guest code is {code}. Your friends enter it on their own profile while logged in, good for 3 uses.
 
-Notes: "Guest passes: confirm the membership, then issue the code. Active membership in context:
-{yes/no, since date}."
+Reply without the action:
+> We're getting your guest passes set up now.
 
-**Suggested answer (not an active member)**
-> Guest passes come with a membership. If you'd like, I can tell you how membership works!
+**Suggested answer (existing)**, no action:
+> Your guest code is {code}. Your friends enter it on their own profile while logged in, 2 uses left.
 
-A new membership does not earn new codes. Staff check that before issuing.
+**Suggested answer (used_up)**, no action:
+> Your code {code} has used all 3 guest passes. They reset on Oct 30, 2027.
+
+**Suggested answer (not_member)**
+> Guest passes come with a membership: unlimited matches and 3 guest passes a year. Happy to tell you how to join!
 
 ### 2.9 Courtesy and policy context for members
 
@@ -631,6 +642,28 @@ Rule 9: never offer or confirm a hold. Notes: **"Hold requested: tell Ryan."**
 
 Point to playmatchday.com/career, or hand off to the city manager. Draft a thank you and say
 the team will follow up.
+
+### 2.17b Private field rentals and events (category field_rental)
+
+**What players wrote**
+- "I wanted to rent a field for Thanksgiving day if that's possible."
+- "Trying to get in touch with whoever handles rentals for the LBJ school field."
+- "We are hoping for November the 14th, I'm willing to pay whatever you'd earn through the app."
+
+**What to do.** Collect what the city team needs, in one message: which field, the date, the start
+time, how long, and how many people. Ask only for what they haven't already said. Once they have
+given all five, thank them and say the city team will confirm. Never quote a price, never say a
+field is free or booked, and never promise the date.
+
+**Suggested answer (details missing)**
+> Happy to help with that! Which field, what date and time, how long, and about how many people?
+
+**Suggested answer (all five given)**
+> Thanks, that's everything we need. The city team will confirm availability with you.
+
+Notes: "Field rental: {field}, {date}, {time}, {length}, {group size}. City team to confirm." Set the
+flag `team_follow_up` on the "all five given" reply: the chat stays in Needs a human until someone confirms.
+Set `city_guess` from the field or city they name, so the chat lands with that city's manager.
 
 ### 2.18 Greetings, STOP, wrong numbers, reactions to broadcasts: about 52 requests
 

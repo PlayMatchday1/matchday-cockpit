@@ -8849,3 +8849,53 @@ bar's two lines.
   "#18233 · Austin" as in Figma 20877:141.
 - Player Lookup reads its own environment and the push routes read OFFERS_ENV's; when they differ the card says so
   rather than reading another backend's player with the same id.
+
+## Player Chats support agent: why it answered so little, and what changed (2026-11-08)
+
+**Evidence: read-only service-role reads of `crm_messages`, `crm_ai_drafts`, `crm_threads`, `crm_auto_send_config`
+and `change_log`, 2026-10-08 to 2026-11-08, plus code reads cited below.** A "request" is a run of player messages up to
+our first real reply (out-of-hours auto-replies and reactions excluded).
+
+- **Since auto-send went live (2026-10-31 16:00Z): 182 requests needing a reply.** The agent sent the first reply on
+  46 (25%), a person sent a draft on 12 (7%, 6 as is and 6 edited), a person wrote from scratch on 112 (62%),
+  11 got no reply yet, and 1 got a template. Over the full 30 days: 48 agent, 21 drafts, 321 from scratch.
+  Every from-scratch reply was by rmancuso (154) or dgarcia (195). 51 more runs were a bare "ok"/"thanks".
+- **Why the 150 person-handled or unanswered requests (since 2026-10-31) didn't go out on their own**, from each
+  request's tick draft: flag `escalate` 28 (almost all refund or charge disputes, which stay with a person), **a
+  person had only opened the chat 26**, no draft at all 21 (nearly all acks), a person replied in the last 2 hours 17,
+  category `other` 16, a holding line in the draft 10, `urgent` 6, `Waiting on a lookup` 4, hold requested 3, the rest 1 or 2 each.
+- **Opening a chat took it from the agent for good.** `draftOneThread` skipped any player message with any draft
+  (`src/lib/aiDraftAutoRun.ts`, before this change: `if ((any.data ?? []).length) return "has_draft"`), and the
+  card drafts when a person opens a thread, so the tick never decided it. Real case: a guest pass ask at
+  2026-11-07 03:13Z was drafted at 03:13 by a person opening it, and was answered by hand at 19:11. Fixed:
+  `tickSeesDrafts` (`src/lib/aiDraftPolicy.ts`), re-drafting a person's untouched draft after 5 minutes.
+- **"Waiting on a lookup" is not a lookup.** The agent has no tools: every fact is loaded before the model call
+  (`src/lib/aiDraftDeps.ts`, `loadContext`). The label means our last real message was a holding line ("let me check")
+  and the player wrote again (`waitingOnLookup`, `src/lib/aiDraftPolicy.ts`). 4 times in the window; in the 3 with a
+  clear subject: a guest code's uses (HOU), a Veo video, cashing credits out to a bank.
+- **`other` (44 drafts in 30 days):** greetings and "is this the right number" (sent as is, 3), field rentals and
+  private events (4 threads), players suggesting a field (2), merch/store link (1), jobs (1), and acks or reactions.
+  `field_rental` is now its own category.
+- **Guest codes, how staff make them:** the Promo Codes form, `POST /admin/promocodes` with `discountType PERCENT`,
+  `discountValue 100`, `numberOfUsesPerUser 3`, `targetUserType ALL_USERS`, `targetMatchType TOTAL_USAGE`, a start the
+  next whole minute and an end a year later at the end of the Central day (`change_log`, ATX1700FP 2026-10-15,
+  SATX584FP 2026-10-29, ATX1819FP 2026-11-05, SATX600FP 2026-11-07; the two `failed` rows each started at the current
+  minute and got 403 `PROMOCODE_START_DATE_PASSED`, then landed a minute later). Only 4 FP codes were made in 30 days.
+- **Why the agent made none:** `decideAutoSend` sent every guest code to a person (Ryan, 2026-11-07,
+  `GUEST_CODE_PERSON_ONLY`), and the one press from a draft (2026-11-07 12:09Z) failed on the start-time 403 above.
+  Since 2026-11-08 the agent creates one only when `decideGuestPass` (`src/lib/guestPass.ts`) says `create` and an
+  admin has ticked "Can act" for guest passes; the stored `action_categories` did not include `guest_pass` when this shipped.
+- **`mdapi_subscriptions.price` is DOLLARS** (66, 18), not cents: rows for players 48723, 28285, 87737, 90487 read
+  2026-11-08. The guest rule only asks whether it is above 0.
+- **A cancelled member stays `ACTIVE` with `canceled_at` set through the month** (players 48723 cancelled 2026-11-01,
+  28285 cancelled 2026-11-02, both `status ACTIVE` on 2026-11-08). Staff still gave 48723 a code on 2026-11-05.
+  The rule tells a cancelled member about a code they already hold, and leaves a NEW code to a person.
+- **Guest code uses** are standing bookings in our copy, played plus upcoming (`promoRedemptions`). SATX584FP on
+  2026-11-08: 3 standing bookings (one friend twice, one once). On 2026-11-05 at 01:08Z staff said "used twice": the
+  third was on a match still upcoming, which the Promo Codes page's PLAYED headline doesn't count.
+- **Dry run** (`scripts/guest-pass-dry-run.mts`, as of each ask, nothing written): 11 asks in 30 days. create 1
+  (SATX600FP for the 2026-11-07 ask, the code staff made by hand 16 hours later), existing 1, used_up 3, not_member 1,
+  ask for the phone 2 (unlinked threads, where staff asked for a screenshot), a person 3 (an 18-minute-old membership,
+  and a cancelled member twice).
+- **Not built, said here too:** cancelling a spot (still a link, Ryan 2026-11-06), sending a WhatsApp template when
+  the 24-hour window is closed (still a person), sending a canned reply's picture, refunds of any kind.

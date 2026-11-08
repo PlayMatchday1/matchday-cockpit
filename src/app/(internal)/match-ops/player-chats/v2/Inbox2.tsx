@@ -121,7 +121,7 @@ export default function Inbox2({ onUseOld }: { onUseOld: () => void }) {
       return true;
     }).map((t) => ({ ...t, awaiting: isAwaitingReply(t) }));
   }, [threads, view, tab, filters, appUserId]);
-  const live = useMemo(() => bucket(filtered, tab, sectionOf), [filtered, tab, sectionOf]);
+  const live = useMemo(() => bucket(filtered, tab, sectionOf, Date.now()), [filtered, tab, sectionOf]);
   // Rows hold still while a pointer is down over the list, so a realtime reorder can't eat a tap.
   const [frozen, setFrozen] = useState<typeof live | null>(null);
   const groups = frozen ?? live;

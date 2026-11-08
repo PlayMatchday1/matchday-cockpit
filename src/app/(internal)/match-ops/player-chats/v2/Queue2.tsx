@@ -12,11 +12,12 @@ import { ChevronRight, RotateCcw, Search as SearchIcon, SlidersHorizontal, X } f
 import EnablePushNotificationsButton from "@/components/EnablePushNotificationsButton";
 import { KNOWN_CITY_CODES, HIDDEN_CITY_CODES } from "@/lib/cityNormalization";
 import { UNKNOWN_CITY } from "@/lib/cityColors";
-import { awaitingAgeLabel } from "@/lib/awaitingReply";
+import { awaitingAgeLabel, isOverdue } from "@/lib/awaitingReply";
 import { rowAttention } from "@/lib/crmAttention";
 import { WAIT_COLOR, initials, waitStartIso, waitTone, type Inbox2Tab } from "@/lib/inbox2Model";
 import type { ThreadListRow } from "@/lib/crmConversation";
 import AutoSendCountdown from "../components/AutoSendCountdown";
+import AgentScoreLine from "../components/AgentScoreLine";
 
 const INK = "#13241d", MUTED = "#5e6b66", FAINT = "#7c8782", LINE = "#e3e3db", DEEP = "#0e3b2c";
 
@@ -110,6 +111,7 @@ export default function Queue2(props: {
             )}
           </div>
         )}
+        {tab === "needs" && <div className="-mx-[18px]"><AgentScoreLine /></div>}
         <div className="flex gap-1 rounded-[10px] bg-[#f3f3ef] p-1" role="tablist">
           {([["needs", "Needs reply", needsCount], ["waiting", "Waiting", waitingCount], ["done", "Done", null]] as const).map(([k, label, n]) => {
             const on = tab === k;
@@ -204,6 +206,7 @@ function Row({ t, tab, active, nowMs, onSelect, selectMode, checked, onCheck, mi
           {t.player?.is_member && <span className="shrink-0 rounded-full bg-[#e7f1fb] px-1.5 py-px text-[10px] font-semibold text-[#264da6]">Member</span>}
           {mine && <span className="shrink-0 text-[11px] font-semibold" style={{ color: MUTED }}>· You</span>}
           <span className="flex-1" />
+          {owed && att?.section === "human" && isOverdue(since, nowMs) && <span data-testid="crm-overdue" className="shrink-0 rounded-full bg-[#fbe4df] px-1.5 py-px text-[10px] font-bold text-[#a82a18]">Overdue</span>}
           <span data-testid="crm-thread-wait" data-tone={tone} className="shrink-0 text-[12px] font-semibold" style={{ color: owed ? WAIT_COLOR[tone] : "#9aa39f" }}>
             {awaitingAgeLabel(since, nowMs)}
           </span>

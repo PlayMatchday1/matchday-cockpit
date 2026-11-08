@@ -8,14 +8,15 @@
 import { randomUUID } from "node:crypto";
 import { authenticateCrm } from "@/lib/crmAuth";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
-import { AUTO_ACTION_CATEGORIES, AUTO_CATEGORIES, isAutoSendLive, type AutoSendConfig } from "@/lib/aiDraftModel";
+import { AUTO_ACTION_CATEGORIES, AUTO_CATEGORIES, DIAL_CATEGORIES, isAutoSendLive, type AutoSendConfig } from "@/lib/aiDraftModel";
 import { cancelAllHolds } from "@/lib/aiDraftAutoRun";
 import { reviewMasked } from "@/lib/reviewAccount";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const COLS = "auto_categories, action_categories, credit_cap_cents, hold_minutes, enabled, shadow, disabled_reason, disabled_at, updated_at";
+// "*": off_categories arrives with migration 0263; until then it is simply absent and "off" can't be saved.
+const COLS = "*";
 const MAX_CAP_CENTS = 20000;
 
 async function getRoute(req: Request) {
@@ -23,7 +24,7 @@ async function getRoute(req: Request) {
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   const r = await auth.supabase.from("crm_auto_send_config").select(COLS).maybeSingle();
   if (r.error || !r.data) return Response.json({ error: "Couldn't read the auto-send settings." }, { status: 500 });
-  return Response.json({ config: r.data, can_edit: auth.isAdmin && !!auth.appUserId, categories: AUTO_CATEGORIES, action_categories: AUTO_ACTION_CATEGORIES }, { headers: { "cache-control": "no-store" } });
+  return Response.json({ config: r.data, can_edit: auth.isAdmin && !!auth.appUserId, categories: AUTO_CATEGORIES, dial_categories: DIAL_CATEGORIES, action_categories: AUTO_ACTION_CATEGORIES, off_supported: Array.isArray((r.data as { off_categories?: unknown }).off_categories) }, { headers: { "cache-control": "no-store" } });
 }
 
 export async function PATCH(req: Request) {
@@ -43,6 +44,14 @@ export async function PATCH(req: Request) {
     if (!l) return Response.json({ error: "That category can't be turned on." }, { status: 400 });
     patch.auto_categories = l;
   }
+  if (b.off_categories !== undefined) {
+    const l = list(b.off_categories, DIAL_CATEGORIES);
+    if (!l) return Response.json({ error: "That category can't be turned off." }, { status: 400 });
+    patch.off_categories = l;
+  }
+  // One setting per category: a category can't be both auto-send and off.
+  const autoAfter = patch.auto_categories, offAfter = patch.off_categories;
+  if (autoAfter && offAfter && autoAfter.some((c) => offAfter.includes(c))) return Response.json({ error: "A category can't be both auto-send and off." }, { status: 400 });
   if (b.action_categories !== undefined) {
     const l = list(b.action_categories, AUTO_ACTION_CATEGORIES);
     if (!l) return Response.json({ error: "Actions can't be turned on for that category." }, { status: 400 });
@@ -67,6 +76,9 @@ export async function PATCH(req: Request) {
   const read = async () => (await supabase.from("crm_auto_send_config").select(COLS).maybeSingle()).data as (AutoSendConfig & Record<string, unknown>) | null;
   const before = await read();
   if (!before) return Response.json({ error: "Couldn't read the auto-send settings." }, { status: 500 });
+  if (patch.off_categories && !Array.isArray((before as { off_categories?: unknown }).off_categories)) return Response.json({ error: "Off isn't available until migration 0263 is applied." }, { status: 409 });
+  const mergedAuto = patch.auto_categories ?? before.auto_categories, mergedOff = patch.off_categories ?? before.off_categories ?? [];
+  if (mergedAuto.some((c) => mergedOff.includes(c))) return Response.json({ error: "A category can't be both auto-send and off." }, { status: 400 });
   const at = new Date().toISOString();
   const row = { ...patch, updated_at: at, updated_by_user_id: auth.appUserId, ...(patch.enabled === true ? { disabled_reason: null, disabled_at: null } : patch.enabled === false ? { disabled_reason: `Turned off by ${auth.email}.`, disabled_at: at } : {}) };
   const { error, outcome } = await recordWrite(

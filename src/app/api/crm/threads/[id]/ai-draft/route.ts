@@ -19,6 +19,7 @@ import { authenticateCrm } from "@/lib/crmAuth";
 import { assertThreadInScope } from "@/lib/crmScope";
 import { runDraft } from "@/lib/aiDraftRun";
 import { draftDataDeps } from "@/lib/aiDraftDeps";
+import { SKIP_REASON_TEXT } from "@/lib/aiDraftModel";
 import { creditsGate } from "@/lib/creditsAuth";
 import { can, denial } from "@/lib/capabilities";
 import type { AppUserRow } from "@/lib/adminAuth";
@@ -53,6 +54,15 @@ export async function POST(req: Request, ctx: RouteCtx) {
     console.error("[ai-draft] failed", e instanceof Error ? e.message.slice(0, 200) : e);
     return { status: "failed" as const, draft_id: null, message: "Something went wrong making a draft." };
   });
+
+  // THE DIAL'S OFF: the agent stays out of that category, so the card shows nothing. A failed read hides nothing.
+  if (result.status === "ok") {
+    const cfg = await supabase.from("crm_auto_send_config").select("*").maybeSingle();
+    const off = (cfg.data as { off_categories?: unknown } | null)?.off_categories;
+    if (Array.isArray(off) && off.includes(result.draft.category)) {
+      return Response.json({ status: "skipped", reason: "agent_off", message: SKIP_REASON_TEXT.agent_off, action_refusal: null }, { headers: { "cache-control": "no-store" } });
+    }
+  }
 
   console.log(`[ai-draft] thread=${threadId} status=${result.status}${"reused" in result ? ` reused=${result.reused}` : ""}`);
   const http = result.status === "forbidden" ? 403 : result.status === "not_found" ? 404 : 200;

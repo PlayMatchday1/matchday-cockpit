@@ -420,3 +420,13 @@ export function nextWaitingSince(
     prev.waiting_since != null;
   return alreadyWaiting ? prev.waiting_since : incoming.sentAt;
 }
+
+// OVERDUE (Ryan 2026-11-08): a chat handed to a person with no reply after 2 SUPPORT hours (9am to 9pm
+// Central) is flagged at the top of the queue. Business minutes, so a message at 8:55pm is not overdue
+// at 7am the next morning.
+export const OVERDUE_BUSINESS_MINUTES = 120;
+export function isOverdue(waitingSinceIso: string | null | undefined, nowMs: number): boolean {
+  const at = waitingSinceIso ? Date.parse(waitingSinceIso) : NaN;
+  return Number.isFinite(at) && businessMinutesBetween(at, nowMs) >= OVERDUE_BUSINESS_MINUTES;
+}
+

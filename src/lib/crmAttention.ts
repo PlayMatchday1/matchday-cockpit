@@ -3,6 +3,8 @@
 // A thread only leaves it because a hold is running, or because someone replied.
 
 export const STRIKE_DISPUTE_NOTE = "Strike dispute: check with the match manager";
+/** The agent told the player the team will confirm something (a field rental with every detail). */
+export const TEAM_FOLLOW_UP_NOTE = "Team follow-up: the agent said the team will confirm";
 
 export type AttentionDraft = {
   id: string; thread_id: string; based_on_message_id: string; created_at: string; outcome: string; error: string | null;
@@ -20,12 +22,13 @@ const FAILED_ACTION = new Set(["failed", "not_applied", "unknown"]);
 // The strike holding reply answered the player and resolved nothing, so the thread stays with a person
 // until one of them replies.
 export const isStrikeHolding = (d: AttentionDraft | null) =>
-  d?.hold_status === "sent" && /^\[flags: [^\]]*\bstrike_dispute\b/.test(d.staff_notes ?? "");
+  d?.hold_status === "sent" && /^\[flags: [^\]]*\b(?:strike_dispute|team_follow_up)\b/.test(d.staff_notes ?? "");
+const heldReason = (d: AttentionDraft) => (/^\[flags: [^\]]*\bstrike_dispute\b/.test(d.staff_notes ?? "") ? STRIKE_DISPUTE_NOTE : TEAM_FOLLOW_UP_NOTE);
 
 export function attentionFor(a: { awaiting: boolean; draft: AttentionDraft | null; humanRepliedSinceDraft: boolean }): Attention | null {
   const d = a.draft;
   const human = (reason: string, error = false): Attention => ({ section: "human", reason, hold_until: null, ...(error ? { error: true } : {}) });
-  if (isStrikeHolding(d) && !a.humanRepliedSinceDraft) return human(STRIKE_DISPUTE_NOTE);
+  if (d && isStrikeHolding(d) && !a.humanRepliedSinceDraft) return human(heldReason(d));
   if (!a.awaiting) return null;
   if (!d) return human(NO_DRAFT_YET);
   if (d.hold_status === "holding" || d.hold_status === "sending") return { section: "auto_sending", reason: null, hold_until: d.hold_until };

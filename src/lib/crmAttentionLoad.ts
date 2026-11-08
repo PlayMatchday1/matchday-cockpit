@@ -43,9 +43,14 @@ export async function loadAttention(sb: SupabaseClient, threads: readonly { id: 
 }
 
 // Open threads that answered with a strike holding reply: outbound-last, so no inbound-last scan finds them.
+// Also a field rental the agent handed to the team (flag team_follow_up), the same way.
 export async function strikeHoldingThreadIds(sb: SupabaseClient, now: number): Promise<string[]> {
-  const r = await sb.from("crm_ai_drafts").select("thread_id").eq("hold_status", "sent").like("staff_notes", "[flags:%strike_dispute%")
-    .gte("created_at", new Date(now - STRIKE_WINDOW_MS).toISOString());
-  if (r.error) throw new Error(r.error.message);
-  return [...new Set((r.data ?? []).map((x) => x.thread_id as string))];
+  const ids = new Set<string>();
+  for (const flag of ["strike_dispute", "team_follow_up"]) {
+    const r = await sb.from("crm_ai_drafts").select("thread_id").eq("hold_status", "sent").like("staff_notes", `[flags:%${flag}%`)
+      .gte("created_at", new Date(now - STRIKE_WINDOW_MS).toISOString());
+    if (r.error) throw new Error(r.error.message);
+    for (const x of r.data ?? []) ids.add(x.thread_id as string);
+  }
+  return [...ids];
 }

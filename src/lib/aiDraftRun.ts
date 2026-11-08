@@ -30,6 +30,8 @@ import {
   type CitySource, type RefundEligibility,
 } from "@/lib/aiDraftPolicy";
 import { CITY_SCOPES } from "@/lib/cityScope";
+import { guestCodeToFill, type GuestPassAnswer } from "@/lib/guestPass";
+import { staffConfirmedMembership } from "@/lib/aiDraftAction";
 
 export type MembershipCharge = { at: string; amountCents: number; chargeId: string | null };
 
@@ -137,9 +139,14 @@ export type DraftDeps = {
   playbook: () => { text: string; version: string };
   callModel: (req: DraftRequest) => Promise<ModelReply>;
   insertDraft: (row: NewDraftRow) => Promise<{ id: string; created_at: string }>;
+  /** The guest pass answer for a confirmed account (src/lib/guestPassLoad). Absent = guest passes go to a person. */
+  loadGuestPass?: (a: { playerId: number; membership: DraftContextIn["membership"]; staffConfirmed: boolean }) => Promise<GuestPassAnswer>;
   /** Called with what the decision needs, after a guarded draft is stored. The auto-send tick uses it. */
-  afterDraft?: (d: { draftId: string; output: DraftOutput; context: DraftContext; msgs: DraftMsg[]; linkMiss: LinkSuggestion | null }) => Promise<void>;
+  afterDraft?: (d: { draftId: string; output: DraftOutput; context: DraftContext; msgs: DraftMsg[]; linkMiss: LinkSuggestion | null; guestPass: GuestPassAnswer | null }) => Promise<void>;
 };
+
+// What makes a guest pass check worth reading: our database only, so a wide net costs nothing at MatchDay.
+export const GUEST_WORDS_RX = /guests?|pass(?:es)?|fp|friends?|referr|invit|amig[oa]s?|c[oó]digo|code/i;
 
 export type DraftView = {
   id: string; text: string; staff_notes: string[]; category: string | null; flags: string[]; created_at: string;
@@ -271,6 +278,18 @@ export async function runDraft(deps: DraftDeps): Promise<DraftResult> {
     keys = [...keys, "membership_refund"];
   }
 
+  // GUEST PASSES (Ryan 2026-11-08): worked out here, from our copy, so the model only reads the answer.
+  if (GUEST_WORDS_RX.test(elig.pending.map((m) => m.body ?? "").join("\n"))) {
+    if (!accountConfirmed({ ...flags, confirmed: ctxIn.confirmed })) ctxIn.guestPass = { kind: "ask_phone" };
+    else if (deps.loadGuestPass && thread.player_id != null) {
+      ctxIn.guestPass = await deps.loadGuestPass({
+        playerId: thread.player_id, membership: ctxIn.membership,
+        staffConfirmed: staffConfirmedMembership(msgs.filter(isStaffReply).map((m) => m.body ?? "")),
+      }).catch((): GuestPassAnswer => ({ kind: "person", reason: "Guest passes: the check failed." }));
+    } else ctxIn.guestPass = { kind: "person", reason: "Guest passes: the check isn't wired here." };
+    keys = [...keys, `guest_pass:${ctxIn.guestPass.kind}`];
+  }
+
   // THE CLOCK AND THE SCHEDULE. The player's city sets the zone (Central when unknown). The
   // schedule window starts on the day the player wrote; a field named in what they wrote picks the
   // field, otherwise a day word ("tonight", "Saturday") picks their city.
@@ -342,10 +361,15 @@ export async function runDraft(deps: DraftDeps): Promise<DraftResult> {
     appliedActions: await deps.appliedActions().catch(() => [{ kind: "credit" }, { kind: "issue_guest_code" }]),
     veryLate: clock.reply_is_very_late,
     allowedTimeSources: [...schedule.entries.map((e) => e.when_local), ...msgs.map((m) => m.body ?? ""), playbook.text],
+    guestPass: ctxIn.guestPass ?? null,
   });
   if (!guarded.ok) return fail(guarded.error, reply);
 
-  const out = imageMissing ? { ...guarded.output, image_unreadable: true } : guarded.output;
+  // A code the member already holds is filled in now: there is nothing to write. A new one waits for its
+  // write to land (applyDraftAction fills {code} then).
+  const fill = guarded.output.category === "guest_pass" ? guestCodeToFill(ctxIn.guestPass) : null;
+  const filled = fill ? { ...guarded.output, reply: guarded.output.reply.split("{code}").join(fill) } : guarded.output;
+  const out = imageMissing ? { ...filled, image_unreadable: true } : filled;
   // AT MOST 3 BULLETS. The reason an account is unconfirmed is stated in code, first, not left to
   // the model; a model clause that restates it is cut (finalStaffNotes).
   const staffNotes = finalStaffNotes(out.staff_notes, reason);
@@ -376,7 +400,7 @@ export async function runDraft(deps: DraftDeps): Promise<DraftResult> {
     const next = nextThreadCity({ code: thread.city_code ?? null, source: thread.city_source ?? null }, { account: accountCity, field: schedule.fieldCity, inferred: out.city_guess || null }, known);
     if (next) await deps.setThreadCity(next.code, next.source).catch((e: unknown) => console.error("[ai-draft] city not saved", e instanceof Error ? e.message.slice(0, 160) : e));
   }
-  await deps.afterDraft?.({ draftId: row.id, output: out, context, msgs, linkMiss });
+  await deps.afterDraft?.({ draftId: row.id, output: out, context, msgs, linkMiss, guestPass: ctxIn.guestPass ?? null });
   return withLink({
     status: "ok", reused: false,
     draft: {

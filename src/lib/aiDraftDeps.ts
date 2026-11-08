@@ -24,6 +24,8 @@ import { AUTO_SEND_ACTOR } from "@/lib/aiDraftAction";
 import { AUTO_LINKED_NOTE } from "@/lib/aiDraftRun";
 import { type CitySource, type CutShort } from "@/lib/aiDraftPolicy";
 import { membershipChargeFromMirror, priorMembershipRefundAny } from "@/lib/membershipRefund";
+import { loadGuestPassFacts } from "@/lib/guestPassLoad";
+import { decideGuestPass } from "@/lib/guestPass";
 
 const ENV = FULL_EDITOR_ENV;
 const ANTHROPIC_BASE_URL = `https://${ANTHROPIC_HOST}`;
@@ -183,7 +185,7 @@ export function draftDataDeps(args: DraftDataArgs): DataDeps {
           ctxIn.city = p.player.city ?? ctxIn.city;
           ctxIn.strikes = { active: p.strikes.activeCount, limit: p.strikes.limit, suspended: p.strikes.isSuspended };
           if (p.membership) {
-            ctxIn.membership = { status: p.membership.status, since: p.membership.since, renews: p.membership.renews, canceledAt: p.membership.canceledAt, price: p.membership.price, id: p.membership.id ?? null };
+            ctxIn.membership = { status: p.membership.status, statusRaw: p.membership.statusRaw ?? null, since: p.membership.since, renews: p.membership.renews, canceledAt: p.membership.canceledAt, price: p.membership.price, id: p.membership.id ?? null };
           }
           // CUT SHORT, marked on Gameday Ops (migration 0251). A failed read marks nothing, which sends a
           // lights or weather complaint to a person rather than crediting on a guess.
@@ -270,6 +272,16 @@ export function draftDataDeps(args: DraftDataArgs): DataDeps {
         .gte("created_at", new Date(Date.now() - 7 * 86400e3).toISOString());
       if (r.error) throw new Error(r.error.message);
       return (r.data ?? []).map((x) => ({ kind: String((x.action as { kind?: unknown } | null)?.kind ?? "") }));
+    },
+
+    // GUEST PASSES: our copy only (subscriptions, promo codes, their bookings). The membership is the
+    // profile this draft already read; the tick re-reads it live before it creates anything.
+    async loadGuestPass({ playerId, membership, staffConfirmed }) {
+      const facts = await loadGuestPassFacts(supabase, {
+        playerId, threadPhone, accountConfirmed: true, staffConfirmed, now: Date.now(),
+        membership: membership ? { id: membership.id ?? null, statusRaw: membership.statusRaw ?? null, price: membership.price, canceledAt: membership.canceledAt, since: membership.since } : null,
+      });
+      return decideGuestPass(facts);
     },
 
     playbook: () => loadPlaybook(),

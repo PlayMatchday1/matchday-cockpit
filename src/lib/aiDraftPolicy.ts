@@ -207,3 +207,20 @@ export function liveRefundRefusal(target: LiveCharge | null, expectedCents: numb
   if (prior) return `This player already had a membership refund in Stripe (${new Date(prior.created * 1000).toISOString().slice(0, 10)}).`;
   return null;
 }
+
+// ── 5. which player messages the tick decides ──────────────────────────────────────────────────
+
+// OPENING A CHAT USED TO TAKE IT FROM THE AGENT FOR GOOD (found 2026-11-08). The card drafts when a person
+// opens a thread, and any draft for the message made the tick skip it, so a chat someone glanced at was never
+// decided: 26 of 150 person-handled bursts from Oct 31 to Nov 8, among them a guest pass ask at 3:13 AM that
+// sat until 3:18 PM. Now only the tick's own draft, or a person having used or thrown one away, stops it; a
+// person's draft left untouched for STAFF_DRAFT_IDLE_MS is re-drafted and decided. If they reply meanwhile,
+// the hold stops ("A staff member replied").
+export const STAFF_DRAFT_IDLE_MS = 5 * 60e3;
+export type PriorDraft = { requested_by_user_id: string | null; created_at: string; outcome: string };
+export function tickSeesDrafts(rows: readonly PriorDraft[], now: number): "draft" | "has_draft" | "staff_looking" {
+  if (rows.some((r) => r.requested_by_user_id == null)) return "has_draft";
+  if (rows.some((r) => r.outcome !== "pending" && r.outcome !== "superseded")) return "has_draft";
+  const latest = Math.max(...rows.map((r) => Date.parse(r.created_at)));
+  return rows.length && now - latest < STAFF_DRAFT_IDLE_MS ? "staff_looking" : "draft";
+}

@@ -57,7 +57,7 @@ is("system actors get fixed names", [
   actorOf({ actorName: "auto-send", actorEmail: null }, EN).name,
   actorOf({ actorName: "auto-send@clubhouse.system", actorEmail: "auto-send@clubhouse.system" }, EN).name,
   actorOf({ actorName: "system (out-of-hours auto-reply)", actorEmail: null }, EN).name,
-], ["Auto-send", "Auto-send", "Out-of-hours auto-reply"]);
+], ["Support agent", "Support agent", "Out-of-hours auto-reply"]);
 is("the two script rows keep their own names, not Ryan's", [
   actorOf({ actorName: "Field backfill (approved by Ryan Mancuso)", actorEmail: "rmancuso@playmatchday.com" }, EN).name,
   actorOf({ actorName: "Claude (seeded by script, at Ryan's instruction)", actorEmail: "rmancuso@playmatchday.com" }, EN).name,

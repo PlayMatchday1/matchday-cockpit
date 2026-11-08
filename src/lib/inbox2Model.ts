@@ -10,6 +10,7 @@
 //     is used ONLY to order matches, never formatted.
 
 import { WHATSAPP_WINDOW_MS } from "@/lib/crmWindow";
+import { isOverdue } from "@/lib/awaitingReply";
 
 // ── THE QUEUE ───────────────────────────────────────────────────────────────────────────────────
 export type Inbox2Tab = "needs" | "waiting" | "done";
@@ -25,8 +26,10 @@ export const waitStartIso = (r: QueueRow): string => r.waiting_since ?? r.last_m
 /** Needs reply holds ONLY threads waiting on us (Ryan 2026-11-06): the Auto-sending group on top,
  *  then the human rows, longest wait first. Waiting is every open thread with nothing owed, newest
  *  first. Done is the closed list, newest first. No Waiting section inside Needs reply. */
-export function bucket<T extends QueueRow>(rows: readonly T[], tab: Inbox2Tab, sectionOf: (r: T) => Section) {
-  const byLongestWait = (a: T, b: T) => Date.parse(waitStartIso(a)) - Date.parse(waitStartIso(b));
+export function bucket<T extends QueueRow>(rows: readonly T[], tab: Inbox2Tab, sectionOf: (r: T) => Section, nowMs?: number) {
+  // OVERDUE FIRST when a clock is given (2 support hours with no reply, Ryan 2026-11-08), then longest wait.
+  const late = (r: T) => (nowMs != null && isOverdue(waitStartIso(r), nowMs) ? 0 : 1);
+  const byLongestWait = (a: T, b: T) => late(a) - late(b) || Date.parse(waitStartIso(a)) - Date.parse(waitStartIso(b));
   const byNewest = (a: T, b: T) => Date.parse(b.last_message_at) - Date.parse(a.last_message_at);
   if (tab === "needs") {
     return {
