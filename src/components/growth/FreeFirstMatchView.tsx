@@ -1,9 +1,12 @@
 "use client";
 
-/* FREE FIRST MATCH — the page body (Ryan, 2026-11-05; Figma "Clubhouse · Free First Match",
- * frame 20794:45). Reads /api/lifecycle/free-first-match once and filters it here: the range is the
- * day of the player's free match, the city is the city of that match. The before groups keep their
- * fixed window and follow only the city.
+/* FREE FIRST MATCH — the page body. Rebuilt 2026-11-08 to answer "is this working?" (Figma
+ * sl6PTy5LhCVj1gF0HvGmuF frame 28:3; the 2026-11-05 version was frame 20794:45). Reads
+ * /api/lifecycle/free-first-match once; the 7 / 14 / 30 day window re-reads it here.
+ *
+ * ONE WINDOW FOR EVERY RATE, and only players who have had the whole window count; the rest show as
+ * "too early" (freeFirstMatchModel.ts, FAIR WINDOWS). The 2026-11-05 range and city controls, the
+ * funnel, the by-city table, the members column and the free match log were dropped with this design.
  *
  * NO PLATFORM TOGGLE AND NO BLOCKED-CLAIMS CARD. Neither is tracked anywhere the Clubhouse reads
  * (docs/free-first-match/DISCOVERY.md §3 and §4); the backend asks are recorded there, not here.
@@ -17,32 +20,28 @@ import g from "./growth.module.css";
 import pa from "./playerActivity.module.css";
 import s from "./freeFirstMatch.module.css";
 import { fmtInt } from "./format";
-import { CITY_SCOPES } from "@/lib/cityScope";
-import { normalizeMatchCity } from "@/lib/growthAnalytics";
 import {
-  LAUNCH_DAY, beforePeople, byCity, freePeople, groupStats, logFields, logMatches, matchesInRange, paidSpots, registrations,
-  type Filter, type Payload,
+  WINDOWS, activation, beforePeople, firstAfterReadDay, freePeople, groupStats, proposal, signupsSinceLaunch, soldOutByField,
+  type FieldLoss, type Payload, type Window,
 } from "@/lib/freeFirstMatchModel";
 
 const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-const pct = (num: number, den: number): string => (den > 0 ? `${Math.round((num / den) * 100)}%` : "–");
+const rate = (num: number, den: number): number | null => (den > 0 ? num / den : null);
+const pctOf = (r: number | null): string => (r == null ? "–" : `${Math.round(r * 100)}%`);
 const money = (cents: number | null): string => (cents == null ? "–" : `$${Math.round(cents / 100).toLocaleString("en-US")}`);
 const dash = "–";
+/** "Oct 1" from a "YYYY-MM-DD" day. Never through Date: a day is a day in either clock. */
+const dayLabel = (d: string): string => `${MON[Number(d.slice(5, 7)) - 1]} ${Number(d.slice(8, 10))}`;
 
-/** "Thu Dec 4 · 9:00 PM" from a wall-clock "YYYY-MM-DDTHH:MM". No Date is built from the string:
- *  the Z the mirror carries is not meant (docs, "Match startDate/endDate are LOCAL WALL CLOCK"). */
-function whenLabel(wall: string): string {
-  const [d, t] = wall.split("T");
-  const [y, m, dd] = d.split("-").map(Number);
-  const dow = DOW[new Date(Date.UTC(y, m - 1, dd)).getUTCDay()];
-  const [hh, mm] = (t ?? "00:00").split(":").map(Number);
-  const h12 = hh % 12 === 0 ? 12 : hh % 12;
-  return `${dow} ${MON[m - 1]} ${dd} · ${h12}:${String(mm).padStart(2, "0")} ${hh < 12 ? "AM" : "PM"}`;
+/** The free first match on a field's upcoming matches: On, Off, or how many of them are on. */
+function ffeStatus(r: FieldLoss): { text: string; on: boolean } {
+  if (r.upcoming === 0) return { text: "No upcoming", on: false };
+  const known = r.upcoming - r.upcomingUnknown;
+  if (known === 0) return { text: "Unknown", on: false };
+  if (r.upcomingOn === r.upcoming) return { text: "On", on: true };
+  if (r.upcomingOn === 0 && r.upcomingUnknown === 0) return { text: "Off", on: false };
+  return { text: `On for ${r.upcomingOn} of ${r.upcoming}`, on: r.upcomingOn > 0 };
 }
-
-const PAGE_FIRST = 6;
-const PAGE_MORE = 20;
 
 export function FreeFirstMatchInfo() {
   const [open, setOpen] = useState<{ x: number; y: number } | null>(null);
@@ -67,7 +66,7 @@ export function FreeFirstMatchInfo() {
       {open && (
         <div className={pa.tip} role="tooltip" style={{ left: open.x, top: open.y, maxWidth: 300 }}>
           <span className={s.tipTitle}>Started Nov 5, 2026</span>
-          App 1.89 made every new player&apos;s first match free.
+          App 1.89 made every new player&apos;s first match free, on iPhone and Android.
         </div>
       )}
     </>
@@ -77,11 +76,7 @@ export function FreeFirstMatchInfo() {
 export default function FreeFirstMatchView({ authHeaders }: { authHeaders: Record<string, string> }) {
   const [data, setData] = useState<Payload | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [start, setStart] = useState(LAUNCH_DAY);
-  const [end, setEnd] = useState("");
-  const [city, setCity] = useState<string>("all");
-  const [logMode, setLogMode] = useState<"matches" | "fields">("matches");
-  const [shown, setShown] = useState(PAGE_FIRST);
+  const [w, setW] = useState<Window>(7);
 
   const token = authHeaders.Authorization;
   useEffect(() => {
@@ -98,132 +93,126 @@ export default function FreeFirstMatchView({ authHeaders }: { authHeaders: Recor
     return () => { alive = false; };
   }, [token]);
 
-  const today = data?.today ?? "";
-  const filter = useMemo<Filter>(() => {
-    const a = start || LAUNCH_DAY, b = end || today || LAUNCH_DAY;
-    return { start: a <= b ? a : b, end: a <= b ? b : a, city };
-  }, [start, end, today, city]);
-
-  /* The city list: the running cities, plus any other city a free match or a live match carries, so
-   * nothing is hidden behind a list written before it opened. */
-  const cityCodes = useMemo(() => {
-    const codes = new Set<string>(CITY_SCOPES.map((c) => c.identifier));
-    for (const p of data?.people ?? []) if (p.group === "free" && p.city) codes.add(p.city);
-    for (const m of data?.matches ?? []) if (m.city) codes.add(m.city);
-    return [...codes].sort((a, b) => normalizeMatchCity(a).localeCompare(normalizeMatchCity(b)));
-  }, [data]);
-
   const view = useMemo(() => {
     if (!data) return null;
-    const free = freePeople(data.people, filter);
-    const freeIds = new Set(free.map((p) => p.id));
-    const stats = groupStats(free);
-    const regs = registrations(data.regs, filter, normalizeMatchCity);
-    const ms = matchesInRange(data.matches, filter);
+    const t = data.today;
+    const free = freePeople(data.people, t);
+    const fs = groupStats(free, w, t);
     return {
-      free, stats, regs,
+      free, fs,
+      act: activation(data.signups, w, t),
+      signups: signupsSinceLaunch(data.signups, t),
       rows: [
-        { key: "paid", title: "Paid first match", sub: "Before Nov 5", stats: groupStats(beforePeople(data.people, "paid", filter)), hi: false, cost: false },
-        { key: "code", title: "First-match codes", sub: "Marketing codes, still live", stats: groupStats(beforePeople(data.people, "code", filter)), hi: false, cost: true },
-        { key: "ref", title: "Referral codes", sub: "Friend invites", stats: groupStats(beforePeople(data.people, "ref", filter)), hi: false, cost: true },
-        { key: "free", title: "Free first match", sub: "Automatic since Nov 5", stats, hi: true, cost: true },
+        { key: "paid", title: "Paid first match (before Nov 5)", stats: groupStats(beforePeople(data.people, "paid"), w, t), hi: false, cost: false },
+        { key: "code", title: "First-match codes", stats: groupStats(beforePeople(data.people, "code"), w, t), hi: false, cost: true },
+        { key: "ref", title: "Referral codes", stats: groupStats(beforePeople(data.people, "ref"), w, t), hi: false, cost: true },
+        { key: "free", title: "Free first match (since Nov 5)", stats: fs, hi: true, cost: true },
       ],
-      cities: byCity(free, normalizeMatchCity, CITY_SCOPES.map((c) => c.identifier)),
-      spots: paidSpots(ms, freeIds),
-      logM: logMatches(ms, freeIds),
-      logF: logFields(free),
+      lost: soldOutByField(data.matches, free, t),
+      prop: proposal(data.matches, free, data.fieldRates, t),
     };
-  }, [data, filter]);
-
-  useEffect(() => { setShown(PAGE_FIRST); }, [filter, logMode]);
+  }, [data, w]);
 
   if (error) return <div className={`${g.stateMsg} ${g.errorMsg}`}>Could not load: {error}</div>;
   if (!data || !view) return <div className={g.stateMsg}>Loading…</div>;
 
-  const { stats, regs, spots } = view;
-  const funnel = [
-    { label: "Booked free match", n: stats.players, hue: "#0d3b2e" },
-    { label: "Paid 2nd match", n: stats.paid2nd, hue: "#186b4c" },
-    { label: "Paid 3rd match", n: stats.paid3rd, hue: "#4b7d66" },
-    { label: "Became member", n: stats.members, hue: "#6f9a85" },
-  ];
-  const logRows = logMode === "matches" ? view.logM : view.logF;
-  const visible = logRows.slice(0, shown);
+  const { fs, act, lost, prop } = view;
+  const before = rate(act.before.played, act.before.done);
+  const after = rate(act.after.played, act.after.done);
+  const pts = before != null && after != null ? Math.round((after - before) * 1000) / 10 : null;
+  const skipNames = prop.skipFields.map((f) => f.field);
 
   return (
     <>
       <div className={s.controls} data-testid="ffm-controls">
-        <select className={s.select} aria-label="City" value={city} onChange={(e) => setCity(e.target.value)} data-testid="ffm-city">
-          <option value="all">All cities</option>
-          {cityCodes.map((c) => <option key={c} value={c}>{normalizeMatchCity(c)}</option>)}
-        </select>
-        <span className={s.rangeLabel}>Range</span>
-        <input type="date" className={s.date} aria-label="Range start" value={filter.start} max={today || undefined}
-          onChange={(e) => setStart(e.target.value)} data-testid="ffm-start" />
-        <span className={s.to}>to</span>
-        <input type="date" className={s.date} aria-label="Range end" value={filter.end} max={today || undefined}
-          onChange={(e) => setEnd(e.target.value)} data-testid="ffm-end" />
+        <span className={s.ctlLabel}>Window</span>
+        <div className={pa.seg} role="group" aria-label="Window">
+          {WINDOWS.map((d) => (
+            <button key={d} type="button" aria-pressed={w === d} onClick={() => setW(d)} data-testid={`ffm-w${d}`}>{d} days</button>
+          ))}
+        </div>
       </div>
+
+      <section className={g.card} data-testid="ffm-activation">
+        <div className={s.headTitle}>Are more new sign-ups playing their first match?</div>
+        <div className={s.headRow}>
+          <div className={s.side} data-testid="ffm-act-before">
+            <div className={s.eyebrow}>4 weeks before Nov 5</div>
+            <div className={s.big}>{pctOf(before)}</div>
+            <div className={s.sideFoot}>of {fmtInt(act.before.done)} sign-ups ({dayLabel(act.before.from)} – {dayLabel(act.before.to)}) played within {w} days</div>
+          </div>
+          <div className={s.arrow} aria-hidden>→</div>
+          <div className={s.side} data-testid="ffm-act-after">
+            <div className={s.eyebrow}>Since Nov 5</div>
+            {after == null ? (
+              <>
+                <div className={`${s.big} ${s.bigMuted}`}>Too early</div>
+                <div className={s.sideFoot}>{fmtInt(act.after.signups)} sign-ups, none with {w} full days yet · first read {dayLabel(firstAfterReadDay(w))}</div>
+              </>
+            ) : (
+              <>
+                <div className={`${s.big} ${s.bigGreen}`}>{pctOf(after)}</div>
+                <div className={s.sideFoot}>of {fmtInt(act.after.done)} sign-ups played within {w} days</div>
+              </>
+            )}
+          </div>
+          {pts != null && (
+            <div className={s.delta}>
+              <span className={`${s.pill} ${pts > 0 ? s.pillUp : pts < 0 ? s.pillDown : s.pillFlat}`} data-testid="ffm-act-delta">
+                {pts > 0 ? "▲ +" : pts < 0 ? "▼ " : ""}{pts} pts
+              </span>
+              <span className={s.deltaFoot}>only sign-ups with {w} full days{act.after.tooEarly > 0 ? ` · ${fmtInt(act.after.tooEarly)} too early` : ""}</span>
+            </div>
+          )}
+        </div>
+      </section>
 
       <div className={g.kpiRow} data-testid="ffm-kpis">
         <div className={g.kpi}>
           <div className={g.kpiLabel}>Free matches claimed</div>
-          <div className={g.kpiValue} data-testid="ffm-claimed">{fmtInt(stats.players)}</div>
-          <div className={g.kpiFoot}>{pct(stats.players, regs)} of {fmtInt(regs)} new sign-ups</div>
-        </div>
-        <div className={`${g.kpi} ${s.kpiDark}`}>
-          <div className={`${g.kpiLabel} ${s.kpiLabelDark}`}>Paid 2nd match</div>
-          <div className={`${g.kpiValue} ${s.kpiValueDark}`}>{pct(stats.paid2nd, stats.players)}</div>
-          <div className={`${g.kpiFoot} ${s.kpiFootDark}`}>{fmtInt(stats.paid2nd)} players within 30 days</div>
+          <div className={g.kpiValue} data-testid="ffm-claimed">{fmtInt(fs.players)}</div>
+          <div className={g.kpiFoot}>{pctOf(rate(fs.players, view.signups))} of {fmtInt(view.signups)} sign-ups</div>
         </div>
         <div className={g.kpi}>
-          <div className={g.kpiLabel}>Became members</div>
-          <div className={g.kpiValue}>{pct(stats.members, stats.players)}</div>
-          <div className={g.kpiFoot}>{fmtInt(stats.members)} players within 60 days</div>
+          <div className={g.kpiLabel}>Paid 2nd match · {w}d</div>
+          <div className={`${g.kpiValue} ${s.kpiInline}`}>
+            <span data-testid="ffm-paid2nd">{fs.done > 0 ? pctOf(rate(fs.paid2nd, fs.done)) : dash}</span>
+            {fs.tooEarly > 0 && <span className={`${s.pill} ${s.pillEarly}`}>{fmtInt(fs.tooEarly)} too early</span>}
+          </div>
+          <div className={g.kpiFoot}>{fs.done > 0 ? `${fmtInt(fs.paid2nd)} of ${fmtInt(fs.done)} players with ${w} days` : `No free player has had ${w} days yet`}</div>
         </div>
         <div className={g.kpi}>
-          <div className={g.kpiLabel}>Cost per paying player</div>
-          <div className={g.kpiValue}>{money(stats.costPerPayerCents)}</div>
-          <div className={g.kpiFoot}>{money(stats.spotCents)} in free spots</div>
+          <div className={g.kpiLabel}>Free spots given</div>
+          <div className={g.kpiValue}>{money(fs.spotCents)}</div>
+          <div className={g.kpiFoot}>{fmtInt(fs.players)} spots</div>
+        </div>
+        <div className={g.kpi}>
+          <div className={g.kpiLabel}>Sold-out spots lost</div>
+          <div className={g.kpiValue} data-testid="ffm-lost">{money(lost.cents)}</div>
+          <div className={g.kpiFoot}>{fmtInt(lost.spots)} spots on {fmtInt(lost.matches)} sold-out matches</div>
         </div>
       </div>
 
-      <section className={g.card} data-testid="ffm-funnel">
-        <div className={g.cardHead}>
-          <div className={g.cardTitle}>Funnel</div>
-          <div className={s.cardMeta}>{fmtInt(regs)} new sign-ups · {pct(stats.players, regs)} booked their free match</div>
-        </div>
-        <div className={s.funnel}>
-          {funnel.map((f) => (
-            <div className={s.funnelRow} key={f.label}>
-              <div className={s.funnelLabel}>{f.label}</div>
-              <div className={s.funnelTrack}>
-                <div className={s.funnelBar} style={{ width: stats.players > 0 ? `${Math.max(0, Math.min(100, (f.n / stats.players) * 100))}%` : "0%", background: f.hue }} />
-              </div>
-              <div className={s.funnelNum}>{fmtInt(f.n)}<span className={s.funnelPct}>{pct(f.n, stats.players)}</span></div>
-            </div>
-          ))}
-        </div>
-      </section>
-
       <section className={g.card} data-testid="ffm-before-after">
         <div className={g.cardHead}>
-          <div className={g.cardTitle}>Before vs after</div>
-          <div className={s.cardMeta}>Grouped by how the player got their first match</div>
+          <div>
+            <div className={g.cardTitle}>Before vs after, same {w}-day window</div>
+            <div className={g.cardSub}>Players who haven&apos;t had {w} days yet are counted as &ldquo;too early&rdquo;, not as failures. Before = first match Aug 7 – Nov 4.</div>
+          </div>
         </div>
         <div className={pa.tw}>
           <table>
             <thead>
-              <tr><th>First match</th><th>Players</th><th>2nd match · 30d</th><th>3rd match</th><th>Member · 60d</th><th>Cost per payer</th></tr>
+              <tr><th>First match</th><th>Players</th><th>2nd match · {w}d</th><th>3rd match · {w}d</th><th>Too early</th><th>Cost per payer</th></tr>
             </thead>
             <tbody>
               {view.rows.map((r) => (
                 <tr key={r.key} className={r.hi ? s.hiGreen : undefined} data-testid={`ffm-row-${r.key}`}>
-                  <td><span className={s.rowTitle}>{r.title}</span><span className={s.rowSub}>{r.sub}</span></td>
+                  <td><span className={s.rowTitle}>{r.title}</span></td>
                   <td>{fmtInt(r.stats.players)}</td>
-                  <td>{pct(r.stats.paid2nd, r.stats.players)}</td>
-                  <td>{pct(r.stats.paid3rd, r.stats.players)}</td>
-                  <td>{pct(r.stats.members, r.stats.players)}</td>
+                  <td>{pctOf(rate(r.stats.paid2nd, r.stats.done))}</td>
+                  <td>{pctOf(rate(r.stats.paid3rd, r.stats.done))}</td>
+                  <td>{r.hi && r.stats.tooEarly > 0 ? <span className={`${s.pill} ${s.pillEarly}`}>{fmtInt(r.stats.tooEarly)}</span> : fmtInt(r.stats.tooEarly)}</td>
                   <td>{r.cost ? money(r.stats.costPerPayerCents) : dash}</td>
                 </tr>
               ))}
@@ -232,83 +221,62 @@ export default function FreeFirstMatchView({ authHeaders }: { authHeaders: Recor
         </div>
       </section>
 
-      <div className={g.grid2}>
-        <section className={g.card} data-testid="ffm-by-city">
-          <div className={g.cardHead}><div className={g.cardTitle}>By city</div></div>
+      <section className={g.card} data-testid="ffm-sold-out">
+        <div className={g.cardHead}>
+          <div>
+            <div className={g.cardTitle}>Where free players took sold-out spots</div>
+            <div className={g.cardSub}>Matches since Nov 5 that are sold out with a free player in them, by field. Free match = the switch on the field&apos;s upcoming matches.</div>
+          </div>
+        </div>
+        {lost.rows.length === 0 ? (
+          <div className={s.empty}>No sold-out match has a free player in it yet.</div>
+        ) : (
           <div className={pa.tw}>
             <table>
-              <thead><tr><th>City</th><th>Claimed</th><th>2nd match</th><th>Cost per payer</th></tr></thead>
+              <thead><tr><th>Field</th><th>City</th><th>Sold out w/ free</th><th>Spots lost</th><th>Lost $</th><th>Free match</th></tr></thead>
               <tbody>
-                {view.cities.map((c) => (
-                  <tr key={c.city}>
-                    <td>{c.cityName}</td>
-                    <td className={c.claimed === 0 ? pa.zero : undefined}>{fmtInt(c.claimed)}</td>
-                    <td>{pct(c.paid2nd, c.claimed)}</td>
-                    <td>{money(c.costPerPayerCents)}</td>
-                  </tr>
-                ))}
+                {lost.rows.map((r) => {
+                  const st = ffeStatus(r);
+                  return (
+                    <tr key={`${r.city}|${r.field}`}>
+                      <td><span className={s.rowTitle}>{r.field}</span></td>
+                      <td>{r.cityName}</td>
+                      <td>{fmtInt(r.soldOutWithFree)}</td>
+                      <td>{fmtInt(r.spotsLost)}</td>
+                      <td>{money(r.centsLost)}</td>
+                      <td><span className={`${s.pill} ${st.on ? s.pillOn : s.pillOff}`} title={`${r.upcomingOn} of ${r.upcoming} upcoming matches on`}>{st.text}</span></td>
+                    </tr>
+                  );
+                })}
+                <tr className={s.totRow}>
+                  <td>All fields</td><td />
+                  <td>{fmtInt(lost.matches)}</td><td>{fmtInt(lost.spots)}</td><td>{money(lost.cents)}</td><td />
+                </tr>
               </tbody>
             </table>
           </div>
-        </section>
+        )}
+      </section>
 
-        <section className={g.card} data-testid="ffm-paid-spots">
-          <div className={g.cardHead}><div className={g.cardTitle}>Paid spots taken</div></div>
-          <div className={s.stat}><span>Matches with a free player</span><b>{fmtInt(spots.matchesWithFree)}</b></div>
-          <div className={s.stat}><span>Sold out with a free player in it</span><b>{fmtInt(spots.soldOutWithFree)}</b></div>
-          <div className={`${s.stat} ${s.statGold}`}><span>Spots a paying player could have had</span><b>{fmtInt(spots.spotsLost)} · {money(spots.spotsLostCents)}</b></div>
-          <div className={s.subhead}>Average fill</div>
-          <div className={s.fillRow}><span>With a free player</span><b>{spots.fillWithFree == null ? dash : `${Math.round(spots.fillWithFree * 100)}%`}</b></div>
-          <div className={s.fillRow}><span>Without</span><b>{spots.fillWithout == null ? dash : `${Math.round(spots.fillWithout * 100)}%`}</b></div>
-        </section>
-      </div>
-
-      <section className={g.card} data-testid="ffm-log">
-        <div className={g.cardHead}>
-          <div className={g.cardTitle}>Free match log</div>
-          <div className={pa.seg} role="group" aria-label="Log view">
-            <button type="button" aria-pressed={logMode === "matches"} onClick={() => setLogMode("matches")}>Matches</button>
-            <button type="button" aria-pressed={logMode === "fields"} onClick={() => setLogMode("fields")}>Fields</button>
+      <section className={s.proposal} data-testid="ffm-proposal">
+        <div className={s.propHead}>
+          <span className={s.propTitle}>Proposed: automatic eligibility</span>
+          <span className={`${s.pill} ${s.pillEarly}`}>Proposal, not built</span>
+        </div>
+        <div className={s.propGrid}>
+          <div className={s.propItem}>
+            <b>Skip fields that sold out most of the last 4 weeks</b>
+            <span>Over half their matches sold out · {fmtInt(skipNames.length)} fields today{skipNames.length > 0 ? `: ${skipNames.slice(0, 5).join(", ")}${skipNames.length > 5 ? "…" : ""}` : ""} · recomputed daily, no manual toggles</span>
+          </div>
+          <div className={s.propItem}>
+            <b>No fill threshold</b>
+            <span>{fmtInt(prop.lostUnderHalf)} of {fmtInt(prop.lostWithFill)} lost spots were booked while the match was under half full: free players book early, so fill at booking does not separate them</span>
+          </div>
+          <div className={s.propItem}>
+            <b>Would have saved {fmtInt(prop.saved)} of {fmtInt(prop.lostSpots)} spots</b>
+            <span>{money(prop.savedCents)} of {money(prop.lostCents)} since Nov 5 · and withheld {fmtInt(prop.withheld)} free matches on matches that did not sell out</span>
           </div>
         </div>
-        {logRows.length === 0 ? (
-          <div className={s.empty}>No free first matches in this range.</div>
-        ) : logMode === "matches" ? (
-          <table className={s.logTable}>
-            <thead><tr><th>Match</th><th>Free players</th><th>Booked</th></tr></thead>
-            <tbody>
-              {(visible as typeof view.logM).map((m) => (
-                <tr key={m.id}>
-                  <td><span className={s.matchName}>{m.field} · {m.cityName}</span><span className={s.matchWhen}>{whenLabel(m.wall)}</span></td>
-                  <td><div className={s.chips}>{m.freePlayers.map((p) => <span key={p.id} className={s.chip}>{p.name}</span>)}</div></td>
-                  <td>
-                    {m.soldOut && <span className={s.soldOut}>Sold out</span>}
-                    <span className={s.booked}>{fmtInt(m.booked)} / {m.cap == null ? dash : fmtInt(m.cap)}</span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        ) : (
-          <table className={s.logTable}>
-            <thead><tr><th>Field · City</th><th className={s.num}>Free players</th><th className={s.num}>Matches</th><th className={s.num}>Paid 2nd match</th></tr></thead>
-            <tbody>
-              {(visible as typeof view.logF).map((f) => (
-                <tr key={`${f.city}|${f.field}`}>
-                  <td><span className={s.matchName}>{f.field} · {f.cityName}</span></td>
-                  <td className={s.num}>{fmtInt(f.freePlayers)}</td>
-                  <td className={s.num}>{fmtInt(f.matches)}</td>
-                  <td className={s.num}>{pct(f.paid2nd, f.freePlayers)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-        {logRows.length > shown && (
-          <button type="button" className={s.more} onClick={() => setShown((n) => n + PAGE_MORE)}>
-            Show {fmtInt(Math.min(PAGE_MORE, logRows.length - shown))} more
-          </button>
-        )}
       </section>
     </>
   );

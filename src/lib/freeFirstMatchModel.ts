@@ -1,9 +1,16 @@
 /* FREE FIRST MATCH — the model behind /lifecycle/free-first-match (Ryan, 2026-11-05).
  *
  * App 1.89 (2026-11-05) gives every new player their first match free, automatically, as the internal
- * promo FIRST-MATCH-AUTO (production id 23482). This page asks one question: does that free match turn
- * into paying players at a cost we accept. Everything here is pure so the route can build the payload
- * once and the page can filter it by range and city without another request.
+ * promo FIRST-MATCH-AUTO (production id 23482), on iPhone and Android (backend heroku-prod a71fc05,
+ * first-match-free.service.ts decide(): app >= 1.89 and platform ios or android). The page leads with
+ * one question: are more new sign-ups playing their first match. Everything here is pure so the route
+ * builds the payload once and the page re-reads it per window without another request.
+ *
+ * ── FAIR WINDOWS (Ryan, 2026-11-08) ──────────────────────────────────────────────────────────
+ * Every rate uses ONE window, W = 7, 14 or 30 days, for every cohort. "Within W days" of a start day
+ * means on a day <= start + W, so a player who comes back the same weekday a week later is inside a
+ * 7-day window. A player counts only once the window has fully passed: start + W < today (the last
+ * day of the window is yesterday or earlier). Everyone else is "too early", never a failure.
  *
  * ── WHAT A "FREE CLAIM" IS ───────────────────────────────────────────────────────────────────
  * A growth_participation row (one shared rule for who counts: migration 0208, see
@@ -36,8 +43,16 @@ export const BEFORE_TO = "2026-11-04";
 export const FIRST_MATCH_AUTO_CODE = "FIRST-MATCH-AUTO";
 /** The production id, kept as a fallback should the promo mirror ever lack the row. */
 export const FIRST_MATCH_AUTO_PROD_ID = 23482;
-export const PAID_WINDOW_DAYS = 30;
-export const MEMBER_WINDOW_DAYS = 60;
+/** The window choices. Every rate on the page uses the selected one. */
+export const WINDOWS = [7, 14, 30] as const;
+export type Window = (typeof WINDOWS)[number];
+/** The longest window: the server keeps follow-ups and sign-ups this far out. */
+export const MAX_WINDOW = 30;
+/** The activation "before" cohort is this many days of sign-ups. */
+export const BEFORE_SIGNUP_DAYS = 28;
+/** The proposal: skip a field whose share of sold-out matches over the last 4 weeks is above this. */
+export const PROPOSAL_SKIP_SHARE = 0.5;
+export const PROPOSAL_LOOKBACK_DAYS = 28;
 
 /** How the player got their first match. */
 export type Group = "paid" | "code" | "ref" | "free";
@@ -57,12 +72,15 @@ export type Person = {
   field: string;
   /** The anchor match's list price in cents — what the free spot was worth. */
   spotCents: number;
-  paid2nd30: boolean;
-  paid3rd: boolean;
-  member60: boolean;
+  /** Days from the anchor to the 1st and 2nd paid follow-up match (own spot), at most two, ascending. */
+  paidOffsets: number[];
+  /** Free group only: the match's REAL fill when the free spot was booked (counted rows created before
+   *  it and not yet cancelled then, fake fills out, guests in) over capacity. null when unknown. */
+  bookFill: number | null;
 };
 
-export type RegDay = { day: string; city: string; n: number };
+/** One completed sign-up: its Chicago day, and the person's first match day (wall clock), if any. */
+export type Signup = { day: string; first: string | null };
 
 export type MatchRow = {
   id: number;
@@ -76,8 +94,13 @@ export type MatchRow = {
   booked: number;
   cap: number | null;
   priceCents: number;
+  /** The match's firstMatchFreeEnabled (from mdapi_matches.raw). null when the payload lacks it. */
+  ffe: boolean | null;
   freePlayers: { id: number; name: string }[];
 };
+
+/** A field's live matches over the proposal lookback (the 4 weeks to yesterday), and how many sold out. */
+export type FieldRate = { city: string; field: string; matches: number; soldOut: number };
 
 export type Payload = {
   generatedAt: string;
@@ -89,9 +112,12 @@ export type Payload = {
   /** Direct count of standing FIRST-MATCH-AUTO bookings in the mirror, for the deploy check. */
   autoBookingsStanding: number;
   people: Person[];
-  regs: RegDay[];
+  /** Completed sign-ups from LAUNCH_DAY - MAX_WINDOW - BEFORE_SIGNUP_DAYS on. A sign-up whose person
+   *  had already played before signing up (a re-registration) is left out: not a new player. */
+  signups: Signup[];
   /** Every live match from LAUNCH_DAY on, with the free claimants anchored on it. */
   matches: MatchRow[];
+  fieldRates: FieldRate[];
 };
 
 /* ── CLASSIFYING A BOOKING (server side) ───────────────────────────────────────────────────── */
@@ -122,126 +148,151 @@ export const isReferralCode = (code: string): boolean => /^\d+ref$/i.test(code.t
 
 /* ── THE PAGE'S VIEW OF THE PAYLOAD (client side) ──────────────────────────────────────────── */
 
-export type Filter = { start: string; end: string; city: string | "all" };
+const dayDiff = (a: string, b: string): number => Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86400000);
+/** Has the W-day window from `start` fully passed by `today`? (its last day, start + W, is before today) */
+export const windowDone = (start: string, w: number, today: string): boolean => addDays(start, w) < today;
 
-const inRange = (day: string, f: Filter) => day >= f.start && day <= f.end;
-const inCity = (city: string, f: Filter) => f.city === "all" || city === f.city;
-
-/** The free claimants the range and city select. The range is the day of the free match. */
-export function freePeople(people: readonly Person[], f: Filter): Person[] {
-  return people.filter((p) => p.group === "free" && inRange(p.anchor, f) && inCity(p.city, f));
+/** Free claimants with their free match on or before today (a booked future match is not yet a claim). */
+export function freePeople(people: readonly Person[], today: string): Person[] {
+  return people.filter((p) => p.group === "free" && p.anchor >= LAUNCH_DAY && p.anchor <= today);
 }
 
-/** A before group: first matches Aug 7 to Nov 4, every range; the city filter still applies. */
-export function beforePeople(people: readonly Person[], group: Exclude<Group, "free">, f: Filter): Person[] {
-  return people.filter((p) => p.group === group && p.anchor >= BEFORE_FROM && p.anchor <= BEFORE_TO && inCity(p.city, f));
+export function beforePeople(people: readonly Person[], group: Exclude<Group, "free">): Person[] {
+  return people.filter((p) => p.group === group && p.anchor >= BEFORE_FROM && p.anchor <= BEFORE_TO);
 }
 
 export type GroupStats = {
   players: number;
+  /** Players whose window has fully passed: the denominator of every rate. */
+  done: number;
+  tooEarly: number;
   paid2nd: number;
   paid3rd: number;
-  members: number;
-  /** Total value of the first spots, cents (the free spots given away, for the free group). */
+  /** Value of the first spots, all players (the free spots given away, for the free group). */
   spotCents: number;
-  /** cents per paying player, or null when nobody has paid yet. */
+  /** Spot value of the `done` players over those who paid a 2nd match; null when nobody has. */
   costPerPayerCents: number | null;
 };
 
-export function groupStats(ps: readonly Person[]): GroupStats {
-  let paid2nd = 0, paid3rd = 0, members = 0, spotCents = 0;
+export function groupStats(ps: readonly Person[], w: number, today: string): GroupStats {
+  let done = 0, paid2nd = 0, paid3rd = 0, spotCents = 0, doneCents = 0;
   for (const p of ps) {
-    if (p.paid2nd30) paid2nd++;
-    if (p.paid3rd) paid3rd++;
-    if (p.member60) members++;
     spotCents += p.spotCents;
+    if (!windowDone(p.anchor, w, today)) continue;
+    done++;
+    doneCents += p.spotCents;
+    if (p.paidOffsets.length >= 1 && p.paidOffsets[0] <= w) paid2nd++;
+    if (p.paidOffsets.length >= 2 && p.paidOffsets[1] <= w) paid3rd++;
   }
-  return {
-    players: ps.length, paid2nd, paid3rd, members, spotCents,
-    costPerPayerCents: paid2nd > 0 ? spotCents / paid2nd : null,
+  return { players: ps.length, done, tooEarly: ps.length - done, paid2nd, paid3rd, spotCents, costPerPayerCents: paid2nd > 0 ? doneCents / paid2nd : null };
+}
+
+/* ── ACTIVATION ─────────────────────────────────────────────────────────────────────────────── */
+
+export type Cohort = { from: string; to: string; signups: number; done: number; tooEarly: number; played: number };
+
+/** The two sign-up cohorts for window W.
+ *  BEFORE is 28 days of sign-ups whose whole window closed before launch (to = LAUNCH_DAY - W - 1), so
+ *  no one in it could have had the free match. AFTER is every sign-up from LAUNCH_DAY to today. */
+export function activation(signups: readonly Signup[], w: number, today: string): { before: Cohort; after: Cohort } {
+  const bTo = addDays(LAUNCH_DAY, -w - 1), bFrom = addDays(bTo, -(BEFORE_SIGNUP_DAYS - 1));
+  const cohort = (from: string, to: string): Cohort => {
+    let n = 0, done = 0, played = 0;
+    for (const s of signups) {
+      if (s.day < from || s.day > to) continue;
+      n++;
+      if (!windowDone(s.day, w, today)) continue;
+      done++;
+      if (s.first != null && s.first >= s.day && dayDiff(s.day, s.first) <= w) played++;
+    }
+    return { from, to, signups: n, done, tooEarly: n - done, played };
   };
+  return { before: cohort(bFrom, bTo), after: cohort(LAUNCH_DAY, today) };
 }
 
-/** Registrations in the range, by the Chicago day they completed signup; the city filter compares the
- *  declared city against the selected match city's display name. */
-export function registrations(regs: readonly RegDay[], f: Filter, cityName: (code: string) => string): number {
-  const want = f.city === "all" ? null : cityName(f.city);
-  let n = 0;
-  for (const r of regs) if (inRange(r.day, f) && (want == null || r.city === want)) n += r.n;
-  return n;
-}
+/** Sign-ups from launch to today, for the claimed card. */
+export const signupsSinceLaunch = (signups: readonly Signup[], today: string): number =>
+  signups.filter((s) => s.day >= LAUNCH_DAY && s.day <= today).length;
 
-export type ByCityRow = { city: string; cityName: string; claimed: number; paid2nd: number; costPerPayerCents: number | null };
+/** The first day the after cohort has anyone with a full window: launch + W + 1. */
+export const firstAfterReadDay = (w: number): string => addDays(LAUNCH_DAY, w + 1);
 
-export function byCity(free: readonly Person[], cityName: (code: string) => string, allCities: readonly string[]): ByCityRow[] {
-  const m = new Map<string, Person[]>();
-  for (const c of allCities) m.set(c, []);
-  for (const p of free) (m.get(p.city) ?? m.set(p.city, []).get(p.city)!).push(p);
-  return [...m.entries()]
-    .map(([city, ps]) => { const s = groupStats(ps); return { city, cityName: cityName(city), claimed: s.players, paid2nd: s.paid2nd, costPerPayerCents: s.costPerPayerCents }; })
-    .sort((a, b) => b.claimed - a.claimed || a.cityName.localeCompare(b.cityName));
-}
-
-export type PaidSpots = {
-  matchesWithFree: number;
-  soldOutWithFree: number;
-  spotsLost: number;
-  spotsLostCents: number;
-  /** Mean of booked / capacity, or null with no matches. */
-  fillWithFree: number | null;
-  fillWithout: number | null;
-};
+/* ── SOLD-OUT SPOTS ─────────────────────────────────────────────────────────────────────────── */
 
 export const isSoldOut = (m: Pick<MatchRow, "booked" | "cap">): boolean => m.cap != null && m.cap > 0 && m.booked >= m.cap;
 
-/** Matches in the range and city. A match "has a free player" when one of the SELECTED free
- *  claimants is anchored on it, so the card and the KPIs describe the same people. */
-export function matchesInRange(matches: readonly MatchRow[], f: Filter): MatchRow[] {
-  return matches.filter((m) => inRange(m.day, f) && inCity(m.city, f));
-}
+export type FieldLoss = {
+  city: string; cityName: string; field: string;
+  soldOutWithFree: number; spotsLost: number; centsLost: number;
+  /** The field's matches from today on, and how many have the free first match on. */
+  upcoming: number; upcomingOn: number; upcomingUnknown: number;
+};
 
-export function paidSpots(ms: readonly MatchRow[], freeIds: ReadonlySet<number>): PaidSpots {
-  let matchesWithFree = 0, soldOutWithFree = 0, spotsLost = 0, spotsLostCents = 0;
-  const fillA: number[] = [], fillB: number[] = [];
-  for (const m of ms) {
-    const free = m.freePlayers.filter((p) => freeIds.has(p.id));
-    const fill = m.cap != null && m.cap > 0 ? Math.min(1, m.booked / m.cap) : null;
-    if (free.length > 0) {
-      matchesWithFree++;
-      if (fill != null) fillA.push(fill);
-      if (isSoldOut(m)) { soldOutWithFree++; spotsLost += free.length; spotsLostCents += free.length * m.priceCents; }
-    } else if (fill != null) fillB.push(fill);
+/** Sold-out matches with a free claimant on them (launch to today), by field, most spots lost first.
+ *  "Sold out" is the match's booked count now against its cap: a match that sold out and then lost a
+ *  player reads as not sold out. */
+export function soldOutByField(matches: readonly MatchRow[], free: readonly Person[], today: string): { rows: FieldLoss[]; matches: number; spots: number; cents: number } {
+  const freeIds = new Set(free.map((p) => p.id));
+  const by = new Map<string, FieldLoss>();
+  const key = (m: MatchRow) => `${m.city}|${m.field}`;
+  const row = (m: MatchRow) => by.get(key(m)) ?? by.set(key(m), { city: m.city, cityName: m.cityName, field: m.field, soldOutWithFree: 0, spotsLost: 0, centsLost: 0, upcoming: 0, upcomingOn: 0, upcomingUnknown: 0 }).get(key(m))!;
+  let nm = 0, ns = 0, nc = 0;
+  for (const m of matches) {
+    if (m.day < LAUNCH_DAY || m.day > today || !isSoldOut(m)) continue;
+    const k = m.freePlayers.filter((p) => freeIds.has(p.id)).length;
+    if (k === 0) continue;
+    const r = row(m);
+    r.soldOutWithFree++; r.spotsLost += k; r.centsLost += k * m.priceCents;
+    nm++; ns += k; nc += k * m.priceCents;
   }
-  const mean = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
-  return { matchesWithFree, soldOutWithFree, spotsLost, spotsLostCents, fillWithFree: mean(fillA), fillWithout: mean(fillB) };
+  for (const m of matches) {
+    if (m.day < today) continue;
+    const r = by.get(key(m));
+    if (!r) continue;
+    r.upcoming++;
+    if (m.ffe === true) r.upcomingOn++;
+    else if (m.ffe == null) r.upcomingUnknown++;
+  }
+  const rows = [...by.values()].sort((a, b) => b.spotsLost - a.spotsLost || b.centsLost - a.centsLost || a.field.localeCompare(b.field));
+  return { rows, matches: nm, spots: ns, cents: nc };
 }
 
-export type LogMatch = MatchRow & { soldOut: boolean };
-export type LogField = { field: string; city: string; cityName: string; freePlayers: number; matches: number; paid2nd: number };
+/* ── THE PROPOSAL (not built: what the rule WOULD have done) ────────────────────────────────── */
 
-/** Matches with a selected free claimant, newest first. */
-export function logMatches(ms: readonly MatchRow[], freeIds: ReadonlySet<number>): LogMatch[] {
-  return ms
-    .map((m) => ({ ...m, freePlayers: m.freePlayers.filter((p) => freeIds.has(p.id)), soldOut: isSoldOut(m) }))
-    .filter((m) => m.freePlayers.length > 0)
-    .sort((a, b) => (a.wall < b.wall ? 1 : a.wall > b.wall ? -1 : b.id - a.id));
-}
+export type Proposal = {
+  skipFields: FieldRate[];
+  lostSpots: number;
+  lostCents: number;
+  /** Lost spots on a skipped field, and their value. */
+  saved: number;
+  savedCents: number;
+  /** Free claims on matches that did NOT sell out that the rule would also have withheld. */
+  withheld: number;
+  /** Lost spots booked while the match was under half full (real fill), and how many had a fill. */
+  lostUnderHalf: number;
+  lostWithFill: number;
+};
 
-/** One row per field, by free players, highest first. Paid 2nd is the share of that field's free
- *  claimants who paid again within 30 days. */
-export function logFields(free: readonly Person[]): LogField[] {
-  const m = new Map<string, { field: string; city: string; cityName: string; people: Person[]; matches: Set<number> }>();
+export function proposal(matches: readonly MatchRow[], free: readonly Person[], rates: readonly FieldRate[], today: string): Proposal {
+  const skip = rates.filter((r) => r.matches > 0 && r.soldOut / r.matches > PROPOSAL_SKIP_SHARE);
+  const skipKeys = new Set(skip.map((r) => `${r.city}|${r.field}`));
+  const byId = new Map(matches.map((m) => [m.id, m]));
+  let lostSpots = 0, lostCents = 0, saved = 0, savedCents = 0, withheld = 0, lostUnderHalf = 0, lostWithFill = 0;
   for (const p of free) {
-    const k = `${p.city}|${p.field}`;
-    const e = m.get(k) ?? m.set(k, { field: p.field, city: p.city, cityName: p.cityName, people: [], matches: new Set() }).get(k)!;
-    e.people.push(p);
-    e.matches.add(p.matchId);
+    const m = byId.get(p.matchId);
+    if (!m || m.day > today) continue;
+    const skipped = skipKeys.has(`${m.city}|${m.field}`);
+    if (isSoldOut(m)) {
+      lostSpots++; lostCents += m.priceCents;
+      if (skipped) { saved++; savedCents += m.priceCents; }
+      if (p.bookFill != null) { lostWithFill++; if (p.bookFill < 0.5) lostUnderHalf++; }
+    } else if (skipped) withheld++;
   }
-  return [...m.values()]
-    .map((e) => ({ field: e.field, city: e.city, cityName: e.cityName, freePlayers: e.people.length, matches: e.matches.size, paid2nd: e.people.filter((p) => p.paid2nd30).length }))
-    .sort((a, b) => b.freePlayers - a.freePlayers || a.field.localeCompare(b.field));
+  return {
+    skipFields: skip.slice().sort((a, b) => b.soldOut / b.matches - a.soldOut / a.matches || a.field.localeCompare(b.field)),
+    lostSpots, lostCents, saved, savedCents, withheld, lostUnderHalf, lostWithFill,
+  };
 }
 
-/** The follow-up windows, for the server. */
-export const paidWindowEnd = (anchor: string): string => addDays(anchor, PAID_WINDOW_DAYS);
-export const memberWindowEnd = (anchor: string): string => addDays(anchor, MEMBER_WINDOW_DAYS);
+/** Days between two wall-clock / Chicago days, for the server's follow-up offsets. */
+export const daysBetween = dayDiff;

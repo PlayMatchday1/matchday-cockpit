@@ -1,8 +1,8 @@
 /* GET /api/lifecycle/free-first-match — the Free First Match page's payload. READ ONLY.
  *
- * ONE PAYLOAD, NO PARAMETERS. The page filters by range and city itself: the follow-up windows
- * (paid within 30 days, member within 60) are anchored on each player's own first match and do not
- * depend on the range, so the server computes them once per person and the page selects people.
+ * ONE PAYLOAD, NO PARAMETERS. The page applies the 7 / 14 / 30 day window itself: the server keeps
+ * each player's days to their first two paid follow-ups and each sign-up's first match day, so any
+ * window is a filter over the same payload (freeFirstMatchModel.ts, FAIR WINDOWS).
  *
  * ── THE ROWS ARE growth_participation's (0208) ──────────────────────────────────────────────
  * Who counts is decided once, in the view: staff, @matchday.com and fake accounts out, fake-fill

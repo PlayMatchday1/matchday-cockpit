@@ -5,13 +5,13 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { selectAll } from "./supabasePagination";
-import { chicagoYmd, chicagoToday, wallClockYmd } from "./weekBuckets";
-import { normalizeDeclared, normalizeMatchCity, UNASSIGNED_CITY } from "./growthAnalytics";
+import { addDays, chicagoYmd, chicagoToday, wallClockYmd } from "./weekBuckets";
+import { normalizeMatchCity } from "./growthAnalytics";
 import { canonicalVenueName } from "./venueResolver";
 import {
-  BEFORE_FROM, BEFORE_TO, FIRST_MATCH_AUTO_CODE, FIRST_MATCH_AUTO_PROD_ID, LAUNCH_DAY,
-  isPaidBooking, isReferralCode, memberWindowEnd, paidWindowEnd,
-  type Group, type MatchRow, type Payload, type Person, type RegDay, type SubLite,
+  BEFORE_FROM, BEFORE_SIGNUP_DAYS, BEFORE_TO, FIRST_MATCH_AUTO_CODE, FIRST_MATCH_AUTO_PROD_ID, LAUNCH_DAY, MAX_WINDOW,
+  PROPOSAL_LOOKBACK_DAYS, daysBetween, isPaidBooking, isReferralCode,
+  type FieldRate, type Group, type MatchRow, type Payload, type Person, type Signup, type SubLite,
 } from "./freeFirstMatchModel";
 
 type Row = Record<string, unknown>;
@@ -91,13 +91,15 @@ export async function buildFreeFirstMatch(sb: SupabaseClient): Promise<Payload> 
   }
 
   // ── 6. THE MATCHES: the cohort's, plus every live match from launch for the card and the log ─
-  type M = { id: number; wall: string; day: string; city: string; field: string; price: number; freeMember: boolean; booked: number; cap: number | null };
-  const matchCols = "api_id, start_date, city_identifier, field_title, registration_price, is_free_member, max_player_count, player_count, is_cancelled, deleted_at";
+  type M = { id: number; wall: string; day: string; city: string; field: string; price: number; freeMember: boolean; booked: number; cap: number | null; ffe: boolean | null };
+  // ffe: firstMatchFreeEnabled lives only in raw (docs/matchday-api-facts.md, FREE FIRST MATCH).
+  const matchCols = "api_id, start_date, city_identifier, field_title, registration_price, is_free_member, max_player_count, player_count, is_cancelled, deleted_at, ffe:raw->firstMatchFreeEnabled";
   const toM = (r: Row): M => ({
     id: num(r.api_id), wall: String(r.start_date ?? "").slice(0, 16), day: wallClockYmd(String(r.start_date ?? "")),
     city: String(r.city_identifier ?? ""), field: canonicalVenueName(String(r.field_title ?? "")) || String(r.field_title ?? ""),
     price: num(r.registration_price), freeMember: r.is_free_member === true, booked: num(r.player_count),
     cap: r.max_player_count == null ? null : num(r.max_player_count),
+    ffe: typeof r.ffe === "boolean" ? r.ffe : null,
   });
   const matches = new Map<number, M>();
   const cohortMatchIds = [...new Set(part.map((p) => p.match))];
@@ -171,38 +173,80 @@ export async function buildFreeFirstMatch(sb: SupabaseClient): Promise<Payload> 
       if (paidOf(p)) paidDays.push(p.day);
     }
     paidDays.sort();
-    const paid2nd30 = paidDays.length > 0 && paidDays[0] <= paidWindowEnd(anchor.day);
-    const paid3rd = paidDays.length >= 2;
-    const mEnd = memberWindowEnd(anchor.day);
-    const member60 = subs.some((s) => s.activationDay != null && s.activationDay >= anchor.day && s.activationDay <= mEnd);
+    const paidOffsets = paidDays.slice(0, 2).map((d) => daysBetween(anchor.day, d));
 
     people.push({
       id: uid, name: names.get(uid) ?? `Player ${uid}`, group, anchor: anchor.day, matchId: anchor.match,
       city: am?.city || anchor.city, cityName: normalizeMatchCity(am?.city || anchor.city), field: am?.field ?? "",
-      spotCents: am?.price ?? 0, paid2nd30, paid3rd, member60,
+      spotCents: am?.price ?? 0, paidOffsets, bookFill: null,
     });
   }
 
-  // ── 10. REGISTRATIONS from launch, by Chicago day and declared city ───────────────────────
-  const regRows = await selectAll<Row>(() =>
-    sb.from("growth_registration").select("user_id, completed_sign_up_at, declared_city_raw")
-      .eq("completed", true).gte("completed_sign_up_at", `${LAUNCH_DAY}T00:00:00Z`).order("user_id"));
-  const regMap = new Map<string, RegDay>();
-  for (const r of regRows) {
-    const day = chicagoYmd(String(r.completed_sign_up_at));
-    if (day < LAUNCH_DAY) continue;
-    const city = normalizeDeclared(r.declared_city_raw as string | null) ?? UNASSIGNED_CITY;
-    const k = `${day}|${city}`;
-    const e = regMap.get(k) ?? regMap.set(k, { day, city, n: 0 }).get(k)!;
-    e.n++;
+  // ── 10. REAL FILL WHEN EACH FREE SPOT WAS BOOKED (for the proposal) ───────────────────────
+  // Rows that count (rosterRowCounts' rule: PAID or FREE, not cancelled) created before the free
+  // booking and not cancelled by then. Fake fills are left out: a real player displaces them, so they
+  // never stand between a paying player and a spot. paid_status is the row's status NOW, so a row
+  // still WAITING at the time but settled later counts as it ended.
+  const freeBooking = new Map<number, number>(); // person -> booking api id
+  for (const [uid, a] of autoByPerson) freeBooking.set(uid, a.api);
+  const freeMatchIds = [...new Set(people.filter((p) => p.group === "free").map((p) => p.matchId))];
+  const rosterRows = await inChunks(sb, "mdapi_match_players", "api_id, match_api_id, paid_status, is_cancelled, canceled_at, created_at, user_is_fake_player", "match_api_id", freeMatchIds, "api_id", 100);
+  const rowsByMatch = new Map<number, Row[]>();
+  for (const r of rosterRows) { const m = num(r.match_api_id); (rowsByMatch.get(m) ?? rowsByMatch.set(m, []).get(m)!).push(r); }
+  for (const p of people) {
+    if (p.group !== "free") continue;
+    const api = freeBooking.get(p.id), rows = rowsByMatch.get(p.matchId) ?? [], cap = matches.get(p.matchId)?.cap ?? null;
+    const mine = rows.find((r) => num(r.api_id) === api);
+    if (!mine || !cap) continue;
+    const at = String(mine.created_at);
+    const before = rows.filter((r) => num(r.api_id) !== api && r.user_is_fake_player !== true && String(r.created_at) < at
+      && (r.paid_status === "PAID" || r.paid_status === "FREE")
+      && (r.is_cancelled !== true || (r.canceled_at != null && String(r.canceled_at) > at))).length;
+    p.bookFill = before / cap;
   }
 
-  // ── 11. THE MATCH LIST, with the free claimants anchored on each ──────────────────────────
+  // ── 11. SIGN-UPS, by Chicago day, with the person's first match day ───────────────────────
+  // From far enough back for the 30-day "before" cohort (launch - 30 - 1 - 27). completed_sign_up_at
+  // is TRUE UTC, read as its Chicago day; first_match_date is a wall-clock day. A person who had
+  // played before this sign-up (a re-registration) is not a new player and is left out.
+  const signupFrom = addDays(LAUNCH_DAY, -(MAX_WINDOW + BEFORE_SIGNUP_DAYS + 1));
+  const regRows = await selectAll<Row>(() =>
+    sb.from("growth_registration").select("user_id, account_id, completed_sign_up_at")
+      .eq("completed", true).gte("completed_sign_up_at", `${addDays(signupFrom, -1)}T00:00:00Z`).order("account_id"));
+  const regPersons = [...new Set(regRows.map((r) => num(r.user_id)))];
+  const firstOf = new Map<number, string | null>();
+  for (const r of await inChunks(sb, "growth_player_profile", "user_id, first_match_date", "user_id", regPersons, "user_id", 300)) {
+    firstOf.set(num(r.user_id), r.first_match_date == null ? null : String(r.first_match_date));
+  }
+  const signups: Signup[] = [];
+  for (const r of regRows) {
+    const day = chicagoYmd(String(r.completed_sign_up_at));
+    if (day < signupFrom) continue;
+    const first = firstOf.get(num(r.user_id)) ?? null;
+    if (first != null && first < day) continue;
+    signups.push({ day, first });
+  }
+
+  // ── 12. FIELD SELL-OUT RATES over the 4 weeks to yesterday (wall-clock days) ──────────────
+  const rateFrom = addDays(today, -PROPOSAL_LOOKBACK_DAYS);
+  const recent = await selectAll<Row>(() =>
+    sb.from("mdapi_matches").select(matchCols).is("deleted_at", null).eq("is_cancelled", false)
+      .gte("start_date", `${rateFrom}T00:00:00`).lt("start_date", `${today}T00:00:00`).order("api_id"));
+  const rateMap = new Map<string, FieldRate>();
+  for (const m of recent.map(toM)) {
+    if (m.day < rateFrom || m.day >= today) continue;
+    const k = `${m.city}|${m.field}`;
+    const e = rateMap.get(k) ?? rateMap.set(k, { city: m.city, field: m.field, matches: 0, soldOut: 0 }).get(k)!;
+    e.matches++;
+    if (m.cap != null && m.cap > 0 && m.booked >= m.cap) e.soldOut++;
+  }
+
+  // ── 13. THE MATCH LIST, with the free claimants anchored on each ──────────────────────────
   const freeOn = new Map<number, { id: number; name: string }[]>();
   for (const p of people) if (p.group === "free") (freeOn.get(p.matchId) ?? freeOn.set(p.matchId, []).get(p.matchId)!).push({ id: p.id, name: p.name });
   const matchRows: MatchRow[] = live.map(toM).map((m) => ({
     id: m.id, day: m.day, wall: m.wall, city: m.city, cityName: normalizeMatchCity(m.city), field: m.field,
-    booked: m.booked, cap: m.cap, priceCents: m.price, freePlayers: freeOn.get(m.id) ?? [],
+    booked: m.booked, cap: m.cap, priceCents: m.price, ffe: m.ffe, freePlayers: freeOn.get(m.id) ?? [],
   }));
 
   const newest = await sb.from("mdapi_match_players").select("synced_at").order("api_id", { ascending: false }).limit(1);
@@ -211,6 +255,6 @@ export async function buildFreeFirstMatch(sb: SupabaseClient): Promise<Payload> 
   return {
     generatedAt: new Date().toISOString(), today, mirrorSyncedAt: (newest.data?.[0]?.synced_at as string | undefined) ?? null,
     autoPromoIds: [...autoIds], autoBookingsStanding: autoPart.length,
-    people, regs: [...regMap.values()], matches: matchRows,
+    people, signups, matches: matchRows, fieldRates: [...rateMap.values()],
   };
 }

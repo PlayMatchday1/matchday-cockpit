@@ -8442,6 +8442,25 @@ Full write-up: `docs/free-first-match/DISCOVERY.md`. The load-bearing facts:
   `account_id` (the raw `mdapi_match_players.user_id`, indexed) or `player_api_id` / `match_api_id`,
   and widen a person to their accounts through `growth_person_link`.
 
+### Added 2026-11-08 (Free First Match "is this working?" rebuild)
+
+- **The offer is iPhone AND Android, not iPhone-only.** Production backend `heroku-prod/master`
+  a71fc05, `apps/api/src/core/matches/first-match-free/first-match-free.service.ts` `decide()`: app
+  version >= 1.89, `X-App-Platform` `ios` or `android` (anything else: `no_platform`), list price > 0,
+  `firstMatchFreeEnabled !== false`, no prior match, then the remembered-device check per platform.
+  Android additionally needs the HMAC key for Android IDs configured (`device-integrity.config.ts:36`:
+  "unset, Android gets no free first match"). **UNKNOWN whether that key is set in production**: the
+  mirror carries no platform, so Android claims cannot be counted from here.
+- **`firstMatchFreeEnabled` is on production now.** Read from `mdapi_matches.raw` 2026-11-08: all 519
+  live matches from Nov 8 on carry it, every one `true` (no field has been switched off).
+- **Booking-time fill must leave fake rows out.** Fake-fill rows stay in `mdapi_match_players`
+  (`user_is_fake_player true`, `PAID`, not cancelled) after a real player displaces them: match 20898
+  has cap 40, `_count.players` 40, `_count.fakePlayers` 0, and 26 fake rows in the mirror. Counting
+  them put the match at 43/40 before a free booking. Without them every free claim's fill at booking
+  was 0–94% (`src/lib/freeFirstMatchBuild.ts` step 10).
+- **Mirror freshness, 2026-11-08:** the newest `mdapi_match_players` row was synced 21:28Z the same
+  day, minutes after it was created. The "a day behind" note above described Nov 5.
+
 ## Revenue per Player: deleted accounts count on both sides, and January 2025 is why (2026-11-05)
 
 Ryan's decision after the redesign: the denominator stays "active players" (played or held a paying

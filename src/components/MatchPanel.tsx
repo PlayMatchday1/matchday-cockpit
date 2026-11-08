@@ -1476,7 +1476,7 @@ export default function MatchPanel({ matchId, env = DRAWER_ENV, onDirtyChange, o
               <Toggle id="mp-first-free" on={cur[FIRST_MATCH_FREE_KEY] === true} dirty={isDirty(FIRST_MATCH_FREE_KEY)}
                 disabled={!isAdmin} onToggle={(v) => setField(FIRST_MATCH_FREE_KEY, v)}
                 title="Free first match"
-                sub={isAdmin ? "New players on iPhone get this match free" : "New players on iPhone get this match free \u00b7 admins only"} />
+                sub={isAdmin ? "New players get this match free" : "New players get this match free \u00b7 admins only"} />
             )}
           </Section>
 
