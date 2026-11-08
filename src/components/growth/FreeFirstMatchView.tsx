@@ -21,7 +21,7 @@ import pa from "./playerActivity.module.css";
 import s from "./freeFirstMatch.module.css";
 import { fmtInt } from "./format";
 import {
-  WINDOWS, activation, beforePeople, firstAfterReadDay, freePeople, groupStats, proposal, signupsSinceLaunch, soldOutByField,
+  WINDOWS, activation, beforePeople, firstAfterReadDay, freePeople, groupStats, signupsSinceLaunch, soldOutByField,
   type FieldLoss, type Payload, type Window,
 } from "@/lib/freeFirstMatchModel";
 
@@ -109,18 +109,16 @@ export default function FreeFirstMatchView({ authHeaders }: { authHeaders: Recor
         { key: "free", title: "Free first match (since Nov 5)", stats: fs, hi: true, cost: true },
       ],
       lost: soldOutByField(data.matches, free, t),
-      prop: proposal(data.matches, free, data.fieldRates, t),
     };
   }, [data, w]);
 
   if (error) return <div className={`${g.stateMsg} ${g.errorMsg}`}>Could not load: {error}</div>;
   if (!data || !view) return <div className={g.stateMsg}>Loading…</div>;
 
-  const { fs, act, lost, prop } = view;
+  const { fs, act, lost } = view;
   const before = rate(act.before.played, act.before.done);
   const after = rate(act.after.played, act.after.done);
   const pts = before != null && after != null ? Math.round((after - before) * 1000) / 10 : null;
-  const skipNames = prop.skipFields.map((f) => f.field);
 
   return (
     <>
@@ -256,27 +254,6 @@ export default function FreeFirstMatchView({ authHeaders }: { authHeaders: Recor
             </table>
           </div>
         )}
-      </section>
-
-      <section className={s.proposal} data-testid="ffm-proposal">
-        <div className={s.propHead}>
-          <span className={s.propTitle}>Proposed: automatic eligibility</span>
-          <span className={`${s.pill} ${s.pillEarly}`}>Proposal, not built</span>
-        </div>
-        <div className={s.propGrid}>
-          <div className={s.propItem}>
-            <b>Skip fields that sold out most of the last 4 weeks</b>
-            <span>Over half their matches sold out · {fmtInt(skipNames.length)} fields today{skipNames.length > 0 ? `: ${skipNames.slice(0, 5).join(", ")}${skipNames.length > 5 ? "…" : ""}` : ""} · recomputed daily, no manual toggles</span>
-          </div>
-          <div className={s.propItem}>
-            <b>No fill threshold</b>
-            <span>{fmtInt(prop.lostUnderHalf)} of {fmtInt(prop.lostWithFill)} lost spots were booked while the match was under half full: free players book early, so fill at booking does not separate them</span>
-          </div>
-          <div className={s.propItem}>
-            <b>Would have saved {fmtInt(prop.saved)} of {fmtInt(prop.lostSpots)} spots</b>
-            <span>{money(prop.savedCents)} of {money(prop.lostCents)} since Nov 5 · and withheld {fmtInt(prop.withheld)} free matches on matches that did not sell out</span>
-          </div>
-        </div>
       </section>
     </>
   );

@@ -50,9 +50,6 @@ export type Window = (typeof WINDOWS)[number];
 export const MAX_WINDOW = 30;
 /** The activation "before" cohort is this many days of sign-ups. */
 export const BEFORE_SIGNUP_DAYS = 28;
-/** The proposal: skip a field whose share of sold-out matches over the last 4 weeks is above this. */
-export const PROPOSAL_SKIP_SHARE = 0.5;
-export const PROPOSAL_LOOKBACK_DAYS = 28;
 
 /** How the player got their first match. */
 export type Group = "paid" | "code" | "ref" | "free";
@@ -74,9 +71,6 @@ export type Person = {
   spotCents: number;
   /** Days from the anchor to the 1st and 2nd paid follow-up match (own spot), at most two, ascending. */
   paidOffsets: number[];
-  /** Free group only: the match's REAL fill when the free spot was booked (counted rows created before
-   *  it and not yet cancelled then, fake fills out, guests in) over capacity. null when unknown. */
-  bookFill: number | null;
 };
 
 /** One completed sign-up: its Chicago day, and the person's first match day (wall clock), if any. */
@@ -99,9 +93,6 @@ export type MatchRow = {
   freePlayers: { id: number; name: string }[];
 };
 
-/** A field's live matches over the proposal lookback (the 4 weeks to yesterday), and how many sold out. */
-export type FieldRate = { city: string; field: string; matches: number; soldOut: number };
-
 export type Payload = {
   generatedAt: string;
   /** Today in America/Chicago, the default range end. */
@@ -117,7 +108,6 @@ export type Payload = {
   signups: Signup[];
   /** Every live match from LAUNCH_DAY on, with the free claimants anchored on it. */
   matches: MatchRow[];
-  fieldRates: FieldRate[];
 };
 
 /* ── CLASSIFYING A BOOKING (server side) ───────────────────────────────────────────────────── */
@@ -255,43 +245,6 @@ export function soldOutByField(matches: readonly MatchRow[], free: readonly Pers
   }
   const rows = [...by.values()].sort((a, b) => b.spotsLost - a.spotsLost || b.centsLost - a.centsLost || a.field.localeCompare(b.field));
   return { rows, matches: nm, spots: ns, cents: nc };
-}
-
-/* ── THE PROPOSAL (not built: what the rule WOULD have done) ────────────────────────────────── */
-
-export type Proposal = {
-  skipFields: FieldRate[];
-  lostSpots: number;
-  lostCents: number;
-  /** Lost spots on a skipped field, and their value. */
-  saved: number;
-  savedCents: number;
-  /** Free claims on matches that did NOT sell out that the rule would also have withheld. */
-  withheld: number;
-  /** Lost spots booked while the match was under half full (real fill), and how many had a fill. */
-  lostUnderHalf: number;
-  lostWithFill: number;
-};
-
-export function proposal(matches: readonly MatchRow[], free: readonly Person[], rates: readonly FieldRate[], today: string): Proposal {
-  const skip = rates.filter((r) => r.matches > 0 && r.soldOut / r.matches > PROPOSAL_SKIP_SHARE);
-  const skipKeys = new Set(skip.map((r) => `${r.city}|${r.field}`));
-  const byId = new Map(matches.map((m) => [m.id, m]));
-  let lostSpots = 0, lostCents = 0, saved = 0, savedCents = 0, withheld = 0, lostUnderHalf = 0, lostWithFill = 0;
-  for (const p of free) {
-    const m = byId.get(p.matchId);
-    if (!m || m.day > today) continue;
-    const skipped = skipKeys.has(`${m.city}|${m.field}`);
-    if (isSoldOut(m)) {
-      lostSpots++; lostCents += m.priceCents;
-      if (skipped) { saved++; savedCents += m.priceCents; }
-      if (p.bookFill != null) { lostWithFill++; if (p.bookFill < 0.5) lostUnderHalf++; }
-    } else if (skipped) withheld++;
-  }
-  return {
-    skipFields: skip.slice().sort((a, b) => b.soldOut / b.matches - a.soldOut / a.matches || a.field.localeCompare(b.field)),
-    lostSpots, lostCents, saved, savedCents, withheld, lostUnderHalf, lostWithFill,
-  };
 }
 
 /** Days between two wall-clock / Chicago days, for the server's follow-up offsets. */

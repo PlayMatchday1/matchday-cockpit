@@ -8457,7 +8457,8 @@ Full write-up: `docs/free-first-match/DISCOVERY.md`. The load-bearing facts:
   (`user_is_fake_player true`, `PAID`, not cancelled) after a real player displaces them: match 20898
   has cap 40, `_count.players` 40, `_count.fakePlayers` 0, and 26 fake rows in the mirror. Counting
   them put the match at 43/40 before a free booking. Without them every free claim's fill at booking
-  was 0–94% (`src/lib/freeFirstMatchBuild.ts` step 10).
+  was 0–94% (one-off read-only probe over the 68 free claims, 2026-11-08; the page no longer computes
+  booking-time fill since the proposal section was removed).
 - **Mirror freshness, 2026-11-08:** the newest `mdapi_match_players` row was synced 21:28Z the same
   day, minutes after it was created. The "a day behind" note above described Nov 5.
 
