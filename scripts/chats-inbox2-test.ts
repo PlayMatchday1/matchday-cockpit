@@ -191,7 +191,11 @@ console.log("\n— fixes of 2026-11-07 (Ryan's use on production) —");
   is("2. the range toggle renders before (above) the grid, on its own row", stats.indexOf('data-testid="chat-stats-range"') > 0 && stats.indexOf('data-testid="chat-stats-range"') < stats.indexOf('data-testid="chat-stats-grid"'), true);
   is("2. the grid is two rows of cells (2 or 3 columns), not one nowrap band", /grid grid-cols-2 [^"]*grid-cols-3/.test(stats) && !/whitespace-nowrap/.test(stats), true);
   is("2. the popover no longer renders the full-width strip", /<MetricsStrip/.test(inbox), false);
-  is("POSITIVE CONTROL: the old page still renders it", /<MetricsStrip/.test(strip(readFileSync("src/app/(internal)/match-ops/player-chats/CrmClient.tsx", "utf8"))), true);
+  // ITEMISED (2026-11-08, Ryan): the old page no longer renders the strip either (one number: the agent's
+  // weekly line). The control moves to the line that replaced it, on both pages.
+  const oldPage = strip(readFileSync("src/app/(internal)/match-ops/player-chats/CrmClient.tsx", "utf8"));
+  is("POSITIVE CONTROL: both pages render the agent's weekly line", /<AgentScoreLine/.test(oldPage) && /<AgentScoreLine/.test(strip(readFileSync("src/app/(internal)/match-ops/player-chats/v2/Queue2.tsx", "utf8"))), true);
+  is("the old page no longer renders the old strip", /<MetricsStrip/.test(oldPage), false);
   // 3. TEMPLATES LIVE IN THE COMPOSER ONLY.
   is("3. the ⋯ menu has no template item, and the page mounts no template modal of its own", /key: "template"|TemplateSendModal|approved WhatsApp template/.test(inbox), false);
   const comp = strip(readFileSync("src/app/(internal)/match-ops/player-chats/components/Composer.tsx", "utf8"));

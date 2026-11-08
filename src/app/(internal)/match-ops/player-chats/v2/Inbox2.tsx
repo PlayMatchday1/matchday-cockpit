@@ -21,7 +21,6 @@ import { useCrmConversation, markThreadRead, type ThreadListRow } from "@/lib/cr
 import { whatsappWindowExpired, whatsappWindowRemainingMs } from "@/lib/crmWindow";
 import { isAwaitingReply } from "@/lib/awaitingReply";
 import { rowAttention } from "@/lib/crmAttention";
-import { freshAccessToken } from "@/lib/crmSession";
 import { FULL_EDITOR_ENV } from "@/lib/matchEnv";
 import { useAppActivity } from "@/components/AppActivityCard";
 import { annotate } from "@/lib/appActivity";
@@ -233,19 +232,9 @@ export default function Inbox2({ onUseOld }: { onUseOld: () => void }) {
     { key: "old", label: "Back to the old inbox", onClick: onUseOld },
   ] : [];
 
-  // ── the empty state's numbers: this week's chats and median first reply (GET /api/crm/metrics) ──
+  // ── the empty state. Its "This week: N chats · median" line is gone (Ryan 2026-11-08): one number,
+  // the support agent's weekly line (AgentScoreLine) above the tabs. ──
   const needsEmpty = tab === "needs" && !filtersActive(filters) && !legacyView && !threadsLoading && !threadsError && live.rows.length === 0 && live.auto.length === 0;
-  const [week, setWeek] = useState<{ chats: number; median: number | null } | null>(null);
-  useEffect(() => {
-    if (!needsEmpty || week) return;
-    void (async () => {
-      const token = await freshAccessToken();
-      if (!token) return;
-      const r = await fetch("/api/crm/metrics?period=week", { headers: { Authorization: `Bearer ${token}` } }).catch(() => null);
-      const j = r?.ok ? await r.json().catch(() => null) : null;
-      if (j?.metrics?.cohort) setWeek({ chats: j.metrics.cohort.conversations, median: j.metrics.cohort.medianFirstResponseMin });
-    })();
-  }, [needsEmpty, week]);
   const empty = needsEmpty ? (
     <div data-testid="queue-empty" className="mx-[18px] mt-2 flex flex-col items-center gap-[10px] rounded-[12px] border bg-white px-4 py-7 text-center" style={{ borderColor: LINE }}>
       <span className="flex h-11 w-11 items-center justify-center rounded-full bg-[#e3f7ed]">
@@ -253,9 +242,6 @@ export default function Inbox2({ onUseOld }: { onUseOld: () => void }) {
       </span>
       <span className="text-[15px] font-bold" style={{ color: INK }}>Nobody is waiting</span>
       <span className="text-[13px]" style={{ color: MUTED }}>{waitN} conversation{waitN === 1 ? " is" : "s are"} waiting on the player.</span>
-      <span className="text-[12px]" style={{ color: "#9aa39f" }} data-testid="queue-empty-week">
-        {week ? `This week: ${week.chats} chats · ${fmtMin(week.median)} median first reply` : "This week: reading…"}
-      </span>
     </div>
   ) : !threadsLoading && !threadsError && live.rows.length === 0 && live.auto.length === 0 ? (
     <div className="px-[18px] py-8 text-center text-[12px]" style={{ color: FAINT }}>
@@ -376,12 +362,6 @@ export default function Inbox2({ onUseOld }: { onUseOld: () => void }) {
   );
 }
 
-function fmtMin(min: number | null): string {
-  if (min == null) return "—";
-  if (min < 1) return "<1m";
-  if (min < 60) return `${Math.round(min)}m`;
-  return `${Math.floor(min / 60)}h ${Math.round(min % 60)}m`;
-}
 
 function Modal({ title, onClose, wide, children }: { title: string; onClose: () => void; wide?: boolean; children: React.ReactNode }) {
   useEffect(() => {

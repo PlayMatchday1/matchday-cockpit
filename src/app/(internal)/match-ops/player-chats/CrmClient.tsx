@@ -80,7 +80,6 @@ import AutoSendPanel from "./components/AutoSendPanel";
 import AgentScoreLine from "./components/AgentScoreLine";
 import AutoSendCountdown from "./components/AutoSendCountdown";
 import { rowAttention } from "@/lib/crmAttention";
-import MetricsStrip from "./components/MetricsStrip";
 import ContextPane from "./components/ContextPane";
 import { colorForCity } from "@/lib/cityColors";
 import { KNOWN_CITY_CODES, HIDDEN_CITY_CODES } from "@/lib/cityNormalization";
@@ -799,13 +798,9 @@ export default function CrmClient({ onTryNew }: { onTryNew?: () => void } = {}) 
     // The rail is owned by the section layout (fixed, full-bleed). We only leave
     // room for it on desktop via --mo-rail-w, which the layout sets.
     <div className="flex min-h-0 min-w-0 flex-1 lg:pl-[var(--mo-rail-w)]" style={{ background: "#f8faf9" }}>
-      {/* Right column: metrics strip over the three panes */}
+      {/* Right column: the three panes. The old metrics strip ("41 conversations, 9m median") is gone
+          (Ryan 2026-11-08): one number, the support agent's weekly line (AgentScoreLine) atop the list. */}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        {/* Desktop-only: the mobile console is a clean list; the awaiting
-            signal on a phone rides the section strip badge + per-row tag. */}
-        <div className="hidden min-[900px]:block">
-          <MetricsStrip />
-        </div>
 
         <div className="flex min-h-0 min-w-0 flex-1">
           {/* ---- INBOX ---- */}
