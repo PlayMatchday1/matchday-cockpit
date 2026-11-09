@@ -2,8 +2,8 @@
 // partners paid monthly (Hattrick, Crossbar). No week/month toggle: months are
 // the pay unit, with a supplementary "last 8 weeks" activity strip. Presentation
 // only; every figure is derived server-side (partnerGrain + the untouched payment
-// model) and passed in. No "member"/"promo" anywhere; rentals itemised inside the
-// revenue cell, never a match count.
+// model) and passed in. No "member"/"promo" anywhere; rentals are counted inside
+// qualifying revenue and not broken out (Ryan, 2026-11-09), never a match count.
 
 import type { GrainRow } from "@/lib/partnerGrain";
 
@@ -23,7 +23,6 @@ export type PartnerMonthlyProps = {
   since: MonthlySince; months: GrainRow[]; last8: MonthlyWeek[]; footnote: string;
 };
 
-function rentalTotal(r: GrainRow) { return r.rentals.reduce((s, x) => s + x.amount, 0); }
 function statusPill(r: GrainRow) {
   if (r.isOpen) return <span className="pill prog">In progress</span>;
   if (r.state === "nothing") return <span className="pill none">Nothing owed</span>;
@@ -50,7 +49,6 @@ export default function PartnerMonthlyView({ partnerName, sub, terms, since, mon
   const totalIncludesOpen = closed.some((m) => m.isOpen);
   const sum = (rows: GrainRow[], f: (r: GrainRow) => number | null) => rows.reduce((s, r) => s + (f(r) ?? 0), 0);
   const revTotal = sum(detailed, (m) => m.revenue);
-  const rentTotal = sum(detailed, rentalTotal);
 
   return (
     <div className="pm14">
@@ -84,7 +82,6 @@ export default function PartnerMonthlyView({ partnerName, sub, terms, since, mon
           </tr></thead>
           <tbody>
             {ordered.map((m) => {
-              const rent = rentalTotal(m);
               const w = whenText(m);
               return (
                 <tr key={m.key} className={`${m.isOpening ? "opening" : ""} ${m.isOpen ? "running" : ""}`} data-k={m.key} data-diverged={m.diverged ? "1" : undefined}>
@@ -109,25 +106,12 @@ export default function PartnerMonthlyView({ partnerName, sub, terms, since, mon
                   <td>{num(m.spots)}</td>
                   <td>{num(m.daily)}</td>
                   <td>{num(m.guests)}</td>
-                  {/* ── THE TOTAL NEVER MOVES WITHOUT A LINE EXPLAINING IT ─────────────────────
-                      Private rentals were already broken out here. Member spots are the third
-                      term and get the same treatment: a partner reading a bigger number must be
-                      able to see where it came from without asking. */}
-                  {/* ── THE LINE SHOWS ON EVERY PERIOD WITH RENTALS, AND IT ALWAYS FOOTS ─────────────
-                      Ryan: "dont show member spots here" — so there is no member fragment. "Matches"
-                      is the total LESS the rentals, so on a period with a member term it carries the
-                      member-spot value inside it (they are match spots), and the two parts add up to
-                      the total, as the all-time line below does.
-                      UNTIL 2026-11-09 the line was HIDDEN on member-term periods (September 2026 on
-                      for Hattrick), because the old split subtracted the member value from
-                      "matches" and "$3,016 matches + $200 Morning Match" under $4,024 did not foot.
-                      Hiding it also hid the rentals, which is what Ryan asked to see. */}
+                  {/* ── NO BREAKDOWN UNDER QUALIFYING REVENUE (Ryan, 2026-11-09) ─────────────────────
+                      The "$X matches + $Y Morning Match" line is gone from every month, for every
+                      partner. Rentals are still IN the figure (fetchPartnerRows → rentalsIn), they are
+                      just not broken out. It had been hidden on member-term months (which hid their
+                      rentals) and was briefly shown everywhere (262589a); this replaces both. */}
                   <td data-testid="rev-cell">{money(m.revenue)}
-                    {m.revenue != null && rent > 0 && (
-                      <span className="sub rent" data-testid="rev-itemised">
-                        {money(m.revenue - rent)} matches + {money(rent)} {m.rentals[0].label}
-                      </span>
-                    )}
                     {/* THIS ONE STAYS, and it is not an itemisation. It fires only when the venue
                         has no usable DPP list price, and it says the TOTAL IS SHORT. Dropping it
                         with the breakdown would let a period quietly under-report a partner's
@@ -161,7 +145,7 @@ export default function PartnerMonthlyView({ partnerName, sub, terms, since, mon
               <td>{num(sum(detailed, (m) => m.spots))}</td>
               <td>{num(sum(detailed, (m) => m.daily))}</td>
               <td>{num(sum(detailed, (m) => m.guests))}</td>
-              <td>{money(revTotal)}<span className="sub rent">{money(revTotal - rentTotal)} matches + {money(rentTotal)} rentals</span><span className="sub">{detailed.length} months with detail</span></td>
+              <td>{money(revTotal)}<span className="sub">{detailed.length} months with detail</span></td>
               <td>{money(sum(closed, (m) => Math.round(m.payment ?? 0)))}<span className="sub">{totalIncludesOpen ? "includes the month in progress" : "closed months only"}</span></td>
               <td /><td />
             </tr>
@@ -217,9 +201,7 @@ const CSS = `
 .pm14 tfoot td{background:var(--forest);color:#fff;padding:14px;text-align:right;font-size:13px;font-weight:900;white-space:nowrap}
 .pm14 tfoot td:first-child{text-align:left;font-size:10px;letter-spacing:.9px;text-transform:uppercase}
 .pm14 .sub{display:block;font-size:10px;font-weight:750;color:var(--muted);margin-top:3px}
-.pm14 .sub.rent{color:var(--blueInk)}
 .pm14 tfoot .sub{color:#A8C4B7}
-.pm14 tfoot .sub.rent{color:#9BD9F5}
 .pm14 .pill{display:inline-flex;align-items:center;gap:6px;font-size:10.5px;font-weight:900;border-radius:99px;padding:4px 11px;white-space:nowrap}
 .pm14 .pill.paid{background:var(--mintSoft);color:var(--mintInk);border:1px solid var(--mintEdge)}
 .pm14 .pill.late{background:var(--coral);color:var(--coralInk);border:1px solid var(--coralEdge)}

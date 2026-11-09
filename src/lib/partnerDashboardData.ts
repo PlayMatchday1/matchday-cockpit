@@ -143,7 +143,7 @@ export async function buildPartnerDashboardData(
     const footnote =
       `Everything here covers ${venueName} only${launch ? `, from ${dfull(launch)} — the first match MatchDay ran at this venue —` : ""} through ${dfull(today)}, and counts ${totalMatches} matches. ` +
       `Spots filled is every seat paid for and held; MatchDay does not record check-in, so it is not attendance. Daily players and Guests are shown; the remainder of Spots filled is made up of other seat types. ` +
-      `A private rental is a booking with no MatchDay match behind it — no players and no spots — so it adds to qualifying revenue but not to the match or spot counts. Rentals are listed separately inside the revenue column so you can see what you are being paid for. ` +
+      `A private rental is a booking with no MatchDay match behind it — no players and no spots — so it adds to qualifying revenue but not to the match or spot counts. ` +
       `The opening period is a single settled payment with no match-level detail behind it, so it adds to the payment total but not to the counts.` +
       /* THE MEMBER-SPOT SENTENCE WAS HERE AND IS GONE. Ryan: "dont need the footnote". The
        * terms line above already says "with member spots counted", which is the durable statement
