@@ -495,6 +495,13 @@ function fieldBody(f: Form, names: string[]): string {
   if (f.dealType === "FREE_MATCH") return `${n === 1 ? "A free match" : `${n} free matches`} at ${at}${until}.`;
   return `${f.dealType === "SET_PRICE" ? `A ${money(f.dealAmount)} spot in` : dealText(f.dealType, f.dealAmount)} ${any} at ${at}${until}.`;
 }
+/* SUGGESTED COPY FITS THE BACKEND (2026-11-09). eyebrow, caption, headline and line are VARCHAR(64)
+ * (backend-offers apps/api/prisma/schema.prisma, TargetedOfferCampaign), so a suggestion naming a long
+ * field could exceed it and the save failed. A suggestion that would run over drops the field name and
+ * says the same thing without it; staff can still type their own. */
+export const COPY_MAX = 64;
+export const fitCopy = (full: string, short: string) => (full.length <= COPY_MAX ? full : short);
+
 export function autoCopy(f: Form, matches: MatchOpt[], cities: City[] = [], fields: FieldOpt[] = []): Copy {
   // An announcement has nothing to say for itself: staff write it. Only the button and the photo follow the target.
   if (isAnnouncement(f)) {
@@ -512,16 +519,17 @@ export function autoCopy(f: Form, matches: MatchOpt[], cities: City[] = [], fiel
   const headline = f.dealType === "PERCENT_OFF" ? `${f.dealAmount}% OFF`
     : f.dealType === "AMOUNT_OFF" ? `${money(f.dealAmount)} OFF`
     : f.dealType === "SET_PRICE" ? `${money(f.dealAmount)} SPOT` : "FREE MATCH";
-  const line = at.length === 1 ? `ANY MATCH AT ${at[0].title.toUpperCase()}`
-    : at.length > 1 ? `AT ${at[0].title.toUpperCase()} AND ${at.length - 1} MORE`
-    : m ? `${fmt(wallMs(m.startLocal), { weekday: "short" })} ${fmt(wallMs(m.startLocal), { hour: "numeric", minute: "2-digit" })}${m.fieldTitle ? ` · ${m.fieldTitle}` : ""}`.toUpperCase()
+  const when = m ? `${fmt(wallMs(m.startLocal), { weekday: "short" })} ${fmt(wallMs(m.startLocal), { hour: "numeric", minute: "2-digit" })}`.toUpperCase() : "";
+  const line = at.length === 1 ? fitCopy(`ANY MATCH AT ${at[0].title.toUpperCase()}`, "ANY MATCH AT THIS FIELD")
+    : at.length > 1 ? fitCopy(`AT ${at[0].title.toUpperCase()} AND ${at.length - 1} MORE`, `AT ${at.length} FIELDS`)
+    : m ? fitCopy(`${when}${m.fieldTitle ? ` · ${m.fieldTitle.toUpperCase()}` : ""}`, when)
     : n === 1 ? "YOUR NEXT MATCH" : `YOUR NEXT ${n} MATCHES`;
   const where = f.cityIds.length ? ` in ${andList(cityNames(f.cityIds, cities))}` : "";
   const body = at.length ? fieldBody(f, at.map((x) => x.title))
     : m ? `${matchDay(m)}, normally ${money(m.price)}. The discount is already on your account.`
     : `${n === 1 ? "Any match" : `Any ${n} matches`}${where}. The discount is already on your account.`;
   const eyebrow = f.lastPlayed === "LAPSED" ? `WE MISS YOU, ${FIRST_NAME_TOKEN}` : f.lastPlayed === "NEVER" ? "YOUR FIRST MATCH" : m && m.fieldId !== null && f.fieldIds.includes(m.fieldId) ? "YOUR FIELD" : "JUST FOR YOU";
-  const caption = m ? `Your spot at ${m.fieldTitle ?? "the field"} is waiting.` : f.lastPlayed === "LAPSED" ? "Your spot at the field is waiting." : null;
+  const caption = m ? fitCopy(`Your spot at ${m.fieldTitle ?? "the field"} is waiting.`, "Your spot is waiting.") : f.lastPlayed === "LAPSED" ? "Your spot at the field is waiting." : null;
   // The photo: a specific match's own field cover, else null (the app's default MatchDay photo).
   return { eyebrow, caption, headline, line, body, photoUrl: m?.fieldCover ?? at[0]?.cover ?? null, buttonLabel: m ? "Join this match" : "Find a match", dismissLabel: "Not now" };
 }

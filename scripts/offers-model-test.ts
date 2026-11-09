@@ -1469,6 +1469,17 @@ function routeFiles(dir: string): string[] {
     eq("an offer with a deal never sends the accent or a button field", ["headlineAccent" in deal, "buttonFieldId" in deal], [false, false]);
   }
 
+  { // SUGGESTED COPY FITS VARCHAR(64) (2026-11-09): a one-match offer at a long-named field failed to save.
+    const longName = "Saint Edward's University Intramural Soccer Complex Field 3";
+    const lm: MatchOpt[] = [{ ...matches[0], id: 900, fieldId: 9, fieldTitle: longName }];
+    const one = { ...nowF, name: "Long field", scope: "MATCH" as const, matchId: 900, fieldIds: [9], endsLocal: "2026-11-02 19:00:00" };
+    const c = autoCopy(one, lm, cities);
+    eq("long field: the full caption would be over 64 (the control)", `Your spot at ${longName} is waiting.`.length > 64, true);
+    eq("long field: the suggested caption drops the field name", c.caption, "Your spot is waiting.");
+    eq("long field: every suggested 64-character field fits", [c.eyebrow, c.caption, c.headline, c.line].every((x) => (x ?? "").length <= 64), true);
+    eq("short field: the caption still names the field", autoCopy(one, [{ ...lm[0], fieldTitle: "Mueller Park" }], cities).caption, "Your spot at Mueller Park is waiting.");
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`);
   if (pass === 0 || fail > 0) process.exit(1);
 })();
