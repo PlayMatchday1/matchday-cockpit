@@ -62,7 +62,9 @@ export type SourceName =
   // Stripe's end date per CANCELED membership (lib/stripeSubEnds syncSubEnds). In the DB CHECK since 0261.
   | "stripe-sub-ends"
   // Unpaid membership invoices (lib/stripePeopleSync syncUnpaidInvoices). In the DB CHECK since 0262.
-  | "stripe-member-unpaid-invoices";
+  | "stripe-member-unpaid-invoices"
+  // Churn page totals (0264): refresh_churn_player_field, nightly.
+  | "churn-player-field";
 
 // fin_sync_log columns the orchestrator/manual routes write on
 // success. Stripe-specific columns (charges_*) stay null for mdapi

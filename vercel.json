@@ -65,6 +65,10 @@
       "schedule": "0 13 * * *"
     },
     {
+      "path": "/api/sync/churn-player-field",
+      "schedule": "20 13 * * *"
+    },
+    {
       "path": "/api/sync/acquisition-google",
       "schedule": "30 11 * * *"
     },
