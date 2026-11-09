@@ -707,6 +707,41 @@ export default function PlayerActivityPanel({ data, months }: { data: GrowthData
       const c = typeof a === "string" ? a.localeCompare(b as string) : (a as number) - (b as number);
       return st.dir === "desc" ? -c : c;
     });
+    /* ── THE TOTAL ROW (Ryan, 2026-11-09, item 6): THE ROWS SHOWN, ADDED UP ─────────────────────
+     * Counts are the column sums of the rows above (and the period totals' sum). Total players and
+     * Returning players are summed row by row too, so a person who played in two of these cities, or
+     * at two of these fields, counts once in each; the Overall view holds the de-duplicated number,
+     * and the row's (i) says so. The returning rate is summed returning ÷ summed total players.
+     * Registrations have no field, so a field Total reads a dash. Not sortable: it always sits last. */
+    const sumOf = (xs: (number | null)[]) => (xs.some((x) => x != null) ? xs.reduce<number>((a, x) => a + (x ?? 0), 0) : null);
+    const rateOf = (r: number | null, t: number | null) => (r != null && t ? (r / t) * 100 : null);
+    const cellsOf = (e: Entity, kk: PaKey) => { const idx = mapOf(e); return buckets.map((b) => cellVal(idx, e, kk, b.id)); };
+    const colSums = (kk: PaKey) => { const m = rows.map((r) => cellsOf(r.e, kk)); return buckets.map((_, ci) => sumOf(m.map((c) => c[ci]))); };
+    const isRate = M[k].kind === "rate";
+    const retCols = isRate ? colSums("returning") : null, totCols = isRate ? colSums("totalPlayers") : null;
+    const totalCells = isRate ? buckets.map((_, ci) => rateOf(retCols![ci], totCols![ci])) : colSums(k);
+    const totalTotal = isRate ? rateOf(sumOf(retCols!), sumOf(totCols!)) : sumOf(rows.map((r) => r.total));
+    const totalChange: Change = (() => {
+      const na = { v: 0, pts: false, nA: true, isNew: false };
+      let a: number | null, b: number | null;
+      if (grain === "daily") {
+        if (!dayCmp) return na;
+        const dv = (kk: PaKey, day: string, wi: 0 | 1) => sumOf(rows.map((r) => dayValue(r.e, kk, cellsOf(r.e, kk), day, wi)));
+        a = isRate ? rateOf(dv("returning", dayCmp.last, 0), dv("totalPlayers", dayCmp.last, 0)) : dv(k, dayCmp.last, 0);
+        b = isRate ? rateOf(dv("returning", dayCmp.prev, 1), dv("totalPlayers", dayCmp.prev, 1)) : dv(k, dayCmp.prev, 1);
+      } else {
+        if (!cmpPair) return na;
+        a = totalCells[cmpPair.last.i]; b = totalCells[cmpPair.prev.i];
+      }
+      if (a == null || b == null) return na;
+      if (isRate) return { v: a - b, pts: true, nA: false, isNew: false };
+      if (b === 0) return a === 0 ? na : { v: 0, pts: false, nA: false, isNew: true };
+      return { v: ((a - b) / b) * 100, pts: false, nA: false, isNew: false };
+    })();
+    const noRegs = k === "registrations" && isField;
+    const totalDesc = M[k].kind === "distinct" || isRate
+      ? `The ${isField ? "fields" : "cities"} shown, added up. A player who played in more than one of them counts once in each, so this can be higher than Overall, which counts each player once.`
+      : `The ${isField ? "fields" : "cities"} shown, added up.`;
     const colName = st.col === "name" ? (isField ? "Field" : "City")
       : st.col === "total" ? "Period total"
         : st.col === "change" ? "Change"
@@ -803,6 +838,18 @@ export default function PlayerActivityPanel({ data, months }: { data: GrowthData
                   </Fragment>
                 );
               })}
+              {rows.length > 0 && (
+                <tr className={styles.totalRow} data-testid={`pa-total-${k}`}>
+                  <td className={styles.nameCell}><span className={`${styles.name} name`}>Total<Info api={infoApi} label="Total" desc={totalDesc} testId={`pa-info-total-${k}`} /></span></td>
+                  {totalCells.map((v, ci) => (
+                    <td key={buckets[ci].id} data-col={buckets[ci].id} className={buckets[ci].cur ? styles.cur : undefined}>
+                      {noRegs ? "—" : v === 0 ? <span className={styles.zero}>0</span> : fmtVal(k, v)}
+                    </td>
+                  ))}
+                  <td className={styles.tot} data-col="total">{noRegs ? "—" : fmtVal(k, totalTotal)}{!noRegs && totalTotal != null && unitTag(k)}</td>
+                  <td className={styles.chg}><ChangeCell c={totalChange} /></td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>

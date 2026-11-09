@@ -121,6 +121,8 @@
    rather than only in its header. */
 .cur { background: rgba(245, 165, 36, .07); }
 .tot { font-weight: 800; }
+/* The Total row under a city / field table (2026-11-09): the shown rows added up. */
+.totalRow td { font-weight: 800; border-top: 2px solid var(--line, #d6ded9); }
 .chg { min-width: 92px; }
 .zero { color: #b8c4bd; }
 .ip {
