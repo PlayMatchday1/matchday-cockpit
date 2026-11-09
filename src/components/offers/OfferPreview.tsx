@@ -7,7 +7,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { Copy } from "@/lib/offersModel";
-import OfferPopupPreview from "./OfferPopupPreview";
+import OfferPopupPreview, { type AnnouncementLook } from "./OfferPopupPreview";
 import { PushLockScreen } from "./OfferPush";
 import { O } from "./offersUi";
 
@@ -15,8 +15,10 @@ export type PreviewTab = "popup" | "push";
 const POPUP_FULL = 320;
 const POPUP_INSET = 18;
 
-export default function OfferPreview({ tab, setTab, copy, ends, showTicket, opens, push, dateLine, popupOff = false }: {
+export default function OfferPreview({ tab, setTab, copy, ends, showTicket, opens, push, dateLine, popupOff = false, announcement }: {
   tab: PreviewTab; setTab: (t: PreviewTab) => void; copy: Copy; ends: string | null; showTicket: boolean;
+  // A popup with no discount draws its own headline accent and match ticket (OfferPopupPreview).
+  announcement?: AnnouncementLook;
   // Push only: the Popup tab is greyed (there is no popup to show) and the Push tab is the one drawn.
   popupOff?: boolean;
   // "↳ Opens Find a match" (offersModel opensText): the popup's button and the push's tap go to the same place.
@@ -48,7 +50,7 @@ export default function OfferPreview({ tab, setTab, copy, ends, showTicket, open
             <>
               <div className="absolute inset-0" style={{ background: "rgba(0,0,0,0.45)" }} />
               <div className="relative">
-                <OfferPopupPreview copy={copy} ends={ends} showTicket={showTicket} width={popupWidth} />
+                <OfferPopupPreview copy={copy} ends={ends} showTicket={showTicket} width={popupWidth} announcement={announcement} />
               </div>
             </>
           ) : push ? (
@@ -64,7 +66,7 @@ export default function OfferPreview({ tab, setTab, copy, ends, showTicket, open
         </div>
       </div>
       <div data-testid="offers-opens" className="text-center text-[12px] font-medium" style={{ color: O.muted }}>
-        {tab === "popup" ? `↳ Button opens ${opensWhat}` : push ? `↳ Tapping opens ${opensWhat} with the offer applied` : "Turn on Also send as a push to see it here"}
+        {tab === "popup" ? `↳ Button opens ${opensWhat}` : push ? `↳ Tapping opens ${opensWhat}${announcement ? "" : " with the offer applied"}` : "Turn on Also send as a push to see it here"}
       </div>
     </div>
   );

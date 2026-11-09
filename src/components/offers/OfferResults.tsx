@@ -8,7 +8,7 @@
 
 import { useEffect, useState } from "react";
 import {
-  DEFAULT_NEED, DEFAULT_RANGE, RANGES, dealLines, pctText, plannerView, rangeQuery, statusLine, steps, tileSub,
+  ANNOUNCEMENT_APP_NOTE, DEFAULT_NEED, DEFAULT_RANGE, RANGES, dealLines, isAnnouncementFunnel, pctText, plannerView, rangeQuery, statusLine, steps, tileSub,
   type FunnelPage, type Range,
 } from "@/lib/offersFunnel";
 import type { Campaign, FieldOpt, MatchOpt } from "@/lib/offersModel";
@@ -55,20 +55,14 @@ export default function OfferResults({ campaigns, matches, fields }: { campaigns
       ) : !page || !t ? <div className="text-[13px]" style={{ color: O.muted }}>Loading results…</div> : (
         <>
           {page.fixture && <div className="rounded-[10px] px-3 py-2 text-[12px]" style={{ background: O.subtle, color: O.muted }}>Dev fixture: stand-in numbers shaped as the backend contract says. Nothing here is real.</div>}
-          {/* THE TILES */}
-          <div className="grid grid-cols-2 gap-2 md:flex md:items-stretch md:gap-0">
-            {steps(t).map((s, i) => (
-              <div key={s.key} className="contents md:flex md:flex-1 md:items-center">
-                {i > 0 && <span aria-hidden className="hidden px-1.5 text-[22px] md:block" style={{ color: ARROW }}>›</span>}
-                <div data-testid={`offers-results-tile-${s.key}`} className="flex h-full min-w-0 flex-1 flex-col gap-0.5 rounded-[10px] px-3.5 py-3" style={{ background: s.key === "canGetIt" ? AMBER_BG : O.page }}>
-                  <div className="text-[12px] font-semibold" style={{ color: O.muted }}>{s.label}</div>
-                  <div className="text-[24px] font-bold" style={{ color: O.ink }}>{n(s.count)}</div>
-                  <div className="text-[11px]" style={{ color: O.muted }}>{tileSub(s)}</div>
-                  {s.key === "canGetIt" && <div className="text-[11px]" style={{ color: AMBER_INK }}>on app 1.88+{t.estimatedOffers > 0 ? " (est.)" : ""}</div>}
-                </div>
-              </div>
-            ))}
-          </div>
+          {/* THE TILES: offers with a deal (the planner's), then, when there are any, announcements on their own row. */}
+          <Tiles st={steps(t)} prefix="offers-results-tile" note={`on app 1.88+${t.estimatedOffers > 0 ? " (est.)" : ""}`} />
+          {page.announcements && page.announcements.offers > 0 && (
+            <div data-testid="offers-results-announcements" className="flex flex-col gap-2">
+              <div className="text-[12px] font-semibold" style={{ color: O.muted }}>Announcements (no discount) · {n(page.announcements.offers)} · not in the use rate</div>
+              <Tiles st={steps({ ...page.announcements, kind: "ANNOUNCEMENT", used: null })} prefix="offers-results-ann-tile" note={`${ANNOUNCEMENT_APP_NOTE}${page.announcements.estimatedOffers > 0 ? " (est.)" : ""}`} />
+            </div>
+          )}
 
           {/* THE TABLE */}
           <div className="flex flex-col">
@@ -82,7 +76,10 @@ export default function OfferResults({ campaigns, matches, fields }: { campaigns
             {page.offers.map((o) => {
               const [deal, where] = dealLines(o, campaigns, fields);
               const st = steps(o.funnel);
-              const rate = o.funnel.chosen > 0 ? Math.round((o.funnel.used / o.funnel.chosen) * 100) : null;
+              // An announcement's last step is Tapped (it has no uses); its rate is chosen to tapped.
+              const annRow = isAnnouncementFunnel(o.funnel);
+              const last = annRow ? o.funnel.tapped ?? 0 : o.funnel.used ?? 0;
+              const rate = o.funnel.chosen > 0 ? Math.round((last / o.funnel.chosen) * 100) : null;
               return (
                 <div key={o.id} data-testid="offers-results-row" data-id={o.id} className="flex flex-col gap-3 border-b py-3.5 md:flex-row md:items-center md:gap-4" style={{ borderColor: O.line }}>
                   <div className="flex min-w-0 flex-col gap-0.5 md:w-[300px] md:shrink-0 lg:w-[260px] xl:w-[300px]">
@@ -103,12 +100,13 @@ export default function OfferResults({ campaigns, matches, fields }: { campaigns
                         <div className="relative h-1.5 w-full overflow-hidden rounded-[3px]" style={{ background: TRACK }}>
                           <div className="absolute inset-y-0 left-0 rounded-[3px]" style={{ width: `${s.bar}%`, background: s.key === "canGetIt" ? AMBER_BAR : GREEN }} />
                         </div>
+                        {annRow && s.key === "canGetIt" && <div data-testid="offers-results-ann-note" className="text-[10.5px] leading-[13px]" style={{ color: AMBER_INK }}>{ANNOUNCEMENT_APP_NOTE}</div>}
                       </div>
                     ))}
                   </div>
                   <div className="flex flex-col gap-0.5 md:w-[110px] md:shrink-0">
                     <div className="text-[14px] font-bold" style={{ color: O.ink }}>{pctText(rate)}</div>
-                    <div className="text-[11px]" style={{ color: O.muted }}>{n(o.funnel.used)} of {n(o.funnel.chosen)}</div>
+                    <div className="text-[11px]" style={{ color: O.muted }}>{n(last)} {annRow ? "tapped " : ""}of {n(o.funnel.chosen)}</div>
                   </div>
                 </div>
               );
@@ -148,3 +146,21 @@ export default function OfferResults({ campaigns, matches, fields }: { campaigns
   );
 }
 
+// One row of tiles (Chosen › Can get it › Saw it › Used it, or Tapped for announcements), Can get it in amber with its note.
+function Tiles({ st, note, prefix }: { st: ReturnType<typeof steps>; note: string; prefix: string }) {
+  return (
+    <div className="grid grid-cols-2 gap-2 md:flex md:items-stretch md:gap-0">
+      {st.map((s, i) => (
+        <div key={s.key} className="contents md:flex md:flex-1 md:items-center">
+          {i > 0 && <span aria-hidden className="hidden px-1.5 text-[22px] md:block" style={{ color: ARROW }}>›</span>}
+          <div data-testid={`${prefix}-${s.key}`} className="flex h-full min-w-0 flex-1 flex-col gap-0.5 rounded-[10px] px-3.5 py-3" style={{ background: s.key === "canGetIt" ? AMBER_BG : O.page }}>
+            <div className="text-[12px] font-semibold" style={{ color: O.muted }}>{s.label}</div>
+            <div className="text-[24px] font-bold" style={{ color: O.ink }}>{n(s.count)}</div>
+            <div className="text-[11px]" style={{ color: O.muted }}>{tileSub(s)}</div>
+            {s.key === "canGetIt" && <div className="text-[11px]" style={{ color: AMBER_INK }}>{note}</div>}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}

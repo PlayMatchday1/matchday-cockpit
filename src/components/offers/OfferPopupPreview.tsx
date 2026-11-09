@@ -25,9 +25,14 @@ function splitHeadline(headline: string) {
 
 export const POPUP_BASE_WIDTH = 156;
 
-export default function OfferPopupPreview({ copy: raw, ends, showTicket, width = POPUP_BASE_WIDTH }: { copy: Copy; ends: string | null; showTicket: boolean; width?: number }) {
+// announcement (Figma 20892:20143, backend announcements.md): a popup with no discount. Its headline is the plain part
+// plus an accent as typed (no accent: the last word, as before), and its ticket is only the match's kickoff, centred,
+// with no "Auto-applied". Left out for an offer with a deal, which draws exactly as it always has.
+export type AnnouncementLook = { accent: string | null; ticket: string | null };
+export default function OfferPopupPreview({ copy: raw, ends, showTicket, width = POPUP_BASE_WIDTH, announcement }: { copy: Copy; ends: string | null; showTicket: boolean; width?: number; announcement?: AnnouncementLook }) {
   const copy = Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, k === "photoUrl" ? v : withPreviewName(v as string | null)])) as Copy;
-  const { lead, accent } = splitHeadline(copy.headline);
+  const typedAccent = announcement?.accent ? withPreviewName(announcement.accent) : null;
+  const { lead, accent } = announcement && typedAccent ? { lead: copy.headline.trim(), accent: typedAccent.trim() } : splitHeadline(copy.headline);
   const s = width / POPUP_BASE_WIDTH;
   const px = (n: number) => `${Math.round(n * s * 100) / 100}px`;
   return (
@@ -56,7 +61,16 @@ export default function OfferPopupPreview({ copy: raw, ends, showTicket, width =
           {copy.line ? <p className={`${titillium.className} text-center font-bold`} style={{ color: "#5d7a6f", fontSize: px(8), letterSpacing: px(1.25) }}>{copy.line}</p> : null}
         </div>
         {copy.body ? <p className={`${heebo.className} w-full text-center`} style={{ color: "#637973", fontSize: px(7.5), lineHeight: px(10.5) }}>{copy.body}</p> : null}
-        {showTicket && (
+        {announcement ? (announcement.ticket ? (
+          <div data-testid="offers-preview-ticket" data-kind="announcement" className="flex w-full items-center justify-center border-dashed bg-white"
+            style={{ borderColor: "#bac7c3", borderWidth: px(0.5), borderRadius: px(5), padding: `${px(5.5)} ${px(6)}` }}>
+            <div className="flex items-center" style={{ gap: px(2.5) }}>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img alt="" src="/offers/icon-clock.svg" className="block" style={{ width: px(7), height: px(7) }} />
+              <p className={`${heebo.className} whitespace-nowrap font-medium`} style={{ color: "#0b4031", fontSize: px(6.5) }}>{announcement.ticket}</p>
+            </div>
+          </div>
+        ) : null) : showTicket && (
           <div data-testid="offers-preview-ticket" className={`flex w-full items-center border-dashed bg-white ${ends ? "justify-between" : "justify-center"}`}
             style={{ borderColor: "#bac7c3", borderWidth: px(0.5), borderRadius: px(5), padding: `${px(5.5)} ${px(6)}` }}>
             {ends ? (

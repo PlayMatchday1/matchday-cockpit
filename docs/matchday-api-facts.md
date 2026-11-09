@@ -9051,3 +9051,23 @@ Read-only, 2026-11-09 17:45Z (`fin_txn`, `fin_revenue`, `fin_txn_daily`, `partne
   were paid**, not because of rentals. August: paid $1,664.50 (50% of $3,329), recompute $1,588 (50% of $3,176); the $153
   revenue gap = Tomball's August PAID bookings ($153, field 1288, 5 matches). September: paid $2,762.42, recompute $2,609;
   the $153.42 gap = 50% of $306.84, and Tomball's own September page reads $306 qualifying, $153 paid. The paid amounts stand.
+
+## Announcements (popups with no discount): proven on staging (2026-11-09)
+
+**Contract:** backend docs/offers/announcements.md (feature/announcement-popups, 204d6c7). `dealType: "NONE"`; the
+Clubhouse leaves out dealAmount, usesPerPlayer, maxRedemptions, matchIds and appliesFieldIds (`ANNOUNCEMENT_LEAVES_OUT`),
+sends `headline` (plain part) + `headlineAccent`, `buttonTarget` MATCH / FIELD (+ `buttonFieldId`) / FIND_MATCH, and
+holdout 0 unless raised.
+
+- Staging, through the Clubhouse: a ZZ draft saved LANDED and read back `{ dealType: "NONE", dealAmount: 0, headline:
+  "NOW", headlineAccent: "OPEN", buttonTarget: "MATCH", buttonMatchId: 2626, showTicket: true, holdoutPercent: 0,
+  matchIds: [] }`; reloaded with nothing to save; deleted LANDED. Every staging campaign carries `headlineAccent` and
+  `buttonFieldId`; announcement funnels carry `kind: "ANNOUNCEMENT"`, `tapped`, `used: null`; the funnel page has
+  `announcements` totals beside the deal-only `totals` and `planner`.
+- **A gap:** a saved deal draft with a match (or fields) can't be switched to NONE. PATCH `{ dealType: "NONE", ... }`
+  (matchIds can't be sent for NONE) answered 400 "an offer with no deal applies nowhere: pick its match with buttonTarget
+  MATCH and buttonMatchId": the stored matchIds stay. The editor stops that save and says to start a new offer. Drafts
+  without a match or fields switch fine.
+- Unrelated, seen on the way: a one-match offer's suggested caption ("Your spot at {field} is waiting.") can pass the
+  backend's 64-character limit on a long field name (staging "Old Boys and Girls High School - Houston"); the save then
+  fails with "caption must be shorter than or equal to 64 characters".

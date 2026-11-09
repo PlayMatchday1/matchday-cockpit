@@ -57,6 +57,8 @@ const dealWord = (type: Form["dealType"], amount: number) =>
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 const andJoin = (xs: string[]) => (xs.length <= 1 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`);
 export function pushSuggestion(f: Pick<Form, "dealType" | "dealAmount" | "usesPerPlayer" | "scope" | "appliesFieldIds" | "endsLocal">, m: MatchOpt | null, fields: FieldOpt[]): { title: string; body: string } {
+  // An announcement: the push says what the popup says, so it starts from the staff's own headline (see the panel).
+  if (f.dealType === "NONE") return { title: "", body: "" };
   const w = dealWord(f.dealType, f.dealAmount);
   let title: string, body: string;
   if (f.scope === "MATCH" && m) {

@@ -13,7 +13,7 @@ import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/useAuth";
 import {
   STATE_LABEL, audienceText, extraBookingsLine, usedOfLimit, chicagoWallNow, campaignsAfter, comparisonLine, dealText, matchTitle, matchWhere, money, namedMatchIds, progressText, resultsLines, scopeFieldsLine, usedPct, usesText, wallLabel,
-  withCovers, mergeMatches, refreshedLine, type ListChange, type Campaign, type City, type FieldOpt, type MatchOpt,
+  withCovers, mergeMatches, refreshedLine, type Form, type ListChange, type Campaign, type City, type FieldOpt, type MatchOpt,
 } from "@/lib/offersModel";
 import OfferPanel, { type MatchRead } from "./OfferPanel";
 import { PushResultsRow, PushSettingsCard } from "./OfferPush";
@@ -60,11 +60,21 @@ export default function OffersView() {
   // ?open=<id> (Push Notifications' "With offer" rows link here): open that offer once the list has it, then drop the
   // parameter so Back to offers and a refresh show the list.
   const [askedOpen, setAskedOpen] = useState(false);
+  const [seed, setSeed] = useState<Partial<Form> | undefined>(undefined);
   useEffect(() => {
     if (askedOpen || !data) return;
     setAskedOpen(true);
-    const id = Number(new URLSearchParams(window.location.search).get("open"));
+    const q = new URLSearchParams(window.location.search);
+    const id = Number(q.get("open"));
     if (Number.isInteger(id) && id > 0 && data.campaigns.some((c) => c.id === id)) setOpen(id);
+    // ?new=announcement&match=ID (for Match Promotion's Popup channel): a new popup with no discount, its button and
+    // ticket on that match. Nothing is saved until Save draft.
+    if (q.get("new") === "announcement") {
+      const match = Number(q.get("match"));
+      const m = Number.isInteger(match) && match > 0 ? match : null;
+      setSeed({ dealType: "NONE", dealAmount: 0, scope: "ANY", holdoutPercent: 0, showTicket: true, buttonTarget: m ? "MATCH" : "FIND_MATCH", buttonMatchId: m });
+      setOpen("new"); setNewN((n) => n + 1);
+    }
     if (window.location.search) window.history.replaceState(null, "", window.location.pathname);
   }, [askedOpen, data]);
   // THE PUSH MODE on production: asked once per page read, after the list is on screen. Any failure leaves the
@@ -90,7 +100,8 @@ export default function OffersView() {
     return { ...data, matches: withCovers(mergeMatches(Object.values(extraMatches), data.matches), data.fields) };
   }, [data, extraMatches]);
   const current = open === "new" || open === null ? null : view?.campaigns.find((c) => c.id === open) ?? null;
-  const missingKey = current && view ? namedMatchIds(current).filter((id) => !view.matches.some((m) => m.id === id)).join(",") : "";
+  const named = current ? namedMatchIds(current) : open === "new" && seed?.buttonMatchId ? [seed.buttonMatchId] : [];
+  const missingKey = view ? named.filter((id) => !view.matches.some((m) => m.id === id)).join(",") : "";
   useEffect(() => {
     setMatchFailed(false);
     if (!missingKey) return;
@@ -141,7 +152,8 @@ export default function OffersView() {
       {err ? (
         <div data-testid="offers-error" className="rounded-[10px] border px-3 py-2.5 text-[12.5px]" style={{ background: O.critBg, borderColor: O.critLine, color: O.critInk }}>Could not load: {err}</div>
       ) : !view ? <div className="py-6 text-[13px]" style={{ color: O.muted }}>Loading…</div> : editing ? (
-        <OfferPanel key={`${open}:${ver}:${open === "new" ? newN : ""}:${matchRead === "ok"}`} c={current} data={view} matchRead={matchRead} onRetryMatch={() => setMatchRetry((n) => n + 1)} onClose={() => setOpen(null)} onLanded={landed}
+        <OfferPanel key={`${open}:${ver}:${open === "new" ? newN : ""}:${matchRead === "ok"}`} c={current} data={view} matchRead={matchRead} onRetryMatch={() => setMatchRetry((n) => n + 1)} onClose={() => { setOpen(null); setSeed(undefined); }} onLanded={landed}
+          seed={open === "new" ? seed : undefined}
           results={current && current.state !== "DRAFT" ? <ResultsCard c={current} nowWall={nowWall} pushes={!!view.pushes} onLanded={landed} /> : null} />
       ) : (
         <div className="flex flex-col gap-5">
@@ -149,7 +161,7 @@ export default function OffersView() {
           <div data-testid="offers-list" className="overflow-hidden rounded-[12px] border" style={{ background: O.surface, borderColor: O.line }}>
             <div className="flex items-center justify-between px-4 py-3.5">
               <div className="text-[16px] font-bold" style={{ color: O.ink }}>Offers</div>
-              <Btn kind="primary" testId="offers-new" onClick={() => { setOpen("new"); setNewN((n) => n + 1); }}>+ New offer</Btn>
+              <Btn kind="primary" testId="offers-new" onClick={() => { setSeed(undefined); setOpen("new"); setNewN((n) => n + 1); }}>+ New offer</Btn>
             </div>
             <div className={`${COLS} border-y px-4 py-[9px] text-[10px] font-semibold tracking-[0.6px]`} style={{ borderColor: O.line, background: O.subtle, color: O.label }}>
               <div>OFFER</div><div>DEAL</div><div>RESULTS</div><div />

@@ -10,14 +10,18 @@
 
 import { dealText, scopeFieldsLine, wallMs, type Campaign, type CampaignState, type DealType, type FieldOpt } from "./offersModel";
 
-export type Funnel = { chosen: number; canGetIt: number; canGetItPushesOn: number; estimated: boolean; snapshotAt: string | null; saw: number; used: number };
+// kind and tapped (announcements.md "Funnel"): an ANNOUNCEMENT (no discount) has used null and counts tapped instead; an
+// OFFER keeps used. Absent on a backend from before announcements, which is the same as OFFER.
+export type Funnel = { kind?: "OFFER" | "ANNOUNCEMENT"; chosen: number; canGetIt: number; canGetItPushesOn: number; estimated: boolean; snapshotAt: string | null; saw: number; tapped?: number; used: number | null };
 export type FunnelOffer = {
   id: number; name: string; status: string; state: CampaignState; dealType: DealType; dealAmount: number;
   launchedAt: string | null; startsLocal: string; endsLocal: string | null; matchId: number | null; endedAt: string | null; funnel: Funnel;
 };
 export type FunnelTotals = { chosen: number; canGetIt: number; canGetItPushesOn: number; saw: number; used: number; offers: number; estimatedOffers: number };
 export type Planner = { used: number; chosen: number; useRate: number | null; minUsed: number; enoughData: boolean };
-export type FunnelPage = { from: string; to: string; totals: FunnelTotals; planner: Planner; offers: FunnelOffer[] };
+// totals and planner are offers with a deal only; announcements get their own totals (never in the use rate).
+export type AnnouncementTotals = { chosen: number; canGetIt: number; canGetItPushesOn: number; saw: number; tapped: number; estimatedOffers: number; offers: number };
+export type FunnelPage = { from: string; to: string; totals: FunnelTotals; planner: Planner; offers: FunnelOffer[]; announcements?: AnnouncementTotals };
 export type WithoutApp = { campaignId: number; count: number; playerIds: number[] };
 
 // THE RANGE PILL: Last 30 days is the backend's own default (no from/to sent).
@@ -36,13 +40,26 @@ export const pctText = (p: number | null) => (p === null ? "—" : `${p}%`);
 // A bar's width, scaled to Chosen (0 to 100).
 export const barWidth = (part: number, chosen: number) => (chosen > 0 ? Math.max(0, Math.min(100, (part / chosen) * 100)) : 0);
 
-export type Step = { key: "chosen" | "canGetIt" | "saw" | "used"; label: string; count: number; pct: number | null; of: string; bar: number };
-export function steps(f: Pick<Funnel, "chosen" | "canGetIt" | "saw" | "used">): Step[] {
+export type Step = { key: "chosen" | "canGetIt" | "saw" | "used" | "tapped"; label: string; count: number; pct: number | null; of: string; bar: number };
+export const isAnnouncementFunnel = (f: Pick<Funnel, "kind">) => f.kind === "ANNOUNCEMENT";
+// The note under an announcement's Can get it: only the newest app shows a popup with no discount.
+export const ANNOUNCEMENT_APP_NOTE = "needs the latest app update";
+export function steps(f: Pick<Funnel, "chosen" | "canGetIt" | "saw" | "used"> & { kind?: Funnel["kind"]; tapped?: number }): Step[] {
+  if (f.kind === "ANNOUNCEMENT") {
+    const tapped = f.tapped ?? 0;
+    return [
+      { key: "chosen", label: "Chosen", count: f.chosen, pct: null, of: "players picked by filters", bar: f.chosen > 0 ? 100 : 0 },
+      { key: "canGetIt", label: "Can get it", count: f.canGetIt, pct: share(f.canGetIt, f.chosen), of: "of chosen", bar: barWidth(f.canGetIt, f.chosen) },
+      { key: "saw", label: "Saw it", count: f.saw, pct: share(f.saw, f.canGetIt), of: "of can get it", bar: barWidth(f.saw, f.chosen) },
+      { key: "tapped", label: "Tapped", count: tapped, pct: share(tapped, f.saw), of: "of saw it", bar: barWidth(tapped, f.chosen) },
+    ];
+  }
+  const used = f.used ?? 0;
   return [
     { key: "chosen", label: "Chosen", count: f.chosen, pct: null, of: "players picked by filters", bar: f.chosen > 0 ? 100 : 0 },
     { key: "canGetIt", label: "Can get it", count: f.canGetIt, pct: share(f.canGetIt, f.chosen), of: "of chosen", bar: barWidth(f.canGetIt, f.chosen) },
     { key: "saw", label: "Saw it", count: f.saw, pct: share(f.saw, f.canGetIt), of: "of can get it", bar: barWidth(f.saw, f.chosen) },
-    { key: "used", label: "Used it", count: f.used, pct: share(f.used, f.saw), of: "of saw it", bar: barWidth(f.used, f.chosen) },
+    { key: "used", label: "Used it", count: used, pct: share(used, f.saw), of: "of saw it", bar: barWidth(used, f.chosen) },
   ];
 }
 // The tile's second line: "28% of chosen", or the Chosen tile's own words.

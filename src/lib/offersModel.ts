@@ -7,15 +7,20 @@
 // never builds a Date from them in local time. "Now" is the one exception: a true instant, turned into
 // America/Chicago wall clock by chicagoWallNow(). Promo UTC helpers are a different model; do not mix.
 //
-// MONEY: cents. dealAmount is a percent (PERCENT_OFF), cents (AMOUNT_OFF, SET_PRICE) or 0 (FREE_MATCH).
+// MONEY: cents. dealAmount is a percent (PERCENT_OFF), cents (AMOUNT_OFF, SET_PRICE) or 0 (FREE_MATCH, NONE).
+//
+// NONE IS AN ANNOUNCEMENT (backend docs/offers/announcements.md): a popup with no discount. It applies nowhere (no
+// matchIds, no appliesFieldIds, no uses or total), its headline has an explicit accent, its button can open a FIELD,
+// and its ticket is the button match's kickoff. The holdout defaults to 0.
 
 import { LOCAL_MDAPI_HOST } from "./localMode";
 import { canonicalAudience, offerOfSpec, specOfAudience, type ContractAudience, type ContractFilter } from "./audienceModel";
 
-export type DealType = "PERCENT_OFF" | "AMOUNT_OFF" | "SET_PRICE" | "FREE_MATCH";
+export type DealType = "PERCENT_OFF" | "AMOUNT_OFF" | "SET_PRICE" | "FREE_MATCH" | "NONE";
+export const isAnnouncement = (f: { dealType: DealType }) => f.dealType === "NONE";
 export type LastPlayed = "ANY" | "LAPSED" | "NEVER";
 export type Membership = "ANYONE" | "MEMBERS" | "NON_MEMBERS";
-export type ButtonTarget = "FIND_MATCH" | "MATCH" | "MEMBERSHIP";
+export type ButtonTarget = "FIND_MATCH" | "MATCH" | "MEMBERSHIP" | "FIELD";
 export type CampaignStatus = "DRAFT" | "LAUNCHED" | "PAUSED" | "ENDED";
 export type CampaignState = "DRAFT" | "SCHEDULED" | "LIVE" | "PAUSED" | "ENDED";
 // FILTERS: the audience is the filters. PLAYERS: exactly playerIds; the filters don't apply, and only a list of
@@ -50,6 +55,9 @@ export type Campaign = Copy & {
   appliesFieldIds?: number[];
   matchScoped: boolean; matchIds: number[]; startsLocal: string; endsLocal: string | null; showTicket?: boolean; holdoutPercent: number;
   buttonTarget: ButtonTarget; buttonMatchId: number | null; status: CampaignStatus; state: CampaignState;
+  // Announcements (backend announcements.md): the headline's accent part (null: the last word, as 1.88 draws it) and the
+  // field a FIELD button opens. Absent on a backend from before announcements.
+  headlineAccent?: string | null; buttonFieldId?: number | null;
   createdByStaffEmail: string | null; launchedByStaffEmail: string | null; launchedAt: string | null; updatedAt?: string;
   results: Results;
   // popupEnabled false is a push-only offer (backend 08145ea): no popup on app open, the discount still applies at
@@ -124,6 +132,7 @@ export function pickerRange(nowWall: string): { from: string; to: string } {
 // Fields a launched or paused campaign may still change (the backend's EDITABLE_AFTER_LAUNCH).
 export const EDITABLE_AFTER_LAUNCH = new Set<string>([
   "name", "eyebrow", "caption", "headline", "line", "body", "photoUrl", "showTicket", "buttonLabel", "buttonTarget", "buttonMatchId", "dismissLabel", "maxRedemptions", "popupEnabled",
+  "headlineAccent", "buttonFieldId",
 ]);
 // Every key the Clubhouse may send on create or edit. The routes drop anything else.
 export const BODY_KEYS = new Set<string>([
@@ -207,6 +216,7 @@ export function money(cents: number): string {
 }
 // The backend's applyOfferDeal (join-pricing.ts): the price a player pays with the deal. Under 50 cents is free.
 export function priceWithDeal(listPrice: number, type: DealType, amount: number): number {
+  if (type === "NONE") return listPrice; // an announcement never changes the price
   let price = type === "FREE_MATCH" ? 0 : type === "SET_PRICE" ? amount : type === "AMOUNT_OFF" ? listPrice - amount : Math.round(listPrice - (listPrice * amount) / 100);
   price = price < 50 ? 0 : price;
   return Math.max(0, price);
@@ -219,6 +229,7 @@ export const STEPPER: Record<DealType, { start: number; step: number; min: numbe
   AMOUNT_OFF: { start: 500, step: 100, min: 100, max: 10_000 },
   SET_PRICE: { start: 500, step: 100, min: 100, max: 10_000 },
   FREE_MATCH: null,
+  NONE: null,
 };
 export const amountText = (type: DealType, amount: number) => (type === "PERCENT_OFF" ? `${amount}%` : money(amount));
 
@@ -226,6 +237,7 @@ export function dealText(type: DealType, amount: number): string {
   if (type === "PERCENT_OFF") return `${amount}% off`;
   if (type === "AMOUNT_OFF") return `${money(amount)} off`;
   if (type === "SET_PRICE") return `${money(amount)} spot`;
+  if (type === "NONE") return "No discount";
   return "Free match";
 }
 export const usesText = (n: number) => (n === 1 ? "1 match" : `${n} matches`);
@@ -351,6 +363,9 @@ export type Form = {
   // Where the popup's button goes (Edit text › Button opens). Forced to the deal's match when the
   // offer is for a specific match; see buttonOf.
   buttonTarget: ButtonTarget; buttonMatchId: number | null;
+  // An announcement's headline accent ("OPEN" in "NOW OPEN") and its FIELD button's field. Null for offers with a deal,
+  // which never send them, so they save exactly as before.
+  headlineAccent: string | null; buttonFieldId: number | null;
   // Copy per key. Absent is the suggestion, and moves with the deal, audience and match. A string was
   // typed and stays; an emptied box stays empty rather than going back to the deal (see copyOf). null
   // is a removed section and never comes back on its own.
@@ -363,7 +378,7 @@ export function newForm(nowWall: string): Form {
     audienceMode: "FILTERS", playerIdsText: "", playerIds: [], fieldIds: [],
     cityIds: [], lastPlayed: "ANY", lastPlayedDays: null, membership: "ANYONE",
     minMatches: 0, maxMatches: null, ...defaultRun(nowWall), holdoutPercent: 10, maxRedemptions: null, showTicket: true, popupEnabled: true, audienceFilters: null,
-    buttonTarget: "FIND_MATCH", buttonMatchId: null, copy: {},
+    buttonTarget: "FIND_MATCH", buttonMatchId: null, headlineAccent: null, buttonFieldId: null, copy: {},
   };
 }
 
@@ -377,7 +392,7 @@ export function formOf(c: Campaign, matches: MatchOpt[], cities: City[], fields:
     // A short Specific players list stores 0; the form keeps the default, which applies if the list grows to 200.
     startsLocal: c.startsLocal, endsLocal: c.endsLocal, holdoutPercent: c.audienceMode === "PLAYERS" && c.playerIds.length < PLAYERS_HOLDOUT_MIN ? DEFAULT_HOLDOUT_PERCENT : c.holdoutPercent,
     maxRedemptions: c.maxRedemptions, showTicket: c.showTicket ?? true, popupEnabled: c.popupEnabled ?? true,
-    buttonTarget: c.buttonTarget, buttonMatchId: c.buttonMatchId, copy: {},
+    buttonTarget: c.buttonTarget, buttonMatchId: c.buttonMatchId, headlineAccent: c.headlineAccent ?? null, buttonFieldId: c.buttonFieldId ?? null, copy: {},
     audienceFilters: c.audience ? (c.audience.mode === "FILTERS" ? c.audience.filters : []) : null,
   };
   // Saved with the shared audience, the old columns may not hold it: read the nearest old fields from it instead.
@@ -411,22 +426,37 @@ export const pickedMatch = (f: Pick<Form, "scope" | "matchId">, matches: MatchOp
 // An offer for a specific match always opens that match (locked). Otherwise it is the person's pick:
 // Find a match, or one match of their choosing (the offer still works on any match). A stored
 // MEMBERSHIP target is kept as it is; this page does not offer it.
-export type ButtonDest = { target: ButtonTarget; matchId: number | null; locked: boolean };
+export type ButtonDest = { target: ButtonTarget; matchId: number | null; locked: boolean; fieldId?: number | null };
 export function buttonOf(f: Form, matches: MatchOpt[]): ButtonDest {
+  // An announcement's button is all it has: a match (which is also its ticket), a field, or Find a match.
+  if (isAnnouncement(f)) {
+    if (f.buttonTarget === "FIELD") return { target: "FIELD", matchId: null, fieldId: f.buttonFieldId, locked: false };
+    if (f.buttonTarget === "MATCH") return { target: "MATCH", matchId: f.buttonMatchId, locked: false };
+    return { target: "FIND_MATCH", matchId: null, locked: false };
+  }
   const m = pickedMatch(f, matches);
   if (m) return { target: "MATCH", matchId: m.id, locked: true };
   // A field's offer works at several matches, so its button can't open just one.
   if (f.scope === "FIELD") return { target: "FIND_MATCH", matchId: null, locked: true };
   if (f.buttonTarget === "MATCH") return { target: "MATCH", matchId: f.buttonMatchId, locked: false };
-  return { target: f.buttonTarget, matchId: null, locked: false };
+  // FIELD is an announcement's; an offer with a deal saved that way (not possible from this page) opens Find a match.
+  return { target: f.buttonTarget === "FIELD" ? "FIND_MATCH" : f.buttonTarget, matchId: null, locked: false };
+}
+// An announcement's ticket: the kickoff of the match its button opens ("Sat, Nov 14 · 8:00 PM", the match's own wall
+// clock), only with showTicket on. Null otherwise, and always null for an offer with a deal.
+export function announcementTicket(f: Form, matches: MatchOpt[]): string | null {
+  if (!isAnnouncement(f) || !f.showTicket || f.buttonTarget !== "MATCH" || f.buttonMatchId === null) return null;
+  const m = matches.find((x) => x.id === f.buttonMatchId);
+  return m ? wallLabel(m.startLocal) : null;
 }
 // "Thu 7:00 PM · Mueller Park"
 export const matchDay = (m: MatchOpt) =>
   `${fmt(wallMs(m.startLocal), { weekday: "short" })} ${fmt(wallMs(m.startLocal), { hour: "numeric", minute: "2-digit" })}${m.fieldTitle ? ` · ${m.fieldTitle}` : ""}`;
 // The line under the preview: "↳ Opens Find a match" / "↳ Opens Thu 7:00 PM · Mueller Park".
-export function opensText(f: Form, matches: MatchOpt[]): string {
+export function opensText(f: Form, matches: MatchOpt[], fields: FieldOpt[] = []): string {
   const b = buttonOf(f, matches);
   if (b.target === "MEMBERSHIP") return "↳ Opens Membership";
+  if (b.target === "FIELD") { const fl = fields.find((x) => x.id === b.fieldId); return fl ? `↳ Opens ${fl.title}` : "↳ Opens a field (pick one)"; }
   if (b.target === "FIND_MATCH") return "↳ Opens Find a match";
   const bm = matches.find((x) => x.id === b.matchId);
   return bm ? `↳ Opens ${matchPicked(bm)}` : "↳ Opens a match (pick one)";
@@ -466,6 +496,16 @@ function fieldBody(f: Form, names: string[]): string {
   return `${f.dealType === "SET_PRICE" ? `A ${money(f.dealAmount)} spot in` : dealText(f.dealType, f.dealAmount)} ${any} at ${at}${until}.`;
 }
 export function autoCopy(f: Form, matches: MatchOpt[], cities: City[] = [], fields: FieldOpt[] = []): Copy {
+  // An announcement has nothing to say for itself: staff write it. Only the button and the photo follow the target.
+  if (isAnnouncement(f)) {
+    const bm = f.buttonTarget === "MATCH" ? matches.find((x) => x.id === f.buttonMatchId) ?? null : null;
+    const bf = f.buttonTarget === "FIELD" ? fields.find((x) => x.id === f.buttonFieldId) ?? null : null;
+    return {
+      eyebrow: null, caption: null, headline: "", line: null, body: null,
+      photoUrl: bm?.fieldCover ?? bf?.cover ?? null,
+      buttonLabel: f.buttonTarget === "MATCH" ? "SEE THE MATCH" : f.buttonTarget === "FIELD" ? "SEE THE FIELD" : "FIND A MATCH", dismissLabel: "Not now",
+    };
+  }
   const m = pickedMatch(f, matches);
   const at = scopeFieldsOf(f, fields);
   const n = f.usesPerPlayer;
@@ -751,9 +791,17 @@ export function fullBody(f: Form, matches: MatchOpt[], cities: City[], fields: F
 // A row still being filled in (no city picked yet, no date): not something to count or send.
 export const contractIncomplete = (filters: ContractFilter[] | null) =>
   !!filters?.some((x) => Object.values(x).some((v) => v === null || v === undefined || (Array.isArray(v) && v.length === 0)));
+// What an announcement must never send (announcements.md "Clubhouse": each is a 400): the deal's amount, uses and total,
+// and anywhere it applies. Its match is the button's.
+export const ANNOUNCEMENT_LEAVES_OUT = ["dealAmount", "usesPerPlayer", "maxRedemptions", "matchIds", "appliesFieldIds"];
 // The body as sent: on a backend with the shared audience, `audience` in place of the old fields.
 function bodyOf(f: Form, matches: MatchOpt[], cities: City[], fields: FieldOpt[] = []): Record<string, unknown> {
   const full = fullBody(f, matches, cities, fields);
+  if (isAnnouncement(f)) {
+    for (const k of ANNOUNCEMENT_LEAVES_OUT) delete full[k];
+    full.headlineAccent = f.headlineAccent?.trim() || null;
+    full.buttonFieldId = full.buttonTarget === "FIELD" ? f.buttonFieldId : null;
+  }
   if (f.audienceFilters === null) return full;
   for (const k of OLD_AUDIENCE_KEYS) delete full[k];
   full.audience = f.audienceMode === "PLAYERS" ? { mode: "PLAYERS", playerIds: [...f.playerIds].sort((x, y) => x - y) } : { mode: "FILTERS", filters: f.audienceFilters };
@@ -796,6 +844,12 @@ export function audienceBody(f: Form, matches: MatchOpt[], cities: City[]): Reco
 // status: a launched offer's deal is locked, so a deal rule can't stop it saving its name or text.
 export function formProblem(f: Form, matches: MatchOpt[], status: CampaignStatus | null = null): string | null {
   if (!f.name.trim()) return "Give the offer a name.";
+  if (isAnnouncement(f)) {
+    if (!copyOf(f, matches, []).headline?.trim()) return "The popup needs a headline.";
+    if ((f.headlineAccent ?? "").length > 64 || (copyOf(f, matches, []).headline ?? "").length > 64) return "The headline and its accent take up to 64 characters each.";
+    if (f.buttonTarget === "MATCH" && (f.buttonMatchId === null || !matches.some((x) => x.id === f.buttonMatchId))) return "Pick the match the button opens.";
+    if (f.buttonTarget === "FIELD" && f.buttonFieldId === null) return "Pick the field the button opens.";
+  }
   if (status === null || status === "DRAFT") { const deal = setPriceProblem(f, pickedMatch(f, matches)); if (deal) return deal; }
   if (f.scope === "MATCH" && !pickedMatch(f, matches)) return "Pick the match.";
   if (f.endsLocal === null && f.scope === "MATCH") return "A specific match always ends at kickoff.";
@@ -888,7 +942,8 @@ export function offersLogBody(body: Record<string, unknown>): Record<string, unk
 // ── THE SUMMARY ──────────────────────────────────────────────────────────────────────────────────
 // on188: how many of those players have the 1.88 app or later, so can see an offer. 0 until 1.88 ships; absent
 // on an older backend, and then nothing is said.
-export type Count = { count: number; heldBack: number; players: number; mostItCanCost: number | null; on188?: number };
+// onAnnouncementsApp (announcements.md): of count, players on an app that shows popups with no discount.
+export type Count = { count: number; heldBack: number; players: number; mostItCanCost: number | null; on188?: number; onAnnouncementsApp?: number };
 export const on188Line = (c: Pick<Count, "on188">): string | null =>
   typeof c.on188 === "number" ? `${c.on188.toLocaleString("en-US")} of these have the latest app and can see it.` : null;
 
@@ -909,7 +964,8 @@ function dealAndUntil(f: Form, m: MatchOpt | null, nowWall: string, fields: Fiel
   const at = scopeFieldsOf(f, fields).map((x) => x.title);
   const place = at.length ? ` at ${andList(at)}` : "";
   const one = `${n === 1 ? "one match" : `${n} matches`}${place}`;
-  const deal = m
+  const deal = isAnnouncement(f) ? "a popup with no discount"
+    : m
     ? (f.dealType === "FREE_MATCH" ? `${matchDay(m)} free` : f.dealType === "SET_PRICE" ? `a ${money(f.dealAmount)} spot in ${matchDay(m)}` : `${dealText(f.dealType, f.dealAmount)} ${matchDay(m)}`)
     : (f.dealType === "FREE_MATCH" ? `${n === 1 ? "one free match" : `${n} free matches`}${place}` : f.dealType === "SET_PRICE" ? `a ${money(f.dealAmount)} spot in ${one}` : `${dealText(f.dealType, f.dealAmount)} ${one}`);
   const until = f.endsLocal === null ? "until you end it"
@@ -959,6 +1015,7 @@ export function summary(f: Form, count: Count | null, matches: MatchOpt[], citie
   const { deal, until } = dealAndUntil(f, m, nowWall, fields);
   const people = `${count.players.toLocaleString("en-US")} ${players ? "chosen " : ""}${where}${count.players === 1 ? "player" : "players"}`;
   const held = count.heldBack > 0 ? ` (${count.heldBack.toLocaleString("en-US")} more held back to measure)` : "";
+  if (isAnnouncement(f)) return `${people}${who.length ? ` who ${andList(who)}` : ""} ${one1 ? "sees" : "see"} ${deal} ${until}${held}. It changes no price.`;
   const ceiling = costCeiling(f, count, matches);
   const cost = ceiling ? `Most it can cost: ${money(ceiling.cents)}${ceiling.basis ? ` ${ceiling.basis}` : ""}.` : "Most it can cost: not known until matches are listed.";
   return `${people}${who.length ? ` who ${andList(who)}` : ""} ${one1 ? "gets" : "get"} ${deal} ${until}${held}. ${cost}`;

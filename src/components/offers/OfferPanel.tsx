@@ -18,7 +18,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FIRST_NAME_TOKEN, isAdminAccount, MAX_TEST_IDS, SECTION_ADD, addSection, autoCopy, canReset, copyAfterType, isRemovable, staleLines, staleSections, writtenForOnLoad, removeSection, resetCopy, sectionCollapsed, copyAfterHide, hideUpload, photoContentType, photoFileProblem, photoUrlOk, settableHeaders, MAX_USES_PER_PLAYER, notFoundLine, parsePlayerIds, playerLine, PREVIEW_FIRST_NAME, amountText, limitLine, stepLimit, stepUses, usesLine, audienceBody, buttonMatchNote, buttonOf, opensText, chicagoWallNow, copyOf, createBody, defaultRun, endsTicket, formOf, formProblem, fromInput, matchInfo,
-  newForm, contractIncomplete, holdoutFor, on188Line, heldBackLine, playersHoldoutOn, PLAYERS_HOLDOUT_MIN, patchBody, playedAtSuggestions, mergeMatches, withCovers, endNote, pauseNote, ranUntil, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, countWanted, lockedSummary, endHasPassed, launchProblem, offerWallNow, offerZones, setPriceAnyWarning, setPriceProblem, pickedMatch, startLabel, STEPPER, summary, toInput, wallLabel,
+  newForm, contractIncomplete, holdoutFor, isAnnouncement, announcementTicket, DEFAULT_HOLDOUT_PERCENT, on188Line, heldBackLine, playersHoldoutOn, PLAYERS_HOLDOUT_MIN, patchBody, playedAtSuggestions, mergeMatches, withCovers, endNote, pauseNote, ranUntil, COUNT_BLOCK, COUNT_DEBOUNCE_MS, countState, countWanted, lockedSummary, endHasPassed, launchProblem, offerWallNow, offerZones, setPriceAnyWarning, setPriceProblem, pickedMatch, startLabel, STEPPER, summary, toInput, wallLabel,
   photoTiles, photoTileOf, suggestedPhotoTiles, suggestedPhotoLabel, photoReason, photoRowName, lockScreenDate, popupOffBlock, pushOnlyPrefix,
   type Campaign, type City, type Count, type FieldOpt, type Lookup, type UploadedPhoto, type CopyKey, type ListChange, type DealType, type Form, type MatchOpt, type WrittenFor,
 } from "@/lib/offersModel";
@@ -42,6 +42,12 @@ export type MatchRead = "ok" | "loading" | "failed";
 type Data = { campaigns: Campaign[]; cities: City[]; fields: FieldOpt[]; matches: MatchOpt[]; matchesComplete: boolean; matchesError: string | null; pushes?: boolean };
 const DEALS: { type: DealType; label: string }[] = [
   { type: "PERCENT_OFF", label: "% off" }, { type: "AMOUNT_OFF", label: "$ off" }, { type: "SET_PRICE", label: "Set price" }, { type: "FREE_MATCH", label: "Free match" },
+  { type: "NONE", label: "No discount" },
+];
+// An announcement's text (Figma 20892:20143): the headline is two inputs, its plain part here and its accent beside it.
+const ANNOUNCEMENT_FIELDS: readonly (readonly [CopyKey, string, number])[] = [
+  ["eyebrow", "Tag on the photo", 64], ["caption", "Line on the photo", 64], ["headline", "Headline", 64], ["line", "Line", 64],
+  ["body", "Body", 300], ["buttonLabel", "Button text", 64], ["dismissLabel", "Dismiss link", 64],
 ];
 // The popup's text, in the order the card shows them (two to a row on a wide form; the body takes a whole row).
 const COPY_FIELDS: readonly (readonly [CopyKey, string, number])[] = [
@@ -73,8 +79,10 @@ const TEST_IDS_KEY = "offers:last-test-ids";
 const readTestIds = () => { try { return window.localStorage.getItem(TEST_IDS_KEY) ?? ""; } catch { return ""; } };
 const keepTestIds = (text: string) => { try { window.localStorage.setItem(TEST_IDS_KEY, text); } catch { /* private mode */ } };
 
-export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, onClose, onLanded, results }: {
+export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, onClose, onLanded, results, seed }: {
   c: Campaign | null; data: Data; matchRead: MatchRead; onRetryMatch: () => void; onClose: () => void; onLanded: (o: WriteOutcome, selectId?: number, change?: ListChange) => void;
+  // A new offer's starting point beyond the defaults (Match Promotion's link: a popup with no discount for one match).
+  seed?: Partial<Form>;
   // The results card for a launched offer, drawn by the page; sits at the top of the form column.
   results?: React.ReactNode;
 }) {
@@ -91,7 +99,7 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
   // `audience`. Then the full filter list, the email and phone lookup and the sample are on, and `audience` is what is
   // sent; on a backend from before it, the five old filters and ids only, exactly as before.
   const v2 = data.campaigns.some((x) => x.audience !== undefined);
-  const start = useMemo(() => (c ? formOf(c, data.matches, data.cities, data.fields) : { ...newForm(nowWall), audienceFilters: v2 ? [] : null }), [c, data, nowWall, v2]);
+  const start = useMemo(() => (c ? formOf(c, data.matches, data.cities, data.fields) : { ...newForm(nowWall), audienceFilters: v2 ? [] : null, ...(seed ?? {}) }), [c, data, nowWall, v2, seed]);
   const [f, setF] = useState<Form>(start);
   const set = (patch: Partial<Form>) => setF((x) => ({ ...x, ...patch }));
   const locked = c !== null && c.status !== "DRAFT";
@@ -102,12 +110,17 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
   const copy = copyOf(f, data.matches, data.cities, data.fields);
   // Now, as the wall clock furthest ahead among this offer's cities. Worked out when asked, not on mount.
   const offerWall = () => offerWallNow(offerZones(f, m?.cityId ?? null, data.cities));
-  const problem = matchUnread ? null : formProblem(f, data.matches, c?.status ?? null);
+  // A saved draft with a match or fields can't become a popup with no discount: the backend keeps its stored match and
+  // refuses NONE with it ("an offer with no deal applies nowhere"), and the contract gives the Clubhouse no way to clear it.
+  const savedWithScope = c !== null && f.dealType === "NONE" && c.dealType !== "NONE" && (c.matchIds.length > 0 || (c.appliesFieldIds?.length ?? 0) > 0);
+  const problem = matchUnread ? null : savedWithScope ? "This draft was saved for a specific match or fields, which a popup with no discount can't have. Start a new offer for the popup instead." : formProblem(f, data.matches, c?.status ?? null);
   const diff = c && !matchUnread ? patchBody(c, f, data.matches, data.cities, data.fields) : null;
   // THE PUSH (src/components/offers/OfferPush.tsx). Only where the server allows the controls; saved after the
   // offer itself, with its own request (PUT .../push), and before a launch so the launch can queue it.
   const pushOn = !!data.pushes;
-  const pushSugg = pushSuggestion(f, m, data.fields);
+  // An announcement's push says what its popup says: the headline (both parts) and the body as typed.
+  const annHead = [copyOf(f, data.matches, data.cities, data.fields).headline, f.headlineAccent].filter((x) => x && x.trim()).join(" ");
+  const pushSugg = isAnnouncement(f) ? { title: annHead.slice(0, 64), body: copyOf(f, data.matches, data.cities, data.fields).body ?? "" } : pushSuggestion(f, m, data.fields);
   const [pf, setPf] = useState<PushForm>(() => pushFormOf(c?.push, pushSuggestion(start, pickedMatch(start, data.matches), data.fields), defaultSendLocal(nowWall)));
   const pushIsDirty = pushOn && !matchUnread && !pushLocked(c?.push, c?.status ?? null) && pushDirty(c?.push, pf, pushSugg);
   const pushProb = pushOn && !matchUnread ? pushProblem(pf, pushSugg, f.scope) : null;
@@ -283,7 +296,19 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
   }
 
   // ── deal controls ──
-  const pickDeal = (type: DealType) => set({ dealType: type, dealAmount: STEPPER[type]?.start ?? 0 });
+  // NO DISCOUNT (an announcement, backend announcements.md): applies nowhere, so the scope, match, fields, uses and total go;
+  // its holdout starts at 0 (staff can raise it). Leaving it puts a 0 holdout back to the default and drops what only
+  // an announcement has.
+  const pickDeal = (type: DealType) => {
+    if (type === "NONE") {
+      set({ dealType: "NONE", dealAmount: 0, scope: "ANY", matchId: null, appliesFieldIds: [], usesPerPlayer: 1, maxRedemptions: null, holdoutPercent: 0,
+        buttonTarget: f.buttonTarget === "MATCH" ? "MATCH" : "FIND_MATCH" });
+      return;
+    }
+    set({ dealType: type, dealAmount: STEPPER[type]?.start ?? 0,
+      ...(isAnnouncement(f) ? { holdoutPercent: f.holdoutPercent === 0 ? DEFAULT_HOLDOUT_PERCENT : f.holdoutPercent, headlineAccent: null, buttonFieldId: null, buttonTarget: f.buttonTarget === "FIELD" ? "FIND_MATCH" : f.buttonTarget } : {}) });
+  };
+  const ann = isAnnouncement(f);
   const step = (dir: 1 | -1) => {
     const s = STEPPER[f.dealType];
     if (!s) return;
@@ -406,6 +431,7 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
   // ── Button opens (Figma 20612:47 / 92 / 142). Editable after launch like the rest of the text;
   // forced and locked to the deal's match when the offer is for a specific match.
   const btn = buttonOf(f, data.matches);
+  const annTicket = announcementTicket(f, data.matches);
   const btnMatch = data.matches.find((x) => x.id === btn.matchId) ?? null;
   // ── Photo (Figma 20825:213 and the picker 20826:49): the row shows the photo the popup has right now and why; Change
   // opens the picker over every field's covers and this offer's uploads; None is the app's own default. Editable after launch.
@@ -497,19 +523,25 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
       <div data-testid="offers-button-opens" data-locked={btn.locked ? "1" : "0"} className="flex flex-col gap-2">
         <div className="text-[12px] font-semibold" style={{ color: O.ink }}>Button opens</div>
         <div className="flex flex-wrap gap-2">
-          {([["FIND_MATCH", "Find a match"], ["MATCH", "A specific match"]] as const).map(([t, label]) => (
+          {(ann ? ([["MATCH", "A match"], ["FIELD", "A field"], ["FIND_MATCH", "Find a match"]] as const) : ([["FIND_MATCH", "Find a match"], ["MATCH", "A specific match"]] as const)).map(([t, label]) => (
             btn.locked
               ? <span key={t} data-testid={`offers-btn-${t}`} data-on={btn.target === t ? "1" : "0"} className="inline-flex items-center rounded-full border px-3.5 py-[7px] text-[13px] font-medium" style={chip(btn.target === t)}>{label}</span>
-              : <Chip key={t} testId={`offers-btn-${t}`} on={btn.target === t} disabled={off} onClick={() => set(t === "MATCH" ? { buttonTarget: "MATCH" } : { buttonTarget: "FIND_MATCH", buttonMatchId: null })}>{label}</Chip>
+              : <Chip key={t} testId={`offers-btn-${t}`} on={btn.target === t} disabled={off} onClick={() => set(t === "MATCH" ? { buttonTarget: "MATCH", buttonFieldId: null } : t === "FIELD" ? { buttonTarget: "FIELD", buttonMatchId: null } : { buttonTarget: "FIND_MATCH", buttonMatchId: null, buttonFieldId: null })}>{label}</Chip>
           ))}
         </div>
+        {btn.target === "FIELD" && (
+          <select data-testid="offers-btn-field" disabled={frozen} value={f.buttonFieldId ?? ""} onChange={(e) => set({ buttonFieldId: e.target.value ? Number(e.target.value) : null })} className={inputCls} style={inputStyle}>
+            <option value="">Pick the field</option>
+            {[...data.fields].sort((a, b) => a.title.localeCompare(b.title)).map((x) => <option key={x.id} value={x.id}>{x.title}{data.cities.find((c) => c.id === x.cityId) ? ` · ${data.cities.find((c) => c.id === x.cityId)!.name}` : ""}</option>)}
+          </select>
+        )}
         {btn.target === "MATCH" && (
           <>
             <MatchPicker {...pickerProps} testId="offers-btn-match" selected={btnMatch}
               disabled={frozen} locked={btn.locked} empty={matchUnread ? matchUnreadText(matchRead) : undefined} onPick={(id) => set({ buttonMatchId: id })} />
             {btn.locked
               ? <div data-testid="offers-btn-note" className="rounded-[8px] px-2.5 py-2 text-[12px]" style={{ background: O.subtle, color: O.muted }}>Opens the match this offer is for.</div>
-              : btnMatch && <div data-testid="offers-btn-note" className="rounded-[8px] px-2.5 py-2 text-[12px]" style={{ background: O.mint, color: O.ok }}>{buttonMatchNote(btnMatch)}</div>}
+              : btnMatch && !ann && <div data-testid="offers-btn-note" className="rounded-[8px] px-2.5 py-2 text-[12px]" style={{ background: O.mint, color: O.ok }}>{buttonMatchNote(btnMatch)}</div>}
           </>
         )}
       </div>
@@ -541,7 +573,7 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
         {k === "body"
           ? <textarea id={`offers-copy-${k}`} data-testid={`offers-copy-${k}`} rows={2} maxLength={max} disabled={frozen} className={inputCls} style={inputStyle} value={value} onChange={(e) => setCopy(k, e.target.value)} />
           : <input id={`offers-copy-${k}`} data-testid={`offers-copy-${k}`} maxLength={max} disabled={frozen} className={inputCls} style={inputStyle} value={value} onChange={(e) => setCopy(k, e.target.value)} />}
-        {(stale.includes(k) || (!frozen && canReset(f.copy, k, auto))) && (
+        {(stale.includes(k) || (!frozen && canReset(f.copy, k, auto) && !(ann && !auto))) && (
           <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
             {stale.includes(k) && <span data-testid={`offers-stale-${k}`} className="text-[11.5px] font-medium" style={{ color: O.warnInk }}>Written for the old deal</span>}
             {!frozen && canReset(f.copy, k, auto) && (
@@ -583,7 +615,7 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
   const dealWarn = setPriceProblem(f, m);
   const anyWarn = setPriceAnyWarning(f, data.matches);
   const pushShown = pushOn && pf.enabled ? (() => { const t = pushText(pf, pushSugg); return { title: fillPush(t.title, m), body: fillPush(t.body, m) }; })() : null;
-  const opens = matchUnread ? "↳ Opens a match" : opensText(f, data.matches);
+  const opens = matchUnread ? "↳ Opens a match" : opensText(f, data.matches, data.fields);
 
   const title = c ? c.name || "Untitled offer" : f.name.trim() || "New offer";
   const canLaunch = c === null || c.status === "DRAFT";
@@ -661,7 +693,8 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
       {/* COLUMNS (Figma 20825:86): the preview pinned on the left above 1100px, on top below it. */}
       <div className="grid items-start gap-7 min-[1100px]:grid-cols-[430px_minmax(0,1fr)]">
         <div className="min-w-0 min-[1100px]:sticky min-[1100px]:top-[calc(var(--nav-h)+16px)]">
-          <OfferPreview tab={popupOff ? "push" : tab} setTab={setTab} copy={copy} ends={ends} showTicket={f.showTicket} opens={opens} push={pushShown} dateLine={lockScreenDate(nowWall)} popupOff={popupOff} />
+          <OfferPreview tab={popupOff ? "push" : tab} setTab={setTab} copy={copy} ends={ends} showTicket={f.showTicket} opens={opens} push={pushShown} dateLine={lockScreenDate(nowWall)} popupOff={popupOff}
+            announcement={ann ? { accent: f.headlineAccent, ticket: annTicket } : undefined} />
         </div>
         <div className="flex min-w-0 flex-col gap-4">
           {results}
@@ -675,7 +708,8 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
             <div className="flex flex-wrap gap-2">
               {DEALS.map((d) => <Chip key={d.type} testId={`offers-deal-${d.type}`} on={f.dealType === d.type} disabled={dl} onClick={() => pickDeal(d.type)}>{d.label}</Chip>)}
             </div>
-            <div className="grid gap-3 sm:grid-cols-3">
+            {ann && <div data-testid="offers-no-discount-note" className="rounded-[8px] px-3 py-2 text-[12px]" style={{ background: O.subtle, color: O.muted }}>A popup with no discount, for news like a new field or new match times. It changes no price; write it below and pick where its button goes.</div>}
+            {!ann && <div className="grid gap-3 sm:grid-cols-3">
               {STEPPER[f.dealType] && (
                 <Labeled label="Amount">
                   <div className="flex flex-wrap items-center gap-2.5">
@@ -719,7 +753,7 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
                 </div>
                 {f.maxRedemptions !== null && <div data-testid="offers-limit-line" className="text-[12px]" style={{ color: O.muted }}>{limitLine(f.maxRedemptions)}</div>}
               </div>
-            </div>
+            </div>}
             {!dl && dealWarn && <div data-testid="offers-setprice-block" className="text-[12px] font-medium" style={{ color: O.critInk }}>{dealWarn}</div>}
             {!dl && !dealWarn && m && f.dealType === "SET_PRICE" && f.dealAmount === m.price && (
               <div className="text-[12px]" style={{ color: O.warnInk }}>That is the same as its normal {amountText("SET_PRICE", m.price)}, so nobody saves anything.</div>
@@ -727,6 +761,8 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
             {!dl && !dealWarn && anyWarn && <div data-testid="offers-setprice-warn" className="text-[12px]" style={{ color: O.warnInk }}>{anyWarn}</div>}
           </Card>
 
+          {/* An announcement applies nowhere: no Applies to card. */}
+          {!ann && (<>
           {/* APPLIES TO */}
           <Card title="Applies to" testId="offers-applies">
             <div className="flex flex-wrap gap-2">
@@ -772,6 +808,7 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
               </>
             )}
           </Card>
+          </>)}
 
           {/* WHO GETS IT: the shared builder (src/components/audience/WhoGetsIt.tsx, Figma 20828:192 / 20835:230). Every filter on
               a backend with the shared audience; the five old ones (OFFERS_FILTERS) on one without. The lookup, the count and
@@ -779,7 +816,8 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
           <WhoGetsIt spec={aud} onChange={setAud} allowed={allowed} hints={v2 ? undefined : OFFERS_HINTS} choices={v2 ? undefined : { membership: OFFERS_MEMBERSHIP }} cities={data.cities} fields={data.fields} nowWall={nowWall} disabled={dl || audLoad.unknown > 0} testId="offers-who"
             playersSub={holdoutOn ? `Only these players get it. Filters don't apply. With ${PLAYERS_HOLDOUT_MIN} or more, some are held back to measure (More options, under Runs).` : "Only these players get it. Filters don't apply and nobody is held back."}
             count={players || matchUnread || !wantCount ? { state: "off" } : countNow === "error" ? { state: "error", error: countErr ?? undefined, onRetry: retryCount }
-              : count ? { state: "ready", capFlag, text: countLine({ matching: count.count, holdoutPercent: f.holdoutPercent }), extra: on188Line(count) ? <div data-testid="offers-count-on188" className="self-start text-[12px]" style={{ color: O.muted }}>{on188Line(count)}</div> : null } : { state: "counting" }}
+              : count ? { state: "ready", capFlag, text: countLine({ matching: count.count, holdoutPercent: f.holdoutPercent }), extra: ann ? (typeof count.onAnnouncementsApp === "number" ? <div data-testid="offers-count-on-announcements" className="self-start text-[12px]" style={{ color: O.muted }}>{count.onAnnouncementsApp.toLocaleString("en-US")} of these have the latest app and can see it.</div> : null)
+                : on188Line(count) ? <div data-testid="offers-count-on188" className="self-start text-[12px]" style={{ color: O.muted }}>{on188Line(count)}</div> : null } : { state: "counting" }}
             onSample={async () => {
               const r = await authed("/api/audiences/sample", { method: "POST", body: JSON.stringify({ audience: audienceOf(aud, f.playerIds) }) });
               return r.ok ? (r.json as unknown as SampleAnswer) : { error: String(r.json.error) };
@@ -808,26 +846,43 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
           ))}
 
           {/* POPUP (Figma 20825:181). Every line is written from the deal and editable here; the preview on the left redraws as you type. */}
-          <Card title="Popup" sub={popupOff ? null : "Written for you from the deal. Change any line if you want."} testId="offers-popup">
+          <Card title="Popup" sub={popupOff ? null : ann ? "Write what the popup says. The preview shows it as players will." : "Written for you from the deal. Change any line if you want."} testId="offers-popup">
             {/* SHOW POPUP ON APP OPEN (Figma 20825:184; backend popupEnabled, 08145ea). Off is push only: the text below is
                 kept but hidden, the preview shows the push, and the discount still applies at checkout. */}
             <div className="flex items-center gap-3">
               <div className="flex min-w-0 flex-1 flex-col gap-0.5">
                 <div className="text-[13px] font-semibold" style={{ color: O.ink }}>Show popup on app open</div>
-                <div className="text-[12px]" style={{ color: O.muted }}>Off = push only. The discount still auto-applies at checkout.</div>
+                <div className="text-[12px]" style={{ color: O.muted }}>{ann ? "Off = push only." : "Off = push only. The discount still auto-applies at checkout."}</div>
               </div>
               <Toggle testId="offers-popup-on" on={f.popupEnabled} disabled={frozen} label="Show popup on app open" onChange={setPopupEnabled} />
             </div>
             {popupOff && (
               <div data-testid="offers-popup-off-note" className="rounded-[8px] px-3 py-2 text-[12px]" style={{ background: O.subtle, color: O.muted }}>
-                Push only. Nobody sees a popup; the push&apos;s tap lands on {f.scope === "MATCH" ? "the match" : f.scope === "FIELD" && f.appliesFieldIds.length === 1 ? "the field" : "Find a match"} and the offer is already applied there.
+                {ann ? <>Push only. Nobody sees a popup; the push&apos;s tap lands where the button goes ({opens.replace(/^↳ Opens /, "")}).</>
+                  : <>Push only. Nobody sees a popup; the push&apos;s tap lands on {f.scope === "MATCH" ? "the match" : f.scope === "FIELD" && f.appliesFieldIds.length === 1 ? "the field" : "Find a match"} and the offer is already applied there.</>}
                 {!(pushOn && pf.enabled) && <span className="ml-1 font-medium" style={{ color: O.warnInk }}>There is no push either, so it can&apos;t launch like this.</span>}
               </div>
             )}
             {!popupOff && <div className="grid gap-3.5 sm:grid-cols-2">
-              {COPY_FIELDS.map(([k, label, max]) => copyField(k, label, max))}
+              {(ann ? ANNOUNCEMENT_FIELDS : COPY_FIELDS).flatMap(([k, label, max]) => (ann && k === "headline" ? [copyField(k, label, max), (
+                <div key="headlineAccent" className="flex min-w-0 flex-col gap-1.5">
+                  <label htmlFor="offers-headline-accent" className="text-[12px] font-semibold" style={{ color: O.ink }}>Headline accent <span className="font-normal" style={{ color: O.label }}>in green</span></label>
+                  <input id="offers-headline-accent" data-testid="offers-headline-accent" maxLength={64} disabled={frozen} className={inputCls} style={inputStyle} placeholder="OPEN"
+                    value={f.headlineAccent ?? ""} onChange={(e) => set({ headlineAccent: e.target.value || null })} />
+                </div>
+              )] : [copyField(k, label, max)]))}
             </div>}
-            {popupOff ? null : f.showTicket ? (
+            {popupOff ? null : ann ? (
+              <div data-testid="offers-ticket" data-kind="announcement" className="flex flex-col gap-1">
+                <div className="flex items-baseline gap-2">
+                  <span className="text-[12px] font-semibold" style={{ color: O.ink }}>Ticket</span>
+                  {!frozen && f.buttonTarget === "MATCH" && <button type="button" data-testid={f.showTicket ? "offers-remove-ticket" : "offers-add-ticket"} className="text-[11.5px] font-medium" style={{ color: f.showTicket ? O.muted : O.ok }} onClick={() => set({ showTicket: !f.showTicket })}>{f.showTicket ? "Remove" : "+ Add ticket"}</button>}
+                </div>
+                <div className="text-[12px]" style={{ color: O.muted }}>
+                  {f.buttonTarget !== "MATCH" ? "A ticket shows the match's date and time when the button opens a match." : !f.showTicket ? "No ticket." : annTicket ?? "Pick the match below; its date and time go on the ticket."}
+                </div>
+              </div>
+            ) : f.showTicket ? (
               <div data-testid="offers-ticket" className="flex flex-col gap-1">
                 <div className="flex items-baseline gap-2">
                   <span className="text-[12px] font-semibold" style={{ color: O.ink }}>Ticket</span>

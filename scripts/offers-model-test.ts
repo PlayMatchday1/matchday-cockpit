@@ -1451,6 +1451,24 @@ function routeFiles(dir: string): string[] {
     eq("summary on a backend without atCap", pm.summaryLine(pf, { matching: 412, allowPushes: 338, holdoutPercent: 10, heldBack: 34, willSend: 304 }, 2), "Sends now to about 304 players (338 who allow pushes, minus 10% held back to measure). Players already at 2 pushes this week are skipped.");
   }
 
+  // ── ANNOUNCEMENTS (backend docs/offers/announcements.md): dealType NONE never sends what the backend refuses.
+  {
+    const om = await import("../src/lib/offersModel");
+    const ann = { ...nowF, name: "News", dealType: "NONE" as const, dealAmount: 0, holdoutPercent: 0, buttonTarget: "MATCH" as const, buttonMatchId: 116, headlineAccent: "OPEN", copy: { headline: "NOW" } };
+    const body = createBody(ann, matches, cities);
+    eq("announcement: no amount, uses, total, match or fields in the body", om.ANNOUNCEMENT_LEAVES_OUT.filter((k) => k in body), []);
+    eq("announcement: dealType, the accent, the button match and a 0 holdout go", [body.dealType, body.headlineAccent, body.buttonTarget, body.buttonMatchId, body.holdoutPercent, "buttonFieldId" in body], ["NONE", "OPEN", "MATCH", 116, 0, false]);
+    const fieldBody = createBody({ ...ann, buttonTarget: "FIELD", buttonMatchId: null, buttonFieldId: 7 }, matches, cities);
+    eq("announcement: a FIELD button sends its field and no match", [fieldBody.buttonTarget, fieldBody.buttonFieldId, fieldBody.buttonMatchId ?? null], ["FIELD", 7, null]);
+    const saved = { ...draftFrom(), dealType: "NONE", dealAmount: 0, holdoutPercent: 0, buttonTarget: "MATCH", buttonMatchId: 116, headline: "NOW", headlineAccent: "OPEN", buttonFieldId: null } as Campaign;
+    const loaded = formOf(saved, matches, cities);
+    eq("announcement: loaded and not touched sends nothing", patchBody(saved, loaded, matches, cities), {});
+    eq("announcement: the ticket is the button match's kickoff", om.announcementTicket(loaded, matches), om.wallLabel(matches[0].startLocal));
+    eq("announcement: no headline stops the save", formProblem({ ...ann, copy: { headline: "" } }, matches), "The popup needs a headline.");
+    const deal = createBody({ ...nowF, name: "Deal" }, matches, cities);
+    eq("an offer with a deal never sends the accent or a button field", ["headlineAccent" in deal, "buttonFieldId" in deal], [false, false]);
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`);
   if (pass === 0 || fail > 0) process.exit(1);
 })();
