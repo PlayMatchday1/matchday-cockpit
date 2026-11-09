@@ -145,7 +145,7 @@ AS $$
 $$;
 
 -- ── 4c. the pivot ──────────────────────────────────────────────────────────────────────────────
-CREATE OR REPLACE FUNCTION public.dataroom_dim(p_dim text, p_city text, p_field integer, p_day date, p_cohort text)
+CREATE OR REPLACE FUNCTION public.dataroom_dim(p_dim text, p_city text, p_field bigint, p_day date, p_cohort text)
 RETURNS text
 LANGUAGE sql STABLE
 AS $$
@@ -177,7 +177,7 @@ AS $$
     SELECT d.person_id,
            (d.own_spot AND NOT d.managed AND c.id IS NOT NULL) AS counts_player,
            d.city_identifier AS city,
-           COALESCE((p_field_map ->> d.field_id::text)::integer, d.field_id) AS fid,
+           COALESCE((p_field_map ->> d.field_id::text)::bigint, d.field_id) AS fid,
            d.match_date,
            pr.first_match_month AS cohort
       FROM public.dataroom_play d
