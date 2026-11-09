@@ -8932,12 +8932,16 @@ the real field, given the duplicate's photo as their cover, then each duplicate 
 - **One gap: 20831** (199 → 102, 02:18Z). Live `GET /admin/matches/20831` reads fieldId 102, coverId 37, but change_log has no
   row for its field PUT (it has the cover row) and the mirror kept field_id 199 (write-through reported not refreshed).
   Every other move has both rows. Cause UNKNOWN: the runner did not keep the mirror reason.
+  The missing change_log row was BACKFILLED with Ryan's approval 2026-11-09 02:57Z (one INSERT, source "Duplicate field
+  retirement (row backfilled …)", PUT /admin/matches/20831 {"fieldId":102}, landed, 199 → 102).
 - 13 soft deletes LANDED 02:43–02:45Z (`deleted_at` read back from `GET /fields/{id}`), after a live 0-upcoming check per
   field with a positive control (`GET /admin/matches?fieldId=102` → 53 rows, all on 102): 17, 397, 25, 1552, 1981, 18, 859,
-  1123, 1354, 496, 992, 1948, 1949. **199 and 22 wait** until 20867 and 20899 have finished (the upcoming list drops a match
-  15 min after it starts, so a zero there is not proof a match is over).
-- `GET /fields?cityId=` before vs after (cities 1, 2, 3, 5, 7, 8): Austin 17 → 12, Houston 8 → 7 (22 still listed), San Antonio
-  7 → 5 (199 still listed), St. Louis 6 → 4, DFW 11 → 9, OKC 2 → 1. Master Schedule "New match on a field…" for Austin lists 12
+  1123, 1354, 496, 992, 1948, 1949. 199 and 22 waited until 20867 and 20899 had finished (the upcoming list drops a match
+  15 min after it starts, so a zero there is not proof a match is over): a live read at 04:38Z showed 20867 ended 03:00Z and
+  20899 ended 04:15Z; 0 upcoming on both with the same field-102 control (53 rows); soft deletes LANDED 04:39:30Z (199) and
+  04:39:40Z (22). 20867, 20899 and the cancelled 20812 stay on those fields as past matches.
+- `GET /fields?cityId=` (the app's Field Partners call) before → final, 04:39Z (cities 1, 2, 3, 5, 7, 8): Austin 17 → 12,
+  Houston 8 → 6, San Antonio 7 → 4, St. Louis 6 → 4, DFW 11 → 9, OKC 2 → 1. Each venue once. Master Schedule "New match on a field…" for Austin lists 12
   fields with 10, 12 and 13 and none of the duplicates.
 
 **How hiding works (production backend `heroku-prod/master` a71fc05, code read):**
