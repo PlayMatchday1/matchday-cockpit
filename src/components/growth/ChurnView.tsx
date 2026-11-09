@@ -208,7 +208,8 @@ export default function ChurnView({ authHeaders }: { authHeaders: Record<string,
                   <td>{int(r.matches)}</td>
                   <td>{money(r.spentCents)}</td>
                   <td>{dayLabel(r.last)}</td>
-                  <td className={r.daysGone > DAYS_RED ? s.red : undefined}>{int(r.daysGone)}</td>
+                  {/* The red rides on a span: the shared table rule (.tw tbody td) sets every cell's colour and outranks a td class. */}
+                  <td><span className={r.daysGone > DAYS_RED ? s.red : undefined} data-testid="churn-days-gone">{int(r.daysGone)}</span></td>
                   <td>
                     {r.winback.state === "came_back" ? <span className={s.pill}>Came back</span>
                       : r.winback.state === "messaged" ? <span className={s.pill}>Messaged {shortChicago(r.winback.at)}</span>
