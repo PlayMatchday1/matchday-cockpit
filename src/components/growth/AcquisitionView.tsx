@@ -20,12 +20,12 @@
  */
 
 import type { UnmappedAdset } from "@/lib/acquisitionCompute";
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createContext, Fragment, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import styles from "./growth.module.css";
 import { fmtInt } from "./format";
 import {
-  MILESTONES, SKEWED_BEFORE, clickRate, comparisonWindow, costPer, presetRange, type CompareMode,
+  MILESTONES, SKEWED_BEFORE, clickRate, comparisonWindow, costMetrics, costPer, overallConversion, type CostMetrics, presetRange, type CompareMode,
   type DownloadsTable, type DlSub, type DlTag, type DlTop, type Group, type MarketRowView, type Measures, type PageLine, type Preset, type RankedPage,
   type SourceKey, type SourceWindow, type WebsiteTable, type Window,
 } from "@/lib/acquisitionModel";
@@ -106,12 +106,16 @@ function change(cur: number | null | undefined, prev: number | null | undefined)
   return `${d > 0 ? "+" : d < 0 ? "−" : ""}${Math.abs(d)}%`;
 }
 /** The change, small, under its number. `invert` for figures where lower is better. */
+/* WHAT EVERY PERCENTAGE IS AGAINST (Ryan, 2026-11-09): "vs prior 9 days (Oct 23 – Oct 31)", set once
+ * by the page and carried by each badge as its hover text, so no percentage is unlabelled. */
+const CmpLabel = createContext("");
 function Chg({ cur, prev, invert }: { cur: number | null | undefined; prev: number | null | undefined; invert?: boolean }) {
+  const label = useContext(CmpLabel);
   const t = change(cur, prev);
   if (t == null) return null;
   const up = t.startsWith("+") || t === "new", down = t.startsWith("−");
   const cls = (invert ? down : up) ? "up" : (invert ? up : down) ? "down" : "flat";
-  return <span className={`acq-chg ${cls}`} data-testid="acq-chg">{t}</span>;
+  return <span className={`acq-chg ${cls}`} data-testid="acq-chg" title={label || undefined}>{t}</span>;
 }
 /* THE TOOLTIP (Ryan, 2026-10-06: the browser's title hover was slow and never opened on a phone).
  * Opens at once on mouse hover, on tap (touch) or on Enter / Space; closes on mouse leave, a tap
@@ -217,12 +221,15 @@ export default function AcquisitionView({ authHeaders }: { authHeaders: Record<s
   const [custom, setCustom] = useState(() => presetRange("mtd", today));
   const [compareOn, setCompareOn] = useState(true);
   const range = preset === "custom" ? custom : presetRange(preset, today);
-  /* THE COMPARISON (Ryan, 2026-10-06): same days last month (default) or the previous period of the
-   * same length. Choosing a milestone switches to the previous period, so a milestone reads before vs
-   * after. Every badge, tile and table reads whichever is chosen: the server builds every comparison
-   * window from `vs`. */
-  const [vsMode, setVsMode] = useState<CompareMode>("month");
+  /* THE COMPARISON. The previous period of the same length is the default (Ryan, 2026-11-09: "this
+   * week vs last week"; it was same days last month, 2026-10-06), and the page says which, in words,
+   * above the tiles and on every badge. Same days last month stays a choice. Every badge, tile and table
+   * reads whichever is chosen: the server builds every comparison window from `vs`. */
+  const [vsMode, setVsMode] = useState<CompareMode>("prev");
   const cmp = useMemo(() => (compareOn ? comparisonWindow(vsMode, range.since, range.until) : null), [compareOn, vsMode, range.since, range.until]);
+  const rangeDays = Math.round((Date.parse(`${range.until}T00:00:00Z`) - Date.parse(`${range.since}T00:00:00Z`)) / 86400000) + 1;
+  const priorLabel = `prior ${rangeDays} ${rangeDays === 1 ? "day" : "days"}`;
+  const cmpLabel = cmp ? `vs ${vsMode === "prev" ? priorLabel : "same days last month"} (${short(cmp.since)} – ${short(cmp.until)})` : "";
 
   const [data, setData] = useState<Payload | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -261,6 +268,7 @@ export default function AcquisitionView({ authHeaders }: { authHeaders: Record<s
   const siteDl = webDl ? { n: (fb ? webDl.est : webDl.site) || null, p: webDlP ? (fb ? webDlP.est : webDlP.site) : null, est: fb } : undefined;
 
   return (
+    <CmpLabel.Provider value={cmpLabel}>
     <div className="acq" data-testid="acq">
       <style>{CSS}</style>
 
@@ -290,7 +298,7 @@ export default function AcquisitionView({ authHeaders }: { authHeaders: Record<s
         <span className="acq-cmp" data-testid="acq-compare">
           <label className="acq-cmpon"><input type="checkbox" checked={compareOn} onChange={(e) => setCompareOn(e.target.checked)} aria-label="Compare" /> vs</label>
           <span className={styles.adsPills} role="radiogroup" aria-label="Compare with">
-            {([["month", "same days last month"], ["prev", "previous period"]] as const).map(([k, label]) => (
+            {([["prev", priorLabel], ["month", "same days last month"]] as const).map(([k, label]) => (
               <button key={k} type="button" role="radio" aria-checked={vsMode === k} data-testid={`acq-vs-${k}`} disabled={!compareOn}
                 className={vsMode === k && compareOn ? `${styles.adsPill} ${styles.adsPillOn}` : styles.adsPill}
                 onClick={() => setVsMode(k)}>{label}</button>
@@ -306,6 +314,7 @@ export default function AcquisitionView({ authHeaders }: { authHeaders: Record<s
 
       {data && t && (
         <>
+          {cmpLabel && <div className="acq-cmpnote" data-testid="acq-cmp-label">Percentages are {cmpLabel}.</div>}
           {/* ── 2 · FOUR TILES ──────────────────────────────────────────────────────────────── */}
           <div className="acq-tiles" data-testid="acq-tiles">
             <Tile k={FIRST_LABEL} tip={TIP.firstTime} v={fmtInt(t.firstTime)} cur={t.firstTime} prev={tp?.firstTime} />
@@ -398,6 +407,67 @@ export default function AcquisitionView({ authHeaders }: { authHeaders: Record<s
             </div>
           </section>
 
+          {/* ── 3b · COST PER PLAYER AND PAID SHARE (Ryan, 2026-11-09; lib/acquisitionModel.costMetrics) ── */}
+          {(() => {
+            const rate = overallConversion(t), rateP = tp ? overallConversion(tp) : null;
+            const pct = (r: number | null) => (r == null ? "—" : `${(r * 100).toFixed(1)}%`);
+            const rateTxt = rate == null ? "no registrations in this range" : `${pct(rate)} (${fmtInt(t.firstTime)} first-time players ÷ ${fmtInt(t.registrations)} registrations, all cities)`;
+            const tip = {
+              metaNew: `Estimate. Meta registrations × this period's overall registration-to-new-player rate: ${rateTxt}. Meta cannot see a first match.`,
+              metaCpn: "Estimate. Meta ad spend (over the Meta registrations window) ÷ Meta new players (est.).",
+              bCpr: "All ad spend ÷ all registrations, from every source.",
+              bCpn: "All ad spend ÷ all first-time players, from every source.",
+              share: "Meta registrations ÷ all registrations. The rest came from word of mouth, search and everything unpaid. Meta's own count can claim people who signed up in another city.",
+            };
+            const sideOf = (m: { spendCents: number; regSpendCents: number; metaRegs: number | null } | null, regs: number, first: number) =>
+              ({ spendCents: m ? m.spendCents : null, regSpendCents: m?.regSpendCents ?? 0, metaRegs: m?.metaRegs ?? null, registrations: regs, firstTime: first });
+            const Cells = ({ c, p, noOurs }: { c: CostMetrics; p: CostMetrics | null; noOurs?: boolean }) => (
+              <>
+                <Cell v={c.metaNewEst == null ? "—" : <>{fmtInt(Math.round(c.metaNewEst))}<span className="acq-est"> est.</span></>} cur={c.metaNewEst} prev={p?.metaNewEst} />
+                <Cell v={c.metaCostPerNew == null ? "—" : <>{money2(c.metaCostPerNew)}<span className="acq-est"> est.</span></>} cur={c.metaCostPerNew} prev={p?.metaCostPerNew} invert />
+                {noOurs ? <td colSpan={3} className="acq-muted">no city</td> : <>
+                  <Cell v={money2(c.blendedCpr)} cur={c.blendedCpr} prev={p?.blendedCpr} invert />
+                  <Cell v={money2(c.blendedCpn)} cur={c.blendedCpn} prev={p?.blendedCpn} invert />
+                  <Cell v={pct(c.paidShare)} cur={c.paidShare} prev={p?.paidShare} />
+                </>}
+              </>
+            );
+            const un = data.unmapped.cur, unP = compareOn ? data.unmapped.prev : null;
+            const unSide = (xs: UnmappedAdset[]) => sideOf({ spendCents: xs.reduce((a, u) => a + u.spendCents, 0), regSpendCents: xs.reduce((a, u) => a + u.regSpendCents, 0),
+              metaRegs: xs.some((u) => u.metaRegs != null) ? xs.reduce((a, u) => a + (u.metaRegs ?? 0), 0) : null }, 0, 0);
+            return (
+              <section className={`${styles.card} acq-card`} data-testid="acq-cost">
+                <h2 className="acq-h2">Cost per player and paid share</h2>
+                <div className={styles.tableWrap}>
+                  <table className={`${styles.adsTable} acq-table`}>
+                    <thead><tr>
+                      <th>Market</th>
+                      <th>Meta new players <span className="acq-est">est.</span> <Info tip={tip.metaNew} /></th>
+                      <th>Meta cost per new player <span className="acq-est">est.</span> <Info tip={tip.metaCpn} /></th>
+                      <th>Blended cost per registration <Info tip={tip.bCpr} /></th>
+                      <th>Blended cost per new player <Info tip={tip.bCpn} /></th>
+                      <th>Paid share of registrations <Info tip={tip.share} /></th>
+                    </tr></thead>
+                    <tbody>
+                      {data.markets.map((r) => {
+                        const p = compareOn ? r.prev : null;
+                        const c = costMetrics(sideOf(r.cur.meta, r.cur.ours.registrations, r.cur.ours.firstTime), rate);
+                        const cp = p ? costMetrics(sideOf(p.meta, p.ours.registrations, p.ours.firstTime), rateP) : null;
+                        return <tr key={r.key} data-testid="acq-cost-row" data-market={r.key}><td>{r.label}</td><Cells c={c} p={cp} /></tr>;
+                      })}
+                      {un.length > 0 && (
+                        <tr data-testid="acq-cost-unmapped"><td className="acq-muted">Unmapped</td>
+                          <Cells c={costMetrics(unSide(un), rate)} p={unP ? costMetrics(unSide(unP), rateP) : null} noOurs /></tr>
+                      )}
+                      <tr className={`${styles.adsTotal} acq-total`} data-testid="acq-cost-total"><td>Total</td>
+                        <Cells c={costMetrics(t, rate)} p={tp ? costMetrics(tp, rateP) : null} /></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            );
+          })()}
+
           {/* ── 4 · WEBSITE ─────────────────────────────────────────────────────────────────── */}
           <section className={`${styles.card} acq-card`} data-testid="acq-markets">
             <h2 className="acq-h2">Website</h2>
@@ -446,6 +516,7 @@ export default function AcquisitionView({ authHeaders }: { authHeaders: Record<s
         </>
       )}
     </div>
+    </CmpLabel.Provider>
   );
 }
 
@@ -705,6 +776,7 @@ const CSS = `
 .acq .acq-dlmsg{font-size:12px;color:#5b6b64}
 .acq .acq-tag{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;background:#fde9bf;color:#7a4e06;border-radius:4px;padding:2px 6px}
 .acq .acq-through{font-size:11.5px;color:var(--muted,#5c7168);border-bottom:1px dotted currentColor;cursor:help}
+.acq .acq-cmpnote{margin-top:12px;font:600 12px/1.4 system-ui,sans-serif;opacity:.7}
 .acq .acq-tiles{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:14px}
 .acq .acq-tile{background:#fff;border:1px solid var(--line,#e3e7e1);border-radius:12px;padding:12px 14px}
 .acq .acq-tk{font-size:10.5px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--muted,#5c7168)}

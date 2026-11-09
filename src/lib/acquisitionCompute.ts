@@ -35,8 +35,9 @@ export async function acquisitionResponse(auth: { supabase: import("@supabase/su
   const since = q("since"), until = q("until");
   if (!since || !until || until < since) return Response.json({ error: "since and until (YYYY-MM-DD) are required" }, { status: 400 });
   const compare = url.searchParams.get("compare") === "1";
-  // vs=prev: the same number of days just before; anything else: the same days last month (default).
-  const mode: CompareMode = url.searchParams.get("vs") === "prev" ? "prev" : "month";
+  // vs=month: the same days last month; anything else: the same number of days just before (the
+  // default since 2026-11-09, Ryan: "this week vs last week").
+  const mode: CompareMode = url.searchParams.get("vs") === "month" ? "month" : "prev";
 
   try {
     const sb = auth.supabase;

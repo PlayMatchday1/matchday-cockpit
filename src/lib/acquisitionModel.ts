@@ -528,3 +528,28 @@ export function websiteFallbackOn(today: string, siteNamedInFeed: boolean): bool
   return today >= WEB_FALLBACK_FROM && !siteNamedInFeed;
 }
 export const websiteEstimate = (t: DownloadsTable): number | null => (t.split ? Math.max(0, t.top.web - t.split.sub.share - t.split.sub.google) : null);
+
+/* ── COST AND PAID SHARE (Ryan, 2026-11-09, item 4 of Miguel's list) ─────────────────────────────
+ * Per market and in total, over the selected range:
+ *   Meta new players (est.)       Meta registrations × the range's OVERALL conversion rate
+ *                                 (all first-time players ÷ all registrations, every city together).
+ *                                 Meta cannot see a first match, so this is an estimate and says so.
+ *   Meta cost per new player      Meta spend over the Meta-registration window ÷ that estimate.
+ *   Blended cost per registration all spend ÷ all registrations.
+ *   Blended cost per new player   all spend ÷ all first-time players.
+ *   Paid share of registrations   Meta registrations ÷ all registrations (word of mouth is the rest).
+ * A missing input reads null ("—"), never 0. Money is cents. */
+export type CostSide = { spendCents: number | null; regSpendCents: number; metaRegs: number | null; registrations: number; firstTime: number };
+export type CostMetrics = { metaNewEst: number | null; metaCostPerNew: number | null; blendedCpr: number | null; blendedCpn: number | null; paidShare: number | null };
+/** The range's overall registration → first-time-player rate, the estimate's multiplier. */
+export const overallConversion = (t: { registrations: number; firstTime: number }) => (t.registrations > 0 ? t.firstTime / t.registrations : null);
+export function costMetrics(s: CostSide, rate: number | null): CostMetrics {
+  const metaNewEst = s.metaRegs == null || rate == null ? null : s.metaRegs * rate;
+  return {
+    metaNewEst,
+    metaCostPerNew: costPer(s.regSpendCents, metaNewEst),
+    blendedCpr: s.spendCents == null ? null : costPer(s.spendCents, s.registrations),
+    blendedCpn: s.spendCents == null ? null : costPer(s.spendCents, s.firstTime),
+    paidShare: s.metaRegs == null || s.registrations <= 0 ? null : s.metaRegs / s.registrations,
+  };
+}
