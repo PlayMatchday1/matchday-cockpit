@@ -19,6 +19,7 @@
  * (green / amber / red) read lib/acquisitionTargets.
  */
 
+import type { UnmappedAdset } from "@/lib/acquisitionCompute";
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import styles from "./growth.module.css";
@@ -47,6 +48,7 @@ const TIP = {
   spend: "What we paid Meta in this period. Data starts Aug 1.",
   installs: "App installs Meta says came from our ads. Meta's own count.",
   metaRegs: "Sign-ups Meta says came from our ads. Meta's own count, from Sep 12.",
+  unmapped: "Ad sets whose Meta metro is not one of our active cities (the 2026 Daily Matches list). Their spend, installs and registrations count in the Total. Add the city on Daily Matches and the ad set moves to its row.",
   cpr: "Ad spend divided by Meta registrations. Target: under $5.",
   allRegs: "Every new sign-up in this market, from any source.",
   firstTime: "People who played their first MatchDay match in this period, from any source.",
@@ -81,6 +83,7 @@ type Payload = {
   markets: MarketRowView[];
   totals: { cur: Totals; prev: Totals | null };
   notAttributed: { cur: number; prev: number | null };
+  unmapped: { cur: UnmappedAdset[]; prev: UnmappedAdset[] | null };
   metaWindow: { cur: Window | null; regSince: string | null };
   site: { cur: Group | null; prev: Group | null };
   cities: { cur: Group | null; prev: Group | null };
@@ -361,13 +364,26 @@ export default function AcquisitionView({ authHeaders }: { authHeaders: Record<s
                       </tr>
                     );
                   })}
-                  {data.notAttributed.cur > 0 && (
-                    <tr data-testid="acq-notattributed">
-                      <td className="acq-muted">Spend not tied to a market</td>
-                      <Cell v={money(data.notAttributed.cur)} cur={data.notAttributed.cur} prev={compareOn ? data.notAttributed.prev : null} />
-                      <td colSpan={5} />
-                    </tr>
-                  )}
+                  {/* UNMAPPED (Ryan, 2026-11-09): always shown. Each ad set whose Meta metro is no active
+                    * city (growth_cities), by name, with Meta's own spend, installs and registrations, all
+                    * counted in the Total. Empty is the healthy state, and it says so. */}
+                  <tr className="acq-sub" data-testid="acq-unmapped-head">
+                    <td colSpan={7} className="acq-muted">Unmapped <Info tip={TIP.unmapped} />{data.unmapped.cur.length === 0 ? " · none: every ad set with spend is on a city row" : ""}</td>
+                  </tr>
+                  {data.unmapped.cur.map((u) => {
+                    const pu = compareOn ? data.unmapped.prev?.find((x) => x.adsetId === u.adsetId) ?? null : null;
+                    const cpr = costPer(u.regSpendCents, u.metaRegs);
+                    return (
+                      <tr key={u.adsetId} data-testid="acq-unmapped-row" data-adset={u.adsetId}>
+                        <td title={[u.campaignName, u.topMarket ? `Meta metro: ${u.topMarket}` : null].filter(Boolean).join(" · ")}>{u.adsetName ?? u.adsetId}</td>
+                        <Cell v={money(u.spendCents)} cur={u.spendCents} prev={pu?.spendCents} />
+                        <Cell v={u.installs == null ? "—" : fmtInt(u.installs)} cur={u.installs} prev={pu?.installs} />
+                        <Cell v={u.metaRegs == null ? "—" : fmtInt(u.metaRegs)} cur={u.metaRegs} prev={pu?.metaRegs} />
+                        <Cell v={money2(cpr)} cur={cpr} prev={pu ? costPer(pu.regSpendCents, pu.metaRegs) : null} invert band={cprBand(cpr)} />
+                        <td colSpan={2} className="acq-muted">no city</td>
+                      </tr>
+                    );
+                  })}
                   <tr className={`${styles.adsTotal} acq-total`} data-testid="acq-meta-total">
                     <td>Total</td>
                     <Cell v={money(t.spendCents)} cur={t.spendCents} prev={tp?.spendCents} />

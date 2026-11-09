@@ -18,7 +18,7 @@
  *   NODE_OPTIONS="--conditions=react-server" npx tsx scripts/ads-overview-test.ts
  */
 import {
-  buildAdsOverview, servedBreakdown, shareOf, perUnit, PAID_MARKETS,
+  buildAdsOverview, servedBreakdown, shareOf, perUnit, marketOfMetro,
   orderAdsets, duplicateNames, CONFIDENCE_WORTH_FLAGGING, costBand, fairShareCents, overUnderCents,
   metaRegistrationsUsable, META_REG_FROM, registrationRebuildStart, attributionLabel, spendVsAverageExample,
   rateIsThin, MIN_PLAYERS_FOR_RATE,
@@ -26,6 +26,15 @@ import {
   type GeoRow, type FlatRow, type DimRow, type AcqRow, type AdsetRow,
 } from "../src/lib/adsOverview";
 import { UNKNOWN_MARKET } from "../src/lib/metaAdSpend";
+import { marketsFrom } from "../src/lib/acquisitionModel";
+
+/* THE MARKETS ARE AN INPUT NOW (growth_cities, 2026-11-09). These fixtures were written for the seven
+ * paid markets of the time, so that is the active list they run against; PHL_MARKETS adds Philadelphia. */
+const SEVEN = [{ name: "Atlanta", code: "ATL" }, { name: "Austin", code: "ATX" }, { name: "Dallas", code: "DFW" }, { name: "Houston", code: "HOU" },
+  { name: "OKC", code: "OKC" }, { name: "San Antonio", code: "SATX" }, { name: "St. Louis", code: "STL" }];
+const MARKETS = marketsFrom(SEVEN);
+const PAID_MARKETS = MARKETS.keys;
+const PHL_MARKETS = marketsFrom([...SEVEN, { name: "Philadelphia", code: "PHL" }]);
 
 let pass = 0; const fails: string[] = [];
 const ok = (m: string) => { pass++; console.log(`  ok  ${m}`); };
@@ -81,7 +90,7 @@ console.log("\na row is the ad set's PARENT market, not the market its money lan
   ];
   const flat: FlatRow[] = [{ spend_date: "2026-09-01", adset_id: "a", spend_cents: 90348, installs: 40, clicks: 16, registrations: 4 }];
   const dim: DimRow[] = [{ adset_id: "a", adset_name: "HTX", campaign_name: "c", market_key: "HTX", market_raw: "Houston, TX", market_confidence: 0.986 }];
-  const o = buildAdsOverview({ geo, flat, dim, acq: [] });
+  const o = buildAdsOverview({ geo, flat, dim, acq: [], markets: MARKETS });
   const htx = o.rows.find((r) => r.marketKey === "HTX")!;
   is("the whole ad set's spend is Houston's", htx.spendCents, 54028 + 36049 + 271);
   is("…split home / unattributed / other named", [htx.homeCents, htx.unknownCents, htx.otherNamedCents], [54028, 36049, 271]);
@@ -115,7 +124,7 @@ console.log("\nwhat is left out is counted, never dropped");
     { signup_date: "2026-09-01", declared_city_raw: "Warsaw", registrations: 7, became_players: 5, played_within_7d: 5, played_within_30d: 5 },
     { signup_date: "2026-09-01", declared_city_raw: "New York City", registrations: 2, became_players: 1, played_within_7d: 1, played_within_30d: 1 },
   ];
-  const o = buildAdsOverview({ geo, flat: [], dim, acq });
+  const o = buildAdsOverview({ geo, flat: [], dim, acq, markets: MARKETS });
 
   is("both unattributable ad sets are NAMED, with their spend",
     o.notAttributed.map((n) => `${n.adsetName} ${n.spendCents}`), ["ELP 34863", "SPLIT 100"]);
@@ -142,8 +151,8 @@ console.log("\nrates refuse a zero denominator rather than inventing one");
    * null, while one whose ad sets genuinely produced none reports 0. */
   const dim: DimRow[] = [{ adset_id: "a", adset_name: "x", campaign_name: "c", market_key: "ATX", market_raw: "Austin, TX", market_confidence: 1 }];
   const geo: GeoRow[] = [{ spend_date: "2026-09-01", adset_id: "a", market_raw: "Austin, TX", market_key: "ATX", spend_cents: 100, clicks: 0 }];
-  const noneReported = buildAdsOverview({ geo, flat: [{ spend_date: "2026-09-01", adset_id: "a", spend_cents: 100, installs: null, clicks: 0, registrations: null }], dim, acq: [] });
-  const zeroReported = buildAdsOverview({ geo, flat: [{ spend_date: "2026-09-01", adset_id: "a", spend_cents: 100, installs: 0, clicks: 0, registrations: null }], dim, acq: [] });
+  const noneReported = buildAdsOverview({ geo, flat: [{ spend_date: "2026-09-01", adset_id: "a", spend_cents: 100, installs: null, clicks: 0, registrations: null }], dim, acq: [], markets: MARKETS });
+  const zeroReported = buildAdsOverview({ geo, flat: [{ spend_date: "2026-09-01", adset_id: "a", spend_cents: 100, installs: 0, clicks: 0, registrations: null }], dim, acq: [], markets: MARKETS });
   is("a market with no install figure reports null", noneReported.rows.find((r) => r.marketKey === "ATX")!.installs, null);
   is("control — one that reported zero reports 0", zeroReported.rows.find((r) => r.marketKey === "ATX")!.installs, 0);
 }
@@ -160,7 +169,7 @@ console.log("\nthe spending period, because the window is not it");
     // end of the window and hide exactly the thing this column exists to show.
     { spend_date: "2026-09-18", adset_id: "a", market_raw: "Oklahoma City, OK", market_key: "OKC", spend_cents: 0, clicks: 0 },
   ];
-  const o = buildAdsOverview({ geo, flat: [], dim, acq: [] });
+  const o = buildAdsOverview({ geo, flat: [], dim, acq: [], markets: MARKETS });
   const okc = o.rows.find((r) => r.marketKey === "OKC")!;
   is("first and last are the days money actually moved", [okc.firstSpend, okc.lastSpend], ["2026-08-01", "2026-08-28"]);
   is("…and a zero-spend day is not counted", okc.spendDays, 2);
@@ -369,6 +378,24 @@ console.log("\na window can be too young to read");
   /* ZERO IS NOT THIN, IT IS ABSENT. A market with no players has no rate at all, and the cell is
    * a dash rather than a figure with a caveat attached to it. */
   is("zero players is not 'thin', it is no rate at all", rateIsThin(0), false);
+}
+
+console.log("\nMeta metros map onto the active cities by their leading name (2026-11-09)");
+{
+  is("Dallas-Ft. Worth is Dallas (Fort Worth stays in Dallas)", marketOfMetro("Dallas-Ft. Worth, TX", MARKETS), "DFW");
+  is("Oklahoma City is OKC", marketOfMetro("Oklahoma City, OK", MARKETS), "OKC");
+  is("Houston keeps its HTX market key", marketOfMetro("Houston, TX", MARKETS), "HTX");
+  is("Philadelphia maps once it is an active city", marketOfMetro("Philadelphia, PA", PHL_MARKETS), "PHL");
+  is("Philadelphia maps to nothing while it is not (the control)", marketOfMetro("Philadelphia, PA", MARKETS), null);
+  is("Unknown is never a city", marketOfMetro(UNKNOWN_MARKET, PHL_MARKETS), null);
+  const dim: DimRow[] = [{ adset_id: "phl", adset_name: "Philadelphia", campaign_name: "MD / PHL", market_key: null, market_raw: "Philadelphia, PA", market_confidence: 1 }];
+  const geo: GeoRow[] = [{ spend_date: "2026-11-03", adset_id: "phl", market_raw: "Philadelphia, PA", market_key: null, spend_cents: 8612, clicks: 0 }];
+  const flat: FlatRow[] = [{ spend_date: "2026-11-03", adset_id: "phl", spend_cents: 8612, installs: 48, clicks: 0, registrations: 25 }];
+  const on = buildAdsOverview({ geo, flat, dim, acq: [], markets: PHL_MARKETS });
+  const phl = on.rows.find((r) => r.marketKey === "PHL");
+  is("an active Philadelphia carries its ad set's spend, installs and registrations", [phl?.spendCents, phl?.installs, phl?.metaRegistrations, on.notAttributed.length], [8612, 48, 25, 0]);
+  const off = buildAdsOverview({ geo, flat, dim, acq: [], markets: MARKETS });
+  is("not active: the ad set is listed by name with spend, installs and registrations", off.notAttributed.map((n) => [n.adsetName, n.spendCents, n.installs, n.registrations]), [["Philadelphia", 8612, 48, 25]]);
 }
 
 console.log(`\n${pass} passed, ${fails.length} failed`);

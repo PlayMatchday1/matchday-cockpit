@@ -24,19 +24,37 @@
  * playedWithin7d is the settled figure that sits beside it.
  */
 
-import { cityForMarket, UNKNOWN_MARKET } from "./metaAdSpend";
+import { MARKET_CONFIDENCE_FLOOR, UNKNOWN_MARKET } from "./metaAdSpend";
+import { marketOfDeclared, OTHER_CITIES, type Markets } from "./acquisitionModel";
+import { normalizeDeclared } from "./growthAnalytics";
 
-/** Our seven paid markets. Warsaw, NYC and El Paso are deliberately absent: we do not buy there,
- *  so they cannot have a cost per player, and padding the table with them to make the new-player
- *  column tie to the company total would be inventing rows. The page states the gap instead. */
-export const PAID_MARKETS = ["ATL", "ATX", "DFW", "HTX", "OKC", "SATX", "STL"] as const;
-
-/** growth_acquisition_daily carries the RAW declared city. The resolver stays in Node, the rule
- *  0096 states — the views group, they do not re-implement the city vocabulary. */
-export const DECLARED_CITY_TO_KEY: Readonly<Record<string, string>> = Object.freeze({
-  "Atlanta": "ATL", "Austin": "ATX", "Dallas / Fort Worth": "DFW", "Houston": "HTX",
-  "Oklahoma City": "OKC", "San Antonio": "SATX", "St. Louis": "STL",
-});
+/* ── THE MARKETS ARE THE ACTIVE CITIES (growth_cities, lib/activeCities — Ryan 2026-11-09) ────────
+ * Before this, a fixed list of seven paid markets and a fixed seven-row Meta metro list decided where
+ * an ad set's money went, so the Philadelphia ad set (first spend 2026-11-03) had no row: its spend sat
+ * in "Spend not tied to a market" and its registrations and installs counted nowhere.
+ *
+ * A Meta metro (comscore_market) maps to an active city BY ITS LEADING CITY NAME, read through the
+ * same vocabulary as a declared city: "Dallas-Ft. Worth, TX" → "Dallas" (Fort Worth stays in Dallas),
+ * "Oklahoma City, OK" → "OKC", "Philadelphia, PA" → "Philadelphia". A metro whose leading name is no
+ * active city maps to nothing, and its ad set is listed by name as Unmapped — counted in the Total.
+ *
+ * THE VOTE IS STILL READ, NOT RE-RUN: fin_meta_adset's dominant metro (market_raw) and its share
+ * (market_confidence, floor 0.6) come from the sync. Only the metro → city lookup happens here, at
+ * read time, because the stored market_key also feeds Finance's Meta expense by city, which keeps
+ * its own fixed list (lib/metaAdSpend META_MARKET_TO_CITY) until Ryan moves Finance. */
+export function metroCityName(marketRaw: string): string {
+  return marketRaw.replace(/,\s*[A-Z]{2}(?:-[A-Z]{2})*\s*$/, "").split("-")[0].trim();
+}
+export function marketOfMetro(marketRaw: string | null | undefined, mk: Markets): string | null {
+  if (!marketRaw || marketRaw === UNKNOWN_MARKET) return null;
+  const n = normalizeDeclared(metroCityName(marketRaw));
+  return (n && mk.byName.get(n.toLowerCase())) || null;
+}
+/** An ad set's market: its dominant metro, when that cleared the confidence floor and is an active city. */
+function adsetMarket(dim: DimRow | undefined, mk: Markets): string | null {
+  if (!dim || dim.market_confidence == null || dim.market_confidence < MARKET_CONFIDENCE_FLOOR) return null;
+  return marketOfMetro(dim.market_raw, mk);
+}
 
 export type GeoRow = { spend_date: string; adset_id: string; market_raw: string; market_key: string | null; spend_cents: number; clicks: number | null };
 export type FlatRow = { spend_date: string; adset_id: string; spend_cents: number; installs: number | null; clicks: number | null; registrations: number | null };
@@ -103,6 +121,8 @@ export type MarketRow = {
 export type NotAttributed = {
   adsetId: string; adsetName: string | null; campaignName: string | null;
   spendCents: number; confidence: number | null;
+  /** Meta's own counts for the ad set, ABSENT stays null (the same rule as a market row). */
+  installs: number | null; registrations: number | null;
   topMarkets: { marketRaw: string; spendCents: number }[];
 };
 
@@ -165,7 +185,9 @@ export function servedBreakdown(rows: readonly { marketRaw: string; spendCents: 
 
 export function buildAdsOverview(input: {
   geo: readonly GeoRow[]; flat: readonly FlatRow[]; dim: readonly DimRow[]; acq: readonly AcqRow[];
+  markets: Markets;
 }): AdsOverview {
+  const mk = input.markets;
   // THE PARENT IS READ, NEVER RE-DERIVED. fin_meta_adset holds it; recomputing here would be a
   // second implementation of the vote, and the two would disagree the first time either changed.
   const parentOf = new Map<string, DimRow>();
@@ -195,7 +217,7 @@ export function buildAdsOverview(input: {
   const byMarket = new Map<string, MarketRow>();
   const servedRaw = new Map<string, { marketRaw: string; spendCents: number }[]>();
   const spendDaysOf = new Map<string, Set<string>>();
-  for (const k of PAID_MARKETS) {
+  for (const k of mk.keys) {
     const r = seed(); r.marketKey = k; byMarket.set(k, r); servedRaw.set(k, []); spendDaysOf.set(k, new Set());
   }
 
@@ -203,7 +225,7 @@ export function buildAdsOverview(input: {
 
   for (const [adsetId, rows] of geoByAdset) {
     const dim = parentOf.get(adsetId);
-    const key = dim?.market_key ?? null;
+    const key = adsetMarket(dim, mk);
     const spendCents = rows.reduce((a, r) => a + r.spend_cents, 0);
     const flat = flatByAdset.get(adsetId);
 
@@ -216,17 +238,18 @@ export function buildAdsOverview(input: {
       notAttributed.push({
         adsetId, adsetName: dim?.adset_name ?? null, campaignName: dim?.campaign_name ?? null,
         spendCents, confidence: dim?.market_confidence ?? null, topMarkets: top,
+        installs: flat?.installs ?? null, registrations: flat?.registrations ?? null,
       });
       continue;
     }
 
     const row = byMarket.get(key)!;
-    const home = cityForMarket(dim?.market_raw ?? "") === key ? dim?.market_raw : null;
+    const home = marketOfMetro(dim?.market_raw, mk) === key ? dim?.market_raw : null;
     row.spendCents += spendCents;
     for (const r of rows) {
       if (r.market_raw === UNKNOWN_MARKET) row.unknownCents += r.spend_cents;
       else if (home && r.market_raw === home) row.homeCents += r.spend_cents;
-      else if (r.market_key === key) row.homeCents += r.spend_cents;
+      else if (marketOfMetro(r.market_raw, mk) === key) row.homeCents += r.spend_cents;
       else row.otherNamedCents += r.spend_cents;
       servedRaw.get(key)!.push({ marketRaw: r.market_raw, spendCents: r.spend_cents });
       /* A DAY COUNTS ONLY IF MONEY MOVED. A zero-spend row is a day Meta reported on, not a day
@@ -249,7 +272,7 @@ export function buildAdsOverview(input: {
     });
   }
 
-  for (const k of PAID_MARKETS) {
+  for (const k of mk.keys) {
     const row = byMarket.get(k)!;
     row.served = servedBreakdown(servedRaw.get(k)!);
     row.spendDays = spendDaysOf.get(k)!.size;
@@ -259,7 +282,8 @@ export function buildAdsOverview(input: {
   // ── the player side ──────────────────────────────────────────────────────────────────────────
   let exRegs = 0, exPlayers = 0; const exCities = new Set<string>();
   for (const a of input.acq) {
-    const key = DECLARED_CITY_TO_KEY[a.declared_city_raw ?? ""] ?? null;
+    const dk = marketOfDeclared(a.declared_city_raw, mk);
+    const key = dk === OTHER_CITIES ? null : dk;
     if (!key || !byMarket.has(key)) {
       exRegs += a.registrations; exPlayers += a.became_players;
       if (a.declared_city_raw) exCities.add(a.declared_city_raw);

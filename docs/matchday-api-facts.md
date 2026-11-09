@@ -9082,3 +9082,15 @@ holdout 0 unless raised.
 - Declared cities: "New York City" 429, Warsaw 313, El Paso 114, Philadelphia 40.
 - New York: matches carry `NYC` and signups say "New York City". `normalizeMatchCity` now prints `NYC` as "New York City" (growthAnalytics `MATCH_CODE_ALIAS`), kept out of `CITY_CODE_TO_DISPLAY` because that map also gates the Master Schedule grid.
 - NOT moved onto growth_cities: Finance's `CITY_DISPLAY_ORDER` / `types.CITIES` (P&L rows, typed, tied by the finance guards), the Ads page's `PAID_MARKETS` (where we buy Meta ads, a different question), and the Retention / Cohort selectors (they show every city with cohorts, except New York).
+
+## Meta ad sets → cities follow growth_cities (2026-11-09)
+
+- **Read-only check (Graph `insights`, level=adset), Oct 10 – Nov 9:** 9 ad sets had spend, and all are in `fin_meta_adset`.
+  - "Fort Worth" (campaign "MD / STL & OKC & FW", first spend Oct 16) is served in Meta's "Dallas-Ft. Worth, TX" metro: $407.46 of $407.51. It belongs to Dallas.
+  - "Philadelphia" (campaign "MD / PHL/ App Promotion - November 2026", first spend Nov 3) is served in "Philadelphia, PA". The sync's fixed seven-row `META_MARKET_TO_CITY` left its `market_key` null.
+- **Lifecycle now maps at read time** (`src/lib/adsOverview.ts` `marketOfMetro`). An ad set's dominant metro (`fin_meta_adset.market_raw`, confidence ≥ 0.6) maps by its leading city name, read through `normalizeDeclared`, onto growth_cities. "Dallas-Ft. Worth" → Dallas; "Oklahoma City" → OKC.
+  - The stored `market_key` and `META_MARKET_TO_CITY` are unchanged. They also feed Finance's Meta expense by city, which keeps its own list for now.
+- **Acquisition's "Unmapped" section** lists any ad set whose metro is no active city, by name, with spend, installs and Meta registrations, all counted in the Total. It replaced "Spend not tied to a market", which showed spend only and dropped registrations and installs.
+- **Reconciled with Acquisition's compute run locally against production:**
+  - Oct 10 – Nov 8: Total $5,765.69 and 743 Meta registrations. Meta reported $5,765.73 and 743.
+  - Nov 1–9: Philadelphia $86.12, 48 installs, 25 Meta registrations from the 10:00Z sync. Meta live read 28.

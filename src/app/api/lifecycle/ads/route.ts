@@ -9,11 +9,13 @@
  * section. Read-only: this route never writes.
  */
 
+import { loadActiveCities } from "@/lib/activeCities";
+import { marketOfDeclared, marketsFrom } from "@/lib/acquisitionModel";
 import { authenticateLifecycle } from "@/lib/lifecycleAuth";
 import { selectAll } from "@/lib/supabasePagination";
 import { META_ADSET_FLOOR_YMD } from "@/lib/metaAdSpend";
 import {
-  buildAdsOverview, DECLARED_CITY_TO_KEY, META_REG_FROM, PAID_MARKETS, type AcqRow, type DimRow, type FlatRow, type GeoRow,
+  buildAdsOverview, META_REG_FROM, type AcqRow, type DimRow, type FlatRow, type GeoRow,
 } from "@/lib/adsOverview";
 
 export const runtime = "nodejs";
@@ -68,17 +70,19 @@ export async function GET(req: Request) {
     ]);
 
     const acq = acqAll.filter((r) => r.signup_date >= since);
-    const payload = metaCovered ? buildAdsOverview({ geo, flat, dim, acq }) : null;
-    const ours: Record<string, { registrations: number; becamePlayers: number }> = Object.fromEntries(PAID_MARKETS.map((m) => [m, { registrations: 0, becamePlayers: 0 }]));
+    // The markets are the active cities (growth_cities via lib/activeCities), as on Acquisition.
+    const markets = marketsFrom(await loadActiveCities(sb));
+    const payload = metaCovered ? buildAdsOverview({ geo, flat, dim, acq, markets }) : null;
+    const ours: Record<string, { registrations: number; becamePlayers: number }> = Object.fromEntries(markets.keys.map((m) => [m, { registrations: 0, becamePlayers: 0 }]));
     for (const r of acqAll) {
-      const k = r.declared_city_raw ? DECLARED_CITY_TO_KEY[r.declared_city_raw] : undefined;
-      if (!k || !ours[k]) continue;
+      const k = marketOfDeclared(r.declared_city_raw, markets);
+      if (!ours[k]) continue;
       ours[k].registrations += Number(r.registrations); ours[k].becamePlayers += Number(r.became_players);
     }
     const regSince = since < META_REG_FROM && until >= META_REG_FROM ? META_REG_FROM : null;
     const reg = regSince ? Object.fromEntries(buildAdsOverview({
       geo: geo.filter((g) => g.spend_date >= regSince), flat: flat.filter((f) => f.spend_date >= regSince), dim,
-      acq: acq.filter((a) => a.signup_date >= regSince),
+      acq: acq.filter((a) => a.signup_date >= regSince), markets,
     }).rows.map((r) => [r.marketKey, { metaRegistrations: r.metaRegistrations, spendCents: r.spendCents }])) : null;
     return Response.json({
       requestedSince: requested, since, until, metaCovered, ...(payload ?? {}),

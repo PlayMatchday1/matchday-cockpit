@@ -26,6 +26,10 @@ import { META_ADSET_FLOOR_YMD } from "@/lib/metaAdSpend";
 
 const YMD = /^\d{4}-\d{2}-\d{2}$/;
 
+/** An ad set whose Meta metro is no active city (Acquisition's Unmapped section). */
+export type UnmappedAdset = { adsetId: string; adsetName: string | null; campaignName: string | null; spendCents: number;
+  installs: number | null; metaRegs: number | null; regSpendCents: number; topMarket: string | null };
+
 export async function acquisitionResponse(auth: { supabase: import("@supabase/supabase-js").SupabaseClient }, url: URL): Promise<Response> {
   const q = (k: string) => { const v = url.searchParams.get(k); return v && YMD.test(v) ? v : null; };
   const since = q("since"), until = q("until");
@@ -123,20 +127,30 @@ export async function acquisitionResponse(auth: { supabase: import("@supabase/su
      * Spend / installs / cost per new player over the window; Meta's registrations only from Sep 12
      * (the day it could see them) — a window starting earlier counts from Sep 12, and says so. */
     const metaSide = (w: Window | null) => {
-      if (!w) return { by: new Map<string, MetaSide>(), notAttributedCents: 0, regSince: null as string | null };
+      if (!w) return { by: new Map<string, MetaSide>(), notAttributedCents: 0, unmapped: [] as UnmappedAdset[], regSince: null as string | null };
       const inW = <T extends { spend_date: string }>(xs: T[], a: string) => xs.filter((x) => x.spend_date >= a && x.spend_date <= w.until);
       const acqW = acq.filter((a) => a.signup_date >= w.since && a.signup_date <= w.until);
-      const main = buildAdsOverview({ geo: inW(geo, w.since), flat: inW(flat, w.since), dim, acq: acqW });
+      const main = buildAdsOverview({ geo: inW(geo, w.since), flat: inW(flat, w.since), dim, acq: acqW, markets: mk });
       const regFrom = w.since >= META_REG_FROM ? w.since : w.until >= META_REG_FROM ? META_REG_FROM : null;
       const reg = regFrom && regFrom !== w.since
-        ? new Map(buildAdsOverview({ geo: inW(geo, regFrom), flat: inW(flat, regFrom), dim, acq: acqW.filter((a) => a.signup_date >= regFrom) }).rows.map((r) => [r.marketKey, r]))
+        ? new Map(buildAdsOverview({ geo: inW(geo, regFrom), flat: inW(flat, regFrom), dim, acq: acqW.filter((a) => a.signup_date >= regFrom), markets: mk }).rows.map((r) => [r.marketKey, r]))
         : null;
       const by = new Map<string, MetaSide>(main.rows.map((r) => {
         const rr = reg ? reg.get(r.marketKey) : r;
         return [r.marketKey, { spendCents: r.spendCents, installs: r.installs, metaRegs: regFrom ? rr?.metaRegistrations ?? null : null,
           regSpendCents: regFrom ? rr?.spendCents ?? 0 : 0, metaPlayers: r.becamePlayers }];
       }));
-      return { by, notAttributedCents: main.notAttributed.reduce((a, n) => a + n.spendCents, 0), regSince: regFrom && regFrom !== w.since ? regFrom : null };
+      /* UNMAPPED (Ryan, 2026-11-09): every ad set whose metro is no active city, by name, with Meta's
+       * own spend, installs and registrations — all counted in the Total. Registrations use the same
+       * from-Sep-12 window as a market row's. */
+      const regNa = reg ? new Map(buildAdsOverview({ geo: inW(geo, regFrom!), flat: inW(flat, regFrom!), dim, acq: [], markets: mk }).notAttributed.map((n) => [n.adsetId, n])) : null;
+      const unmapped: UnmappedAdset[] = main.notAttributed.map((n) => {
+        const rn = regNa ? regNa.get(n.adsetId) : n;
+        return { adsetId: n.adsetId, adsetName: n.adsetName, campaignName: n.campaignName, spendCents: n.spendCents, installs: n.installs,
+          metaRegs: regFrom ? rn?.registrations ?? null : null, regSpendCents: regFrom ? rn?.spendCents ?? 0 : 0,
+          topMarket: n.topMarkets[0]?.marketRaw ?? null };
+      });
+      return { by, notAttributedCents: main.notAttributed.reduce((a, n) => a + n.spendCents, 0), unmapped, regSince: regFrom && regFrom !== w.since ? regFrom : null };
     };
     /* FIRST-TIME PLAYERS, PLAYER ACTIVITY'S OWN ROWS (Ryan, 2026-10-05): growth_player_profile, a
      * person in the day of their first match ever and that match's city. first_match_date is already
@@ -201,11 +215,17 @@ export async function acquisitionResponse(auth: { supabase: import("@supabase/su
       cur: { ...side(k, mC, metaCur, oC, wC), rank: k === OTHER_CITIES ? null : marketRank(k, ranksC, map) },
       prev: compare && oP && wP ? { ...side(k, mP, metaCmp, oP, wP), rank: k === OTHER_CITIES ? null : marketRank(k, ranksP, map) } : null,
     })).filter((r) => mk.keys.includes(r.key) || r.cur.ours.registrations > 0 || r.cur.ours.firstTime > 0 || r.cur.web.visits > 0);
-    const sum = (sideOf: (r: MarketRowView) => MarketSide | null, notAttr: number) => {
+    const sum = (sideOf: (r: MarketRowView) => MarketSide | null, notAttr: number, un: readonly UnmappedAdset[] = []) => {
       const web = emptyMeasures(); let spend = notAttr, anyMeta = false; const ours = emptyOurs();
       /* META'S OWN COUNTS, TOTALLED for the Meta ads table. null stays null — a market Meta reported
-       * nothing for adds nothing, and a column with no market reporting reads "—", not 0. */
+       * nothing for adds nothing, and a column with no market reporting reads "—", not 0. Unmapped ad
+       * sets count here too (their spend is already in notAttr). */
       let installs: number | null = null, metaRegs: number | null = null, regSpendCents = 0;
+      for (const u of un) {
+        regSpendCents += u.regSpendCents;
+        if (u.installs != null) installs = (installs ?? 0) + u.installs;
+        if (u.metaRegs != null) metaRegs = (metaRegs ?? 0) + u.metaRegs;
+      }
       for (const r of markets) {
         const s2 = sideOf(r); if (!s2) continue; addMeasures(web, s2.web);
         ours.registrations += s2.ours.registrations; ours.firstTime += s2.ours.firstTime;
@@ -220,8 +240,8 @@ export async function acquisitionResponse(auth: { supabase: import("@supabase/su
     /* THE TOTAL ROW'S WEBSITE COLUMNS ARE THE WHOLE SITE (Ryan, 2026-10-04): the markets plus
      * Homepage and site-wide plus Other pages, so they match the Website store clicks tile. */
     const totals = {
-      cur: { ...sum((r) => r.cur, mC.notAttributedCents), web: current.website.total },
-      prev: compare ? { ...sum((r) => r.prev, mP?.notAttributedCents ?? 0), web: cmp?.website.total ?? emptyMeasures() } : null,
+      cur: { ...sum((r) => r.cur, mC.notAttributedCents, mC.unmapped), web: current.website.total },
+      prev: compare ? { ...sum((r) => r.prev, mP?.notAttributedCents ?? 0, mP?.unmapped ?? []), web: cmp?.website.total ?? emptyMeasures() } : null,
     };
     /* APPLE'S TABLE, every number over the Apple window. Meta's iPhone installs and spend come per day
      * from the same ad-set rows as the Meta table, over exactly those days. */
@@ -237,6 +257,7 @@ export async function acquisitionResponse(auth: { supabase: import("@supabase/su
       since, until, windows, current, compare: cmp, freshness, mappedRows: map.length, generatedAt: new Date().toISOString(),
       markets, totals,
       notAttributed: { cur: mC.notAttributedCents, prev: mP?.notAttributedCents ?? null },
+      unmapped: { cur: mC.unmapped, prev: mP ? mP.unmapped : null },
       excluded: excludedIn(oursCur),
       metaWindow: { cur: metaCur, regSince: mC.regSince },
       site: { cur: siteGroup(current.website, "site"), prev: cmp ? siteGroup(cmp.website, "site") : null },
