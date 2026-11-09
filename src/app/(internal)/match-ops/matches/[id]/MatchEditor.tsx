@@ -32,6 +32,9 @@ import CancelReasonPicker from "@/components/CancelReasonPicker";
 import { useCreditEveryone, creditStakes } from "@/lib/useCreditEveryone";
 import { fmtUsd } from "@/lib/creditsModel";
 import MoneyInput from "@/components/MoneyInput";
+import NewMatchCoverPicker, { rememberNewMatchCover, takeNewMatchCover } from "@/components/covers/NewMatchCoverPicker";
+import MatchCoverField from "@/components/covers/MatchCoverField";
+import { coversWrite } from "@/components/covers/coversClient";
 /* THE SHAPE OF A MATCH COMES FROM ONE PLACE. teamCountWrites and teamShapeError are the same two
  * functions Match panel calls — pure functions of (teamCount, perTeam) and (total, teamCount), so
  * there is nothing panel-specific in them and nothing to fork. Reimplementing either here would
@@ -304,6 +307,18 @@ export default function MatchEditor({ id, mode = "edit", sourceId, fieldId: from
   const [dTime, setDTime] = useState("");
   const [inverted, setInverted] = useState(false);
   const [created, setCreated] = useState<{ id: number; outcome: string } | null>(null);
+  /* COVER PHOTO ON CREATE AND COPY (NewMatchCoverPicker). null = the field's Default. Sent as its own write
+   * once the create has LANDED; its result is shown on the new match's page. */
+  const [coverPick, setCoverPick] = useState<number | null>(null);
+  const [coverNote, setCoverNote] = useState<{ line: string; ok: boolean } | null>(null);
+  useEffect(() => { if (mode === "edit") setCoverNote(takeNewMatchCover(id)); }, [mode, id]);
+  // A cover belongs to one field: a new field starts back on Default (the picker re-offers a copy's source cover).
+  useEffect(() => { if (mode === "create") setCoverPick(null); }, [mode, state?.fieldId]);
+  const applyCreatedCover = async (newId: number) => {
+    if (coverPick == null) return;
+    const r = await coversWrite(`/api/covers/matches/${newId}`, { method: "PUT", json: { coverId: coverPick } }, "the cover photo");
+    rememberNewMatchCover(newId, r.line, r.verdict === "LANDED");
+  };
   const [dupe, setDupe] = useState<{ id: number; name: string } | null>(null);
 
   const load = useCallback(async () => {
@@ -745,6 +760,7 @@ export default function MatchEditor({ id, mode = "edit", sourceId, fieldId: from
         setMsg({ kind: "warn", text: `The match was created, but the Clubhouse copy was not (${json.mirrorReason ?? "unknown"}). ` +
           `It will not appear on Master Schedule until the nightly sync — run the matches sync on /data.` });
       }
+      await applyCreatedCover(Number(json.id));
       router.push(`/match-ops/matches/${json.id}`);
     } else {
       setMsg({ kind: "warn", text: `The create returned ${json.outcome ?? "FAILED"}. It may or may not have landed — do NOT press it again; ` +
@@ -828,6 +844,7 @@ export default function MatchEditor({ id, mode = "edit", sourceId, fieldId: from
     }
     if (json.outcome === "LANDED" && json.id) {
       // STEP TWO. The remaining fields ride the PUT that already works.
+      await applyCreatedCover(Number(json.id));
       router.push(`/match-ops/matches/${json.id}?copyFrom=${sourceId ?? ""}`);
     } else {
       setMsg({ kind: "warn", text:
@@ -1088,6 +1105,16 @@ export default function MatchEditor({ id, mode = "edit", sourceId, fieldId: from
                   NO city's roster — people this control never offered either. Two pages must not
                   disagree about what the manager picker is. */}
               <div className="grid">{inGroup("match").map(renderField)}</div>
+              {mode === "create" ? (
+                <NewMatchCoverPicker fieldId={state?.fieldId ? Number(state.fieldId) : null} sourceId={sourceId ?? null}
+                  value={coverPick} onChange={setCoverPick} />
+              ) : variant === "page" && /^\d+$/.test(String(id)) ? (
+                <div style={{ marginTop: 12 }}>
+                  {coverNote && <div data-testid="new-match-cover-note" style={{ fontSize: 12, marginBottom: 6, color: coverNote.ok ? "#1f8a57" : "#8a6300" }}>{coverNote.line}</div>}
+                  <MatchCoverField matchId={Number(id)} fieldDirty={changedKeys.includes("fieldId")}
+                    manageHref={(fid) => `/match-ops/fields?field=${fid}`} />
+                </div>
+              ) : null}
             </div>
           </Section>
 
