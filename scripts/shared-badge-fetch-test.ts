@@ -154,7 +154,8 @@ async function main() {
       ["src/app/(internal)/lifecycle/funnel/page.tsx", false],
       ["src/app/(internal)/lifecycle/behavior/page.tsx", false],
       ["src/app/(internal)/lifecycle/revenue-per-player/page.tsx", false],
-      ["src/app/(internal)/lifecycle/churn/page.tsx", false],
+      // Churn renders immediately since its 2026-11-09 rebuild: it reads only /api/lifecycle/churn, never g.data.
+      ["src/app/(internal)/lifecycle/churn/page.tsx", true],
     ] as [string, boolean][]) {
       const src = readFileSync(file, "utf8");
       const has = /needsGrowthData=\{false\}/.test(src);

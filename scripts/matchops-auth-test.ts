@@ -110,6 +110,9 @@ is("authenticateMatchOpsRead is imported by EXACTLY the 23 intended routes", imp
   "matchday/[env]/memberships/[subscriptionId]/end/route.ts",
   "matchday/[env]/memberships/[subscriptionId]/price/route.ts",
   "matchday/[env]/memberships/add/route.ts",
+  /* 0266 — Player Lookup's Former staff switch. Clubhouse data only (player_former_staff), no MatchDay call. GET is
+   * a Match Ops read; POST adds MANAGE PLAYERS on top, the ban route's authority, read fresh per request. */
+  "lookup/former-staff/route.ts",
   // Phase 30 — the Registered Players table under Player Lookup. A pure READ of the mdapi mirror
   // (mdapi_users + mdapi_match_players), so can_access_matchops gates the whole route with no
   // write flag on top. It is on this gate rather than the admin one BECAUSE a confined account
