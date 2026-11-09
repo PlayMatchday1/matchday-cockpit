@@ -14,6 +14,7 @@ import { supabase } from "@/lib/supabase";
 import { REACHES, type MapCity, type Reach } from "@/lib/locationsMap";
 import type { TestFieldImpact } from "@/lib/testFieldImpact";
 import type { TestPinMark } from "@/components/LocationsLeaflet";
+import { ChevronDown, ChevronRight, Eye, EyeOff, MapPin, X } from "lucide-react";
 
 type Saved = { id: string; name: string; lat: number; lng: number; query: string | null; created_by_email: string; created_by_name: string | null; created_at: string };
 type Draft = { key: string; lat: number; lng: number; name: string; query: string | null };
@@ -21,7 +22,6 @@ type Hit = { label: string; lat: number; lng: number; source: "zip" | "openstree
 export type TestPin = TestPinMark & { query: string | null; savedBy?: string; savedAt?: string };
 
 const int = (n: number) => n.toLocaleString("en-US");
-const pct = (n: number, d: number) => (d > 0 ? `${Math.round((n / d) * 100)}%` : "n/a");
 const players = (n: number) => `${int(n)} ${n === 1 ? "player" : "players"}`;
 const dayOf = (iso: string) => new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", month: "short", day: "numeric", year: "numeric" }).format(new Date(iso));
 
@@ -46,6 +46,10 @@ export function useTestFields(enabled: boolean) {
   const [impactErr, setImpactErr] = useState<string | null>(null);
   const [impactBusy, setImpactBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; bad: boolean } | null>(null);
+  /* SHOW / HIDE ON MAP (2026-11-08): the eye on a row. View state for this visit only; a hidden pin
+   * still counts in every number, it is only left off the map. */
+  const [hidden, setHidden] = useState<Set<string>>(() => new Set());
+  const toggleHidden = useCallback((key: string) => setHidden((h) => { const n = new Set(h); if (n.has(key)) n.delete(key); else n.add(key); return n; }), []);
   const seq = useRef(0);
 
   const loadSaved = useCallback(async () => {
@@ -128,9 +132,17 @@ export function useTestFields(enabled: boolean) {
   }, [loadSaved]);
 
   return { enabled, pins, ready, canEdit, loadErr, dropping, setDropping, selected, setSelected, impact, impactErr, impactBusy,
-    msg, addDraft, renameDraft, discardDraft, saveDraft, remove };
+    msg, addDraft, renameDraft, discardDraft, saveDraft, remove, hidden, toggleHidden };
 }
 export type TestFields = ReturnType<typeof useTestFields>;
+
+/** The test pins a view lists: a city's own (its city is the impact route's, the market whose area
+ *  holds the pin; a fresh draft shows before that is known), or every pin on All cities. */
+export function pinsInView(tf: TestFields, cityId: number | null): TestPin[] {
+  if (cityId == null) return tf.pins;
+  const byKey = new Map((tf.impact?.pins ?? []).map((p) => [p.key, p.cityId]));
+  return tf.pins.filter((p) => byKey.get(p.key) === cityId || (p.draft && !byKey.has(p.key)));
+}
 
 export default function LocationsTestFields({ tf, city, reach, onReach, cityName, onFocus }: {
   tf: TestFields;
@@ -145,8 +157,8 @@ export default function LocationsTestFields({ tf, city, reach, onReach, cityName
   const [searching, setSearching] = useState(false);
   const [searchErr, setSearchErr] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
-  /* ONE ROW OPEN AT A TIME (Ryan, 2026-10-29). Selecting a pin, on the map or with Show, opens its row;
-   * a new draft is selected when it is added, so it opens with its name box and Save. */
+  /* ONE ROW OPEN AT A TIME (Ryan, 2026-10-29). Selecting a pin, on the map or by its row, opens its
+   * details; a new draft is selected when it is added, so it opens with its name box and Save. */
   const [open, setOpen] = useState<string | null>(null);
   useEffect(() => { if (tf.selected) setOpen(tf.selected); }, [tf.selected]);
 
@@ -166,21 +178,17 @@ export default function LocationsTestFields({ tf, city, reach, onReach, cityName
     const short = h.source === "zip" ? h.label : h.label.split(",").slice(0, 2).join(",").trim();
     tf.addDraft(h.lat, h.lng, short || q.trim(), q.trim());
     onFocus(h.lat, h.lng);
-    setHits(null);
+    setHits(null); setQ("");
   };
 
   const byKey = new Map((tf.impact?.pins ?? []).map((p) => [p.key, p]));
-  const coverage = (tf.impact?.cities ?? []).filter((c) => !city || c.cityId === city.id);
-  const leftOut = tf.impact ? (city ? coverage.reduce((s, c) => s + c.leftOut, 0) : tf.impact.leftOut) : null;
   const days = tf.impact?.activeRecentDays ?? 90;
-  /* ONLY THIS CITY'S TEST FIELDS (Ryan, 2026-10-29): a pin's city is the impact route's (the market
-   * whose area holds it). Until those numbers arrive a saved pin's city is not known, so a city view
-   * waits for them; a draft shows at once, since it was just added here. All cities lists every pin,
-   * grouped by city, outside every market last. */
   const cityOf = (key: string) => byKey.get(key)?.cityId;
-  const inView = tf.pins.filter((p) => !city || cityOf(p.key) === city.id || (p.draft && cityOf(p.key) === undefined));
+  const inView = pinsInView(tf, city?.id ?? null);
   const elsewhere = city && tf.impact ? tf.pins.length - inView.length : 0;
-  const groups: { label: string | null; pins: TestPin[] }[] = city ? [{ label: null, pins: inView }] : (() => {
+  /* ALL CITIES GROUPS BY CITY (2026-11-08): each city collapsed with its "N test" count, outside every
+   * market last; the group holding the selected pin opens. */
+  const groups: { label: string; pins: TestPin[] }[] = city ? [] : (() => {
     const g = new Map<string, TestPin[]>();
     for (const p of inView) {
       const c = cityOf(p.key);
@@ -190,160 +198,208 @@ export default function LocationsTestFields({ tf, city, reach, onReach, cityName
     const last = (l: string) => (l === "Outside every market" ? 1 : l === "Working out the city" ? 2 : 0);
     return [...g].sort((a, b) => last(a[0]) - last(b[0]) || a[0].localeCompare(b[0])).map(([label, pins]) => ({ label, pins }));
   })();
+  const [openGroups, setOpenGroups] = useState<Set<string>>(() => new Set());
+  const selGroup = !city && tf.selected ? groups.find((g) => g.pins.some((p) => p.key === tf.selected))?.label ?? null : null;
+  useEffect(() => { if (selGroup) setOpenGroups((s) => (s.has(selGroup) ? s : new Set([...s, selGroup]))); }, [selGroup]);
   const saveBlock = tf.ready === false ? "Saving needs migration 0232 first." : !tf.canEdit ? "Only admins can save test fields." : null;
 
-  return (
-    <div className="lm-pcard lm-tf" data-testid="test-fields">
-      <div className="lm-ptitle">Add a test field</div>
-      <form className="lm-tf-find" onSubmit={(e) => { e.preventDefault(); void find(); }}>
-        <input className="lm-tf-input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Address or place" aria-label="Address or place" data-testid="tf-query" />
-        <button type="submit" className="loc-btn" disabled={searching} data-testid="tf-find">{searching ? "Finding..." : "Find"}</button>
-      </form>
-      <button type="button" className={"loc-btn lm-tf-drop" + (tf.dropping ? " lm-tf-drop-on" : "")} aria-pressed={tf.dropping} data-testid="tf-drop"
-        onClick={() => tf.setDropping(!tf.dropping)}>{tf.dropping ? "Cancel pin drop" : "Drop a pin on the map"}</button>
-      {searchErr && <div className="lm-tf-msg lm-tf-bad">{searchErr}</div>}
-      {hits && (hits.length === 0
-        ? <div className="lm-tf-msg">Nothing found.</div>
-        : (
-          <ul className="lm-tf-hits" data-testid="tf-hits">
-            {hits.map((h, i) => (
-              <li key={i}><button type="button" className="lm-tf-hit" onClick={() => pick(h)}>{h.label}</button></li>
-            ))}
-          </ul>
-        ))}
-
-      {tf.pins.length > 0 && (
-        <>
-          {!city && (
-            <div className="lm-reach lm-tf-reach" role="group" aria-label="Test field reach">
-              <span className="loc-control-label">Reach</span>
-              <div className="lm-seg">
-                {REACHES.map((r) => (
-                  <button type="button" key={r} aria-pressed={reach === r} className={"lm-seg-btn" + (reach === r ? " lm-seg-on" : "")} onClick={() => onReach(r)}>{r} mi</button>
-                ))}
+  const row = (p: TestPin, compact: boolean) => {
+    const im = byKey.get(p.key);
+    const x = im?.byReach[reach];
+    const on = tf.selected === p.key;
+    const expanded = open === p.key;
+    const isHidden = tf.hidden.has(p.key);
+    const removeBlock = p.draft ? null : !tf.canEdit ? "Only admins can remove test fields." : null;
+    return (
+      <li key={p.key} className={"lm-tfr" + (compact ? " lm-tfr-c" : "") + (on ? " lm-tfr-on" : "") + (isHidden ? " lm-tfr-hid" : "")} data-testid="tf-pin">
+        <div className="lm-tfr-head">
+          <button type="button" className="lm-tfr-main" aria-expanded={expanded} data-testid="tf-pin-toggle"
+            title={expanded ? "Hide details" : "Show on the map and see details"}
+            onClick={() => { if (expanded) { setOpen(null); return; } tf.setSelected(p.key); setOpen(p.key); onFocus(p.lat, p.lng); }}>
+            <i className={"lm-tfr-dot" + (p.draft ? " lm-tfr-dot-draft" : "")} aria-hidden />
+            {compact ? (
+              <>
+                <span className="lm-tfr-name" title={p.name}>{p.name || "Unnamed"}</span>
+                <span className="lm-tfr-n" data-testid="tf-pin-players">{x ? int(x.players) : tf.impactErr ? "" : "..."}</span>
+              </>
+            ) : (
+              <span className="lm-tfr-col">
+                <b className="lm-tfr-name" title={p.name}>{p.name || "Unnamed"}</b>
+                <span className="lm-tfr-sub" data-testid="tf-pin-players">
+                  {p.draft ? "Not saved · " : ""}{x ? `${players(x.players)} within ${reach} mi` : tf.impactErr ? "" : "..."}
+                </span>
+              </span>
+            )}
+          </button>
+          <button type="button" className="lm-tfr-icon" aria-pressed={!isHidden} data-testid="tf-eye"
+            title={isHidden ? "Show on the map" : "Hide from the map"} aria-label={isHidden ? `Show ${p.name} on the map` : `Hide ${p.name} from the map`}
+            onClick={() => tf.toggleHidden(p.key)}>
+            {isHidden ? <EyeOff size={16} strokeWidth={1.33} /> : <Eye size={16} strokeWidth={1.33} />}
+          </button>
+          <button type="button" className="lm-tfr-icon lm-tfr-x" data-testid="tf-remove" disabled={removeBlock != null}
+            title={removeBlock ?? (p.draft ? "Discard this draft" : "Remove for everyone")} aria-label={p.draft ? `Discard ${p.name}` : `Remove ${p.name}`}
+            onClick={() => { if (p.draft) tf.discardDraft(p.key); else setConfirmRemove(p.key); }}>
+            <X size={14} strokeWidth={1.46} />
+          </button>
+        </div>
+        {confirmRemove === p.key && (
+          <div className="lm-tf-actions lm-tfr-pad">
+            <span className="lm-tf-meta">Remove {p.name} for everyone?</span>
+            <button type="button" className="loc-btn lm-tf-danger lm-tf-small" onClick={() => { setConfirmRemove(null); void tf.remove(p.key); }} data-testid="tf-remove-confirm">Yes, remove it</button>
+            <button type="button" className="loc-btn lm-tf-small" onClick={() => setConfirmRemove(null)}>Keep it</button>
+          </div>
+        )}
+        {expanded && (
+          <div className="lm-tf-detail lm-tfr-pad" data-testid="tf-pin-detail">
+            {p.draft && <input className="lm-tf-input lm-tf-name" value={p.name} maxLength={80} aria-label="Test field name" onChange={(e) => tf.renameDraft(p.key, e.target.value)} />}
+            {x ? (
+              <table className="lm-tf-nums">
+                <tbody>
+                  <tr><td>Players within {reach} mi</td><td className="loc-num">{int(x.players)}</td></tr>
+                  <tr><td>New coverage</td><td className="loc-num"><b>{int(x.newCoverage)}</b></td></tr>
+                  <tr><td>Played in the last {days} days</td><td className="loc-num">{int(x.activeRecent)}</td></tr>
+                  {x.outsideMarket > 0 && <tr><td>Outside every market</td><td className="loc-num">{int(x.outsideMarket)}</td></tr>}
+                </tbody>
+              </table>
+            ) : !tf.impactErr && <div className="lm-note">Loading...</div>}
+            {im && im.nearestFields.length > 0 && (
+              <div className="lm-tf-near">Nearest fields: {im.nearestFields.map((f) => `${f.title} (${f.mi} mi)`).join(", ")}</div>
+            )}
+            <div className="lm-tf-meta">
+              {p.draft ? "Not saved." : `Added by ${p.savedBy} on ${dayOf(p.savedAt!)}.`}
+              {im && ` ${im.cityId != null ? cityName(im.cityId) : "Outside every market"}.`}
+            </div>
+            {p.draft && (
+              <div className="lm-tf-actions">
+                <button type="button" className="loc-btn" disabled={saveBlock != null || !p.name.trim()} title={saveBlock ?? (p.name.trim() ? "" : "Give it a name first.")}
+                  onClick={() => void tf.saveDraft(p.key)} data-testid="tf-save">Save for the team</button>
+                <button type="button" className="loc-btn" onClick={() => tf.discardDraft(p.key)}>Discard</button>
               </div>
-            </div>
-          )}
-          {tf.impactErr && <div className="lm-tf-msg lm-tf-bad">Could not work out the numbers: {tf.impactErr}</div>}
-          {!tf.impact && !tf.impactErr && <div className="lm-tf-msg">Loading...</div>}
-          {coverage.map((c) => (
-            <div key={c.cityId} className="lm-tf-cov" data-testid="tf-coverage">
-              Coverage at {reach} mi{city ? "" : ` in ${cityName(c.cityId)}`}: <b>{pct(c.before[reach], c.players)}</b> now, <b>{pct(c.after[reach], c.players)}</b> with test fields.
-              <span className="lm-tf-covsub"> {int(c.after[reach] - c.before[reach])} more of {players(c.players)}.</span>
-            </div>
-          ))}
-          {city && tf.impact && coverage.length === 0 && <div className="lm-tf-msg">No change to coverage in {city.name}.</div>}
-          {leftOut != null && <div className="lm-note" data-testid="tf-left-out">City-level only, left out: {int(leftOut)}</div>}
-          {tf.impactBusy && tf.impact && <div className="lm-note">Updating...</div>}
+            )}
+          </div>
+        )}
+      </li>
+    );
+  };
 
-          {city && !tf.impact && tf.pins.some((p) => !p.draft) && <div className="lm-note">Finding which test fields are in {city.name}...</div>}
-          {city && tf.impact && inView.length === 0 && <div className="lm-tf-msg" data-testid="tf-none-here">No test fields in {city.name} yet.</div>}
-          {elsewhere > 0 && <div className="lm-note" data-testid="tf-elsewhere">{elsewhere} more in other cities. All cities lists every one.</div>}
-          {groups.map((grp) => (
-            <div key={grp.label ?? "here"}>
-              {grp.label && <div className="lm-tf-city" data-testid="tf-city">{grp.label}</div>}
-              <ul className="lm-tf-pins">
-                {grp.pins.map((p) => {
-                  const im = byKey.get(p.key);
-                  const x = im?.byReach[reach];
-                  const on = tf.selected === p.key;
-                  const expanded = open === p.key;
-                  return (
-                    <li key={p.key} className={"lm-tf-pin" + (on ? " lm-tf-pin-on" : "") + (expanded ? " lm-tf-pin-open" : "")} data-testid="tf-pin">
-                      <div className="lm-tf-pinhead">
-                        <button type="button" className="lm-tf-row" aria-expanded={expanded} data-testid="tf-pin-toggle"
-                          title={expanded ? "Hide details" : "Show details"} onClick={() => setOpen(expanded ? null : p.key)}>
-                          <span className="lm-tf-caret" aria-hidden>{expanded ? "▾" : "▸"}</span>
-                          <span className="lm-tf-tag">{p.draft ? "Draft" : "Test"}</span>
-                          <span className="lm-tf-namecol">
-                            <b className="lm-tf-pname" title={p.name}>{p.name || "Unnamed"}</b>
-                            <span className="lm-tf-count" data-testid="tf-pin-players">
-                              {x ? `${players(x.players)} within ${reach} mi` : tf.impactErr ? "" : "..."}
-                            </span>
-                          </span>
-                        </button>
-                        <button type="button" className="loc-btn lm-tf-small" onClick={() => { tf.setSelected(p.key); onFocus(p.lat, p.lng); }}>Show</button>
-                        {!p.draft && tf.canEdit && confirmRemove !== p.key && (
-                          <button type="button" className="loc-btn lm-tf-small" onClick={() => setConfirmRemove(p.key)} data-testid="tf-remove">Remove</button>
-                        )}
-                      </div>
-                      {confirmRemove === p.key && (
-                        <div className="lm-tf-actions">
-                          <span className="lm-tf-meta">Remove {p.name} for everyone?</span>
-                          <button type="button" className="loc-btn lm-tf-danger lm-tf-small" onClick={() => { setConfirmRemove(null); void tf.remove(p.key); }} data-testid="tf-remove-confirm">Yes, remove it</button>
-                          <button type="button" className="loc-btn lm-tf-small" onClick={() => setConfirmRemove(null)}>Keep it</button>
-                        </div>
-                      )}
-                      {expanded && (
-                        <div className="lm-tf-detail" data-testid="tf-pin-detail">
-                          {p.draft && <input className="lm-tf-input lm-tf-name" value={p.name} maxLength={80} aria-label="Test field name" onChange={(e) => tf.renameDraft(p.key, e.target.value)} />}
-                          {x ? (
-                            <table className="lm-tf-nums">
-                              <tbody>
-                                <tr><td>New coverage</td><td className="loc-num"><b>{int(x.newCoverage)}</b></td></tr>
-                                <tr><td>Played in the last {days} days</td><td className="loc-num">{int(x.activeRecent)}</td></tr>
-                                {x.outsideMarket > 0 && <tr><td>Outside every market</td><td className="loc-num">{int(x.outsideMarket)}</td></tr>}
-                              </tbody>
-                            </table>
-                          ) : !tf.impactErr && <div className="lm-note">Loading...</div>}
-                          {im && im.nearestFields.length > 0 && (
-                            <div className="lm-tf-near">Nearest fields: {im.nearestFields.map((f) => `${f.title} (${f.mi} mi)`).join(", ")}</div>
-                          )}
-                          <div className="lm-tf-meta">
-                            {p.draft ? "Not saved." : `Added by ${p.savedBy} on ${dayOf(p.savedAt!)}.`}
-                            {im && ` ${im.cityId != null ? cityName(im.cityId) : "Outside every market"}.`}
-                          </div>
-                          {p.draft && (
-                            <div className="lm-tf-actions">
-                              <button type="button" className="loc-btn" disabled={saveBlock != null || !p.name.trim()} title={saveBlock ?? (p.name.trim() ? "" : "Give it a name first.")}
-                                onClick={() => void tf.saveDraft(p.key)} data-testid="tf-save">Save for the team</button>
-                              <button type="button" className="loc-btn" onClick={() => tf.discardDraft(p.key)}>Discard</button>
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
+  return (
+    <div className="lm-tf" data-testid="test-fields">
+      {/* ONE INPUT (2026-11-08): Enter (or Find) looks the text up; the pin button drops one on the map. */}
+      <form className="lm-tf-add" onSubmit={(e) => { e.preventDefault(); void find(); }}>
+        <div className="lm-tf-box">
+          <input className="lm-tf-boxin" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Add a test field: address or drop a pin"
+            aria-label="Add a test field: address or place" data-testid="tf-query" />
+          {q.trim() && <button type="submit" className="lm-tf-find" disabled={searching} data-testid="tf-find">{searching ? "Finding..." : "Find"}</button>}
+          <button type="button" className={"lm-tf-pinbtn" + (tf.dropping ? " lm-tf-pinbtn-on" : "")} aria-pressed={tf.dropping} data-testid="tf-drop"
+            title={tf.dropping ? "Cancel pin drop" : "Drop a pin on the map"} aria-label={tf.dropping ? "Cancel pin drop" : "Drop a pin on the map"}
+            onClick={() => tf.setDropping(!tf.dropping)}><MapPin size={15} strokeWidth={1.6} /></button>
+        </div>
+        {tf.dropping && <div className="lm-tf-msg lm-tf-dropmsg">Click the map to drop a pin. <button type="button" className="lm-tf-link" onClick={() => tf.setDropping(false)}>Cancel</button></div>}
+        {searchErr && <div className="lm-tf-msg lm-tf-bad">{searchErr}</div>}
+        {hits && (hits.length === 0
+          ? <div className="lm-tf-msg">Nothing found.</div>
+          : (
+            <ul className="lm-tf-hits" data-testid="tf-hits">
+              {hits.map((h, i) => (
+                <li key={i}><button type="button" className="lm-tf-hit" onClick={() => pick(h)}>{h.label}</button></li>
+              ))}
+            </ul>
           ))}
+        {/* All cities has no Reach control in the bar above the map; the test fields keep theirs here. */}
+        {!city && tf.pins.length > 0 && (
+          <div className="lm-reach lm-tf-reach" role="group" aria-label="Test field reach">
+            <span className="loc-control-label">Reach</span>
+            <div className="lm-seg">
+              {REACHES.map((r) => (
+                <button type="button" key={r} aria-pressed={reach === r} className={"lm-seg-btn" + (reach === r ? " lm-seg-on" : "")} onClick={() => onReach(r)}>{r} mi</button>
+              ))}
+            </div>
+          </div>
+        )}
+        {tf.impactErr && <div className="lm-tf-msg lm-tf-bad">Could not work out the numbers: {tf.impactErr}</div>}
+        {tf.msg && <div className={"lm-tf-msg" + (tf.msg.bad ? " lm-tf-bad" : "")} data-testid="tf-msg">{tf.msg.text}</div>}
+        {tf.loadErr && tf.ready !== false && <div className="lm-tf-msg lm-tf-bad">Could not load saved test fields: {tf.loadErr}</div>}
+        {tf.ready === false && <div className="lm-note">Saving is not set up yet.</div>}
+      </form>
+
+      {city ? (
+        <>
+          {!tf.impact && tf.pins.some((p) => !p.draft) && !tf.impactErr && <div className="lm-tfr-foot">Finding which test fields are in {city.name}...</div>}
+          {tf.impact && inView.length === 0 && <div className="lm-tfr-foot" data-testid="tf-none-here">No test fields in {city.name} yet.</div>}
+          {inView.length > 0 && <ul className="lm-tfr-list">{inView.map((p) => row(p, false))}</ul>}
+          {elsewhere > 0 && <div className="lm-tfr-foot" data-testid="tf-elsewhere">{elsewhere} more test {elsewhere === 1 ? "field" : "fields"} in other cities</div>}
         </>
+      ) : groups.length === 0 ? (
+        tf.pins.length === 0 && <div className="lm-tfr-foot">No test fields yet.</div>
+      ) : (
+        <ul className="lm-tfr-list">
+          {groups.map((g) => {
+            const isOpen = openGroups.has(g.label);
+            return (
+              <li key={g.label} className="lm-tfg" data-testid="tf-city">
+                <button type="button" className={"lm-tfg-head" + (isOpen ? " lm-tfg-open" : "")} aria-expanded={isOpen}
+                  onClick={() => setOpenGroups((s) => { const n = new Set(s); if (n.has(g.label)) n.delete(g.label); else n.add(g.label); return n; })}>
+                  {isOpen ? <ChevronDown size={12} strokeWidth={1.25} /> : <ChevronRight size={12} strokeWidth={1.25} />}
+                  <span className="lm-tfg-name">{g.label}</span>
+                  <span className="lm-tfg-n">{g.pins.length} test</span>
+                </button>
+                {isOpen && <ul className="lm-tfr-list">{g.pins.map((p) => row(p, true))}</ul>}
+              </li>
+            );
+          })}
+        </ul>
       )}
-      {tf.msg && <div className={"lm-tf-msg" + (tf.msg.bad ? " lm-tf-bad" : "")} data-testid="tf-msg">{tf.msg.text}</div>}
-      {tf.loadErr && tf.ready !== false && <div className="lm-tf-msg lm-tf-bad">Could not load saved test fields: {tf.loadErr}</div>}
-      {tf.ready === false && <div className="lm-note">Saving is not set up yet.</div>}
-      <div className="lm-note">Distances in a straight line.</div>
     </div>
   );
 }
 
 export const TEST_FIELDS_CSS = `
-.lm-tf{border-color:#cbbdf2}
-.lm-tf-find{display:flex;gap:6px;margin:8px 0 6px}
+.lm-tf{display:flex;flex-direction:column}
+.lm-tf-add{padding:8px 14px 10px}
+.lm-tf-box{display:flex;align-items:center;gap:4px;border:1px solid var(--line);border-radius:8px;padding:0 4px 0 10px;background:#fff}
+.lm-tf-box:focus-within{border-color:#7b4fd6}
+.lm-tf-boxin{flex:1;min-width:0;border:0;outline:0;background:transparent;padding:8px 0;font:inherit;font-size:12px;color:var(--forest)}
+.lm-tf-boxin::placeholder{color:#9aaba5}
+.lm-tf-find{border:0;background:none;font:inherit;font-size:12px;font-weight:700;color:#7b4fd6;padding:4px 6px;cursor:pointer}
+.lm-tf-pinbtn{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border:0;border-radius:6px;background:none;color:#6b807a;cursor:pointer}
+.lm-tf-pinbtn:hover{background:#f6f8f7;color:#7b4fd6}
+.lm-tf-pinbtn-on{background:#f1ecfc;color:#7b4fd6}
+.lm-tf-dropmsg{color:#7b4fd6}
+.lm-tf-link{border:0;background:none;padding:0;font:inherit;font-weight:700;color:inherit;text-decoration:underline;cursor:pointer}
 .lm-tf-input{flex:1;min-width:0;border:1px solid #c9d3ce;border-radius:7px;padding:6px 8px;font:inherit;font-size:13px}
-.lm-tf-drop{width:100%;text-align:left}
-.lm-tf-drop-on{background:#efe9fd;border-color:#6b3fd4;color:#3d1f8f}
 .lm-tf-hits{list-style:none;margin:6px 0 0;padding:0;display:flex;flex-direction:column;gap:4px}
 .lm-tf-hit{width:100%;text-align:left;background:#fff;border:1px solid #d8dfdb;border-radius:7px;padding:6px 8px;font:inherit;font-size:12.5px;cursor:pointer}
-.lm-tf-hit:hover{border-color:#6b3fd4}
-.lm-tf-reach{margin:10px 0 4px}
-.lm-tf-cov{margin:8px 0 2px;font-size:13.5px}
-.lm-tf-covsub{color:#4f5f57;font-size:12.5px}
-.lm-tf-msg{margin-top:6px;font-size:12.5px;color:#4f5f57}
+.lm-tf-hit:hover{border-color:#7b4fd6}
+.lm-tf-reach{margin:10px 0 0}
+.lm-tf-msg{margin-top:6px;font-size:12px;color:#4f5f57}
 .lm-tf-bad{color:#a2340f}
-.lm-tf-pins{list-style:none;margin:6px 0 0;padding:0;display:flex;flex-direction:column;gap:4px}
-.lm-tf-pin{border:1.5px dashed #b9a6ee;border-radius:9px;padding:4px 6px}
-.lm-tf-city{margin:10px 0 0;font-size:10px;font-weight:900;letter-spacing:.7px;text-transform:uppercase;color:var(--muted)}
-.lm-tf-row{flex:1;min-width:0;display:flex;align-items:center;gap:6px;border:0;background:none;padding:2px 0;font:inherit;font-size:12.5px;text-align:left;cursor:pointer;color:inherit}
-.lm-tf-caret{color:#6b3fd4;font-size:10px;width:10px}
-.lm-tf-namecol{flex:1;min-width:0;display:flex;flex-direction:column;line-height:1.25}
-.lm-tf-count{font-size:11.5px;color:#4f5f57;font-variant-numeric:tabular-nums}
-.lm-tf-detail{padding:4px 0 2px 16px}
-.lm-tf-pin-on{border-color:#6b3fd4;background:#faf8ff}
-.lm-tf-pinhead{display:flex;align-items:center;gap:6px}
-.lm-tf-tag{background:#6b3fd4;color:#fff;border-radius:4px;padding:1px 5px;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.03em}
-.lm-tf-pname{min-width:0;overflow-wrap:anywhere}
+.lm-tfr-list{list-style:none;margin:0;padding:0}
+.lm-tfr{border-top:1px solid var(--line)}
+.lm-tfr-on{background:#faf8ff}
+.lm-tfr-head{display:flex;align-items:center;gap:6px;padding:0 10px 0 0}
+.lm-tfr-main{flex:1;min-width:0;display:flex;align-items:center;gap:10px;border:0;background:none;padding:11px 0 11px 18px;font:inherit;text-align:left;cursor:pointer;color:var(--forest)}
+.lm-tfr-c .lm-tfr-main{padding-left:40px}
+.lm-tfr-dot{flex:none;width:10px;height:10px;border-radius:50%;background:#7b4fd6}
+.lm-tfr-c .lm-tfr-dot{width:8px;height:8px}
+.lm-tfr-dot-draft{background:#fff;border:2px dashed #7b4fd6}
+.lm-tfr-hid .lm-tfr-dot{opacity:.35}
+.lm-tfr-hid .lm-tfr-name{color:#6b807a}
+.lm-tfr-col{min-width:0;display:flex;flex-direction:column;gap:1px}
+.lm-tfr-name{min-width:0;font-size:13px;font-weight:600;color:var(--forest);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lm-tfr-c .lm-tfr-name{flex:1;font-size:12px;font-weight:500}
+.lm-tfr-sub{font-size:11px;color:#6b807a;font-variant-numeric:tabular-nums}
+.lm-tfr-n{font-size:12px;font-weight:600;color:#6b807a;font-variant-numeric:tabular-nums}
+.lm-tfr-icon{flex:none;display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border:0;border-radius:6px;background:none;color:#6b807a;cursor:pointer}
+.lm-tfr-x{color:#9aaba5}
+.lm-tfr-icon:hover:not(:disabled){background:#f6f8f7;color:var(--forest)}
+.lm-tfr-icon:disabled{opacity:.35;cursor:not-allowed}
+.lm-tfr-pad{padding:0 14px 10px 38px}
+.lm-tfr-foot{border-top:1px solid var(--line);padding:10px 18px 12px;font-size:12px;font-weight:500;color:#9aaba5}
+.lm-tfg{border-top:1px solid var(--line)}
+.lm-tfg-head{width:100%;display:flex;align-items:center;gap:10px;border:0;background:#fff;padding:11px 14px 11px 18px;font:inherit;text-align:left;cursor:pointer;color:#6b807a}
+.lm-tfg-open{background:#f6f8f7}
+.lm-tfg-name{flex:1;min-width:0;font-size:13px;font-weight:700;color:var(--forest)}
+.lm-tfg-n{background:#f1ecfc;color:#7b4fd6;border-radius:999px;padding:2px 8px;font-size:11px;font-weight:600}
 .lm-tf-name{font-weight:700;width:100%;margin-bottom:4px}
 .lm-tf-small{padding:2px 8px;font-size:12px}
 .lm-tf-meta{font-size:12px;color:#5b6b63;margin:4px 0}

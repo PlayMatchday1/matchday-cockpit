@@ -19,7 +19,7 @@ import type { AreaPlayer } from "@/lib/areaPlayers";
 import LocationsCompetitorCard, { PlaceVenueCard, SharedVenueCard, type Placing } from "@/components/LocationsCompetitorCard";
 import { COMP_CSS, SOURCE_FILL, SOURCE_NAME, compHtml, sharedHtml, type CompetitorPayload, type CompetitorVenue, type SharedVenue } from "@/lib/competitorVenues";
 import { fmtDistance, type DistanceUnit } from "@/lib/locationScopes";
-import LocationsTestFields, { TEST_FIELDS_CSS, useTestFields } from "@/components/LocationsTestFields";
+import LocationsTestFields, { TEST_FIELDS_CSS, pinsInView, useTestFields } from "@/components/LocationsTestFields";
 import { ACTIVITIES, ACTIVITY_FILL, ACTIVITY_INK, ACTIVITY_LABEL, ACTIVITY_SHORT, type Activity, type BubblePlays, type PlayField } from "@/lib/wherePlayed";
 
 // Legend samples: the SAME HTML the map draws (locationsMarks), shrunk — so the legend cannot drift
@@ -47,6 +47,7 @@ const ShowMore = ({ total, open, onToggle, testId }: { total: number; open: bool
       {open ? "Show less" : `Show all (${total.toLocaleString("en-US")})`}
     </button>
   ) : null;
+type PanelTab = "test" | "fields" | "gaps";
 const NAT_FILTERS: { key: NatFilter; label: string }[] = [
   { key: "all", label: "All players" }, { key: "in_market", label: "In market" }, { key: "waitlist", label: "Outside coverage" },
 ];
@@ -99,6 +100,10 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin, ap
   const tfSelect = tf.setSelected;
   useEffect(() => { if (selected) tfSelect(null); }, [selected, tfSelect]);
   useEffect(() => { if (tf.selected) { setSelected(null); setHighlight(null); } }, [tf.selected]);
+  /* PANEL TABS (2026-11-08): Test fields / Fields / Gaps. A test pin picked on the map opens Test fields. */
+  const [ptab, setPtab] = useState<PanelTab>("test");
+  const ptabShown: PanelTab = ptab === "test" && !tf.enabled ? "fields" : ptab;
+  useEffect(() => { if (tf.selected) setPtab("test"); }, [tf.selected]);
   // Fetch Leaflet's code NOW, alongside the data, not after it: it was a second wait of 0.5 to 2 s.
   useEffect(() => { void import("@/components/LocationsLeaflet"); }, []);
 
@@ -258,7 +263,6 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin, ap
   // LONG LISTS SHOW THEIR TOP 5 (Ryan, 2026-10-27): New markets by players, Fields by players within reach.
   const outsideSorted = [...data.outside].sort((a, b) => b.players - a.players || a.place.localeCompare(b.place));
   const outsideShown = showAllOutside ? outsideSorted : outsideSorted.slice(0, TOP_N);
-  const covered = city ? city.coverage[reach] : 0;
   const selField: MapField | null = selected?.kind === "field" ? fieldById.get(selected.id) ?? null : null;
   const selZip: MapZip | null = selected?.kind === "zip" ? zips.find((z) => z.key === selected.key) ?? null : null;
   const selNational: NationalZip | null = selNat ? nationalSet.find((z) => z.key === selNat) ?? null : null;
@@ -443,7 +447,7 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin, ap
                 if (placing && id === placing.venueId) { setPlacing({ ...placing, lat, lng, moved: true }); return; }
                 void saveComp(id, { lat, lng }).then((ok) => { if (ok) setMoving(null); });
               }}
-              testPins={tf.enabled ? tf.pins : []} selectedTestPin={tf.selected} onSelectTestPin={(k) => { tf.setSelected(k); setSelected(null); setHighlight(null); }}
+              testPins={tf.enabled ? tf.pins.filter((p) => !tf.hidden.has(p.key)) : []} selectedTestPin={tf.selected} onSelectTestPin={(k) => { tf.setSelected(k); setSelected(null); setHighlight(null); }}
               dropping={tf.enabled && tf.dropping}
               onDrop={(lat, lng) => { tf.addDraft(lat, lng, `Pin at ${lat.toFixed(4)}, ${lng.toFixed(4)}`, null); tf.setDropping(false); }} />
           </div>
@@ -514,10 +518,39 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin, ap
           {/* NO TALLER THAN THE MAP (Ryan, 2026-10-29): this box fills the panel, which the map column sizes,
               and scrolls inside, so the players table always starts right under the map. */}
           <div className="lm-panel-scroll" data-testid="map-panel-scroll">
-          {tf.enabled && (
-            <LocationsTestFields tf={tf} city={city} reach={reach} onReach={setReach} cityName={cityLabel}
-              onFocus={(lat, lng) => setFocus({ lat, lng, zoom: 11, n: Date.now() })} />
-          )}
+          {/* ONE COVERAGE BLOCK (2026-11-08, Figma "Locations — right panel cleanup"): now, and with the test
+              fields when there are any. "Now" is the map's own coverage (the city's, or every city's summed);
+              the gain is the test-field route's after − before, so "now" never moves while that loads. */}
+          {(() => {
+            const pool = city ? [city] : data.cities;
+            const total = pool.reduce((s, c) => s + c.players, 0);
+            const now = pool.reduce((s, c) => s + c.coverage[reach], 0);
+            const tfHere = tf.enabled ? pinsInView(tf, city?.id ?? null) : [];
+            const gain = tf.impact ? tf.impact.cities.filter((c) => !city || c.cityId === city.id).reduce((s, c) => s + (c.after[reach] - c.before[reach]), 0) : null;
+            const withTf = tfHere.length > 0;
+            const w = (n: number) => `${total > 0 ? Math.min(100, (n / total) * 100) : 0}%`;
+            return (
+              <div className="lm-cov" data-testid="map-coverage">
+                <div className="lm-cov-label">Coverage at {reach} {U}</div>
+                {total === 0 ? <div className="lm-empty">{NO_PLAYERS}</div> : (
+                  <>
+                    <div className="lm-cov-big">
+                      <span className="lm-cov-now">{pct(now, total)}</span>
+                      {withTf && <><span className="lm-cov-arrow" aria-hidden>→</span><span className="lm-cov-after" data-testid="cov-after">{gain == null ? "…" : pct(now + gain, total)}</span></>}
+                    </div>
+                    <div className="lm-cov-bar" aria-hidden>
+                      {withTf && gain != null && <i className="lm-cov-bar-after" style={{ width: w(now + gain) }} />}
+                      <i className="lm-cov-bar-now" style={{ width: w(now) }} />
+                    </div>
+                    <div className="lm-cov-line" data-testid="cov-line">
+                      {int(now)} of {int(total)} players {withTf ? "now" : `have a field within ${reach} ${U}`}
+                      {withTf && ` · ${gain == null ? "…" : `+${int(gain)}`} with ${tfHere.length} test ${tfHere.length === 1 ? "field" : "fields"}`}
+                    </div>
+                  </>
+                )}
+              </div>
+            );
+          })()}
           {/* The missing-field warning: every one on All cities, only the city's own inside a city. */}
           {(() => {
             const bad = city ? data.badFields.filter((f) => f.cityId === city.id) : data.badFields;
@@ -564,178 +597,150 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin, ap
               </ul>
             </div>
           )}
-          {!city ? (
-            <>
-            {selNational && (
-              <div className="lm-pcard lm-detail" data-testid="map-nat-detail">
-                <div className="lm-ptitle-row">
-                  <div className="lm-ptitle">{selNational.zip ? `Zip ${selNational.zip}` : selNational.area}</div>
-                  <button type="button" className="loc-btn lm-clear" onClick={() => setSelNat(null)}>Clear</button>
-                </div>
-                {selNational.label && selNational.label !== selNational.area && <div className="lm-sub">{selNational.label}</div>}
-                <div className="lm-sub">{int(selNational.players)} {selNational.players === 1 ? "player" : "players"}, {selNational.verdict === "in_market" ? "inside a city's area" : "outside coverage"}</div>
-                <div className="lm-sub">Nearest city: {cityLabel(selNational.nearestCityId)}, {mi(selNational.nearestCityMi)} away</div>
-                {selNational.bucket && <div className="lm-sub">{ACTIVITY_LABEL[selNational.bucket]}</div>}
-                {selNational.fromZip > 0 && <div className="lm-sub lm-fromzip" data-testid="bubble-from-zip">{selNational.fromZip === selNational.players ? "Located from zip" : `${selNational.fromZip} located from zip`}: MatchDay sent no coordinates, so this is the zip&apos;s Census centre.</div>}
-                <LocationsWherePlay plays={selNational.plays} fieldById={playFieldById} outsideView={(f) => outsideView(f)} unit={unit} />
+          {selNational && !city && (
+            <div className="lm-pcard lm-detail" data-testid="map-nat-detail">
+              <div className="lm-ptitle-row">
+                <div className="lm-ptitle">{selNational.zip ? `Zip ${selNational.zip}` : selNational.area}</div>
+                <button type="button" className="loc-btn lm-clear" onClick={() => setSelNat(null)}>Clear</button>
               </div>
-            )}
-            <div className="lm-pcard">
-              <div className="lm-ptitle">Pick a city</div>
-              <table className="lm-list" data-testid="map-city-list">
-                <thead><tr><th>City</th><th className="loc-num">Players</th><th className="loc-num">Fields</th><th className="loc-num">Near a field</th></tr></thead>
-                <tbody>
-                  {data.cities.filter((c) => c.hasFields).map((c) => (
-                    <tr key={c.id} className="lm-row" tabIndex={0} onClick={() => onCity(c.id)}
-                      onKeyDown={(e) => { if (e.key === "Enter") onCity(c.id); }}>
-                      <td>{c.name}</td>
-                      <td className="loc-num">{int(c.players)}</td>
-                      <td className="loc-num">{int(c.fields)}</td>
-                      <td className="loc-num">{c.players ? pct(c.coverage[10], c.players) : "—"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              <div className="lm-note">Near a field = players within 10 {UL} of an active field.</div>
-              {noFieldCities.length > 0 && (
-                <div className="lm-note" data-testid="map-no-fields">No fields yet: {noFieldCities.map((c) => c.name).join(", ")}.</div>
-              )}
+              {selNational.label && selNational.label !== selNational.area && <div className="lm-sub">{selNational.label}</div>}
+              <div className="lm-sub">{int(selNational.players)} {selNational.players === 1 ? "player" : "players"}, {selNational.verdict === "in_market" ? "inside a city's area" : "outside coverage"}</div>
+              <div className="lm-sub">Nearest city: {cityLabel(selNational.nearestCityId)}, {mi(selNational.nearestCityMi)} away</div>
+              {selNational.bucket && <div className="lm-sub">{ACTIVITY_LABEL[selNational.bucket]}</div>}
+              {selNational.fromZip > 0 && <div className="lm-sub lm-fromzip" data-testid="bubble-from-zip">{selNational.fromZip === selNational.players ? "Located from zip" : `${selNational.fromZip} located from zip`}: MatchDay sent no coordinates, so this is the zip&apos;s Census centre.</div>}
+              <LocationsWherePlay plays={selNational.plays} fieldById={playFieldById} outsideView={(f) => outsideView(f)} unit={unit} />
             </div>
-            <div className="lm-pcard">
-              <div className="lm-ptitle">New markets</div>
-              {data.outside.length === 0 ? (
-                <div className="lm-empty" data-testid="map-outside-empty">No players outside coverage yet</div>
-              ) : (
-                <table className="lm-list" data-testid="map-outside">
-                  <thead><tr><th>Place</th><th className="loc-num">Players</th><th>Nearest city</th></tr></thead>
-                  <tbody>
-                    {outsideShown.map((o) => (
-                      <tr key={`${o.place}|${o.zipKeys[0]}`} className={"lm-row" + (selNational && o.zipKeys.includes(selNational.key) ? " lm-row-on" : "")} tabIndex={0}
-                        onClick={() => {
-                          if (natFilter === "in_market") setNatFilter("all");
-                          setFocus({ lat: o.lat, lng: o.lng, zoom: 10, n: Date.now() });
-                          setSelNat(o.zipKeys[0] ?? null);
-                        }}
-                        onKeyDown={(e) => { if (e.key === "Enter") { setFocus({ lat: o.lat, lng: o.lng, zoom: 10, n: Date.now() }); setSelNat(o.zipKeys[0] ?? null); } }}>
-                        <td>{o.place}</td><td className="loc-num">{int(o.players)}</td>
-                        <td>{cityLabel(o.nearestCityId)}, {mi(o.nearestCityMi)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-              <ShowMore total={outsideSorted.length} open={showAllOutside} onToggle={() => setShowAllOutside((o) => !o)} testId="map-outside-more" />
-            </div>
-            </>
-          ) : (
-            <>
-              <div className="lm-pcard" data-testid="map-coverage">
-                <div className="lm-ptitle">Coverage at {reach} {U}</div>
-                {city.players === 0 ? (
-                  <div className="lm-empty">{NO_PLAYERS}</div>
-                ) : (
-                  <>
-                    <div className="lm-big">{pct(covered, city.players)}</div>
-                    <div className="lm-sub">{int(covered)} of {int(city.players)} players have a field within {reach} {U}</div>
-                    <div className="lm-sub">{int(city.players - covered)} {city.players - covered === 1 ? "has" : "have"} no field within {reach} {U}</div>
-                  </>
-                )}
-                {city.unplaced > 0 && <div className="lm-note">{int(city.unplaced)} more {city.unplaced === 1 ? "player has" : "players have"} no location we can map.</div>}
-              </div>
-
-              {(selField || selZip) && (
-                <div className="lm-pcard lm-detail" data-testid="map-detail">
-                  <div className="lm-ptitle-row">
-                    <div className="lm-ptitle">{selField ? selField.title : selZip!.zip ? `Zip ${selZip!.zip}` : selZip!.area}</div>
-                    <button type="button" className="loc-btn lm-clear" onClick={() => setSelected(null)}>Clear</button>
-                  </div>
-                  {selField ? (
-                    <>
-                    <div className="lm-sub">{city.players === 0 ? NO_PLAYERS : `${int(selField.reach[reach])} ${selField.reach[reach] === 1 ? "player" : "players"} within ${reach} ${U}`}</div>
-                    {selField.venueId != null ? (
-                      <>
-                        <div className="lw-title lm-within-title">MatchDay fields here</div>
-                        <ul className="lm-near" data-testid="venue-fields">
-                          {selField.fields.map((m) => <li key={m.id}><span>{m.title}</span><span>field {m.id}</span></li>)}
-                        </ul>
-                      </>
-                    ) : (
-                      <div className="lm-unmapped" data-testid="field-unmapped">
-                        <b>Unmapped.</b> MatchDay field {selField.fields[0]?.id} is not linked to a venue, so it shows on its own. Link it on the <a href="/admin/fields">Fields page</a>.
-                      </div>
-                    )}
-                    </>
-                  ) : (
-                    <>
-                      <div className="lm-sub">{int(selZip!.players)} {selZip!.players === 1 ? "player" : "players"}{selZip!.bucket ? `, ${ACTIVITY_LABEL[selZip!.bucket].toLowerCase()}` : ""}</div>
-                      {selZip!.fromZip > 0 && <div className="lm-sub lm-fromzip" data-testid="bubble-from-zip">{selZip!.fromZip === selZip!.players ? "Located from zip" : `${selZip!.fromZip} located from zip`}: MatchDay sent no coordinates, so this is the zip&apos;s Census centre.</div>}
-                      <LocationsWherePlay plays={selZip!.plays} fieldById={playFieldById} outsideView={(f) => outsideView(f)} unit={unit} />
-                      <div className="lw-title lm-within-title">Fields within {reach} {UL}</div>
-                      {/* The fields within the current reach of THIS bubble. minReach is the server's
-                          exact-distance answer. */}
-                      {(() => {
-                        const inRing = selZip!.nearby.filter((n) => n.minReach <= reach);
-                        return inRing.length === 0 ? (
-                          <div className="lm-sub" data-testid="detail-no-field">No field within {reach} {UL}.</div>
-                        ) : (
-                          <ul className="lm-near" data-testid="detail-fields">
-                            {inRing.map((n) => (
-                              <li key={n.fieldId}><span>{fieldById.get(n.fieldId)?.title ?? `Field ${n.fieldId}`}</span><span>{mi(n.mi)}</span></li>
-                            ))}
-                          </ul>
-                        );
-                      })()}
-                    </>
-                  )}
-                </div>
-              )}
-
-              <div className="lm-pcard">
-                <div className="lm-ptitle">Fields</div>
-                {fieldsSorted.length === 0 ? (
-                  <div className="lm-empty">No active fields here.</div>
-                ) : (
-                  <table className="lm-list" data-testid="map-fields">
-                    <thead><tr><th>Field</th><th className="loc-num">Players within {reach} {U}</th></tr></thead>
-                    <tbody>
-                      {(showAllFields ? fieldsSorted : fieldsSorted.slice(0, TOP_N)).map((f) => (
-                        <tr key={f.id} className={"lm-row" + (highlight === f.id ? " lm-row-on" : "")} tabIndex={0}
-                          onClick={() => setHighlight(highlight === f.id ? null : f.id)}
-                          onKeyDown={(e) => { if (e.key === "Enter") setHighlight(highlight === f.id ? null : f.id); }}>
-                          <td>{f.title}{f.fields.length > 1 && <span className="lm-nfields"> · {f.fields.length} fields</span>}{f.venueId == null && <span className="lm-unmapped-tag" title="Not linked to a venue: fix it on the Fields page">Unmapped</span>}</td><td className="loc-num">{int(f.reach[reach])}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-                <ShowMore total={fieldsSorted.length} open={showAllFields} onToggle={() => setShowAllFields((o) => !o)} testId="map-fields-more" />
-              </div>
-
-              <div className="lm-pcard">
-                <div className="lm-ptitle">Biggest gaps</div>
-                {city.players === 0 ? (
-                  <div className="lm-empty">{NO_PLAYERS}</div>
-                ) : gaps.length === 0 ? (
-                  <div className="lm-empty">Every area here has a field within {reach} {U}.</div>
-                ) : (
-                  <table className="lm-list" data-testid="map-gaps">
-                    <thead><tr><th>Area</th><th className="loc-num">Players</th><th>{unit === "km" ? "Km" : "Miles"} to nearest field</th></tr></thead>
-                    <tbody>
-                      {gaps.map((z) => (
-                        <tr key={z.key} className={"lm-row" + (selZip?.key === z.key ? " lm-row-on" : "")} tabIndex={0}
-                          onClick={() => { setSelected({ kind: "zip", key: z.key }); setHighlight(null); }}
-                          onKeyDown={(e) => { if (e.key === "Enter") setSelected({ kind: "zip", key: z.key }); }}>
-                          <td>{z.area}</td><td className="loc-num">{int(z.players)}</td>
-                          <td>{z.nearestFieldMi == null ? "No active field"
-                            : `${mi(z.nearestFieldMi)}, ${z.nearestFieldId != null ? fieldById.get(z.nearestFieldId)?.title ?? `Field ${z.nearestFieldId}` : ""}`}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              </div>
-            </>
           )}
+          {city && (selField || selZip) && (
+            <div className="lm-pcard lm-detail" data-testid="map-detail">
+              <div className="lm-ptitle-row">
+                <div className="lm-ptitle">{selField ? selField.title : selZip!.zip ? `Zip ${selZip!.zip}` : selZip!.area}</div>
+                <button type="button" className="loc-btn lm-clear" onClick={() => setSelected(null)}>Clear</button>
+              </div>
+              {selField ? (
+                <>
+                <div className="lm-sub">{city.players === 0 ? NO_PLAYERS : `${int(selField.reach[reach])} ${selField.reach[reach] === 1 ? "player" : "players"} within ${reach} ${U}`}</div>
+                {selField.venueId != null ? (
+                  <>
+                    <div className="lw-title lm-within-title">MatchDay fields here</div>
+                    <ul className="lm-near" data-testid="venue-fields">
+                      {selField.fields.map((m) => <li key={m.id}><span>{m.title}</span><span>field {m.id}</span></li>)}
+                    </ul>
+                  </>
+                ) : (
+                  <div className="lm-unmapped" data-testid="field-unmapped">
+                    <b>Unmapped.</b> MatchDay field {selField.fields[0]?.id} is not linked to a venue, so it shows on its own. Link it on the <a href="/admin/fields">Fields page</a>.
+                  </div>
+                )}
+                </>
+              ) : (
+                <>
+                  <div className="lm-sub">{int(selZip!.players)} {selZip!.players === 1 ? "player" : "players"}{selZip!.bucket ? `, ${ACTIVITY_LABEL[selZip!.bucket].toLowerCase()}` : ""}</div>
+                  {selZip!.fromZip > 0 && <div className="lm-sub lm-fromzip" data-testid="bubble-from-zip">{selZip!.fromZip === selZip!.players ? "Located from zip" : `${selZip!.fromZip} located from zip`}: MatchDay sent no coordinates, so this is the zip&apos;s Census centre.</div>}
+                  <LocationsWherePlay plays={selZip!.plays} fieldById={playFieldById} outsideView={(f) => outsideView(f)} unit={unit} />
+                  <div className="lw-title lm-within-title">Fields within {reach} {UL}</div>
+                  {/* The fields within the current reach of THIS bubble. minReach is the server's
+                      exact-distance answer. */}
+                  {(() => {
+                    const inRing = selZip!.nearby.filter((n) => n.minReach <= reach);
+                    return inRing.length === 0 ? (
+                      <div className="lm-sub" data-testid="detail-no-field">No field within {reach} {UL}.</div>
+                    ) : (
+                      <ul className="lm-near" data-testid="detail-fields">
+                        {inRing.map((n) => (
+                          <li key={n.fieldId}><span>{fieldById.get(n.fieldId)?.title ?? `Field ${n.fieldId}`}</span><span>{mi(n.mi)}</span></li>
+                        ))}
+                      </ul>
+                    );
+                  })()}
+                </>
+              )}
+            </div>
+          )}
+
+          {/* TABS (2026-11-08): one list at a time. Test fields only where test fields exist (Growth's US map). */}
+          <div className="lm-ptabs-wrap">
+            <div className="lm-ptabs" role="tablist" aria-label="Panel lists">
+              {([...(tf.enabled ? [["test", "Test fields"]] : []), ["fields", "Fields"], ["gaps", "Gaps"]] as [PanelTab, string][]).map(([k, label]) => (
+                <button type="button" key={k} role="tab" aria-selected={ptabShown === k} data-testid={`ptab-${k}`}
+                  className={"lm-ptab" + (ptabShown === k ? " lm-ptab-on" : "")} onClick={() => setPtab(k)}>{label}</button>
+              ))}
+            </div>
+          </div>
+
+          {ptabShown === "test" && tf.enabled && (
+            <LocationsTestFields tf={tf} city={city} reach={reach} onReach={setReach} cityName={cityLabel}
+              onFocus={(lat, lng) => setFocus({ lat, lng, zoom: 11, n: Date.now() })} />
+          )}
+
+          {ptabShown === "fields" && (city ? (
+            <div className="lm-rows" data-testid="map-fields">
+              {fieldsSorted.length === 0 ? <div className="lm-rfoot">No active fields here.</div> : (
+                (showAllFields ? fieldsSorted : fieldsSorted.slice(0, TOP_N)).map((f) => (
+                  <button type="button" key={f.id} className={"lm-r" + (highlight === f.id ? " lm-r-on" : "")}
+                    onClick={() => setHighlight(highlight === f.id ? null : f.id)}>
+                    <span className="lm-r-name">{f.title}{f.fields.length > 1 && ` · ${f.fields.length} fields`}{f.venueId == null && <span className="lm-unmapped-tag" title="Not linked to a venue: fix it on the Fields page">Unmapped</span>}</span>
+                    <span className="lm-r-n">{int(f.reach[reach])}</span>
+                  </button>
+                ))
+              )}
+              {fieldsSorted.length > TOP_N && <div className="lm-rmore"><ShowMore total={fieldsSorted.length} open={showAllFields} onToggle={() => setShowAllFields((o) => !o)} testId="map-fields-more" /></div>}
+              <div className="lm-rfoot">Players within {reach} {U} · straight-line distance</div>
+            </div>
+          ) : (
+            <div className="lm-rows" data-testid="map-city-list">
+              {data.cities.filter((c) => c.hasFields).map((c) => (
+                <button type="button" key={c.id} className="lm-r" onClick={() => onCity(c.id)}>
+                  <span className="lm-r-col">
+                    <span className="lm-r-name">{c.name}</span>
+                    <span className="lm-r-sub">{int(c.fields)} {c.fields === 1 ? "field" : "fields"} · {c.players ? pct(c.coverage[reach], c.players) : "—"} within {reach} {U} of a field</span>
+                  </span>
+                  <span className="lm-r-n">{int(c.players)}</span>
+                </button>
+              ))}
+              {noFieldCities.length > 0 && <div className="lm-rfoot" data-testid="map-no-fields">No fields yet: {noFieldCities.map((c) => c.name).join(", ")}.</div>}
+              <div className="lm-rfoot">Players in each city · straight-line distance</div>
+            </div>
+          ))}
+
+          {ptabShown === "gaps" && (city ? (
+            <div className="lm-rows" data-testid="map-gaps">
+              {city.players === 0 ? <div className="lm-rfoot">{NO_PLAYERS}</div>
+                : gaps.length === 0 ? <div className="lm-rfoot">Every area here has a field within {reach} {U}.</div>
+                : gaps.map((z) => (
+                  <button type="button" key={z.key} className={"lm-r" + (selZip?.key === z.key ? " lm-r-on" : "")}
+                    onClick={() => { setSelected({ kind: "zip", key: z.key }); setHighlight(null); }}>
+                    <span className="lm-r-col">
+                      <span className="lm-r-name">{z.area}</span>
+                      <span className="lm-r-sub">{z.nearestFieldMi == null ? "No active field"
+                        : `${mi(z.nearestFieldMi)} to ${z.nearestFieldId != null ? fieldById.get(z.nearestFieldId)?.title ?? `Field ${z.nearestFieldId}` : "the nearest field"}`}</span>
+                    </span>
+                    <span className="lm-r-n">{int(z.players)}</span>
+                  </button>
+                ))}
+              {city.unplaced > 0 && <div className="lm-rfoot">{int(city.unplaced)} more {city.unplaced === 1 ? "player has" : "players have"} no location we can map.</div>}
+            </div>
+          ) : (
+            <div className="lm-rows" data-testid="map-outside">
+              {data.outside.length === 0 ? <div className="lm-rfoot" data-testid="map-outside-empty">No players outside coverage yet</div>
+                : outsideShown.map((o) => (
+                  <button type="button" key={`${o.place}|${o.zipKeys[0]}`} className={"lm-r" + (selNational && o.zipKeys.includes(selNational.key) ? " lm-r-on" : "")}
+                    onClick={() => {
+                      if (natFilter === "in_market") setNatFilter("all");
+                      setFocus({ lat: o.lat, lng: o.lng, zoom: 10, n: Date.now() });
+                      setSelNat(o.zipKeys[0] ?? null);
+                    }}>
+                    <span className="lm-r-col">
+                      <span className="lm-r-name">{o.place}</span>
+                      <span className="lm-r-sub">Nearest city: {cityLabel(o.nearestCityId)}, {mi(o.nearestCityMi)}</span>
+                    </span>
+                    <span className="lm-r-n">{int(o.players)}</span>
+                  </button>
+                ))}
+              {outsideSorted.length > TOP_N && <div className="lm-rmore"><ShowMore total={outsideSorted.length} open={showAllOutside} onToggle={() => setShowAllOutside((o) => !o)} testId="map-outside-more" /></div>}
+              <div className="lm-rfoot">Players outside every city&apos;s area</div>
+            </div>
+          ))}
           </div>
         </div>
       </div>
@@ -797,6 +802,33 @@ const CSS = `
 .lm-dot-gap{border-style:dashed}
 .lm-pin{display:inline-block;width:10px;height:10px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);background:#003326;margin-right:7px;vertical-align:-1px}
 .lm-ring{display:inline-block;width:14px;height:14px;border-radius:50%;border:1.5px solid rgba(0,51,38,.55);background:rgba(0,51,38,.06);margin-right:6px;vertical-align:-3px}
+.lm-cov{padding:18px 18px 16px;display:flex;flex-direction:column;gap:10px}
+.lm-cov-label{font-size:11px;font-weight:600;letter-spacing:.66px;text-transform:uppercase;color:#6b807a}
+.lm-cov-big{display:flex;align-items:baseline;gap:10px;font-variant-numeric:tabular-nums;line-height:1}
+.lm-cov-now{font-size:34px;font-weight:800;color:var(--forest);letter-spacing:-.5px}
+.lm-cov-arrow{font-size:18px;font-weight:700;color:#9aaba5}
+.lm-cov-after{font-size:34px;font-weight:800;color:#7b4fd6;letter-spacing:-.5px}
+.lm-cov-bar{position:relative;height:8px;border-radius:4px;background:#e3e9e6;overflow:hidden}
+.lm-cov-bar i{position:absolute;left:0;top:0;height:8px;border-radius:4px}
+.lm-cov-bar-after{background:rgba(123,79,214,.35)}
+.lm-cov-bar-now{background:#138a55}
+.lm-cov-line{font-size:12px;color:#6b807a;font-variant-numeric:tabular-nums}
+.lm-ptabs-wrap{padding:0 14px 12px}
+.lm-ptabs{display:flex;gap:2px;padding:3px;border-radius:10px;background:#f6f8f7}
+.lm-ptab{flex:1;border:0;background:transparent;border-radius:8px;padding:6px 12px;font:inherit;font-size:12px;font-weight:600;color:#6b807a;cursor:pointer}
+.lm-ptab-on{background:#fff;color:var(--forest);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.lm-rows{display:flex;flex-direction:column}
+.lm-r{display:flex;align-items:center;gap:10px;width:100%;border:0;border-top:1px solid var(--line);background:#fff;padding:11px 14px 11px 18px;font:inherit;text-align:left;cursor:pointer;color:var(--forest)}
+.lm-r:hover{background:#f6f8f7}
+.lm-r:focus-visible{outline:2px solid #2CDB87;outline-offset:-2px}
+.lm-r-on,.lm-r-on:hover{background:#E3F7EC}
+.lm-r-col{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.lm-r-name{flex:1;min-width:0;font-size:13px;font-weight:500}
+.lm-r-col .lm-r-name{flex:none}
+.lm-r-sub{font-size:11px;color:#6b807a}
+.lm-r-n{font-size:13px;font-weight:700;font-variant-numeric:tabular-nums}
+.lm-rmore{border-top:1px solid var(--line);padding:0 18px 8px}
+.lm-rfoot{border-top:1px solid var(--line);padding:10px 18px 12px;font-size:11px;color:#9aaba5}
 .lm-panel{position:relative;min-width:0}
 .lm-panel-scroll{position:absolute;inset:0;overflow-y:auto;display:flex;flex-direction:column;gap:0}
 .lm-panel-toggle{display:none}
