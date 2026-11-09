@@ -9045,7 +9045,8 @@ Read-only, 2026-11-09 17:45Z (`fin_txn`, `fin_revenue`, `fin_txn_daily`, `partne
   September's and October's rentals with it. Ryan, 2026-11-09: **no breakdown at all.** The "$X matches + $Y Morning Match"
   line is gone from every month of the monthly partner page (admin preview and public), the all-time row shows only its
   total, and the footnote no longer says rentals are listed separately. Rentals are still inside qualifying revenue and
-  the payment. The weekly layout (`PartnerDashboardV14`) still shows rentals as their own "↳ … included in revenue" rows.
+  the payment. The weekly layout (`PartnerDashboardV14`) got the same treatment the same day: no "↳ … included in revenue"
+  rental rows and no footnote sentence about rentals being itemised.
 - **August and September read "Figures changed after payment" because Tomball's matches were in Austin's figures when they
   were paid**, not because of rentals. August: paid $1,664.50 (50% of $3,329), recompute $1,588 (50% of $3,176); the $153
   revenue gap = Tomball's August PAID bookings ($153, field 1288, 5 matches). September: paid $2,762.42, recompute $2,609;

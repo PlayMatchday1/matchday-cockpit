@@ -155,14 +155,8 @@ function Rows({ r }: { r: GrainRow }) {
         <td>{payCell}</td>
         <td style={{ textAlign: "right" }}>{statusPill(r)}</td>
       </tr>
-      {r.rentals.map((rl, i) => (
-        <tr className="rental" key={`r${i}`} data-testid="rental-line">
-          <td style={{ paddingLeft: 26 }}>↳ {rl.label}</td>
-          <td>{em}</td><td>{em}</td><td>{em}</td><td>{em}</td>
-          <td>{money(rl.amount)}</td><td>{em}</td>
-          <td style={{ textAlign: "right", fontWeight: 700, color: C.muted, fontSize: 11 }}>included in revenue</td>
-        </tr>
-      ))}
+      {/* NO RENTAL ROWS (Ryan, 2026-11-09): rentals stay inside qualifying revenue and the payment, not broken out —
+          the same as the monthly page (PartnerMonthlyView). */}
     </>
   );
 }
@@ -188,7 +182,6 @@ function footnote(g: PartnerGrains): string {
   let s =
     "Spots filled is every seat paid for and held. MatchDay does not record check-in, so it is not attendance. " +
     "Daily players and Guests are shown; the remainder of Spots filled is made up of other seat types.";
-  if (g.rentalTotal > 0) s += ` Private rentals (${money(g.rentalTotal)} across the period) count toward qualifying revenue and are itemised on their own line, never folded into a match.`;
   if (g.roundingDrift !== 0) s += ` Each week is rounded to the nearest dollar on its own, so the sum of the weeks is what was actually paid — it differs by ${money(Math.abs(g.roundingDrift))} from rounding once at the end.`;
   if (g.anyDiverged) s += " A ✱ marks a paid period whose underlying figures changed after payment; the amount shown is what was actually paid and is never recomputed.";
   return s;
@@ -238,8 +231,6 @@ const CSS = `
 .pv14 tbody td{padding:12px 14px;text-align:right;font-size:13px;font-weight:800;color:var(--ink);border-bottom:1px solid #EDF1EC;white-space:nowrap}
 .pv14 tbody td:first-child{text-align:left;font-weight:850;color:var(--forest)}
 .pv14 tbody tr.zero td{color:var(--muted);font-weight:700}
-.pv14 tbody tr.rental td{font-size:11.5px;font-weight:750;color:var(--muted);background:#FCFEFD}
-.pv14 tbody tr.rental td:first-child{color:var(--muted);font-weight:750}
 .pv14 tbody tr.opening td{background:#FBFAF6}
 .pv14 tfoot td{position:sticky;bottom:0;z-index:3;background:var(--forest);color:#fff;padding:13px 14px;text-align:right;font-size:13px;font-weight:900;white-space:nowrap}
 .pv14 tfoot td:first-child{text-align:left;font-size:10px;letter-spacing:.9px;text-transform:uppercase}
