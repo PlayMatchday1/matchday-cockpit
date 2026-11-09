@@ -14,6 +14,7 @@
 // THE FIELD LIST is MatchDay's own (GET /cities + GET /admin/fields — two GETs, the Fields page's
 // pair, cached ten minutes per instance), because only it knows which fields are hidden.
 
+import { loadActiveCities } from "@/lib/activeCities";
 import { authenticateLifecycle } from "@/lib/lifecycleAuth";
 import { fetchCityDirectory } from "@/lib/cityDirectoryServer";
 import { citiesWithFields } from "@/lib/cityDirectory";
@@ -73,6 +74,13 @@ async function readMeta(sb: SupabaseClient): Promise<Meta> {
     fields = [...seen.values()].sort((a, b) => a.title.localeCompare(b.title));
     cities = [...new Set(fields.map((f) => f.city).filter((c): c is string => !!c))].map((code) => ({ code, name: cityName(code) })).sort((a, b) => a.name.localeCompare(b.name));
   }
+  /* THE CITY LIST IS growth_cities (lib/activeCities, Ryan 2026-11-09), in the Daily Matches order:
+   * Philadelphia included, Warsaw and anything else outside active operations left out, and their
+   * fields with them. MatchDay's directory still says which FIELDS are live. */
+  const active = (await loadActiveCities(sb)).filter((c): c is { name: string; code: string } => !!c.code);
+  const activeCodes = new Set(active.map((c) => c.code));
+  cities = active.map((c) => ({ code: c.code, name: c.name }));
+  fields = fields.filter((f) => !f.city || activeCodes.has(f.city));
   const vlinks: VenueLink[] = (links.data ?? []).map((l) => ({ venue: Number(l.fin_venue_id), field: Number(l.mdapi_field_id), title: String(l.field_title_at_link ?? ""), excluded: l.excluded_from_venue === true }));
   const fold = foldHidden(fields, vlinks);
   const byVenue = new Map<number, number[]>();

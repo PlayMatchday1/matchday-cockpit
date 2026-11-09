@@ -15,8 +15,9 @@ import "server-only"; // no-op under --conditions=react-server
  */
 
 import { selectAll } from "@/lib/supabasePagination";
+import { loadActiveCities } from "@/lib/activeCities";
 import {
-  LIVE_MARKETS, OTHER_CITIES, FIRST_TIME, WEB_FEED_FROM, addMeasures, androidAdsets, downloadsTable, metaIphoneDays, websiteDownloads, websiteEstimate, websiteFallbackOn, type Coverage, type DlRow, emptyMeasures, emptyOurs, marketLabel, marketOfDeclared, marketOfMatchCity, marketRank, pageRanks,
+  OTHER_CITIES, marketsFrom, FIRST_TIME, WEB_FEED_FROM, addMeasures, androidAdsets, downloadsTable, metaIphoneDays, websiteDownloads, websiteEstimate, websiteFallbackOn, type Coverage, type DlRow, emptyMeasures, emptyOurs, marketLabel, marketOfDeclared, marketOfMatchCity, marketRank, pageRanks,
   comparisonWindow, sourceWindows, type CompareMode, webByMarket, websiteTable, type ClickRow, type GscRow, type MarketRowView, type MarketSide,
   type MetaSide, type OursSide, type PageMapRow, type PageRank, type QueryRow, type WebRow, type Window,
 } from "@/lib/acquisitionModel";
@@ -35,6 +36,8 @@ export async function acquisitionResponse(auth: { supabase: import("@supabase/su
 
   try {
     const sb = auth.supabase;
+    /* The market rows: growth_cities' visible cities (lib/activeCities), then Other cities. */
+    const mk = marketsFrom(await loadActiveCities(sb));
     const latest = async (table: string, col: string) => {
       const { data, error } = await sb.from(table).select(col).order(col, { ascending: false }).limit(1);
       if (error) throw new Error(`${table}: ${error.message}`);
@@ -147,12 +150,12 @@ export async function acquisitionResponse(auth: { supabase: import("@supabase/su
       const at = (k: string) => { const e = by.get(k) ?? emptyOurs(); by.set(k, e); return e; };
       for (const r of acq) {
         if (r.signup_date < w.since || r.signup_date > w.until) continue;
-        at(marketOfDeclared(r.declared_city_raw)).registrations += Number(r.registrations);
+        at(marketOfDeclared(r.declared_city_raw, mk)).registrations += Number(r.registrations);
       }
       for (const f of firsts) {
         const d = String(f.first_match_date).slice(0, 10);
         if (d < w.since || d > w.until) continue;
-        at(marketOfMatchCity(f.first_match_city)).firstTime += 1;
+        at(marketOfMatchCity(f.first_match_city, mk)).firstTime += 1;
       }
       return by;
     };
@@ -184,8 +187,8 @@ export async function acquisitionResponse(auth: { supabase: import("@supabase/su
     /* ── THE MARKET ROWS ──────────────────────────────────────────────────────────────────────── */
     const mC = metaSide(metaCur), mP = compare ? metaSide(metaCmp) : null;
     const oC = oursSide(oursCur), oP = compare ? oursSide(oursCmp) : null;
-    const wC = webByMarket(current.website), wP = cmp ? webByMarket(cmp.website) : null;
-    const keys = [...LIVE_MARKETS, OTHER_CITIES];
+    const wC = webByMarket(current.website, mk), wP = cmp ? webByMarket(cmp.website, mk) : null;
+    const keys = [...mk.keys, OTHER_CITIES];
     const side = (k: string, m: ReturnType<typeof metaSide> | null, metaWin: Window | null, o: Map<string, OursSide>, w: ReturnType<typeof webByMarket>): MarketSide => ({
       meta: metaWin && m ? m.by.get(k) ?? (k === OTHER_CITIES ? null : { spendCents: 0, installs: null, metaRegs: null, regSpendCents: 0, metaPlayers: 0 }) : null,
       ours: o.get(k) ?? emptyOurs(),
@@ -193,11 +196,11 @@ export async function acquisitionResponse(auth: { supabase: import("@supabase/su
       rank: null,
     });
     const markets: MarketRowView[] = keys.map((k) => ({
-      key: k, label: marketLabel(k),
+      key: k, label: marketLabel(k, mk),
       pages: (wC.get(k)?.pages ?? []).map((p) => ({ ...p, ...(ranksC.get(p.path) ?? { rank: null, queries: [] }) })),
       cur: { ...side(k, mC, metaCur, oC, wC), rank: k === OTHER_CITIES ? null : marketRank(k, ranksC, map) },
       prev: compare && oP && wP ? { ...side(k, mP, metaCmp, oP, wP), rank: k === OTHER_CITIES ? null : marketRank(k, ranksP, map) } : null,
-    })).filter((r) => LIVE_MARKETS.includes(r.key as never) || r.cur.ours.registrations > 0 || r.cur.ours.firstTime > 0 || r.cur.web.visits > 0);
+    })).filter((r) => mk.keys.includes(r.key) || r.cur.ours.registrations > 0 || r.cur.ours.firstTime > 0 || r.cur.web.visits > 0);
     const sum = (sideOf: (r: MarketRowView) => MarketSide | null, notAttr: number) => {
       const web = emptyMeasures(); let spend = notAttr, anyMeta = false; const ours = emptyOurs();
       /* META'S OWN COUNTS, TOTALLED for the Meta ads table. null stays null — a market Meta reported
@@ -225,7 +228,7 @@ export async function acquisitionResponse(auth: { supabase: import("@supabase/su
     const meta = { floor: META_ADSET_FLOOR_YMD, byDay: metaIphoneDays(flat, androidAdsets(dim)) };
     const dlTable = (w: Window) => downloadsTable(dl, w, coverage, meta);
     const webDl = (w: Window) => {
-      const r = websiteDownloads(dl, w, map);
+      const r = websiteDownloads(dl, w, map, mk);
       return { byRow: Object.fromEntries(r.byRow), site: r.site, est: webFallback ? websiteEstimate(dlTable(w)) : null };
     };
     const siteGroup = (w: typeof current.website, key: string) => w.groups.find((g) => g.key === key) ?? null;

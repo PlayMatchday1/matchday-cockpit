@@ -32,11 +32,9 @@ export type Period = { kind: Kind; from: string; to: string };
 type Row = Record<string, unknown>;
 
 /** The confined city identifier as an Acquisition market key and as a Player activity city name. */
-const MARKET_OF: Record<string, string> = { ATX: "ATX", DFW: "DFW", HOU: "HTX", SATX: "SATX", STL: "STL", OKC: "OKC", ATL: "ATL", WAW: "WAW" };
+const MARKET_OF: Record<string, string> = { ATX: "ATX", DFW: "DFW", HOU: "HTX", SATX: "SATX", STL: "STL", OKC: "OKC", ATL: "ATL", PHL: "PHL", WAW: "WAW" };
 export const scopeNames = (id: string | null) => (id ? { market: MARKET_OF[id] ?? id, city: marketLabel(MARKET_OF[id] ?? id) } : null);
 
-/* The cities the desktop's Player Activity lists by default (PlayerActivityPanel ACTIVE_CITIES). */
-export const ACTIVE_CITIES = ["Atlanta", "Austin", "Dallas", "Houston", "OKC", "San Antonio", "St. Louis"];
 
 export function periodOf(kind: Kind, start: string): Period {
   if (kind === "day") return { kind, from: start, to: start };

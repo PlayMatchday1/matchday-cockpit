@@ -17,6 +17,9 @@
 // decided split Apple's page.link downloads by (share links / Instagram organic / Meta ads / other).
 // The share-link count itself is the "Player shares" floor.
 
+import { acqMarketKey, type ActiveCity } from "./activeCities";
+import { normalizeDeclared } from "./growthAnalytics";
+
 export type PageMapRow = { match_kind: string; pattern: string; market_key: string | null; page_kind: string; label: string; sort_order: number };
 export type GscRow = { day: string; page_url: string; clicks: number; impressions: number; position_x_impressions: number };
 export type WebRow = { day: string; page_path: string; sessions: number };
@@ -226,20 +229,35 @@ export const MILESTONES: { day: string; label: string }[] = [
 /* ── THE MAIN TABLE: ONE ROW PER MARKET (Ryan, 2026-10-04 redesign) ───────────────────────────────
  * Ad spend and the Meta detail come from lib/adsOverview over Meta's own window (from Aug 1, the
  * rebuild); registrations and new players are ours over the range; website numbers are the city's
- * mapped pages (city page + venue pages) over each Google source's own window. Markets are the seven
- * active cities — the Player Funnel's grouping: New York, Warsaw (not a MatchDay market, Ryan
+ * mapped pages (city page + venue pages) over each Google source's own window. Markets are the
+ * active cities (growth_cities, below): New York, Warsaw (not a MatchDay market, Ryan
  * 2026-10-04) and El Paso (a fleet city not yet running) are one "Other cities" row, with every other
  * declared city, so the rows always add up to the tiles. */
-export const LIVE_MARKETS = ["ATL", "ATX", "DFW", "HTX", "OKC", "SATX", "STL"] as const;
+/* THE MARKETS ARE growth_cities (lib/activeCities, Ryan 2026-11-09) — the 2026 Daily Matches list,
+ * hidden rows left out, in its order. It replaced a hard-coded seven, which is why Philadelphia sat
+ * in "Other cities". A market's key is its MatchDay code, except Houston's, which acq_page_map and
+ * Meta spell HTX (acqMarketKey). Everything not in the list folds into "Other cities". */
 export const OTHER_CITIES = "OTHER";
-const LIVE_LABEL: Record<string, string> = { ATL: "Atlanta", ATX: "Austin", DFW: "Dallas", HTX: "Houston", OKC: "OKC", SATX: "San Antonio", STL: "St. Louis", WAW: "Warsaw", OTHER: "Other cities" };
-export const marketLabel = (k: string) => LIVE_LABEL[k] ?? k;
-const DECLARED: Record<string, string> = {
-  "Atlanta": "ATL", "Austin": "ATX", "Dallas / Fort Worth": "DFW", "Houston": "HTX", "Oklahoma City": "OKC",
-  "San Antonio": "SATX", "St. Louis": "STL",
+export type Markets = { keys: string[]; label: Record<string, string>; byName: Map<string, string>; byCode: Map<string, string> };
+export function marketsFrom(cities: readonly ActiveCity[]): Markets {
+  const keys: string[] = []; const label: Record<string, string> = { OTHER: "Other cities" };
+  const byName = new Map<string, string>(); const byCode = new Map<string, string>();
+  for (const c of cities) {
+    if (!c.code) continue; // a city with no MatchDay code has nothing code-keyed to match
+    const k = acqMarketKey(c.code);
+    keys.push(k); label[k] = c.name; byName.set(c.name.toLowerCase(), k); byCode.set(c.code, k);
+  }
+  return { keys, label, byName, byCode };
+}
+const STATIC_LABEL: Record<string, string> = { ATL: "Atlanta", ATX: "Austin", DFW: "Dallas", HTX: "Houston", OKC: "OKC", SATX: "San Antonio", STL: "St. Louis", PHL: "Philadelphia", WAW: "Warsaw", OTHER: "Other cities" };
+/** A market key's name: the active list's own spelling when given one, else the fixed spelling. */
+export const marketLabel = (k: string, mk?: Markets) => mk?.label[k] ?? STATIC_LABEL[k] ?? k;
+/** A declared city (raw signup text) through the growth vocabulary, then onto the active list. */
+export const marketOfDeclared = (city: string | null, mk: Markets) => {
+  const n = normalizeDeclared(city);
+  return (n && mk.byName.get(n.toLowerCase())) || OTHER_CITIES;
 };
-export const marketOfDeclared = (city: string | null) => (city && DECLARED[city]) || OTHER_CITIES;
-export const marketOfPageKey = (k: string | null) => (k && (LIVE_MARKETS as readonly string[]).includes(k) ? k : OTHER_CITIES);
+export const marketOfPageKey = (k: string | null, mk: Markets) => (k && mk.keys.includes(k) ? k : OTHER_CITIES);
 
 export type MetaSide = { spendCents: number; installs: number | null; metaRegs: number | null; regSpendCents: number; metaPlayers: number };
 /* OURS (0208). firstTime is "First-time players" — Player Activity's definition and source
@@ -250,18 +268,17 @@ export type OursSide = { registrations: number; firstTime: number };
 export const emptyOurs = (): OursSide => ({ registrations: 0, firstTime: 0 });
 /* A first match's city is an mdapi city code (HOU, ATX, …), not a declared city name. Warsaw, El
  * Paso and anything unknown fall into "Other cities", as declared cities do. */
-const MATCH_CITY: Record<string, string> = { ATL: "ATL", ATX: "ATX", DFW: "DFW", HOU: "HTX", OKC: "OKC", SATX: "SATX", STL: "STL" };
-export const marketOfMatchCity = (code: string | null) => (code && MATCH_CITY[code]) || OTHER_CITIES;
+export const marketOfMatchCity = (code: string | null, mk: Markets) => (code && mk.byCode.get(code)) || OTHER_CITIES;
 export type MarketSide = { meta: MetaSide | null; ours: OursSide; web: Measures; rank: number | null };
 export type RankedPage = PageLine & PageRank;
 export type MarketRowView = { key: string; label: string; cur: MarketSide; prev: MarketSide | null; pages: RankedPage[] };
 
 /** Group the website table's city groups and the "Other cities" fold into one Measures per market. */
-export function webByMarket(w: WebsiteTable): Map<string, { m: Measures; pages: PageLine[] }> {
+export function webByMarket(w: WebsiteTable, mk: Markets): Map<string, { m: Measures; pages: PageLine[] }> {
   const out = new Map<string, { m: Measures; pages: PageLine[] }>();
   for (const g of w.groups) {
     if (g.kind !== "city") continue;
-    const k = marketOfPageKey(g.key.replace(/^city:/, ""));
+    const k = marketOfPageKey(g.key.replace(/^city:/, ""), mk);
     const e = out.get(k) ?? { m: zero(), pages: [] };
     add(e.m, g); e.pages.push(...g.pages); out.set(k, e);
   }
@@ -471,13 +488,13 @@ export function androidAdsets(dims: readonly { adset_id: string; campaign_id: st
  * site-wide), "other" (Other pages), or null (not ours / unreadable). Venue tags are cut short at
  * the source (web-venue-hammond-par), so a venue tag matches the ONE venue page whose slug starts
  * with it; two or none → Other pages. */
-export function marketOfTag(tag: string, map: readonly PageMapRow[]): string | null {
+export function marketOfTag(tag: string, map: readonly PageMapRow[], mk: Markets): string | null {
   const t = tag.trim().toLowerCase();
   if (!t.startsWith("web-")) return null;
   const rest = t.slice(4);
   if (["home", "header", "footer", "home-popup"].includes(rest)) return "site";
   if (rest === "blog" || rest.startsWith("blog-")) return "other";
-  const key = (m: PageMapRow) => (m.market_key && (LIVE_MARKETS as readonly string[]).includes(m.market_key) ? m.market_key : OTHER_CITIES);
+  const key = (m: PageMapRow) => marketOfPageKey(m.market_key, mk);
   if (rest.startsWith("venue-")) {
     const slug = rest.slice(6);
     const hits = map.filter((m) => m.page_kind === "venue" && m.pattern.toLowerCase().replace(/^\/pickup-soccer-/, "").startsWith(slug));
@@ -487,13 +504,13 @@ export function marketOfTag(tag: string, map: readonly PageMapRow[]): string | n
   return city ? key(city) : "other";
 }
 /** First-time downloads per Website row from Detailed's campaign tags, and the playmatchday.com total. */
-export function websiteDownloads(rows: readonly DlRow[], win: Window, map: readonly PageMapRow[]): { byRow: Map<string, number>; site: number } {
+export function websiteDownloads(rows: readonly DlRow[], win: Window, map: readonly PageMapRow[], mk: Markets): { byRow: Map<string, number>; site: number } {
   const byRow = new Map<string, number>(); let site = 0;
   for (const r of rows) {
     if (r.report !== "detailed" || r.download_type !== FIRST_TIME || r.day < win.since || r.day > win.until) continue;
     if (subOf(r.source_type, r.source_info) === "site") site += r.counts;
     if (!r.campaign) continue;
-    let row = marketOfTag(r.campaign, map);
+    let row = marketOfTag(r.campaign, map, mk);
     if (!row) continue;
     if (r.territory === "PL") row = OTHER_CITIES;
     byRow.set(row, (byRow.get(row) ?? 0) + r.counts);

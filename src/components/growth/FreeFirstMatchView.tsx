@@ -21,7 +21,7 @@ import g from "./growth.module.css";
 import pa from "./playerActivity.module.css";
 import s from "./freeFirstMatch.module.css";
 import { fmtInt } from "./format";
-import { CITY_SCOPES } from "@/lib/cityScope";
+import { useGrowth } from "./GrowthDataProvider";
 import { normalizeMatchCity } from "@/lib/growthAnalytics";
 import {
   WINDOWS, activation, beforePeople, byCity, firstAfterReadDay, freePeople, groupStats, logFields, logMatches, signupsSinceLaunch, soldOutByField,
@@ -92,6 +92,10 @@ export function FreeFirstMatchInfo() {
 }
 
 export default function FreeFirstMatchView({ authHeaders }: { authHeaders: Record<string, string> }) {
+  /* By city lists every active city (growth_cities via /api/lifecycle, lib/activeCities), Philadelphia
+   * included, plus any other city a free claimant played in. */
+  const activeList = useGrowth().data?.activeCities;
+  const activeCodes = useMemo(() => (activeList ?? []).flatMap((c) => (c.code ? [c.code] : [])), [activeList]);
   const [data, setData] = useState<Payload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [w, setW] = useState<Window>(7);
@@ -129,11 +133,11 @@ export default function FreeFirstMatchView({ authHeaders }: { authHeaders: Recor
         { key: "free", title: "Free first match (since Nov 5)", stats: fs, hi: true, cost: true },
       ],
       lost: soldOutByField(data.matches, free, t),
-      cities: byCity(free, w, t, normalizeMatchCity, CITY_SCOPES.map((c) => c.identifier)),
+      cities: byCity(free, w, t, normalizeMatchCity, activeCodes),
       logM: logMatches(data.matches, free, t),
       logF: logFields(free, w, t),
     };
-  }, [data, w]);
+  }, [data, w, activeCodes]);
 
   useEffect(() => { setShown(PAGE_FIRST); }, [logMode]);
 

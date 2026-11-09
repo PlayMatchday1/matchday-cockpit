@@ -7,6 +7,7 @@
  * The rules (what a match is, what spent is, what the sentence means) are in churnModel.ts; the reads and the
  * caching in churnLoad.ts. Former staff and deleted accounts are left out before anything is counted, and the
  * response says how many. */
+import { loadActiveCities } from "@/lib/activeCities";
 import { authenticateLifecycle } from "@/lib/lifecycleAuth";
 import {
   DAYS_OPTIONS, DEFAULT_DAYS, DEFAULT_SORT, SORT_KEYS, TIERS, applyFilter, columns, defaultSince, sortShown, tierCounts, toCsv,
@@ -39,25 +40,28 @@ export async function GET(req: Request) {
   const page = Math.max(0, Number(sp.get("page") ?? 0) || 0);
 
   try {
-    const [base, staff, live] = await Promise.all([loadBase(auth.supabase, sp.get("fresh") === "1"), formerStaff(auth.supabase), liveVenueKeys(auth.supabase)]);
-    const cityName = (c: string | null) => base.cities.find((x) => x.code === c)?.name ?? (c ?? "");
+    const [base, staff, live, active] = await Promise.all([loadBase(auth.supabase, sp.get("fresh") === "1"), formerStaff(auth.supabase), liveVenueKeys(auth.supabase), loadActiveCities(auth.supabase)]);
+    /* The city list is growth_cities via lib/activeCities (the one list, read fresh within a minute),
+     * every visible city with a code. */
+    const activeCities = active.filter((c): c is { name: string; code: string } => !!c.code);
+    const cityName = (c: string | null) => activeCities.find((x) => x.code === c)?.name ?? (c ?? "");
     const people = base.people.filter((p) => !staff.has(p.id) && !base.contact.get(p.id)?.scrubbed);
     const staffPeople = base.people.filter((p) => staff.has(p.id));
     const deletedPeople = base.people.filter((p) => !staff.has(p.id) && base.contact.get(p.id)?.scrubbed);
 
-    const city = cityRaw && cityRaw !== "all" && base.cities.some((c) => c.code === cityRaw) ? cityRaw : null;
+    const city = cityRaw && cityRaw !== "all" && activeCities.some((c) => c.code === cityRaw) ? cityRaw : null;
     // Everyone in range in this city, before the field: the field list and its counts come from this set.
     const inCity = applyFilter(people, { days, since, city, field: null, today });
     const fieldNum = fieldRaw && fieldRaw !== "all" && /^-?\d+$/.test(fieldRaw) ? Number(fieldRaw) : null;
     const field = fieldNum != null && inCity.some((r) => r.fieldKey === fieldNum) ? fieldNum : null;
     const scoped = field == null ? inCity : applyFilter(people, { days, since, city, field, today });
 
-    // Cities: the Daily Matches list, and Philadelphia (or any other) only when it has players in range.
+    // Cities: the Daily Matches list (growth_cities via lib/activeCities, read fresh within a minute),
+    // every visible city with a code, Philadelphia included, whether or not it has players in range.
     const inRangeAll = applyFilter(people, { days, since, city: null, field: null, today });
     const cityCount = new Map<string, number>();
     for (const r of inRangeAll) if (r.city) cityCount.set(r.city, (cityCount.get(r.city) ?? 0) + 1);
-    const cities = base.cities.filter((c) => c.code !== "PHL" || (cityCount.get(c.code) ?? 0) > 0)
-      .map((c) => ({ code: c.code, name: c.name, players: cityCount.get(c.code) ?? 0 }));
+    const cities = activeCities.map((c) => ({ code: c.code, name: c.name, players: cityCount.get(c.code) ?? 0 }));
 
     // Fields: usual fields in range here, live ones only (the retired duplicates are already folded into
     // their real venue by churn_player_field).

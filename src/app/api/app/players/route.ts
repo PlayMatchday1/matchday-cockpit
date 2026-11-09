@@ -13,9 +13,10 @@
 // DATA THROUGH: each response says the last day each source has (iphone, android, meta); the app
 // stops Downloads and Acquisition's Day at the last synced day and labels a period that runs past it.
 
+import { loadActiveCities } from "@/lib/activeCities";
 import { authenticateApp } from "@/lib/appAuth";
 import { todayBusinessDate } from "@/lib/goalPace";
-import { ACTIVE_CITIES, acquisitionPeriod, activityPeriods, androidPeriod, downloadSyncStale, periodOf, scopeNames, stepOf, type Kind, type Period } from "@/lib/appPlayers";
+import { acquisitionPeriod, activityPeriods, androidPeriod, downloadSyncStale, periodOf, scopeNames, stepOf, type Kind, type Period } from "@/lib/appPlayers";
 import { reviewMasked } from "@/lib/reviewAccount";
 
 export const runtime = "nodejs";
@@ -65,10 +66,14 @@ async function getRoute(req: Request) {
 
     let out: Record<string, unknown>[];
     if (page === "activity") {
-      const act = await timed("activity", activityPeriods(auth.supabase, periods, today));
+      const [act, activeCities] = await Promise.all([
+        timed("activity", activityPeriods(auth.supabase, periods, today)),
+        loadActiveCities(auth.supabase), // growth_cities: the one active-city list (lib/activeCities)
+      ]);
+      const activeNames = activeCities.map((c) => c.name);
       out = periods.map((x, i) => {
         const a = act[i];
-        const cityNames = scope ? [scope.city] : [...new Set([...ACTIVE_CITIES, ...Object.keys(a.cities).filter((c) => (a.cities[c].spots ?? 0) > 0 && c !== "Unassigned")])];
+        const cityNames = scope ? [scope.city] : [...new Set([...activeNames, ...Object.keys(a.cities).filter((c) => (a.cities[c].spots ?? 0) > 0 && c !== "Unassigned")])];
         const cities = cityNames.map((c) => ({
           city: c, v: a.cities[c] ?? null,
           fields: Object.entries(a.fields).filter(([, f]) => f.city === c && ((f.v.spots ?? 0) > 0 || (f.v.totalPlayers ?? 0) > 0)).map(([k, f]) => ({ key: k, name: f.label, v: f.v })),

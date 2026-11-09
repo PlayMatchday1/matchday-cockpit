@@ -14,7 +14,6 @@
  * against the previous month in points. */
 import { useMemo, useState } from "react";
 import type { GrowthData } from "@/lib/growthAnalytics";
-import { CANONICAL_CITIES } from "@/lib/growthAnalytics";
 import { canonCity } from "@/lib/reviewsDerive";
 import { clampMonthsToNow, currentFunnelMonth } from "@/lib/funnelMonth";
 import { monthLabel } from "./format";
@@ -23,9 +22,6 @@ import styles from "./growth.module.css";
 
 const OUTSIDE = "Outside active cities";
 const ALL = "All cities";
-// Fleet cities that are not running. "Running" is not a fact the data carries, so it is a list —
-// the same one PlayerFunnel kept for its chips (El Paso).
-const NOT_RUNNING = new Set(["El Paso"].map((c) => canonCity(c)));
 
 type SortKey = "reg" | "c1" | "c3" | "c5" | "c10";
 const SORTS: { k: SortKey; label: string }[] = [
@@ -63,13 +59,14 @@ export default function FunnelByCity({ data }: { data: GrowthData }) {
   const [sort, setSort] = useState<SortKey>("reg");
   const [asc, setAsc] = useState(false);
 
-  // Active cities and the ones outside them — the comparison's own split, from the same rows.
+  // Active cities and the ones outside them — the comparison's own split, from the same rows. Active
+  // = growth_cities (data.activeCities, lib/activeCities — the 2026 Daily Matches list).
   const { active, outside } = useMemo(() => {
-    const fleet = new Set((CANONICAL_CITIES as readonly string[]).map((c) => canonCity(c)));
+    const fleet = new Set((data.activeCities ?? []).map((c) => canonCity(c.name)));
     const all = [...new Set(data.funnelByMonthCity.map((r) => canonCity(r.city)))].sort();
-    const isOutside = (c: string) => !fleet.has(c) || NOT_RUNNING.has(c);
+    const isOutside = (c: string) => !fleet.has(c);
     return { active: all.filter((c) => !isOutside(c)), outside: all.filter(isOutside) };
-  }, [data.funnelByMonthCity]);
+  }, [data.funnelByMonthCity, data.activeCities]);
 
   const cohortOf = (name: string, m: string | null): Cohort | null => {
     if (!m) return null;

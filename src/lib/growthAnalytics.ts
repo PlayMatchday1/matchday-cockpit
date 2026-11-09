@@ -67,6 +67,9 @@ const DECLARED_TO_CANONICAL: Record<string, string> = {
   "Oklahoma City": "OKC",
   OKC: "OKC",
   "El Paso": "El Paso",
+  Philadelphia: "Philadelphia",
+  "New York": "New York City",
+  NYC: "New York City",
 };
 
 // fin_revenue.city → canonical. "Deleted Account Revenue" and anything else with
@@ -88,9 +91,14 @@ export function normalizeDeclared(raw: string | null | undefined): string | null
   if (!t) return null;
   return DECLARED_TO_CANONICAL[t] ?? t;
 }
+/* NEW YORK IS ONE CITY (Ryan, 2026-11-09). Its matches carry the code "NYC" and its signups the
+ * declared name "New York City"; the two keyed apart, so every city list showed both. The code now
+ * prints as the declared name. Kept out of CITY_CODE_TO_DISPLAY on purpose: that map also decides
+ * which cities the Master Schedule grid shows, and New York is not on it. */
+const MATCH_CODE_ALIAS: Record<string, string> = { NYC: "New York City" };
 export function normalizeMatchCity(code: string | null | undefined): string {
   if (!code) return UNKNOWN_CITY;
-  return CITY_CODE_TO_DISPLAY[code] ?? code;
+  return CITY_CODE_TO_DISPLAY[code] ?? MATCH_CODE_ALIAS[code] ?? code;
 }
 export function normalizeRevenueCity(raw: string | null | undefined): string {
   if (!raw) return UNKNOWN_CITY;
@@ -339,6 +347,9 @@ export type CohortRow = {
 
 export type GrowthData = {
   generatedAt: string;
+  /** growth_cities' visible rows (lib/activeCities), added by /api/lifecycle on every request — the
+   *  one list of active cities. Optional only because readGrowthFromViews' cached payload lacks it. */
+  activeCities?: import("./activeCities").ActiveCity[];
   rowCounts: {
     matchesTotal: number;
     matchesLive: number;

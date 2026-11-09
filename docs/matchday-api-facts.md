@@ -9071,3 +9071,14 @@ holdout 0 unless raised.
 - Unrelated, seen on the way: a one-match offer's suggested caption ("Your spot at {field} is waiting.") can pass the
   backend's 64-character limit on a long field name (staging "Old Boys and Girls High School - Houston"); the save then
   fails with "caption must be shorter than or equal to 64 characters".
+
+## Active cities are growth_cities (2026-11-09)
+
+- The cities Clubhouse treats as "active operations" are the visible rows of `growth_cities` (0253, the 2026 Daily Matches list), read by `src/lib/activeCities.ts` (`loadActiveCities`, 60 s cache) and sent to Lifecycle pages as `activeCities` on `/api/lifecycle`.
+- Read by Player Activity, Funnel by city, Acquisition (market rows; Houston's market key stays `HTX`), Churn, Data Room, Free First Match by city, and the app's Players tab. Anything else (El Paso, New York City, Warsaw, Unassigned) is "outside" and still counts in totals.
+- Warsaw is refused by `loadActiveCities` even if a row for it appears.
+- As read 2026-11-09: 8 visible rows (Austin ATX, Houston HOU, San Antonio SATX, Atlanta ATL, Dallas DFW, St. Louis STL, Philadelphia PHL, OKC OKC).
+- `mdapi_matches.city_identifier` counts (not deleted): ATX 7138, SATX 1444, HOU 1404, DFW 441, ATL 375, STL 294, OKC 180, WAW 37, NYC 26, PHL 15, ELP 2. PHL's 15 are all at Friends Select School, with the first uncancelled one on 2026-11-14.
+- Declared cities: "New York City" 429, Warsaw 313, El Paso 114, Philadelphia 40.
+- New York: matches carry `NYC` and signups say "New York City". `normalizeMatchCity` now prints `NYC` as "New York City" (growthAnalytics `MATCH_CODE_ALIAS`), kept out of `CITY_CODE_TO_DISPLAY` because that map also gates the Master Schedule grid.
+- NOT moved onto growth_cities: Finance's `CITY_DISPLAY_ORDER` / `types.CITIES` (P&L rows, typed, tied by the finance guards), the Ads page's `PAID_MARKETS` (where we buy Meta ads, a different question), and the Retention / Cohort selectors (they show every city with cohorts, except New York).

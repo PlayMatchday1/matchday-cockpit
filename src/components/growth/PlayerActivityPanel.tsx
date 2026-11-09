@@ -75,12 +75,12 @@ const METRICS: { key: PaKey; label: string; kind: Kind; field: boolean; desc: st
 ];
 const M = Object.fromEntries(METRICS.map((m) => [m.key, m])) as Record<PaKey, typeof METRICS[number]>;
 
-/* ── THE SEVEN ACTIVE CITIES ──────────────────────────────────────────────────────────────────
- * The same seven as PAID_MARKETS in lib/adsOverview, spelled the way the growth city vocabulary
- * spells them. Everything else the data carries — El Paso, New York City, Warsaw, Unassigned — is
+/* ── THE ACTIVE CITIES ARE growth_cities (lib/activeCities, Ryan 2026-11-09) ─────────────────────
+ * data.activeCities is the 2026 Daily Matches city list (hidden rows left out), in its order, spelled
+ * the way the growth city vocabulary spells them. It replaced a hard-coded seven that had no
+ * Philadelphia. Everything else the data carries — El Paso, New York City, Warsaw, Unassigned — is
  * OUTSIDE and appears only behind the toggle. Warsaw is a licensed operator and is still counted in
  * Overall; the toggle governs whether it gets its own ROW, not whether it exists. */
-const ACTIVE_CITIES = ["Atlanta", "Austin", "Dallas", "Houston", "OKC", "San Antonio", "St. Louis"];
 
 const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const mLabel = (k: string) => `${MON[Number(k.slice(5, 7)) - 1]} ${k.slice(0, 4)}`;
@@ -551,11 +551,12 @@ export default function PlayerActivityPanel({ data, months }: { data: GrowthData
 
   /* ── ENTITIES ────────────────────────────────────────────────────────────────────────────────*/
   const allCities = useMemo(() => {
-    const present = new Set([...Object.keys(index.byCity), ...ACTIVE_CITIES]);
-    const active = ACTIVE_CITIES.filter((c) => present.has(c));
-    const outside = [...present].filter((c) => !ACTIVE_CITIES.includes(c)).sort();
+    const activeList = (data.activeCities ?? []).map((c) => c.name);
+    const present = new Set([...Object.keys(index.byCity), ...activeList]);
+    const active = activeList.filter((c) => present.has(c));
+    const outside = [...present].filter((c) => !activeList.includes(c)).sort();
     return { active, outside };
-  }, [index.byCity]);
+  }, [index.byCity, data.activeCities]);
 
   const cityEntities = useMemo<Entity[]>(
     () => (showOutside ? [...allCities.active, ...allCities.outside] : allCities.active)

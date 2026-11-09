@@ -30,7 +30,6 @@ export type Contact = { name: string | null; phone: string | null; scrubbed: boo
 export type Base = {
   people: Person[];
   contact: Map<number, Contact>;
-  cities: { code: string; name: string }[];
   refreshedAt: string | null;
 };
 
@@ -56,10 +55,7 @@ async function buildBase(sb: SupabaseClient): Promise<Base> {
     }
   }
 
-  const { data: gc, error: gcErr } = await sb.from("growth_cities").select("name, short_code, hidden, sort_order").order("sort_order");
-  if (gcErr) throw new Error(`growth_cities: ${gcErr.message}`);
-  const cities = ((gc ?? []) as Row[]).filter((c) => c.hidden !== true && c.short_code).map((c) => ({ code: String(c.short_code), name: String(c.name) }));
-  return { people, contact, cities, refreshedAt };
+  return { people, contact, refreshedAt };
 }
 
 export async function loadBase(sb: SupabaseClient, fresh = false): Promise<Base> {

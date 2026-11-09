@@ -10,6 +10,7 @@
 // Gated on can_access_lifecycle via authenticateLifecycle.
 
 import { authenticateLifecycle } from "@/lib/lifecycleAuth";
+import { loadActiveCities } from "@/lib/activeCities";
 import { readGrowthFromViews } from "@/lib/growthFromViews";
 
 export const runtime = "nodejs";
@@ -22,9 +23,12 @@ export async function GET(req: Request) {
   try {
     const t0 = Date.now();
     const timing: { fetchMs?: number; computeMs?: number } = {};
-    const growth = await readGrowthFromViews(auth.supabase, new Date().toISOString(), timing);
+    const [growth, activeCities] = await Promise.all([
+      readGrowthFromViews(auth.supabase, new Date().toISOString(), timing),
+      loadActiveCities(auth.supabase),
+    ]);
     const totalMs = Date.now() - t0;
-    return Response.json(growth, {
+    return Response.json({ ...growth, activeCities }, {
       status: 200,
       headers: {
         "Cache-Control": "private, max-age=60, stale-while-revalidate=300",
