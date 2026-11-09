@@ -113,16 +113,17 @@ export default function PartnerMonthlyView({ partnerName, sub, terms, since, mon
                       Private rentals were already broken out here. Member spots are the third
                       term and get the same treatment: a partner reading a bigger number must be
                       able to see where it came from without asking. */}
-                  {/* ── NO BREAKDOWN ON A PERIOD THAT CARRIES A MEMBER TERM ────────────────────
-                      Ryan: "dont show member spots here". The fragment goes, and so does the whole
-                      line on those periods, because "$3,016 matches + $200 Morning Match" under a
-                      $4,024 total is a breakdown that does not foot. A partial breakdown invites
-                      the reader to do arithmetic that comes out $808 short, which is worse than
-                      showing the total alone.
-                      EVERY OTHER PERIOD KEEPS ITS LINE unchanged: pre-September Hattrick months,
-                      and every partner with no member term at all. */}
+                  {/* ── THE LINE SHOWS ON EVERY PERIOD WITH RENTALS, AND IT ALWAYS FOOTS ─────────────
+                      Ryan: "dont show member spots here" — so there is no member fragment. "Matches"
+                      is the total LESS the rentals, so on a period with a member term it carries the
+                      member-spot value inside it (they are match spots), and the two parts add up to
+                      the total, as the all-time line below does.
+                      UNTIL 2026-11-09 the line was HIDDEN on member-term periods (September 2026 on
+                      for Hattrick), because the old split subtracted the member value from
+                      "matches" and "$3,016 matches + $200 Morning Match" under $4,024 did not foot.
+                      Hiding it also hid the rentals, which is what Ryan asked to see. */}
                   <td data-testid="rev-cell">{money(m.revenue)}
-                    {m.revenue != null && rent > 0 && (m.memberRevenue ?? 0) === 0 && (
+                    {m.revenue != null && rent > 0 && (
                       <span className="sub rent" data-testid="rev-itemised">
                         {money(m.revenue - rent)} matches + {money(rent)} {m.rentals[0].label}
                       </span>

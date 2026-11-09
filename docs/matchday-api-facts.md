@@ -9028,3 +9028,23 @@ matches remain: Lowell's duplicate 1948 ("Lowell H. Strike Middle School Discoun
 the Finance > Revenue figure above. It cannot be split by cohort (no per-player grain in that rollup); the
 "Revenue by cohort year" view is shown disabled with that reason. Churn's 0264 does reach per-person net through
 `payment_intent_id`, which is the route if a per-cohort revenue pivot is wanted.
+
+## Hattrick (Austin) partner dashboard: the Morning Match line, the Venmo copy, and the August/September flags (2026-11-09)
+
+Read-only, 2026-11-09 17:45Z (`fin_txn`, `fin_revenue`, `fin_txn_daily`, `partner_weekly_payments`, both public partner pages).
+
+- **Rentals reach the dashboard through `fin_txn`, not `fin_revenue`.** Non-match rows come from `fin_txn_daily` by
+  `fin_venue_id` (`partnerStats.ts` fetchPartnerRows). A Venmo rental entered in the Revenue admin lands in `fin_revenue`
+  and is copied into `fin_txn` by `mirrorVenmo` on the next hourly `stripe-txn` run (:20 past the hour), then into
+  `fin_txn_daily`. Every Hattrick rental is on venue 3 (Austin); none on Tomball (52); none mis-dated.
+- **Hattrick rentals by month (all $100, Private Rental, Venmo):** Mar 4, Apr 4, May 5, Jun 4, Jul 2, Aug 4, Sep 2 (Sep 5, 12),
+  Oct 3 (Oct 17, 24, 31). The October three were entered 2026-11-09 17:39–17:40Z, after the 17:20Z run, so at 17:45Z they
+  were in `fin_revenue` only. The dashboard's all-time "$2,100 rentals" was April–September ($1,900 Apr–Aug + $200 Sep);
+  March is before its first detailed month.
+- **The line was hidden on member-term months by design** (`PartnerMonthlyView`, `(memberRevenue ?? 0) === 0`), which hid
+  September's and October's rentals with it. Since 2026-11-09 it shows on every month with rentals as
+  "(revenue − rentals) matches + rentals Morning Match"; "matches" carries the member-spot value, so it foots.
+- **August and September read "Figures changed after payment" because Tomball's matches were in Austin's figures when they
+  were paid**, not because of rentals. August: paid $1,664.50 (50% of $3,329), recompute $1,588 (50% of $3,176); the $153
+  revenue gap = Tomball's August PAID bookings ($153, field 1288, 5 matches). September: paid $2,762.42, recompute $2,609;
+  the $153.42 gap = 50% of $306.84, and Tomball's own September page reads $306 qualifying, $153 paid. The paid amounts stand.
