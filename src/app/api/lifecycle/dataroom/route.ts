@@ -19,7 +19,7 @@ import { fetchCityDirectory } from "@/lib/cityDirectoryServer";
 import { citiesWithFields } from "@/lib/cityDirectory";
 import { RATES_FOR_SQL } from "@/lib/revenueTxn";
 import {
-  assemblePivot, chicagoToday, cleanNever, cleanPlayed, contactOf, expandFields, foldHidden, maskPhone, monthAdd,
+  assemblePivot, chicagoToday, monthShort, cleanNever, cleanPlayed, contactOf, expandFields, foldHidden, maskPhone, monthAdd,
   monthEnd, neverCsv, periodDays, playedCsv, pivotReady, revenueBlocked, sortRows, sumCells, cityName, isMonth,
   PIVOT_DIMS, SEP, type LiveField, type NeverRow, type PivotCell, type PivotDim, type PivotShow, type PivotSpec,
   type PlayedRow, type SortKey, type VenueLink,
@@ -204,6 +204,7 @@ async function pivotTable(sb: SupabaseClient, spec: PivotSpec, meta: Meta) {
     if (!d) return v;
     if (d === "City") return spec.show === "revenue" ? v : cityName(v) || v;
     if (d === "Field") return spec.show === "revenue" ? (v === "none" ? "No venue (membership, other)" : venueName.get(v) ?? `Venue ${v}`) : fieldTitle.get(v) ?? (v === "?" ? "No field" : `Field ${v}`);
+    if ((d === "Month" || d === "Cohort month") && isMonth(v)) return monthShort(v);   // "May 2026", not "2026-05"
     return v;
   };
   const table = assemblePivot(cells, spec, spec.show === "spots" || spec.show === "revenue", label);
