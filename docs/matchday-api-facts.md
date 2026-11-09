@@ -8461,6 +8461,23 @@ Full write-up: `docs/free-first-match/DISCOVERY.md`. The load-bearing facts:
   booking-time fill since the proposal section was removed).
 - **Mirror freshness, 2026-11-08:** the newest `mdapi_match_players` row was synced 21:28Z the same
   day, minutes after it was created. The "a day behind" note above described Nov 5.
+- **A landed `firstMatchFreeEnabled` switch did not reach the mirror until the next matches sync
+  (fixed 2026-11-08).** Matches 20615–20634 were switched off 21:40–21:45Z; `change_log` has 20 PUTs
+  `{"firstMatchFreeEnabled":false}`, all `landed`. `GET /admin/matches/20616` then read `false` with
+  `updatedAt 2026-11-08T21:40:47.128Z`, while `mdapi_matches.raw` still read `true` with `updatedAt` from
+  Nov 4 and a `synced_at` 30 ms after each save. Cause: `refreshMatchMirror`
+  (`src/lib/mirrorWriteThrough.ts`) patched only mapped columns plus `player_count` and `synced_at`;
+  this key lives only in `raw`, so the row looked fresh and was stale. The next `mdapi-matches` run
+  (`fin_sync_log`, cron, 23:30Z; none ran in between) rewrote `raw` and all 20 read `false`. The
+  write-through now merges the key and the API's `updatedAt` into the existing `raw`
+  (`scripts/mirror-writethrough-test.ts`). The matches sync is NOT reliably hourly: Nov 8 runs were
+  19:25Z, 21:28Z (manual) and 23:30Z.
+- **Android free first match needs `FREE_MATCH_DEVICE_ID_HMAC_SECRET`** on the production Heroku app
+  `playmatchday` (backend git remote `heroku-prod` = `git.heroku.com/playmatchday.git`). Read in
+  `apps/api/src/config/device-integrity.config.ts:37` (heroku-prod a71fc05); when empty, every Android
+  app-open sync logs `device_integrity_logs` outcome `android_not_configured` and is not remembered
+  (`device-integrity.service.ts:720`), so no Android player passes the device check. Whether it is
+  set in production: UNKNOWN from here.
 
 ## Revenue per Player: deleted accounts count on both sides, and January 2025 is why (2026-11-05)
 

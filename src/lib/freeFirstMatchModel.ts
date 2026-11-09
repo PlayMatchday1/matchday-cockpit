@@ -247,5 +247,46 @@ export function soldOutByField(matches: readonly MatchRow[], free: readonly Pers
   return { rows, matches: nm, spots: ns, cents: nc };
 }
 
+/* ── BY CITY AND THE FREE MATCH LOG (restored 2026-11-08, on the selected window) ──────────── */
+
+export type ByCityRow = { city: string; cityName: string; stats: GroupStats };
+
+/** Free claimants by the city of their free match; every running city listed, most claims first. */
+export function byCity(free: readonly Person[], w: number, today: string, cityName: (code: string) => string, allCities: readonly string[]): ByCityRow[] {
+  const m = new Map<string, Person[]>();
+  for (const c of allCities) m.set(c, []);
+  for (const p of free) (m.get(p.city) ?? m.set(p.city, []).get(p.city)!).push(p);
+  return [...m.entries()]
+    .map(([city, ps]) => ({ city, cityName: cityName(city), stats: groupStats(ps, w, today) }))
+    .sort((a, b) => b.stats.players - a.stats.players || a.cityName.localeCompare(b.cityName));
+}
+
+export type LogMatch = MatchRow & { soldOut: boolean };
+export type LogField = { field: string; city: string; cityName: string; matches: number; stats: GroupStats };
+
+/** Matches since launch with a free claimant on them, newest first. */
+export function logMatches(matches: readonly MatchRow[], free: readonly Person[], today: string): LogMatch[] {
+  const ids = new Set(free.map((p) => p.id));
+  return matches
+    .filter((m) => m.day >= LAUNCH_DAY && m.day <= today)
+    .map((m) => ({ ...m, freePlayers: m.freePlayers.filter((p) => ids.has(p.id)), soldOut: isSoldOut(m) }))
+    .filter((m) => m.freePlayers.length > 0)
+    .sort((a, b) => (a.wall < b.wall ? 1 : a.wall > b.wall ? -1 : b.id - a.id));
+}
+
+/** One row per field, most free players first; the paid 2nd rate is on the selected window. */
+export function logFields(free: readonly Person[], w: number, today: string): LogField[] {
+  const m = new Map<string, { field: string; city: string; cityName: string; people: Person[]; matches: Set<number> }>();
+  for (const p of free) {
+    const k = `${p.city}|${p.field}`;
+    const e = m.get(k) ?? m.set(k, { field: p.field, city: p.city, cityName: p.cityName, people: [], matches: new Set() }).get(k)!;
+    e.people.push(p);
+    e.matches.add(p.matchId);
+  }
+  return [...m.values()]
+    .map((e) => ({ field: e.field, city: e.city, cityName: e.cityName, matches: e.matches.size, stats: groupStats(e.people, w, today) }))
+    .sort((a, b) => b.stats.players - a.stats.players || a.field.localeCompare(b.field));
+}
+
 /** Days between two wall-clock / Chicago days, for the server's follow-up offsets. */
 export const daysBetween = dayDiff;

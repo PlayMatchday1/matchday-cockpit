@@ -132,6 +132,34 @@ async function main() {
     is("a mirror failure is reported, not thrown", { refreshed: r.refreshed, reason: r.reason }, { refreshed: false, reason: "boom" });
   }
 
+  console.log("\nfirstMatchFreeEnabled lives only in raw, and a landed switch must reach it (2026-11-08):");
+  {
+    // A stand-in that also answers select("raw"): the row's raw as the sync left it.
+    const RAW = { id: 20616, firstMatchFreeEnabled: true, updatedAt: "2026-11-04T19:44:21.190Z", name: "Parmer", players: [{ id: 1 }] };
+    const fakeRawSb = (raw: unknown) => {
+      const calls: { patch: Record<string, unknown>; id: unknown }[] = [];
+      const sb = { from: () => ({
+        select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: raw === undefined ? null : { raw }, error: null }) }) }),
+        update: (patch: Record<string, unknown>) => ({ async eq(_c: string, id: unknown) { calls.push({ patch, id }); return { error: null }; } }),
+      }) };
+      return { sb: sb as never, calls };
+    };
+    const { sb, calls } = fakeRawSb(RAW);
+    const r = await refreshMatchMirror(sb, "production", 20616, ["firstMatchFreeEnabled"],
+      { firstMatchFreeEnabled: false, updatedAt: "2026-11-08T21:40:47.128Z" }, "landed");
+    is("it reports refreshed", r.refreshed, true);
+    is("  …raw carries the read-back false and the API's updatedAt, the rest of raw kept",
+       calls[0]?.patch.raw, { ...RAW, firstMatchFreeEnabled: false, updatedAt: "2026-11-08T21:40:47.128Z" });
+    // Control: a column-only key does not read or rewrite raw.
+    const c2 = fakeRawSb(RAW);
+    await refreshMatchMirror(c2.sb, "production", 20616, ["name"], { name: "Parmer" }, "landed");
+    is("  control — a column key leaves raw out of the patch", "raw" in (c2.calls[0]?.patch ?? {}), false);
+    // Not landed: nothing at all, raw included.
+    const c3 = fakeRawSb(RAW);
+    await refreshMatchMirror(c3.sb, "production", 20616, ["firstMatchFreeEnabled"], { firstMatchFreeEnabled: false }, "unknown");
+    is("  a non-landed switch writes nothing", c3.calls.length, 0);
+  }
+
   console.log("\na CREATED match gets a ROW, not a patch that matches nothing:");
 {
   const CREATED = {

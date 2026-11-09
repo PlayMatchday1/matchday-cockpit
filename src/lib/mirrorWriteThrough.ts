@@ -72,6 +72,9 @@ const COLUMN: Record<string, string> = {
   isCancelled: "is_cancelled",
 };
 
+/** Written keys the mirror keeps only inside `raw` (no column). See refreshMatchMirror. */
+const RAW_ONLY: readonly string[] = ["firstMatchFreeEnabled"];
+
 /* NOT MIRRORED, AND DELIBERATELY SO — every one of these is a field the app can write for which
  * mdapi_matches has NO column, so there is nothing to go stale:
  *   managerIntro, fakeSpotLeft36h / 24h / 12h / 6h / 3h
@@ -161,6 +164,27 @@ export async function refreshMatchMirror(
    * and a guessed 0 is a number nobody can tell from a measured one. */
   const cnt = after._count as { players?: unknown } | null | undefined;
   if (cnt && typeof cnt === "object" && typeof cnt.players === "number") patch.player_count = cnt.players;
+
+  /* ── KEYS THAT LIVE ONLY IN raw ───────────────────────────────────────────────────────────
+   * firstMatchFreeEnabled has no column: readers take it from mdapi_matches.raw
+   * (freeFirstMatchBuild.ts). This patch used to stamp synced_at and leave raw alone, so a
+   * LANDED switch-off read back as ON with a fresh synced_at until the next full sync — proven
+   * 2026-11-08: matches 20615–20634 switched off 21:40–21:45Z, GET /admin/matches/20616 read
+   * false, the mirror's raw still said true with raw.updatedAt from Nov 4. The key (and the
+   * API's updatedAt) are merged into the row's existing raw; the rest of raw is untouched. A
+   * row we cannot read is reported, not guessed at. */
+  const rawKeys = RAW_ONLY.filter((k) => keys.includes(k) && k in after);
+  if (rawKeys.length > 0) {
+    const cur = await supabase.from("mdapi_matches").select("raw").eq("api_id", matchApiId).maybeSingle();
+    if (cur.error) return { refreshed: false, reason: cur.error.message };
+    const raw = (cur.data as { raw?: unknown } | null)?.raw;
+    if (raw && typeof raw === "object") {
+      const next: Record<string, unknown> = { ...(raw as Record<string, unknown>) };
+      for (const k of rawKeys) next[k] = after[k] ?? null;
+      if (typeof after.updatedAt === "string") next.updatedAt = after.updatedAt;
+      patch.raw = next;
+    }
+  }
 
   if (Object.keys(patch).length === 0) return { refreshed: false, reason: "no mirrored fields" };
   /* THE ROW IS NOW NEWER THAN THE LAST SYNC, AND IT MUST SAY SO. The Master Schedule stamps its

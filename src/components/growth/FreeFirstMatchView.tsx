@@ -6,7 +6,8 @@
  *
  * ONE WINDOW FOR EVERY RATE, and only players who have had the whole window count; the rest show as
  * "too early" (freeFirstMatchModel.ts, FAIR WINDOWS). The 2026-11-05 range and city controls, the
- * funnel, the by-city table, the members column and the free match log were dropped with this design.
+ * funnel and the members column were dropped with this design; the by-city table and the free match
+ * log came back under it (Ryan, 2026-11-08), their rates on the same window.
  *
  * NO PLATFORM TOGGLE AND NO BLOCKED-CLAIMS CARD. Neither is tracked anywhere the Clubhouse reads
  * (docs/free-first-match/DISCOVERY.md §3 and §4); the backend asks are recorded there, not here.
@@ -20,8 +21,10 @@ import g from "./growth.module.css";
 import pa from "./playerActivity.module.css";
 import s from "./freeFirstMatch.module.css";
 import { fmtInt } from "./format";
+import { CITY_SCOPES } from "@/lib/cityScope";
+import { normalizeMatchCity } from "@/lib/growthAnalytics";
 import {
-  WINDOWS, activation, beforePeople, firstAfterReadDay, freePeople, groupStats, signupsSinceLaunch, soldOutByField,
+  WINDOWS, activation, beforePeople, byCity, firstAfterReadDay, freePeople, groupStats, logFields, logMatches, signupsSinceLaunch, soldOutByField,
   type FieldLoss, type Payload, type Window,
 } from "@/lib/freeFirstMatchModel";
 
@@ -32,6 +35,21 @@ const money = (cents: number | null): string => (cents == null ? "–" : `$${Mat
 const dash = "–";
 /** "Oct 1" from a "YYYY-MM-DD" day. Never through Date: a day is a day in either clock. */
 const dayLabel = (d: string): string => `${MON[Number(d.slice(5, 7)) - 1]} ${Number(d.slice(8, 10))}`;
+const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+/** "Thu Dec 4 · 9:00 PM" from a wall-clock "YYYY-MM-DDTHH:MM". No Date is built from the string:
+ *  the Z the mirror carries is not meant (docs, "Match startDate/endDate are LOCAL WALL CLOCK"). */
+function whenLabel(wall: string): string {
+  const [d, t] = wall.split("T");
+  const [y, m, dd] = d.split("-").map(Number);
+  const dow = DOW[new Date(Date.UTC(y, m - 1, dd)).getUTCDay()];
+  const [hh, mm] = (t ?? "00:00").split(":").map(Number);
+  const h12 = hh % 12 === 0 ? 12 : hh % 12;
+  return `${dow} ${MON[m - 1]} ${dd} · ${h12}:${String(mm).padStart(2, "0")} ${hh < 12 ? "AM" : "PM"}`;
+}
+
+const PAGE_FIRST = 6;
+const PAGE_MORE = 20;
 
 /** The free first match on a field's upcoming matches: On, Off, or how many of them are on. */
 function ffeStatus(r: FieldLoss): { text: string; on: boolean } {
@@ -77,6 +95,8 @@ export default function FreeFirstMatchView({ authHeaders }: { authHeaders: Recor
   const [data, setData] = useState<Payload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [w, setW] = useState<Window>(7);
+  const [logMode, setLogMode] = useState<"matches" | "fields">("matches");
+  const [shown, setShown] = useState(PAGE_FIRST);
 
   const token = authHeaders.Authorization;
   useEffect(() => {
@@ -109,8 +129,13 @@ export default function FreeFirstMatchView({ authHeaders }: { authHeaders: Recor
         { key: "free", title: "Free first match (since Nov 5)", stats: fs, hi: true, cost: true },
       ],
       lost: soldOutByField(data.matches, free, t),
+      cities: byCity(free, w, t, normalizeMatchCity, CITY_SCOPES.map((c) => c.identifier)),
+      logM: logMatches(data.matches, free, t),
+      logF: logFields(free, w, t),
     };
   }, [data, w]);
+
+  useEffect(() => { setShown(PAGE_FIRST); }, [logMode]);
 
   if (error) return <div className={`${g.stateMsg} ${g.errorMsg}`}>Could not load: {error}</div>;
   if (!data || !view) return <div className={g.stateMsg}>Loading…</div>;
@@ -119,6 +144,8 @@ export default function FreeFirstMatchView({ authHeaders }: { authHeaders: Recor
   const before = rate(act.before.played, act.before.done);
   const after = rate(act.after.played, act.after.done);
   const pts = before != null && after != null ? Math.round((after - before) * 1000) / 10 : null;
+  const logRows = logMode === "matches" ? view.logM : view.logF;
+  const visible = logRows.slice(0, shown);
 
   return (
     <>
@@ -253,6 +280,79 @@ export default function FreeFirstMatchView({ authHeaders }: { authHeaders: Recor
               </tbody>
             </table>
           </div>
+        )}
+      </section>
+
+      <section className={g.card} data-testid="ffm-by-city">
+        <div className={g.cardHead}>
+          <div>
+            <div className={g.cardTitle}>By city</div>
+            <div className={g.cardSub}>Free first matches since Nov 5, by the city of the match. 2nd match on the same {w}-day window.</div>
+          </div>
+        </div>
+        <div className={pa.tw}>
+          <table>
+            <thead><tr><th>City</th><th>Claimed</th><th>2nd match · {w}d</th><th>Too early</th><th>Cost per payer</th></tr></thead>
+            <tbody>
+              {view.cities.map((c) => (
+                <tr key={c.city}>
+                  <td>{c.cityName}</td>
+                  <td className={c.stats.players === 0 ? pa.zero : undefined}>{fmtInt(c.stats.players)}</td>
+                  <td>{pctOf(rate(c.stats.paid2nd, c.stats.done))}</td>
+                  <td>{fmtInt(c.stats.tooEarly)}</td>
+                  <td>{money(c.stats.costPerPayerCents)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className={g.card} data-testid="ffm-log">
+        <div className={g.cardHead}>
+          <div className={g.cardTitle}>Free match log</div>
+          <div className={pa.seg} role="group" aria-label="Log view">
+            <button type="button" aria-pressed={logMode === "matches"} onClick={() => setLogMode("matches")}>Matches</button>
+            <button type="button" aria-pressed={logMode === "fields"} onClick={() => setLogMode("fields")}>Fields</button>
+          </div>
+        </div>
+        {logRows.length === 0 ? (
+          <div className={s.empty}>No free first matches yet.</div>
+        ) : logMode === "matches" ? (
+          <table className={s.logTable}>
+            <thead><tr><th>Match</th><th>Free players</th><th>Booked</th></tr></thead>
+            <tbody>
+              {(visible as typeof view.logM).map((m) => (
+                <tr key={m.id}>
+                  <td><span className={s.matchName}>{m.field} · {m.cityName}</span><span className={s.matchWhen}>{whenLabel(m.wall)}</span></td>
+                  <td><div className={s.chips}>{m.freePlayers.map((p) => <span key={p.id} className={s.chip}>{p.name}</span>)}</div></td>
+                  <td>
+                    {m.soldOut && <span className={s.soldOut}>Sold out</span>}
+                    <span className={s.booked}>{fmtInt(m.booked)} / {m.cap == null ? dash : fmtInt(m.cap)}</span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <table className={s.logTable}>
+            <thead><tr><th>Field · City</th><th className={s.num}>Free players</th><th className={s.num}>Matches</th><th className={s.num}>Paid 2nd · {w}d</th></tr></thead>
+            <tbody>
+              {(visible as typeof view.logF).map((f) => (
+                <tr key={`${f.city}|${f.field}`}>
+                  <td><span className={s.matchName}>{f.field} · {f.cityName}</span></td>
+                  <td className={s.num}>{fmtInt(f.stats.players)}</td>
+                  <td className={s.num}>{fmtInt(f.matches)}</td>
+                  <td className={s.num}>{f.stats.done > 0 ? pctOf(rate(f.stats.paid2nd, f.stats.done)) : `${fmtInt(f.stats.tooEarly)} too early`}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        {logRows.length > shown && (
+          <button type="button" className={s.more} onClick={() => setShown((n) => n + PAGE_MORE)}>
+            Show {fmtInt(Math.min(PAGE_MORE, logRows.length - shown))} more
+          </button>
         )}
       </section>
     </>

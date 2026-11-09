@@ -1,6 +1,6 @@
 /* FREE FIRST MATCH — only what growth.module.css and playerActivity.module.css do not already have
    (Figma sl6PTy5LhCVj1gF0HvGmuF, frame 28:3): the window toggle row, the activation headline, the
-   too-early and on/off pills, the highlighted and total rows. Cards, the
+   too-early and on/off pills, the highlighted and total rows, and the free match log. Cards, the
    KPI grid, tables, the segmented toggle and the tooltip come from those two. */
 
 /* ── WINDOW TOGGLE, right-aligned under the title ──────────────────────────────────────────── */
@@ -42,6 +42,33 @@
 .hiGreen td { background: #f1f8f4; }
 .totRow td { font-weight: 800; background: rgba(7, 42, 32, .03); }
 .empty { padding: 14px 0 4px; font-size: 12.5px; color: var(--mut, #5b6b63); }
+
+/* ── THE FREE MATCH LOG ────────────────────────────────────────────────────────────────────── */
+.logTable { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.logTable th {
+  text-align: left; padding: 6px 8px; font-size: 9.5px; font-weight: 800; letter-spacing: .09em;
+  text-transform: uppercase; color: var(--mut, #93a49b); border-bottom: 1px solid var(--line, #e3e9e5);
+}
+.logTable td { padding: 11px 8px; border-bottom: 1px solid rgba(7, 42, 32, .06); vertical-align: middle; }
+.logTable th:last-child, .logTable td:last-child { text-align: right; white-space: nowrap; }
+.logTable th.num, .logTable td.num { text-align: right; white-space: nowrap; }
+.matchName { font-weight: 700; color: var(--forest, #0f3d2e); }
+.matchWhen { display: block; font-size: 11.5px; color: var(--mut, #5b6b63); margin-top: 2px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  display: inline-block; padding: 3px 10px; border-radius: 999px; background: #e8f5ee;
+  color: var(--forest, #0f3d2e); font-size: 12px; font-weight: 600; white-space: nowrap;
+}
+.soldOut {
+  display: inline-block; margin-right: 8px; padding: 2px 8px; border-radius: 999px;
+  background: #fbf1d8; color: var(--gold-ink, #8a6300); font-size: 10.5px; font-weight: 800;
+}
+.booked { font-weight: 800; color: var(--forest, #0f3d2e); }
+.more {
+  display: block; margin: 12px auto 0; border: 0; background: transparent; cursor: pointer;
+  font-size: 12.5px; font-weight: 700; color: var(--forest, #0f3d2e);
+}
+.more:hover { text-decoration: underline; }
 
 /* Title tooltip content */
 .tipTitle { display: block; font-weight: 800; margin-bottom: 2px; }
