@@ -31,6 +31,7 @@ import {
   FACT_MODEL_VERSION,
 } from "../src/lib/dataRoom";
 import { readFileSync } from "node:fs";
+import { assemblePivot, sumCells, drillToPlayed, PIVOT_DIMS, SHOW_LABEL, SEP, type PivotSpec } from "../src/lib/dataRoomLists";
 
 let pass = 0, fail = 0;
 const ok = (n: string) => { pass++; console.log(`  ok  ${n}`); };
@@ -150,10 +151,29 @@ console.log("\nthe total header: it names the window, and the window follows the
   is("New players too", totalHeader("2026-02", "2026-09", "New players").kind, "distinct");
   for (const m of ADDITIVE_METRICS) is(`${m} is additive`, isAdditive(m), true);
   for (const m of DISTINCT_METRICS) is(`${m} is not`, isAdditive(m), false);
-  const route = readFileSync("src/app/api/lifecycle/dataroom/route.ts", "utf8");
-  if (/totalCol: totalHeader\(cfg\.filters\.from, cfg\.filters\.to/.test(route))
-    ok("the header is built from the SAME filters the table is — they cannot drift");
-  else bad("the header is built from the same filters", "THE 7,450 BUG CAN COME BACK");
+  /* CONVERTED 2026-11-09 (the list-builder rebuild, migration 0267). This read the old route's source
+   * for `totalCol: totalHeader(cfg.filters…)`. That route is gone: the table, its row totals and its
+   * grand total now come out of ONE SQL GROUPING SETS pass over ONE window, so they cannot cover
+   * different months. What is left to assert is the arithmetic the page builds on top, at runtime:
+   * a revenue (additive) total IS the sum of its cells, and a distinct total is carried as given. */
+  {
+    const spec: PivotSpec = { rows: ["City"], col: "Month", show: "revenue", from: "2026-02", to: "2026-09", city: null, fieldId: null };
+    const cells = sumCells([
+      { r1: "Austin", r2: "", c: "2026-02", v: 10.25 }, { r1: "Austin", r2: "", c: "2026-03", v: 4.75 },
+      { r1: "Houston", r2: "", c: "2026-02", v: 3 },
+    ]);
+    const t = assemblePivot(cells, spec, true, (_d, k) => k);
+    is("an additive row total is the sum of its visible cells", t.rowTotals[`Austin${SEP}`], 15);
+    is("…the column total too", t.colTotals["2026-02"], 13.25);
+    is("…and the grand total is the sum of everything", t.grand, 18);
+    const d = assemblePivot([
+      { r1: "Austin", r2: "", c: "2026-02", g: 0, v: 5 }, { r1: "Austin", r2: "", c: "2026-03", g: 0, v: 4 },
+      { r1: "Austin", r2: "", c: "", g: 1, v: 6 }, { r1: "", r2: "", c: "", g: 7, v: 6 },
+    ], { ...spec, show: "players" }, false, (_d, k) => k);
+    is("a distinct row total is the database's distinct count, not the sum", d.rowTotals[`Austin${SEP}`], 6);
+    is("control — and that is strictly below the sum of its cells here", (d.rowTotals[`Austin${SEP}`] ?? 0) < 9, true);
+    is("months order in time", d.colKeys, ["2026-02", "2026-03"]);
+  }
 }
 
 // ── 3. SWAP ──────────────────────────────────────────────────────────────────────────────────
@@ -182,7 +202,9 @@ console.log("\nswap: the axes exchange and the table retitles itself");
   is("one-deep rows can", canSwap(cfg), true);
   const panel = readFileSync("src/components/growth/DataRoomPanel.tsx", "utf8");
   if (/data-testid="dr-swap"/.test(panel)) ok("the Swap button is on the page"); else bad("the Swap button is on the page");
-  if (/disabled=\{!swappable\}/.test(panel)) ok("…and disables itself instead of dropping a field"); else bad("…and disables itself");
+  /* SELECTOR-PATH EDIT 2026-11-09, itemised: the button's disabled prop was `{!swappable}`; the rebuilt
+   * pivot writes the same rule inline (two-deep rows cannot swap). The intent is unchanged. */
+  if (/data-testid="dr-swap"\s+disabled=\{spec\.rows\.length > 1/.test(panel)) ok("…and disables itself instead of dropping a field"); else bad("…and disables itself");
 }
 
 // ── 4. NO SHADE FIGHTS THE TEXT ──────────────────────────────────────────────────────────────
@@ -214,36 +236,25 @@ console.log("\nheat: one hue, and the darkest step still reads");
   is("a degenerate grid does not divide by zero", heatStep(5, 5, 5), 0);
 }
 
-// ── 5. THE DRAWER, AND 6. NOTHING BELOW THE TOTALS ROW ───────────────────────────────────────
-console.log("\nthe drawer is the explanation, and the table ends at the totals row");
+// ── 5. THE DRILL-DOWN ────────────────────────────────────────────────────────────────────────
+/* REPLACED 2026-11-09. The drawer (and its eleven source assertions) is gone by request: clicking a
+ * pivot number now opens the Played tab pre-filtered to the players behind it, so the drill-down is a
+ * real, exportable list. What is asserted instead is the mapping from a cell to those filters. */
+console.log("\nthe drill-down: a number opens the Played list behind it");
 {
-  const panel = readFileSync("src/components/growth/DataRoomPanel.tsx", "utf8");
-  const jsx = panel.slice(panel.indexOf("return ("), panel.indexOf("<style jsx>"));
-  for (const t of ["dr-drawer", "dr-drawer-title", "dr-drawer-close", "dr-drawer-export", "dr-drawer-copy", "dr-cell", "dr-total-head", "dr-row-total"])
-    if (panel.includes(`data-testid="${t}"`)) ok(`${t} is on the page`); else bad(`${t} is on the page`);
-  if (/onClick=\{\(\) => setOpenCell\(\{ r, c: /.test(jsx)) ok("clicking a cell opens the drawer");
-  else bad("clicking a cell opens the drawer");
-  if (/openCell\?\.r === r && openCell\?\.c === c/.test(jsx)) ok("…and the clicked cell is marked while it is open");
-  else bad("…and the clicked cell is marked");
-  if (/drSel/.test(jsx)) ok("…with a visible outline, not just state"); else bad("…with a visible outline");
-  if (/onClick=\{\(\) => setOpenCell\(null\)\}/.test(jsx)) ok("closing clears it, so no cell stays marked");
-  else bad("closing clears it");
-  if (/\{openCell && \(/.test(jsx)) ok("the drawer does not exist when no cell is open"); else bad("the drawer is conditional");
-  is("the drawer names the cell from the row AND column it came from", /\{openCell\.r\}\{openCell\.c/.test(jsx), true);
-
-  /* NOTHING BELOW THE TOTALS ROW. The drill-down used to be explained by a sentence under the
-   * table and the shading by a legend beside it. Both are gone: the drawer opening is the
-   * explanation. Asserted on the JSX between the grid and the drawer — the only thing allowed
-   * there is a comment. */
-  const between = jsx.slice(jsx.indexOf('data-testid="dr-grid"'), jsx.indexOf('data-testid="dr-drawer"'));
-  const after = between.slice(between.indexOf("</div>"));
-  const stray = after.replace(/\{\/\*[\s\S]*?\*\/\}/g, " ").replace(/\{openCell && \([\s\S]*$/, " ");
-  if (!/<p\b|<span\b|<small\b|<footer\b/.test(stray)) ok("no paragraph, note or legend renders below the grid");
-  else bad("no note renders below the grid", stray.replace(/\s+/g, " ").slice(0, 160));
-  // POSITIVE CONTROL: the pattern DOES fire on markup that has one.
-  is("control — the stray-text pattern finds a <p> when there is one", /<p\b/.test('<div/><p>note</p>'), true);
-  for (const gone of ["drNote", "drLegend", "heat legend", "Click any", "Rows don't sum", "don’t sum"])
-    if (!panel.includes(gone)) ok(`"${gone}" is gone from the panel`); else bad(`"${gone}" is gone`, "it is still rendered");
+  const base: PivotSpec = { rows: ["City"], col: "Month", show: "players", from: "2026-05", to: "2026-10", city: null, fieldId: null };
+  const f = drillToPlayed(base, `DFW${SEP}`, "2026-08");
+  is("a City × Month cell opens that city", f?.city, "DFW");
+  is("…for that one month", f?.period, { from: "2026-08", to: "2026-08" });
+  is("…with no other filter set", [f?.type, f?.matches, f?.within, f?.fieldIds], ["all", { min: 1, max: null }, null, []]);
+  const y = drillToPlayed({ ...base, col: "Year" }, `DFW${SEP}`, "2026");
+  is("a Year cell is clipped to the pivot's own window", y?.period, { from: "2026-05", to: "2026-10" });
+  const row = drillToPlayed(base, `ATX${SEP}`, "");
+  is("a row total opens the whole window", row?.period, { from: "2026-05", to: "2026-10" });
+  is("a Field cell opens that field", drillToPlayed({ ...base, rows: ["Field"] }, `1387${SEP}`, "2026-08")?.fieldIds, [1387]);
+  is("a cohort cell has no list behind it", drillToPlayed({ ...base, col: "Cohort month" }, `DFW${SEP}`, "2026-01"), null);
+  is("…nor does New players", drillToPlayed({ ...base, show: "new" }, `DFW${SEP}`, "2026-08"), null);
+  is("control — a revenue Field cell maps a venue to its fields", drillToPlayed({ ...base, show: "revenue", rows: ["Field"] }, `54${SEP}`, "2026-08", () => [1387])?.fieldIds, [1387]);
 }
 
 // ── 7. THE MEMO ──────────────────────────────────────────────────────────────────────────────
@@ -272,9 +283,8 @@ console.log("\nspeed: the cube is memoised per configuration");
   for (let i = 0; i < 40; i++) pivotCached(facts, { ...cfg, filters: { ...cfg.filters, city: `c${i}` } }, "k1");
   if (cubeCacheSize() <= 24) ok(`the cache is bounded — 40 configs left ${cubeCacheSize()} entries`);
   else bad("the cache is bounded", `${cubeCacheSize()} entries`);
-  const route = readFileSync("src/app/api/lifecycle/dataroom/route.ts", "utf8");
-  if (/pivotCached\(F\.facts, cfg, F\.key\)/.test(route)) ok("the route serves the memoised cube");
-  else bad("the route serves the memoised cube");
+  /* REMOVED 2026-11-09: "the route serves the memoised cube". The route no longer builds a cube; the
+   * pivot is one SQL call (0267). The cache above is tested as a unit and no page reads it. */
 }
 
 // ── 8. WHAT WAS KEPT ─────────────────────────────────────────────────────────────────────────
@@ -283,12 +293,15 @@ console.log("\nkept: the presets, Export, every dimension and every measure");
   const panel = readFileSync("src/components/growth/DataRoomPanel.tsx", "utf8");
   for (const p of ["Players by city by month", "Spots per player by field", "Revenue by cohort year", "New players by city", "Field by month"])
     if (panel.includes(p)) ok(`preset "${p}" kept`); else bad(`preset "${p}" kept`);
+  /* CONVERTED 2026-11-09: dimensions and measures were greps over the panel; they now live in
+   * dataRoomLists and are asserted there at runtime. The measures are the brief's three plus New
+   * players (its preset stays): Spots booked and Matches were the same count and are "Spots". The
+   * pivot's CSV is built in the browser from the table on screen (counts only, no contact data), so
+   * "still server-side" is removed rather than converted. */
   for (const d of ["City", "Field", "Month", "Year", "Cohort year", "Cohort month"])
-    if (new RegExp(`"${d}"`).test(panel)) ok(`dimension ${d} kept`); else bad(`dimension ${d} kept`);
-  for (const m of [...ADDITIVE_METRICS, ...DISTINCT_METRICS])
-    if (panel.includes(`"${m}"`) || panel.includes(`${m}:`)) ok(`measure ${m} kept`); else bad(`measure ${m} kept`);
-  if (/data-testid="dr-export"/.test(panel)) ok("Export kept on the table"); else bad("Export kept");
-  if (/mode: "tableCsv"/.test(panel)) ok("…and still builds the CSV server-side"); else bad("…still server-side");
+    if ((PIVOT_DIMS as readonly string[]).includes(d)) ok(`dimension ${d} kept`); else bad(`dimension ${d} kept`);
+  is("the measures are players, new players, spots and revenue", Object.keys(SHOW_LABEL), ["players", "new", "spots", "revenue"]);
+  if (/data-testid="dr-pivot-export"/.test(panel)) ok("Export kept on the table"); else bad("Export kept");
   /* STACKED ROWS STAY, because something uses them: the "Field by month" preset is rows
    * ["City","Field"]. They live in the chip strip like any other field. */
   if (/rows: \["City", "Field"\]/.test(panel)) ok("stacked rows are still reachable — a preset uses them");
@@ -425,11 +438,9 @@ console.log("\nthe cold fetch: eight bands that cover the id space exactly once"
     if (k in s0) ok(`the counter reports ${k}`); else bad(`the counter reports ${k}`);
   is("it reports the concurrency actually in force", s0.concurrency, FACT_FETCH_CONCURRENCY);
   is("cold is whatever the caller was told, not a guess", factCacheStats(true).cold, true);
-  const route = readFileSync("src/app/api/lifecycle/dataroom/route.ts", "utf8");
-  if (/coldBuilds > buildsBefore/.test(route)) ok("cold is decided by the build counter MOVING across the call");
-  else bad("cold is decided by the counter moving", "a boolean set by hand would drift from the truth");
-  if (/Server-Timing/.test(route) && /facts;dur=/.test(route)) ok("…and rides on Server-Timing, readable without parsing a body");
-  else bad("…rides on Server-Timing");
+  /* REMOVED 2026-11-09: two greps over the route ("cold is decided by the counter moving", "rides on
+   * Server-Timing"). The route no longer loads the fact table at all — that load was the 12.9–17.7 s
+   * "building…" — so it has no cold path to time. */
   const lib = readFileSync("src/lib/dataRoom.ts", "utf8");
   if (/\[dataroom\] fact table BUILT/.test(lib))
     ok("every rebuild logs itself, so a week of traffic answers the question");

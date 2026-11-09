@@ -1,150 +1,249 @@
-// POST /api/lifecycle/dataroom — the Player Data Room pivot + cell drill-down. One
-// cached fact table (getFacts) serves both. Body.mode:
-//   "pivot"   { config }            → the pivot table + filter/dim metadata
-//   "cell"    { config, r, c }      → the distinct players inside one cell
-//   "tableCsv"{ config }            → the pivot table as CSV
-//   "cellCsv" { config, r, c }      → the cell's players as CSV
-// Gated on can_access_lifecycle. Reads only; the fact table is derived from the views.
+// POST /api/lifecycle/dataroom — Player Data Room (rebuilt 2026-11-09 as a campaign list builder).
+// Body.mode:
+//   "meta"                       cities, live fields (+ the hidden ones folded into them), pivot months
+//   "played"   { filters, sort } the Played list: count, contact gaps, the first rows (phones masked)
+//   "never"    { filters, sort } the Never played list, the same shape
+//   "playedCsv" / "neverCsv"     every row, as Klaviyo imports it
+//   "pivot"    { spec }          one pivot table
+// Gated on can_access_lifecycle. Reads only.
+//
+// THE DATA IS IN POSTGRES (migration 0267). The old route loaded all 173,389 plays into the function
+// and grouped them in memory; the first open on a cold instance took 12.9–17.7 s (Vercel logs,
+// 2026-11-03 and 2026-11-08) behind a "building…" label. Every list and table is now one SQL call.
+//
+// THE FIELD LIST is MatchDay's own (GET /cities + GET /admin/fields — two GETs, the Fields page's
+// pair, cached ten minutes per instance), because only it knows which fields are hidden.
+
 import { authenticateLifecycle } from "@/lib/lifecycleAuth";
-import { getFacts, pivotCached, cellPlayers, measure, totalHeader, factCacheStats, type PivotConfig } from "@/lib/dataRoom";
+import { fetchCityDirectory } from "@/lib/cityDirectoryServer";
+import { citiesWithFields } from "@/lib/cityDirectory";
+import { RATES_FOR_SQL } from "@/lib/revenueTxn";
+import {
+  assemblePivot, chicagoToday, cleanNever, cleanPlayed, contactOf, expandFields, foldHidden, maskPhone, monthAdd,
+  monthEnd, neverCsv, periodDays, playedCsv, pivotReady, revenueBlocked, sortRows, sumCells, cityName, isMonth,
+  PIVOT_DIMS, SEP, type LiveField, type NeverRow, type PivotCell, type PivotDim, type PivotShow, type PivotSpec,
+  type PlayedRow, type SortKey, type VenueLink,
+} from "@/lib/dataRoomLists";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
+export const dynamic = "force-dynamic";
 
-const money = (n: number) => "$" + n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const cell = (r: (number | null)[] | number[]) => r;
-void cell;
+const PREVIEW = 20;
+const MISSING = "The Data Room's database functions are not installed yet (migration 0267).";
+const missingFn = (m: string) => /dataroom_/.test(m) && /does not exist|schema cache|Could not find the function/i.test(m);
 
-/* MODULE INIT. Set when this file is first evaluated, which on a serverless platform is once per
- * instance — so `Date.now() - MODULE_INIT` on the first request is a lower bound on how long the
- * instance has been alive before anyone asked it for anything. */
-const MODULE_INIT = Date.now();
-let firstRequestAt = 0;
+type Meta = {
+  cities: { code: string; name: string }[];
+  fields: LiveField[];
+  fold: Record<number, number>;
+  venues: { id: number; name: string; fields: number[] }[];
+  months: { first: string; last: string };
+  fieldsSource: "matchday" | "mirror";
+  fieldsNote: string | null;
+};
+let metaCache: { at: number; meta: Meta } | null = null;
+const META_TTL = 10 * 60_000;
+
+async function readMeta(sb: SupabaseClient): Promise<Meta> {
+  if (metaCache && Date.now() - metaCache.at < META_TTL) return metaCache.meta;
+  const [links, venues, first] = await Promise.all([
+    sb.from("fin_venue_fields").select("fin_venue_id, mdapi_field_id, field_title_at_link, excluded_from_venue"),
+    sb.from("fin_venues").select("id, venue_name, city"),
+    sb.from("growth_player_profile").select("first_match_month").order("first_match_month", { ascending: true }).limit(1).maybeSingle(),
+  ]);
+  if (links.error) throw new Error(`fin_venue_fields: ${links.error.message}`);
+  if (venues.error) throw new Error(`fin_venues: ${venues.error.message}`);
+
+  let fields: LiveField[] = [], cities: Meta["cities"] = [], fieldsSource: Meta["fieldsSource"] = "matchday", fieldsNote: string | null = null;
+  try {
+    const dir = citiesWithFields(await fetchCityDirectory("production"));
+    cities = dir.filter((c) => c.abbr).map((c) => ({ code: c.abbr!, name: c.display }));
+    fields = dir.flatMap((c) => c.fields.map((f) => ({ id: f.id, title: f.title, city: c.abbr })));
+  } catch (e) {
+    /* MatchDay unreachable: fall back to the fields that had a match in the last 120 days. That list
+     * cannot tell a hidden field from a live one, and the panel says so. */
+    fieldsSource = "mirror";
+    fieldsNote = `MatchDay's field list did not load (${e instanceof Error ? e.message.slice(0, 120) : "error"}), so fields come from recent matches and may include hidden ones.`;
+    const since = new Date(Date.now() - 120 * 86_400_000).toISOString();
+    const { data } = await sb.from("mdapi_matches").select("field_id, field_title, city_identifier").gte("start_date", since).not("field_id", "is", null).limit(5000);
+    const seen = new Map<number, LiveField>();
+    for (const r of data ?? []) if (!seen.has(Number(r.field_id))) seen.set(Number(r.field_id), { id: Number(r.field_id), title: String(r.field_title ?? `Field ${r.field_id}`), city: r.city_identifier ?? null });
+    fields = [...seen.values()].sort((a, b) => a.title.localeCompare(b.title));
+    cities = [...new Set(fields.map((f) => f.city).filter((c): c is string => !!c))].map((code) => ({ code, name: cityName(code) })).sort((a, b) => a.name.localeCompare(b.name));
+  }
+  const vlinks: VenueLink[] = (links.data ?? []).map((l) => ({ venue: Number(l.fin_venue_id), field: Number(l.mdapi_field_id), title: String(l.field_title_at_link ?? ""), excluded: l.excluded_from_venue === true }));
+  const fold = foldHidden(fields, vlinks);
+  const byVenue = new Map<number, number[]>();
+  for (const l of vlinks) if (!l.excluded) (byVenue.get(l.venue) ?? byVenue.set(l.venue, []).get(l.venue)!).push(l.field);
+  const today = chicagoToday();
+  const meta: Meta = {
+    cities, fields, fold, fieldsSource, fieldsNote,
+    venues: (venues.data ?? []).map((v) => ({ id: Number(v.id), name: String(v.venue_name ?? `Venue ${v.id}`), fields: byVenue.get(Number(v.id)) ?? [] })),
+    months: { first: String(first.data?.first_match_month ?? "2023-04"), last: today.slice(0, 7) },
+  };
+  metaCache = { at: Date.now(), meta };
+  return meta;
+}
+
+async function playedRows(sb: SupabaseClient, raw: unknown, meta: Meta): Promise<PlayedRow[]> {
+  const f = cleanPlayed(raw);
+  const { from, to } = periodDays(f.period, chicagoToday());
+  const { data, error } = await sb.rpc("dataroom_played_list", {
+    p_from: from, p_to: to, p_city: f.city,
+    p_field_ids: f.fieldIds.length ? expandFields(f.fieldIds, meta.fold) : null,
+    p_member: f.type, p_min: f.matches.min, p_max: f.matches.max, p_within: f.within,
+  });
+  if (error) throw new Error(missingFn(error.message) ? MISSING : error.message);
+  return (data ?? []) as PlayedRow[];
+}
+async function neverRows(sb: SupabaseClient, raw: unknown): Promise<NeverRow[]> {
+  const f = cleanNever(raw, chicagoToday());
+  /* Chicago month starts as instants. A month boundary is midnight in Chicago, not UTC. */
+  const at = (ym: string) => chicagoMidnight(`${ym}-01`);
+  const { data, error } = await sb.rpc("dataroom_never_played", { p_from: at(f.from), p_to: at(monthAdd(f.to, 1)), p_city: f.city });
+  if (error) throw new Error(missingFn(error.message) ? MISSING : error.message);
+  return (data ?? []) as NeverRow[];
+}
+/** The UTC instant of 00:00 in America/Chicago on a given day (DST-aware). */
+function chicagoMidnight(ymd: string): string {
+  const guess = Date.parse(`${ymd}T06:00:00Z`);
+  const local = new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", hour: "numeric", hour12: false }).format(new Date(guess));
+  const h = Number(local) % 24;
+  return new Date(guess - h * 3_600_000).toISOString();
+}
+
+function preview<T extends PlayedRow | NeverRow>(rows: T[], sortRaw: unknown) {
+  const s = (sortRaw ?? {}) as { key?: string; dir?: string };
+  const keys: SortKey[] = ["name", "email", "phone", "city", "matches", "lastPlayed", "signedUp"];
+  const key = keys.includes(s.key as SortKey) ? (s.key as SortKey) : null;
+  const sorted = key ? sortRows(rows, key, s.dir === "asc" ? "asc" : "desc") : rows;
+  let noEmail = 0, noPhone = 0;
+  for (const r of rows) { const c = contactOf(r); if (c.noEmail) noEmail++; if (c.noPhone) noPhone++; }
+  return {
+    count: rows.length, noEmail, noPhone,
+    rows: sorted.slice(0, PREVIEW).map((r) => {
+      const c = contactOf(r);
+      return { ...r, name: c.name, email: c.email, phone: maskPhone(c.phone), noEmail: c.noEmail, noPhone: c.noPhone };
+    }),
+  };
+}
+
+function csvResponse(text: string, name: string) {
+  const safe = name.replace(/[^\w\- ]+/g, "").trim().replace(/\s+/g, "-").toLowerCase() || "players";
+  return new Response(text, { status: 200, headers: {
+    "Content-Type": "text/csv; charset=utf-8", "Content-Disposition": `attachment; filename="${safe}-${chicagoToday()}.csv"`, "Cache-Control": "no-store",
+  } });
+}
+
+// ── the pivot ───────────────────────────────────────────────────────────────────────────────────
+function cleanSpec(x: unknown, meta: Meta): PivotSpec | null {
+  const s = (x ?? {}) as Record<string, unknown>;
+  const dim = (v: unknown): PivotDim | null => (PIVOT_DIMS.includes(v as PivotDim) ? (v as PivotDim) : null);
+  const rows = Array.isArray(s.rows) ? s.rows.map(dim).filter((d): d is PivotDim => !!d).slice(0, 2) : [];
+  const col = dim(s.col);
+  const show = (["players", "new", "spots", "revenue"] as const).includes(s.show as PivotShow) ? (s.show as PivotShow) : null;
+  let from = isMonth(s.from) ? s.from : meta.months.first, to = isMonth(s.to) ? s.to : meta.months.last;
+  if (from > to) [from, to] = [to, from];
+  const spec: PivotSpec = {
+    rows: [...new Set(rows)].filter((d) => d !== col), col, show, from, to,
+    city: typeof s.city === "string" && /^[A-Z]{2,5}$/.test(s.city) ? s.city : null,
+    fieldId: Number.isInteger(Number(s.fieldId)) && Number(s.fieldId) > 0 ? Number(s.fieldId) : null,
+  };
+  return pivotReady(spec) ? spec : null;
+}
+
+async function pivotTable(sb: SupabaseClient, spec: PivotSpec, meta: Meta) {
+  const fieldTitle = new Map(meta.fields.map((f) => [String(f.id), f.title]));
+  const venueName = new Map(meta.venues.map((v) => [String(v.id), v.name]));
+  let cells: PivotCell[];
+  if (spec.show === "revenue") {
+    const blocked = revenueBlocked(spec);
+    if (blocked) return { blocked };
+    /* FINANCE NET, the Finance > Revenue definition (fin_txn_sums: gross − refunds − failed − disputes −
+     * per-charge sales tax, test and internal rows out). Month × venue is its grain. */
+    const venueOfField = spec.fieldId != null
+      ? meta.venues.find((v) => v.fields.includes(spec.fieldId!))?.id ?? -1 : null;
+    const { data, error } = await sb.rpc("fin_txn_sums", {
+      p_from: `${spec.from}-01`, p_to: monthEnd(spec.to), p_grain: "month", p_by_venue: true, p_venue_id: venueOfField, ...RATES_FOR_SQL,
+    });
+    if (error) throw new Error(`fin_txn_sums: ${error.message}`);
+    const MONEY = new Set(["charge", "refund", "failed", "dispute", "manual"]);
+    const cityLabel = spec.city ? cityName(spec.city) : null;
+    const items: { r1: string; r2: string; c: string; v: number }[] = [];
+    for (const r of (data ?? []) as Record<string, unknown>[]) {
+      if (r.excluded === true || !MONEY.has(String(r.kind))) continue;
+      const city = r.city == null || String(r.city).trim() === "" ? "Deleted Account Revenue" : String(r.city);
+      if (cityLabel && city !== cityLabel) continue;
+      const month = String(r.period).slice(0, 7);
+      const venue = r.fin_venue_id == null ? "none" : String(r.fin_venue_id);
+      const dv = (d: PivotDim | null | undefined) => (d === "City" ? city : d === "Field" ? venue : d === "Month" ? month : d === "Year" ? month.slice(0, 4) : "");
+      items.push({ r1: dv(spec.rows[0]), r2: dv(spec.rows[1]), c: dv(spec.col), v: (Number(r.gross_cents) - Number(r.tax_cents ?? 0)) / 100 });
+    }
+    cells = sumCells(items);
+  } else {
+    const { data, error } = await sb.rpc("dataroom_pivot", {
+      p_from: `${spec.from}-01`, p_to: monthEnd(spec.to), p_city: spec.city,
+      p_field_ids: spec.fieldId != null ? expandFields([spec.fieldId], meta.fold) : null,
+      p_field_map: meta.fold, p_r1: spec.rows[0] ?? null, p_r2: spec.rows[1] ?? null, p_c: spec.col,
+    });
+    if (error) throw new Error(missingFn(error.message) ? MISSING : error.message);
+    const k = spec.show === "spots" ? "spots" : spec.show === "new" ? "new" : "players";
+    cells = ((data ?? []) as Record<string, unknown>[]).map((r) => ({ r1: String(r.r1 ?? ""), r2: String(r.r2 ?? ""), c: String(r.c ?? ""), g: Number(r.g), v: Number(r[k] ?? 0) }));
+  }
+  /* LABELS. Field keys are ids (a live field, or a hidden one with no live sibling); revenue's Field
+   * keys are fin_venues ids. Unknown field ids take their latest title from the mirror. */
+  const unknown = spec.show !== "revenue" && [...spec.rows, spec.col].includes("Field")
+    ? [...new Set(cells.flatMap((c) => [c.r1, c.r2, c.c]).filter((v) => /^\d+$/.test(v) && !fieldTitle.has(v)))] : [];
+  if (unknown.length) {
+    const { data } = await sb.from("mdapi_matches").select("field_id, field_title").in("field_id", unknown.slice(0, 300).map(Number)).order("start_date", { ascending: false }).limit(3000);
+    for (const r of data ?? []) if (!fieldTitle.has(String(r.field_id))) fieldTitle.set(String(r.field_id), `${r.field_title ?? `Field ${r.field_id}`} (hidden)`);
+  }
+  const label = (d: PivotDim | null | undefined, v: string): string => {
+    if (!d) return v;
+    if (d === "City") return spec.show === "revenue" ? v : cityName(v) || v;
+    if (d === "Field") return spec.show === "revenue" ? (v === "none" ? "No venue (membership, other)" : venueName.get(v) ?? `Venue ${v}`) : fieldTitle.get(v) ?? (v === "?" ? "No field" : `Field ${v}`);
+    return v;
+  };
+  const table = assemblePivot(cells, spec, spec.show === "spots" || spec.show === "revenue", label);
+  const labels: Record<string, string> = {};
+  for (const rk of table.rowKeys) { const [a, b] = rk.split(SEP); labels[rk] = [label(spec.rows[0], a), spec.rows[1] ? label(spec.rows[1], b) : ""].filter(Boolean).join(" · "); }
+  const colLabels: Record<string, string> = {};
+  for (const c of table.colKeys) colLabels[c] = label(spec.col, c);
+  return { table, labels, colLabels };
+}
 
 export async function POST(req: Request) {
-  const reqT0 = Date.now();
-  if (!firstRequestAt) firstRequestAt = reqT0;
-  const authT0 = Date.now();
   const auth = await authenticateLifecycle(req);
-  const authMs = Date.now() - authT0;
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
-  const body = (await req.json().catch(() => ({}))) as { mode?: string; config?: PivotConfig; r?: string; c?: string };
-  const cfg = body.config;
-  if (!cfg || !Array.isArray(cfg.rows) || !cfg.rows.length) return Response.json({ error: "config.rows required" }, { status: 400 });
-
+  const body = (await req.json().catch(() => ({}))) as { mode?: string; filters?: unknown; sort?: unknown; spec?: unknown; name?: string };
+  const sb = auth.supabase;
+  const t0 = Date.now();
   try {
-    /* COLD OR WARM, ON EVERY RESPONSE. `getFacts` caches per warm instance; whether a given visit
-     * paid for a rebuild was invisible, which is why "what fraction of visits hit a cold instance"
-     * had no answer. `wasCold` is decided by whether the build counter moved across this call. */
-    const buildsBefore = factCacheStats(false).coldBuilds;
-    const factT0 = Date.now();
-    const F = await getFacts(auth.supabase);
-    const factMs = Date.now() - factT0;
-    const stats = factCacheStats(factCacheStats(false).coldBuilds > buildsBefore);
-
-    /* CLAMP THE WINDOW TO THE MONTHS THAT EXIST, BEFORE ANYTHING READS IT.
-     *
-     * The client sends a sentinel window ("1900-01".."2999-12") on its very first request, because
-     * it does not learn the real bounds until this response arrives. That sentinel then reached the
-     * total column's header and it rendered "Jan 1900 – Dec 2999" — a window naming itself
-     * truthfully and being absurd, which is the same class of defect as the total that named no
-     * window at all. Clamping here means the header can only ever name months the data has, and it
-     * makes the figure and the label come from one clamped value rather than two. */
-    const lo = F.monthsAvailable[0] ?? cfg.filters.from;
-    const hi = F.monthsAvailable[F.monthsAvailable.length - 1] ?? cfg.filters.to;
-    const clamp = (m: string, d: string) => (!m || m < lo ? lo : m > hi ? hi : m) || d;
-    cfg.filters = { ...cfg.filters, from: clamp(cfg.filters.from, lo), to: clamp(cfg.filters.to, hi) };
-
-    if (body.mode === "cell" || body.mode === "cellCsv") {
-      const base = cellPlayers(F.facts, cfg, String(body.r), String(body.c ?? "__all__"));
-      /* NAME AND PHONE FOR THE DRAWER. The fact table carries a user_id and nothing else — it is
-       * built for arithmetic, not for identity — so a drill-down that only printed "ID 60019" was
-       * a list nobody could act on. They come from the MIRROR (mdapi_users), in ONE query over the
-       * ids already in the cell, so the cost is bounded by the cell and not by the table.
-       *
-       * ONLY on the drill-down. The pivot itself never carries a name or a phone; there is no
-       * reason for 30,000 phone numbers to cross the wire so a grid of counts can render. */
-      const ids = base.map((p) => p.id);
-      const who = new Map<number, { name: string | null; phone: string | null }>();
-      for (let i = 0; i < ids.length; i += 500) {
-        const { data } = await auth.supabase.from("mdapi_users")
-          .select("id,first_name,last_name,phone_number").in("id", ids.slice(i, i + 500));
-        for (const u of data ?? []) {
-          const r = u as { id: number; first_name: string | null; last_name: string | null; phone_number: string | null };
-          who.set(Number(r.id), {
-            name: [r.first_name, r.last_name].map((x) => String(x ?? "").trim()).filter(Boolean).join(" ") || null,
-            phone: r.phone_number ?? null,
-          });
-        }
+    const meta = await readMeta(sb);
+    switch (body.mode) {
+      case "meta":
+        return Response.json({ ...meta, today: chicagoToday() }, { headers: { "Cache-Control": "no-store" } });
+      case "played":
+        return Response.json({ ...preview(await playedRows(sb, body.filters, meta), body.sort), ms: Date.now() - t0 }, { headers: { "Cache-Control": "no-store" } });
+      case "never":
+        return Response.json({ ...preview(await neverRows(sb, body.filters), body.sort), ms: Date.now() - t0 }, { headers: { "Cache-Control": "no-store" } });
+      case "playedCsv":
+        return csvResponse(playedCsv(await playedRows(sb, body.filters, meta)), body.name ?? "played");
+      case "neverCsv":
+        return csvResponse(neverCsv(await neverRows(sb, body.filters), chicagoToday()), body.name ?? "never-played");
+      case "pivot": {
+        const spec = cleanSpec(body.spec, meta);
+        if (!spec) return Response.json({ empty: true });
+        return Response.json({ ...(await pivotTable(sb, spec, meta)), spec, ms: Date.now() - t0 }, { headers: { "Cache-Control": "no-store" } });
       }
-      const players = base.map((p) => ({ ...p, name: who.get(p.id)?.name ?? null, phone: who.get(p.id)?.phone ?? null }));
-      if (body.mode === "cellCsv") {
-        const header = "Player ID,Name,Phone,City,Field,Cohort,Months active,Spots,Revenue\n";
-        const lines = players.map((p) => `${p.id},"${p.name ?? ""}","${p.phone ?? ""}","${p.city}","${p.field}","${p.cohort}",${p.months},${p.spots},${money(p.revenue)}`).join("\n");
-        return new Response(header + lines + "\n", { status: 200, headers: { "Content-Type": "text/csv; charset=utf-8", "Content-Disposition": `attachment; filename="players.csv"` } });
-      }
-      return Response.json({ players, count: players.length }, { status: 200 });
+      default:
+        return Response.json({ error: "Unknown mode." }, { status: 400 });
     }
-
-    /* MEMOISED PER CONFIG. The full cross-tab was rebuilt on every keystroke of the builder;
-     * measured on production (151,559 facts) a 42-column cube costs 684 ms and an 8-column one
-     * 164 ms, while the same cube served from the cache costs 0 ms. A SWAP is the same facts read
-     * the other way round, so it should never cost a recompute twice. Keyed on the fact table's own
-     * cache key as well as the config, so a fresh fact table cannot be served a stale cube. */
-    const pivotT0 = Date.now();
-    const { table: t, hit } = pivotCached(F.facts, cfg, F.key);
-    const pivotMs = Date.now() - pivotT0;
-    if (body.mode === "tableCsv") {
-      const showV = (v: number | null, vi: number) => (v == null ? "" : cfg.vals[vi].metric === "Revenue" ? money(v) : String(v));
-      const head = [cfg.rows.join(" · "), ...(t.hasCols ? t.colKeys : [""]).flatMap((c) => cfg.vals.map((vv) => `${vv.agg} of ${vv.metric}${t.hasCols ? ` (${c})` : ""}`)), ...(t.hasCols ? cfg.vals.map((vv) => `${vv.agg} of ${vv.metric} (Total)`) : [])];
-      const rows = t.rowKeys.map((r) => [
-        `"${r}"`,
-        ...t.colKeys.flatMap((c) => t.cells[r][c].map((v, vi) => showV(v, vi))),
-        ...(t.hasCols ? t.rowTotals[r].map((v, vi) => showV(v, vi)) : []),
-      ].join(","));
-      const grand = ["Grand total", ...t.colTotals.flatMap((cv) => cv.map((v, vi) => showV(v, vi))), ...(t.hasCols ? t.grandTotal.map((v, vi) => showV(v, vi)) : [])].join(",");
-      return new Response([head.join(","), ...rows, grand].join("\n") + "\n", { status: 200, headers: { "Content-Type": "text/csv; charset=utf-8", "Content-Disposition": `attachment; filename="data-room.csv"` } });
-    }
-
-    // default: pivot + metadata for the builder
-    return Response.json(
-      {
-        ...t,
-        /* THE TOTAL COLUMN NAMES THE WINDOW IT COVERS. The bug was a total over Apr 2023 – Sep 2026
-         * beside columns showing Feb – Sep 2026 — 7,450 against 6,712 of visible cells. The label
-         * and the figure now come from the same `filters`, so they cannot drift without the header
-         * being visibly wrong. `kind` says whether the column is a SUM or a DISTINCT COUNT: for
-         * Players a "total" is not the sum of the cells and must not be labelled as one. */
-        totalCol: totalHeader(cfg.filters.from, cfg.filters.to, cfg.vals[0]?.metric ?? "Players"),
-        cached: hit,
-        // THE COUNTER, ON THE WIRE. A week of logs answers the cold-hit fraction exactly.
-        /* THE WHOLE SERVER SIDE OF A COLD OPEN, IN ONE OBJECT. Measured, never estimated:
-         * authMs is the gate, factMs the fact table (broken down in lastBuildParts), pivotMs the
-         * cube, and sinceModuleInit says how long this instance had been alive when the first
-         * request reached it — the closest thing a function has to "boot cost". */
-        facts: { ...stats, factMs, authMs, pivotMs, totalMs: Date.now() - reqT0,
-                 sinceModuleInit: firstRequestAt - MODULE_INIT },
-        meta: { monthsAvailable: F.monthsAvailable, cities: F.cities, fieldsByCity: F.fieldsByCity } },
-      {
-        status: 200,
-        headers: {
-          "Cache-Control": "private, max-age=30",
-          // Readable in the network panel and in Vercel's logs without parsing a body.
-          "Server-Timing": [
-            `auth;dur=${authMs}`,
-            `facts;dur=${factMs};desc="${stats.cold ? "cold" : "warm"}"`,
-            stats.lastBuildParts ? `factsKey;dur=${stats.lastBuildParts.keyMs}` : "",
-            stats.lastBuildParts ? `participation;dur=${stats.lastBuildParts.partsMs}` : "",
-            stats.lastBuildParts ? `profiles;dur=${stats.lastBuildParts.profsMs}` : "",
-            stats.lastBuildParts ? `factMap;dur=${stats.lastBuildParts.mapMs}` : "",
-            `cube;dur=${pivotMs};desc="${hit ? "cached" : "built"}"`,
-            `total;dur=${Date.now() - reqT0}`,
-          ].filter(Boolean).join(", "),
-        },
-      },
-    );
   } catch (e) {
-    console.error("[api/lifecycle/dataroom] failed", e);
-    return Response.json({ error: "Failed to build the pivot" }, { status: 500 });
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error("[api/lifecycle/dataroom] failed", msg);
+    return Response.json({ error: msg.slice(0, 300) }, { status: msg === MISSING ? 503 : 500 });
   }
 }

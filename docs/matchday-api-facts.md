@@ -8996,3 +8996,35 @@ reads as an event by title (17, 199, 22, 1552) has `fin_venue_fields.counts_as_r
 already regular, the same as its real field. What does change: per-field counts on the Fields page; the ATHK and SCI Veo
 codes list only 892 and 1090, so those moved matches now show on the Veo day page; the public site's price range now
 includes the Discounted matches; 397's matches join Austin's community (397 had no `community_field_map` row).
+
+## Player Data Room rebuilt as a list builder (2026-11-09)
+
+**Why "building…" stalled.** The old pivot loaded every play into the function before it drew anything: on a cold
+instance, `getFacts` read all of `growth_participation` (173,389 rows, 8-way keyset). Vercel logs for
+`POST /api/lifecycle/dataroom`: `fact table BUILT in 17698ms` (2026-11-09 03:20Z, the open before this rebuild),
+`12864ms` (04:27Z), `13617ms` (2026-11-03). `lastBuildParts` on a warm read: partsMs 12,591 of the 12,864, profiles 513.
+All logged requests returned 200: it was not stuck, it was slow, with "building…" and no progress for 13–18 s; the first
+response then set the window and fired a second request. The same rows read 3.0 s in August at 151,654 rows. Reading
+the base tables instead (`mdapi_match_players` 290,951 rows) took 8.0 s from a laptop, so the fix is not a faster fetch:
+since 0267 every list and pivot is one SQL function and nothing loads the plays into Node.
+
+**Definitions the Data Room uses (0267, `dataroom_play` / `dataroom_contact`), evidence from the mirror:**
+- Own spot = `mdapi_match_players.user_type = 'PLAYER'`. Values on the 27,433 newest rows: PLAYER 25,092, GUEST 1,877,
+  ADDITIONAL_SPOT 464. GUEST / ADDITIONAL_SPOT are spots a player bought for someone else and sit on the buyer's row.
+- Managed = the person is `manager_id` or `second_manager_id` of the match. `manager_id` is an mdapi user id: 83 of 83
+  distinct ids since 2026-07-01 are in `mdapi_users`, and 147 roster rows are a manager on their own match (137 PLAYER).
+- Played = the same rule as Churn's 0264 (growth_participation, PLAYER, not managed, match day before today Chicago).
+  No-shows (`is_absent`, 62 of the 27,433 rows) are NOT removed, as in 0264.
+- Member = an ACTIVE row in `paid_member_subscription` (0235): 262 ACTIVE, 1 PAST_DUE, 2,273 CANCELED on 2026-11-09.
+- Contactable = not fake, email not `@matchday.com` / `@playmatchday.com` (staff and `del_…` tombstones), not the
+  "Deleted Account" scrub, not in `growth_internal_account`.
+
+**Hidden fields fold into the live field of the same venue.** `GET /admin/fields` drops soft-deleted fields, but their
+matches remain: Lowell's duplicate 1948 ("Lowell H. Strike Middle School Discount") holds 11 matches through
+2026-10-28, and `fin_venue_fields` links 1948 and 1387 to venue 54. Picking a live field reads its hidden venue-mates
+(`foldHidden`, `src/lib/dataRoomLists.ts`); `excluded_from_venue` fields never fold.
+
+**Pivot revenue is Finance net from `fin_txn_sums` (month × venue).** October 2026 through the pivot's read: $87,043.26,
+the Finance > Revenue figure above. It cannot be split by cohort (no per-player grain in that rollup); the
+"Revenue by cohort year" view is shown disabled with that reason. Churn's 0264 does reach per-person net through
+`payment_intent_id`, which is the route if a per-cohort revenue pivot is wanted.
