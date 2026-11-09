@@ -8917,3 +8917,78 @@ our first real reply (out-of-hours auto-replies and reactions excluded).
   and a cancelled member twice).
 - **Not built, said here too:** cancelling a spot (still a link, Ryan 2026-11-06), sending a WhatsApp template when
   the 24-hour window is closed (still a person), sending a canned reply's picture, refunds of any kind.
+
+## Duplicate fields retired (2026-11-09): what was hidden, and how to undo it
+
+Ryan's go-ahead 2026-11-09. Duplicate fields existed only because a field had one photo; a match can now
+use any of its field's covers (`field_covers`, production backend a71fc05). Upcoming matches were moved to
+the real field, given the duplicate's photo as their cover, then each duplicate was soft-deleted.
+
+**The run, 2026-11-09 (runner used the routes' own code: `recordWrite` → change_log, `apiWrite`, `refreshMatchMirror`,
+`coverWrite`; one API call at a time, >= 2 s apart):**
+- 117 upcoming matches moved, each LANDED on a live re-read of field and cover, with price, start, capacity,
+  `firstMatchFreeEnabled`, `_count.players` and name identical before and after. Skipped: 20867 (field 199, 02:00Z) and
+  20899 (field 22, 03:15Z), both starting within 2 hours, left where they are (Ryan); 20812 (field 199) cancelled, left.
+- **One gap: 20831** (199 → 102, 02:18Z). Live `GET /admin/matches/20831` reads fieldId 102, coverId 37, but change_log has no
+  row for its field PUT (it has the cover row) and the mirror kept field_id 199 (write-through reported not refreshed).
+  Every other move has both rows. Cause UNKNOWN: the runner did not keep the mirror reason.
+- 13 soft deletes LANDED 02:43–02:45Z (`deleted_at` read back from `GET /fields/{id}`), after a live 0-upcoming check per
+  field with a positive control (`GET /admin/matches?fieldId=102` → 53 rows, all on 102): 17, 397, 25, 1552, 1981, 18, 859,
+  1123, 1354, 496, 992, 1948, 1949. **199 and 22 wait** until 20867 and 20899 have finished (the upcoming list drops a match
+  15 min after it starts, so a zero there is not proof a match is over).
+- `GET /fields?cityId=` before vs after (cities 1, 2, 3, 5, 7, 8): Austin 17 → 12, Houston 8 → 7 (22 still listed), San Antonio
+  7 → 5 (199 still listed), St. Louis 6 → 4, DFW 11 → 9, OKC 2 → 1. Master Schedule "New match on a field…" for Austin lists 12
+  fields with 10, 12 and 13 and none of the duplicates.
+
+**How hiding works (production backend `heroku-prod/master` a71fc05, code read):**
+- The app's Field Partners carousel, Our Locations screen and match filter by field all read `GET /fields?cityId=`
+  (`frontend-rn-upgrade` `FieldsCarousel.tsx:35`, `OurLocationScreen.tsx:41`, `FieldsFilterBottomsheet.tsx:44`;
+  that checkout is Oct 29, not necessarily the shipped 1.89). It returns `deleted_at IS NULL`, ordered by
+  `order_position` (`fields.repository.ts:34`). There is no hidden or active flag.
+- `DELETE /admin/fields/:id` is a SOFT delete: it sets `deleted_at` only (`fields.repository.ts:205-213`). Nothing filters
+  matches, bookings or history on a field's `deleted_at`; `GET /fields/:id` (`getById`) still answers. `GET /admin/fields`
+  also filters on it, so Clubhouse's city directory (Master Schedule "New match on a field…") drops the field.
+  About 30 older fields with past matches were already hidden this way (e.g. 21 "Tournaments at ATH Pearland", 43 past).
+- **There is no restore endpoint.** Undo is a database update on the backend, e.g.
+  `UPDATE fields SET deleted_at = NULL WHERE id IN (…);` — run by whoever has backend database access.
+- `fields.merged_into_field_id` exists and nothing reads or writes it yet (schema comment).
+
+**The fields, before the soft delete** (from `GET /admin/fields`, production, 2026-11-09 01:4xZ; every one had
+`deleted_at` null and `merged_into_field_id` null). "Cover on real field" is the `field_covers` id added on the
+real field with the same image (POST `/admin/fields/{real}/covers`, all 7 LANDED 2026-11-09 01:44–01:45Z, change_log
+source "Field covers · add (duplicate field retirement)").
+
+| Field | Name | City | Real field | order_position | Default cover (cover_s3_key = path after the host) | Cover on real field |
+|---|---|---|---|---|---|---|
+| 17 | NEMP Tournaments | Austin | 10 | 17 | https://images.playmatchday.com/images/712ebd4b-01dd-4db2-9e06-f817703a0135 | 34 |
+| 397 | NEMP Discounted | Austin | 10 | 397 | https://images.playmatchday.com/images/eff58464-a3bc-4901-95fa-a8ac0812b630 | 35 |
+| 25 | Stadium Field at Round Rock M.C. | Austin | 12 | 25 | https://images.playmatchday.com/images/188ad2ea-afda-41d8-a4d8-8f4537df4226 | 36 |
+| 199 | Tourney at Soccer Central | San Antonio | 102 | 14 | https://images.playmatchday.com/images/30d66dcd-d673-407a-bef4-e539973ba18a | 37 |
+| 22 | Tourney ATH Pearland | Houston | 32 | 600 | https://images.playmatchday.com/images/ac6f8a38-2772-4179-bc3a-d0a33c3b05ce | 38 |
+| 1552 | Tourney ATH Katy | Houston | 892 | 1552 | https://images.playmatchday.com/images/e7d9142d-59cf-4dfb-ba32-17090320f18e | 39 |
+| 1981 | Scissortail Park Discounted | Oklahoma City | 1090 | 1981 | https://images.playmatchday.com/images/1e401a59-8352-4075-ada9-4f34c17a1524 | 40 |
+| 18 | Round Rock Tournaments | Austin | 12 | 18 | https://images.playmatchday.com/images/f0a89bba-5ffd-4e6e-941e-2596e2bfec95 | – |
+| 859 | Premier at SJD | Austin | 13 | 660 | https://images.playmatchday.com/images/75c123f3-0c78-49f3-a349-7ba3f7221eb8 | – |
+| 1123 | Soccer Central World Cup Tournament | San Antonio | 102 | 1123 | https://images.playmatchday.com/images/11b4fddd-8c01-4b4d-b200-48c252bba666 | – |
+| 1354 | Premier Match at Soccer Central | San Antonio | 102 | 15 | https://images.playmatchday.com/images/fd42e9ef-e231-4af1-bdee-2394be0c0933 | – |
+| 496 | Tourney at Lou Fusz | St. Louis | 664 | 496 | https://images.playmatchday.com/images/c791cee0-44ca-482d-8426-de0527440b92 | – |
+| 992 | MD Combine at Lou Fusz Athletic Complex | St. Louis | 664 | 992 | https://images.playmatchday.com/images/d0ab00d5-a6bb-4d14-8c4a-054156f41f84 | – |
+| 1948 | Lowell H. Strike Middle School Discount | Dallas / Fort Worth | 1387 | 12 | https://images.playmatchday.com/images/f24ba8eb-c896-49d0-b298-2213bdb7cc95 | – |
+| 1949 | Crossbar Rowlett Discount | Dallas / Fort Worth | 1321 | 12 | https://images.playmatchday.com/images/eccde41e-2249-4f2c-915e-f1bd0e999579 | – |
+
+**Moving a match's field (code read, production backend):** `PUT /admin/matches/:id { fieldId }` clears `cover_id` in the
+same update (`matches.service.ts:1642-1646`), so the cover is a second write. It leaves the roster, price, dates,
+capacity and match-level promo codes alone; currency is recomputed from the new field's city. Proven per match in
+the 2026-11-09 run (live re-read of price, start, capacity, free-first-match, `_count.players` and name, before and after).
+
+**Field-specific promo codes follow the field** (`promocodes.service.ts:394-395`): no per-match exclusion exists. The only
+per-match lever is `firstMatchFreeEnabled: false`, which refuses every NEW_USERS code on the match AND the automatic free
+first match (`matches.service.ts:418-420`). OKCMD (18029) and WELCOMEOKC (20934) list field 1090 only, so the two
+Scissortail Discounted matches moved onto 1090 now accept them (Ryan: leave it, no per-match way).
+
+**Clubhouse effects of a same-venue move** (sweep 2026-11-09): venue-keyed numbers (revenue, field cost, P&L, partner
+dashboards, Gameday capacity, Free First Match's canonical venue) do not move. Every duplicate with upcoming matches that
+reads as an event by title (17, 199, 22, 1552) has `fin_venue_fields.counts_as_regular_play` true, so its category was
+already regular, the same as its real field. What does change: per-field counts on the Fields page; the ATHK and SCI Veo
+codes list only 892 and 1090, so those moved matches now show on the Veo day page; the public site's price range now
+includes the Discounted matches; 397's matches join Austin's community (397 had no `community_field_map` row).
