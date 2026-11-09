@@ -65,6 +65,11 @@ export const META_MARKET_TO_CITY: Readonly<Record<string, string>> = Object.free
   "St. Louis, MO": "STL",
 });
 
+/** Turns a Meta market into our city code, or null. The sync passes the ACTIVE-CITY resolver
+ *  (growth_cities via lib/adsOverview.marketOfMetro, 2026-11-09); the fixed list above is the default
+ *  for callers that have no city list, and the pure tests. */
+export type MarketResolver = (marketRaw: string) => string | null;
+
 /** The city code for a Meta market, or null when we do not recognise it. Null is never a drop. */
 export function cityForMarket(marketRaw: string): string | null {
   return Object.prototype.hasOwnProperty.call(META_MARKET_TO_CITY, marketRaw)
@@ -169,8 +174,8 @@ export function reconcileDay(
 }
 
 /** Attach our city code and account metadata. Unmapped markets keep their spend and get null. */
-export function toDailyRows(rows: MetaBreakdownRow[], adAccountId: string, currency: string): DailyRow[] {
-  return rows.map((r) => ({ ...r, marketKey: cityForMarket(r.marketRaw), adAccountId, currency }));
+export function toDailyRows(rows: MetaBreakdownRow[], adAccountId: string, currency: string, resolve: MarketResolver = cityForMarket): DailyRow[] {
+  return rows.map((r) => ({ ...r, marketKey: resolve(r.marketRaw), adAccountId, currency }));
 }
 
 /* ── INTO fin_expenses ──────────────────────────────────────────────────────────────────────────
@@ -349,7 +354,7 @@ export type DerivedParent = {
  *
  * TIES BREAK ON THE MARKET NAME, so two runs over identical data cannot disagree.
  */
-export function deriveParentMarket(rows: readonly AdsetMarketSpend[]): DerivedParent {
+export function deriveParentMarket(rows: readonly AdsetMarketSpend[], resolve: MarketResolver = cityForMarket): DerivedParent {
   const byMarket = new Map<string, number>();
   for (const r of rows) {
     if (r.marketRaw === UNKNOWN_MARKET) continue;
@@ -363,7 +368,7 @@ export function deriveParentMarket(rows: readonly AdsetMarketSpend[]): DerivedPa
   const ranked = [...byMarket.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
   const [marketRaw, top] = ranked[0];
   const confidence = top / namedTotal;
-  const mapped = cityForMarket(marketRaw);
+  const mapped = resolve(marketRaw);
   return {
     marketRaw,
     marketKey: confidence >= MARKET_CONFIDENCE_FLOOR ? mapped : null,

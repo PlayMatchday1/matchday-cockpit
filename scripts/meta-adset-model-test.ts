@@ -1,4 +1,6 @@
 import "server-only"; // no-op under --conditions=react-server
+import { marketsFrom } from "../src/lib/acquisitionModel";
+import { marketOfMetro } from "../src/lib/adsOverview";
 /* THE AD-SET MODEL: which market an ad set belongs to, and when an install moved.
  *
  * Both decisions are invisible on screen and both fail toward a plausible number.
@@ -15,7 +17,7 @@ import "server-only"; // no-op under --conditions=react-server
  *   NODE_OPTIONS="--conditions=react-server" npx tsx scripts/meta-adset-model-test.ts
  */
 import {
-  deriveParentMarket, MARKET_CONFIDENCE_FLOOR, UNKNOWN_MARKET, UNALLOCATED_MARKET,
+  deriveParentMarket, MARKET_CONFIDENCE_FLOOR, UNKNOWN_MARKET, UNALLOCATED_MARKET, toDailyRows, monthlyExpenseRows,
   actionValue, META_INSTALL_ACTION, META_REGISTRATION_ACTION,
   observationsToAppend, observationKey, isAtOrAfterAdsetFloor, META_ADSET_FLOOR_YMD,
   type AdsetMarketSpend, type FreshInstallRow,
@@ -170,6 +172,22 @@ console.log("\nthe ad-set floor is its own, and it is not the ledger's");
    * tables — the CHECK would refuse the row and take the whole run with it. */
   is("control — a December day, legal for the daily store, is refused here",
     isAtOrAfterAdsetFloor("2025-12-01"), false);
+}
+
+console.log("\nthe sync maps metros onto the active cities (growth_cities, 2026-11-09)");
+{
+  const mk = marketsFrom([{ name: "Austin", code: "ATX" }, { name: "Dallas", code: "DFW" }, { name: "Houston", code: "HOU" }, { name: "Philadelphia", code: "PHL" }]);
+  const resolve = (raw: string) => marketOfMetro(raw, mk);
+  const phl = [{ marketRaw: "Philadelphia, PA", spendCents: 8612 }];
+  is("the fixed list leaves Philadelphia unattributed (the control)", deriveParentMarket(phl).marketKey, null);
+  is("the active-city resolver attributes it to PHL", (({ marketKey, attributed }) => ({ marketKey, attributed }))(deriveParentMarket(phl, resolve)), { marketKey: "PHL", attributed: true });
+  is("Dallas-Ft. Worth stays Dallas under the resolver", deriveParentMarket([{ marketRaw: "Dallas-Ft. Worth, TX", spendCents: 40746 }], resolve).marketKey, "DFW");
+  is("Houston keeps the ledger's HTX key", deriveParentMarket([{ marketRaw: "Houston, TX", spendCents: 100 }], resolve).marketKey, "HTX");
+  const daily = toDailyRows([{ date: "2026-11-03", marketRaw: "Philadelphia, PA", spendCents: 8612, impressions: null },
+    { date: "2026-11-03", marketRaw: UNALLOCATED_MARKET, spendCents: 10, impressions: null }], "act_1", "USD", resolve);
+  is("daily rows: Philadelphia keyed PHL, the unallocated remainder stays null", daily.map((r) => r.marketKey), ["PHL", null]);
+  is("and the ledger rolls November's Philadelphia into its own city row", monthlyExpenseRows(daily.map((r) => ({ date: r.date, marketKey: r.marketKey, spendCents: r.spendCents })))
+    .map((m) => [m.city, m.amountCents, m.unallocated]), [[null, 10, true], ["PHL", 8612, false]]);
 }
 
 console.log(`\n${pass} passed, ${fails.length} failed`);

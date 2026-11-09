@@ -9094,3 +9094,14 @@ holdout 0 unless raised.
 - **Reconciled with Acquisition's compute run locally against production:**
   - Oct 10 – Nov 8: Total $5,765.69 and 743 Meta registrations. Meta reported $5,765.73 and 743.
   - Nov 1–9: Philadelphia $86.12, 48 installs, 25 Meta registrations from the 10:00Z sync. Meta live read 28.
+- **Finance (2026-11-09, later the same day):** the Meta sync (`syncMetaAdSpend`) maps metros with the same growth_cities resolver. That covers `fin_meta_ad_spend_daily.market_key`, each ad set's stored parent, and the `fin_expenses` Meta rows written by name.
+  - From the first sync after deploy, November's "Philadelphia, PA" $86.12 is written as city "Philadelphia" instead of "Meta ads - unallocated".
+  - Finance's city P&L list (`CITY_DISPLAY_ORDER`) still has no Philadelphia row. Ryan will add it after Philadelphia's first match (Sat 2026-11-14), as one change.
+  - Before the switch, from `fin_expenses`:
+    - Oct 2026: ATL 1,048.83, ATX 810.11, DFW 1,513.66, HTX 936.06, OKC 397.77, SATX 610.63, STL 461.92, no city 3.84.
+    - Nov 1–9: ATL 247.43, ATX 208.40, DFW 456.06, HTX 247.83, OKC 124.25, SATX 165.65, STL 124.03, no city 86.22 (of which Philadelphia, PA 86.12).
+
+## Philadelphia's "15 matches" and upcoming bookings (2026-11-09)
+
+- **The "15" was a count of `mdapi_matches` rows**, not of played matches: 2 cancelled (21242 Nov 8, 21241 Nov 12) and 13 scheduled from 21243 (Sat Nov 14). No page counts cancelled matches as played.
+- **`growth_participation` (0208) excludes cancelled matches but had no start-time cutoff.** On 2026-11-09 it held 104 bookings on 37 upcoming matches, and 11 people had a future `first_match_date`. Philadelphia's 1 "spot booked" in November was a booking on 21243. Migration 0268 adds the cutoff.

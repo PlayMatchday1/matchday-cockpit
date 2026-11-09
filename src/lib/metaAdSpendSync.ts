@@ -40,6 +40,9 @@ import {
   type MetaBreakdownRow, type DailyRow, type LedgerSourceRow, type MonthCoverage,
 } from "./metaAdSpend";
 import { selectAll } from "./supabasePagination";
+import { loadActiveCities } from "./activeCities";
+import { marketsFrom, type Markets } from "./acquisitionModel";
+import { marketOfMetro } from "./adsOverview";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 export type MetaSyncResult = {
@@ -150,6 +153,14 @@ export type MetaSyncOptions = { since?: string; until?: string; dailyOnly?: bool
 
 export async function syncMetaAdSpend(sb: SupabaseClient, todayYmd: string, opts: MetaSyncOptions = {}): Promise<MetaSyncResult> {
   apiCalls = 0;
+  /* THE METRO → CITY MAP IS THE ACTIVE-CITY LIST (growth_cities, Ryan 2026-11-09), the same one
+   * Acquisition uses (lib/adsOverview.marketOfMetro), so Finance's Meta expense by city and the
+   * Acquisition page agree, and Philadelphia's spend is labelled Philadelphia rather than "no city".
+   * A metro whose leading name is no active city stays null: unallocated, never dropped. Read before
+   * any Meta call, so a failed read stops the run with nothing written. */
+  const mk = marketsFrom(await loadActiveCities(sb));
+  const resolve = (raw: string) => marketOfMetro(raw, mk);
+  labelMarkets = mk;
 
   // ── The account, and the currency gate. A non-USD account writes NOTHING and converts nothing.
   const accs = await pageAll("me/adaccounts", { fields: "id,name,account_id,currency,timezone_name" });
@@ -206,7 +217,7 @@ export async function syncMetaAdSpend(sb: SupabaseClient, todayYmd: string, opts
     if (varianceCents !== 0) varianceByDay.push({ date, cents: varianceCents });
     allRows.push(...withUnalloc);
   }
-  const daily: DailyRow[] = toDailyRows(allRows, account.id, account.currency);
+  const daily: DailyRow[] = toDailyRows(allRows, account.id, account.currency, resolve);
 
   // ── WRITE 1: the daily store. Upsert on the primary key; a re-pull of a revised day overwrites.
   // Writes never retry.
@@ -274,7 +285,7 @@ export async function syncMetaAdSpend(sb: SupabaseClient, todayYmd: string, opts
         adset_id: String(r.adset_id ?? ""),
         campaign_id: String(r.campaign_id ?? ""),
         market_raw: String(r[BREAKDOWN_PARAM]),
-        market_key: cityForMarket(String(r[BREAKDOWN_PARAM])),
+        market_key: resolve(String(r[BREAKDOWN_PARAM])),
         spend_cents: spendStringToCents(r.spend),
         impressions: impressionsToInt(r.impressions),
         clicks: impressionsToInt(r.clicks),
@@ -383,7 +394,7 @@ export async function syncMetaAdSpend(sb: SupabaseClient, todayYmd: string, opts
     }
     const dimRows: Record<string, unknown>[] = [];
     for (const [adsetId, rows] of byAdset) {
-      const parent: DerivedParent = deriveParentMarket(rows);
+      const parent: DerivedParent = deriveParentMarket(rows, resolve);
       const listed = nameOf.get(adsetId), ins = insightName.get(adsetId), st = stored.get(adsetId);
       const meta = {
         name: listed?.name || ins?.name || st?.adset_name || null,
@@ -596,7 +607,10 @@ const CITY_LABEL: Record<string, string> = {
   ATL: "Atlanta", ATX: "Austin", DFW: "Dallas", HTX: "Houston",
   OKC: "OKC", SATX: "San Antonio", STL: "St. Louis",
 };
-function cityLabel(code: string | null): string | null { return code ? (CITY_LABEL[code] ?? code) : null; }
+/** The active list's spelling first (growth_cities names match these labels: "Dallas", "OKC"), so a
+ *  new city such as Philadelphia is written by name, never as its code. */
+let labelMarkets: Markets | null = null;
+function cityLabel(code: string | null): string | null { return code ? (labelMarkets?.label[code] ?? CITY_LABEL[code] ?? code) : null; }
 
 export { cityForMarket };
 
