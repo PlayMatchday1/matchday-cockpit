@@ -1,10 +1,9 @@
 "use client";
 
-// CHURN — moved verbatim.
-// NO PERIOD BAR: this panel has always had its own filters (inactive for, last played after) and
-// never followed the global period. The subtitle states it rather than a legend dot.
+// CHURN — players who stopped playing, and who to win back (rebuilt 2026-11-09, Figma sl6PTy5LhCVj1gF0HvGmuF 32:3).
+// NO PERIOD BAR: the page's own sentence filter sets the window. Reads only /api/lifecycle/churn.
 
-import ChurnPanel from "@/components/growth/ChurnPanel";
+import ChurnView from "@/components/growth/ChurnView";
 import SectionFrame from "@/components/growth/SectionFrame";
 import { useGrowth } from "@/components/growth/GrowthDataProvider";
 
@@ -13,10 +12,11 @@ export default function LifecycleChurnPage() {
   return (
     <SectionFrame
       title="Churn"
-      subtitle="Who has stopped playing — set your own inactivity window below; this page does not follow the time period."
+      subtitle="Players who stopped playing, and who to win back"
       period={false}
+      needsGrowthData={false}
     >
-      {g.data && <ChurnPanel cities={g.data.cities} authHeaders={g.authHeaders} />}
+      <ChurnView authHeaders={g.authHeaders} />
     </SectionFrame>
   );
 }

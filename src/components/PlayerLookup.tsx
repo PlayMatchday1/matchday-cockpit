@@ -13,6 +13,7 @@
 // EDIT MATCHES gate, deny-lists and recordWrite already on it. canEdit here is only a
 // courtesy gate — the server refuses regardless (zero-network 403 for read-only users).
 
+import FormerStaffCard from "@/components/FormerStaffCard";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
@@ -495,6 +496,7 @@ export default function PlayerLookup() {
               match managers on an Apple relay address — which Retool's email-only add modal cannot.
               Putting the action on their card means there is no second search box to rebuild. */}
           <MatchManagerRosterCard playerId={profile.player.id} playerName={profile.player.name} />
+          <FormerStaffCard playerId={profile.player.id} />
           <ProfileView p={profile} fields={fields} canEdit={canEdit} canManage={canManage} canCredit={canCredit} canMember={canMember}
             canActivity={canActivity} activityStartOpen={activityOpenFor === profile.player.id}
             onReload={reloadProfile}

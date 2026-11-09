@@ -1,81 +1,105 @@
-// GET /api/lifecycle/churn — potential-churn list from growth_player_profile, ranked
-// by MATCHES PLAYED desc (days-inactive breaks ties). Filters: city, field (canonical),
-// days (inactive floor 30/60/90/120), after (last-played-after ceiling). ?format=csv
-// streams the FULL filtered set (both bounds), not the visible page.
+/* GET /api/lifecycle/churn — the Churn page (rebuilt 2026-11-09). READ ONLY.
+ *
+ * Query: days (30|60|90|120|180, 180 = 180+), since (YYYY-MM-DD, default Jan 1 this year), city (short code or
+ * "all"), field (venue key or "all"), tier (all|heavy|regular|tried), sort (churnModel SORT_KEYS), dir (asc|desc),
+ * page. ?format=csv streams every row of the filtered tier with the SAME columns as the table (churnModel.columns).
+ *
+ * The rules (what a match is, what spent is, what the sentence means) are in churnModel.ts; the reads and the
+ * caching in churnLoad.ts. Former staff and deleted accounts are left out before anything is counted, and the
+ * response says how many. */
 import { authenticateLifecycle } from "@/lib/lifecycleAuth";
-import { fetchChurnList, cityAbbrFromDisplay, type ChurnListRow } from "@/lib/growthViews";
-import { DEFAULT_HEAVY, DEFAULT_WINDOW, clampHeavy, effectiveStart, emailDisplay, TIERS, type Tier, type WindowKind } from "@/lib/churnModel";
+import {
+  DAYS_OPTIONS, DEFAULT_DAYS, DEFAULT_SORT, SORT_KEYS, TIERS, applyFilter, columns, defaultSince, sortShown, tierCounts, toCsv,
+  type Display, type SortDir, type SortKey, type Tier,
+} from "@/lib/churnModel";
+import { formerStaff, liveVenueKeys, loadBase, winbacks } from "@/lib/churnLoad";
 
 export const runtime = "nodejs";
-export const maxDuration = 30;
+export const maxDuration = 60;
 const PAGE_SIZE = 12;
 
-function parse(req: Request) {
-  const sp = new URL(req.url).searchParams;
-  const city = sp.get("city");
-  const field = sp.get("field");
-  /* THE WINDOW DEFAULTS TO THIS YEAR. It defaulted to all time, which is how a player last seen in
-   * September 2024 — 704 days gone — sat beside someone who lapsed in May. Measured at the 90-day
-   * floor: all time 9,427 · 12 months 4,719 · this year 3,166. The date box overrides the buttons;
-   * effectiveStart is the one place that precedence lives. */
-  const win = (sp.get("win") ?? DEFAULT_WINDOW) as WindowKind;
-  const today = new Date().toISOString().slice(0, 10);
-  const tierParam = sp.get("tier");
-  return {
-    days: Number(sp.get("days") ?? 90),
-    cityAbbr: !city || city === "all" ? null : cityAbbrFromDisplay(city),
-    field: field && field !== "all" ? field : null,
-    after: sp.get("after"),
-    start: effectiveStart(win === "ytd" || win === "12m" || win === "all" ? win : DEFAULT_WINDOW, sp.get("after"), today),
-    win,
-    heavy: clampHeavy(Number(sp.get("threshold") ?? DEFAULT_HEAVY)),
-    tier: (TIERS as string[]).includes(String(tierParam)) ? (tierParam as Tier) : null,
-    heavyOnly: sp.get("heavy") === "1",
-    page: Math.max(0, Number(sp.get("page") ?? 0)),
-  };
-}
+const chicagoToday = () => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago" }).format(new Date());
 
 export async function GET(req: Request) {
   const auth = await authenticateLifecycle(req);
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
-  const p = parse(req);
   const sp = new URL(req.url).searchParams;
+  const today = chicagoToday();
+  const daysRaw = Number(sp.get("days") ?? DEFAULT_DAYS);
+  const days = (DAYS_OPTIONS as readonly number[]).includes(daysRaw) ? daysRaw : DEFAULT_DAYS;
+  const sinceRaw = sp.get("since");
+  const since = sinceRaw && /^\d{4}-\d{2}-\d{2}$/.test(sinceRaw) ? sinceRaw : defaultSince(today);
+  const cityRaw = sp.get("city");
+  const fieldRaw = sp.get("field");
+  const tierRaw = sp.get("tier");
+  const tier: Tier | null = (TIERS as string[]).includes(String(tierRaw)) ? (tierRaw as Tier) : null;
+  const sortRaw = sp.get("sort");
+  const sort: SortKey = (SORT_KEYS as readonly string[]).includes(String(sortRaw)) ? (sortRaw as SortKey) : DEFAULT_SORT.key;
+  const dir: SortDir = sp.get("dir") === "asc" ? "asc" : sp.get("dir") === "desc" ? "desc" : DEFAULT_SORT.dir;
+  const page = Math.max(0, Number(sp.get("page") ?? 0) || 0);
 
   try {
+    const [base, staff, live] = await Promise.all([loadBase(auth.supabase, sp.get("fresh") === "1"), formerStaff(auth.supabase), liveVenueKeys(auth.supabase)]);
+    const cityName = (c: string | null) => base.cities.find((x) => x.code === c)?.name ?? (c ?? "");
+    const people = base.people.filter((p) => !staff.has(p.id) && !base.contact.get(p.id)?.scrubbed);
+    const staffPeople = base.people.filter((p) => staff.has(p.id));
+    const deletedPeople = base.people.filter((p) => !staff.has(p.id) && base.contact.get(p.id)?.scrubbed);
+
+    const city = cityRaw && cityRaw !== "all" && base.cities.some((c) => c.code === cityRaw) ? cityRaw : null;
+    // Everyone in range in this city, before the field: the field list and its counts come from this set.
+    const inCity = applyFilter(people, { days, since, city, field: null, today });
+    const fieldNum = fieldRaw && fieldRaw !== "all" && /^-?\d+$/.test(fieldRaw) ? Number(fieldRaw) : null;
+    const field = fieldNum != null && inCity.some((r) => r.fieldKey === fieldNum) ? fieldNum : null;
+    const scoped = field == null ? inCity : applyFilter(people, { days, since, city, field, today });
+
+    // Cities: the Daily Matches list, and Philadelphia (or any other) only when it has players in range.
+    const inRangeAll = applyFilter(people, { days, since, city: null, field: null, today });
+    const cityCount = new Map<string, number>();
+    for (const r of inRangeAll) if (r.city) cityCount.set(r.city, (cityCount.get(r.city) ?? 0) + 1);
+    const cities = base.cities.filter((c) => c.code !== "PHL" || (cityCount.get(c.code) ?? 0) > 0)
+      .map((c) => ({ code: c.code, name: c.name, players: cityCount.get(c.code) ?? 0 }));
+
+    // Fields: usual fields in range here, live ones only (the retired duplicates are already folded into
+    // their real venue by churn_player_field).
+    const fieldMap = new Map<number, { key: number; label: string; players: number }>();
+    for (const r of inCity) {
+      if (live && !live.has(r.fieldKey)) continue;
+      const e = fieldMap.get(r.fieldKey) ?? fieldMap.set(r.fieldKey, { key: r.fieldKey, label: r.field, players: 0 }).get(r.fieldKey)!;
+      e.players++;
+    }
+    const fields = [...fieldMap.values()].sort((a, b) => a.label.localeCompare(b.label));
+
+    const counts = tierCounts(scoped);
+    // Who the same filter would have listed but is left out, so the page can say so.
+    const sameFilter = { days, since, city, field, today };
+    const staffOut = applyFilter(staffPeople, sameFilter).length;
+    const deleted = applyFilter(deletedPeople, sameFilter).length;
+    const inTier = tier ? scoped.filter((r) => r.tier === tier) : scoped;
+    const named = inTier.map((r) => ({ ...r, name: base.contact.get(r.id)?.name ?? null }));
+    const sorted = sortShown(named, sort, dir);
+    const fieldScoped = field != null;
+
+    const pick = sp.get("format") === "csv" ? sorted : sorted.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE);
+    const wb = await winbacks(auth.supabase, pick.map((r) => r.id));
+    const rows: Display[] = pick.map((r) => ({ ...r, phone: base.contact.get(r.id)?.phone ?? null, winback: wb.get(r.id) ?? { state: "none" } }));
+
     if (sp.get("format") === "csv") {
-      const res = await fetchChurnList(auth.supabase, { ...p, pageSize: PAGE_SIZE, all: true });
-      const enc = new TextEncoder();
-      const stream = new ReadableStream({
-        start(controller) {
-          // THE EXPORT CARRIES WHAT THE PAGE IS FOR. A CSV of ids is the same unusable list in a
-          // different file. A relay address is labelled here too, never pasted as a token.
-          controller.enqueue(enc.encode("Player ID,Name,Email,Phone,Member,City,Field,Days inactive,Matches played,Spent,Last played\n"));
-          for (const r of res.rows as ChurnListRow[]) {
-            const e = emailDisplay(r);
-            controller.enqueue(enc.encode(
-              `${r.u},"${r.name ?? ""}","${e.kind === "address" ? e.text : e.text}","${r.phone ?? ""}",${r.isMember ? "yes" : "no"},` +
-              `"${r.city}","${r.field}",${r.days},${r.matches},${r.spent.toFixed(2)},${r.last}\n`));
-          }
-          controller.close();
-        },
-      });
-      return new Response(stream, {
+      return new Response(toCsv(rows, fieldScoped, cityName), {
         status: 200,
-        headers: {
-          "Content-Type": "text/csv; charset=utf-8",
-          "Content-Disposition": `attachment; filename="potential-churn-${p.days}d.csv"`,
-        },
+        headers: { "Content-Type": "text/csv; charset=utf-8", "Content-Disposition": `attachment; filename="churn-${days}d-since-${since}.csv"` },
       });
     }
-
-    const t0 = Date.now();
-    const r = await fetchChurnList(auth.supabase, { ...p, pageSize: PAGE_SIZE });
-    return Response.json(
-      { ...r, page: p.page, pageSize: PAGE_SIZE, days: p.days, win: p.win, tier: p.tier },
-      { status: 200, headers: { "Server-Timing": `churn;dur=${Date.now() - t0}` } },
-    );
+    return Response.json({
+      today, refreshedAt: base.refreshedAt,
+      filter: { days, since, city, field, tier, sort, dir },
+      cities, fields, liveFieldsKnown: live != null,
+      counts, total: inTier.length, page, pageSize: PAGE_SIZE,
+      columns: columns(fieldScoped).map((c) => ({ key: c.key, label: c.label })),
+      rows: rows.map((r) => ({ ...r, cityName: cityName(r.city) })),
+      excluded: { formerStaff: staffOut, deleted },
+    });
   } catch (e) {
     console.error("[api/lifecycle/churn] failed", e);
-    return Response.json({ error: "Failed to load churn list" }, { status: 500 });
+    return Response.json({ error: e instanceof Error ? e.message : "Failed to load churn" }, { status: 500 });
   }
 }

@@ -27,6 +27,7 @@
 // CHANGE LOG (2026-10-20): every send, landed or failed, is recorded through logCrmSend, the same
 // metadata-only shape as /api/crm/send: template NAME and body LENGTH, never the variables.
 
+import { markWinbackSent } from "@/lib/churnWinback";
 import { assertThreadInScope } from "@/lib/crmScope";
 import { authenticateCrm } from "@/lib/crmAuth";
 import { logCrmSend } from "@/lib/crmSendLog";
@@ -190,6 +191,8 @@ export async function POST(req: Request) {
     console.error("[crm:send-template] message insert failed", inserted.error);
     return Response.json({ error: "DB error" }, { status: 500 });
   }
+  // Churn win-back: a template this staff member sends after pressing Message on Churn (churnWinback.ts).
+  if (!sendError) await markWinbackSent(supabase, threadId, actorEmail, inserted.data.id as string);
 
   // Thread update. On a successful send, reopen a closed thread (the
   // operator is re-engaging) so it does not sit in Closed while an

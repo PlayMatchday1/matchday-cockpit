@@ -27,6 +27,7 @@
 //   5. Update thread last_message_at + last_message_preview.
 //   6. Return the new message row.
 
+import { markWinbackSent } from "@/lib/churnWinback";
 import Telnyx from "telnyx";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { assertThreadInScope } from "@/lib/crmScope";
@@ -429,6 +430,8 @@ async function handleWhatsAppSend({
 
   await logCrmSend({ kind: "text", path: "/api/crm/send", threadId, toPhone, channel: "whatsapp", appUserId, actorEmail, draftId: autoSentDraftId, bodyLength: body.length, sendError, nowIso });
   if (!sendError) await cancelHoldsForHumanSend(supabase, threadId, appUserId);
+  // Churn win-back: a message this staff member sends after pressing Message on Churn (churnWinback.ts).
+  if (!sendError) await markWinbackSent(supabase, threadId, actorEmail, inserted.data.id as string);
   if (draftId && !sendError) {
     await recordDraftSent(supabase, { draftId, threadId, sentBody: body, messageId: inserted.data.id as string, userId: appUserId });
   }
