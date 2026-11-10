@@ -52,7 +52,7 @@ const TIP = {
   cpr: "Ad spend divided by Meta registrations. Target: under $5.",
   allRegs: "Every new sign-up in this market, from any source.",
   firstTime: "People who played their first MatchDay match in this period, from any source.",
-  rank: "Where our city page shows on Google for \"pickup soccer [city]\". 1 is the top. Lower is better. Target: 3 or better.",
+  rank: "Average Google position of our city page for searches that name the city and say pickup, pick up or pick-up (\"pickup soccer austin\", \"okc pick up soccer\"), weighted by impressions. Broader searches like \"pickup soccer near me\" or \"soccer leagues austin\" don't count. 1 is the top; lower is better. Target: 3 or better. Shows — until those searches have 20 impressions in the period.",
   searchClicks: "People who clicked through to us from Google search.",
   visits: "Visits to these pages on our website.",
   storeClicks: "Taps on the App Store or Google Play button. Wanting to download, not a download yet.",
@@ -546,7 +546,9 @@ function RankCell({ rank, prev, badge }: { rank: number | null; prev?: number | 
   const band = badge && rank != null ? rankBand(Math.round(rank * 10) / 10) : null;
   return (
     <td data-testid="acq-rank">
-      <span className="acq-n"><Badge band={band}>{rank == null ? "—" : rank.toFixed(1)}</Badge></span>
+      <span className="acq-n">{rank == null
+        ? <Info tip="Not enough searches yet" testId="acq-rank-none"><span className="acq-dash">—</span></Info>
+        : <Badge band={band}>{rank.toFixed(1)}</Badge>}</span>
       {d != null && d !== 0 && <span className={`acq-chg ${d < 0 ? "up" : "down"}`} data-testid="acq-chg">{d > 0 ? "+" : "−"}{Math.abs(d).toFixed(1)}</span>}
     </td>
   );

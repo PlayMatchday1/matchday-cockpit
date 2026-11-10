@@ -86,61 +86,93 @@ export function websiteTable(input: { win: { gsc: Window; web: Window }; map: re
   return { groups: list, total, skewed: since < SKEWED_BEFORE };
 }
 
-/* ── GOOGLE RANK (Ryan, 2026-10-05) ──────────────────────────────────────────────────────────────
- * The average Google position of a market's CITY page for "pickup soccer [city]", plus "pick up
- * soccer [city]" and "pickup soccer near me" where Search Console has them for that page.
- * Impression-weighted, like Avg position: Σ(position × impressions) / Σ impressions over the
- * matching queries in the Search Console window. Lower is better. Venue and blog pages get the same
- * figure over the same queries, for the expansion. A page with no impressions on any of them has no
- * rank ("—"), never a zero. */
+/* ── GOOGLE RANK (Ryan, 2026-10-05; rule changed 2026-11-09, see CORE CITY QUERIES) ─────────────
+ * The impression-weighted Google position of a market's CITY page over its core city queries in the
+ * Search Console window: Σ(position × impressions) / Σ impressions. Lower is better. Venue and blog
+ * pages get the same figure over the same rule, for the expansion. Under 20 core impressions there is
+ * no rank ("—", "Not enough searches yet"), never a zero. */
 export type QueryRow = { day: string; page_url: string; query: string; impressions: number; position_x_impressions: number };
 export type RankQuery = { query: string; position: number; impressions: number };
-export type PageRank = { rank: number | null; queries: RankQuery[] };
+/** rank: impression-weighted position over the page's CORE queries, null when they have fewer than
+ *  RANK_MIN_IMPRESSIONS in the window. coreImpressions: those queries' impressions. queries: the chips. */
+export type PageRank = { rank: number | null; coreImpressions: number; queries: RankQuery[] };
 
+/* CORE CITY QUERIES (Ryan, 2026-11-09). Rank is only over queries naming the city (or an alias) AND
+ * "pickup" / "pick up" / "pick-up", case-insensitive, whole words. Broad queries ("pickup soccer near
+ * me" at 33, "soccer leagues austin" at 60) moved Austin from ~2 to 15.4 on a handful of impressions
+ * while its city searches stayed at 1–2. Under 20 core impressions in the window, there is no rank. */
+export const RANK_MIN_IMPRESSIONS = 20;
+const RANK_CITY_ALIASES: Record<string, string[]> = {
+  ATX: ["austin", "atx"], HTX: ["houston", "htx"], DFW: ["dallas", "dfw", "fort worth", "ft worth"], ATL: ["atlanta", "atl"],
+  SATX: ["san antonio", "satx"], STL: ["st louis", "st. louis", "saint louis", "stl"], OKC: ["okc", "oklahoma city"],
+  PHL: ["philadelphia", "philly", "phl"], ELP: ["el paso"],
+};
+const PICKUP = /(^|[^a-z])pick[\s-]?up([^a-z]|$)/;
+const esc = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const cityRe = new Map<string, RegExp | null>();
+/** Does this query count toward the market's rank? */
+export function isCoreRankQuery(market: string, query: string): boolean {
+  if (!cityRe.has(market)) {
+    const a = RANK_CITY_ALIASES[market];
+    cityRe.set(market, a ? new RegExp(`(^|[^a-z])(${a.map(esc).join("|")})([^a-z]|$)`) : null);
+  }
+  const re = cityRe.get(market);
+  const q = query.trim().toLowerCase();
+  return !!re && re.test(q) && PICKUP.test(q);
+}
+
+/* THE CHIPS are unchanged: the queries the expanded rows have always listed. */
 const RANK_CITY_NAMES: Record<string, string[]> = {
   ATX: ["austin"], HTX: ["houston"], DFW: ["dallas"], ATL: ["atlanta"], SATX: ["san antonio"],
   STL: ["st louis", "st. louis", "saint louis"], OKC: ["okc", "oklahoma city"], ELP: ["el paso"],
 };
-/** The exact queries behind a market's rank, lower-cased. */
+/** The exact queries the expanded rows list as chips, lower-cased. */
 export function rankQueriesFor(market: string): Set<string> {
   const out = new Set<string>(["pickup soccer near me"]);
   for (const c of RANK_CITY_NAMES[market] ?? []) { out.add(`pickup soccer ${c}`); out.add(`pick up soccer ${c}`); }
   return out;
 }
 
-/** Rank per page path over one Search Console window; only mapped pages of a market are ranked. */
+/** Rank and chips per page path over one Search Console window; only mapped pages of a market count. */
 export function pageRanks(rows: readonly QueryRow[], win: Window, map: readonly PageMapRow[]): Map<string, PageRank> {
-  const acc = new Map<string, Map<string, { impressions: number; px: number }>>();
+  type Acc = { core: { impressions: number; px: number }; chips: Map<string, { impressions: number; px: number }> };
+  const acc = new Map<string, Acc>();
   const want = new Map<string, Set<string>>();
   for (const r of rows) {
     if (r.day < win.since || r.day > win.until) continue;
     const m = mapPath(r.page_url, map);
     if (!m?.market_key) continue;
-    const set = want.get(m.market_key) ?? (want.set(m.market_key, rankQueriesFor(m.market_key)), want.get(m.market_key)!);
     const q = r.query.trim().toLowerCase();
-    if (!set.has(q)) continue;
-    const byQ = acc.get(r.page_url) ?? (acc.set(r.page_url, new Map()), acc.get(r.page_url)!);
-    const a = byQ.get(q) ?? { impressions: 0, px: 0 };
-    a.impressions += Number(r.impressions); a.px += Number(r.position_x_impressions);
-    byQ.set(q, a);
+    const core = isCoreRankQuery(m.market_key, q);
+    const set = want.get(m.market_key) ?? (want.set(m.market_key, rankQueriesFor(m.market_key)), want.get(m.market_key)!);
+    if (!core && !set.has(q)) continue;
+    const e = acc.get(r.page_url) ?? (acc.set(r.page_url, { core: { impressions: 0, px: 0 }, chips: new Map() }), acc.get(r.page_url)!);
+    if (core) { e.core.impressions += Number(r.impressions); e.core.px += Number(r.position_x_impressions); }
+    if (set.has(q)) {
+      const a = e.chips.get(q) ?? { impressions: 0, px: 0 };
+      a.impressions += Number(r.impressions); a.px += Number(r.position_x_impressions);
+      e.chips.set(q, a);
+    }
   }
   const out = new Map<string, PageRank>();
-  for (const [path, byQ] of acc) {
-    let imp = 0, px = 0; const queries: RankQuery[] = [];
-    for (const [query, a] of byQ) {
-      if (a.impressions <= 0) continue;
-      imp += a.impressions; px += a.px;
-      queries.push({ query, position: a.px / a.impressions, impressions: a.impressions });
-    }
-    out.set(path, { rank: imp > 0 ? px / imp : null, queries: queries.sort((a, b) => b.impressions - a.impressions || a.query.localeCompare(b.query)) });
+  for (const [path, e] of acc) {
+    const queries: RankQuery[] = [];
+    for (const [query, a] of e.chips) if (a.impressions > 0) queries.push({ query, position: a.px / a.impressions, impressions: a.impressions });
+    const ci = e.core.impressions;
+    out.set(path, { rank: ci >= RANK_MIN_IMPRESSIONS ? e.core.px / ci : null, coreImpressions: ci,
+      queries: queries.sort((a, b) => b.impressions - a.impressions || a.query.localeCompare(b.query)) });
   }
   return out;
 }
 
 /** A market's rank is its CITY page's. */
 export function marketRank(market: string, ranks: Map<string, PageRank>, map: readonly PageMapRow[]): number | null {
+  return marketRankOf(market, ranks, map).rank;
+}
+export function marketRankOf(market: string, ranks: Map<string, PageRank>, map: readonly PageMapRow[]): { rank: number | null; coreImpressions: number } {
   const city = map.find((m) => m.market_key === market && m.page_kind === "city");
-  return city ? ranks.get(city.pattern.toLowerCase())?.rank ?? null : null;
+  const r = city ? ranks.get(city.pattern.toLowerCase()) : undefined;
+  return { rank: r?.rank ?? null, coreImpressions: r?.coreImpressions ?? 0 };
 }
 
 /* ── EACH SOURCE'S WINDOW, TRIMMED TO ITS OWN "DATA THROUGH" ─────────────────────────────────────

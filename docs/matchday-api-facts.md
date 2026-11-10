@@ -9127,3 +9127,15 @@ holdout 0 unless raised.
   spots given"), codes $2,090 (186), referral $0, Total $8.97 vs ad-only $5.89.
 - **The promo mirror carries no city.** `mdapi_promocodes` has no city or field list (`target_match_type`
   SPECIFIC_FIELDS says only that one exists). A code's city is read from where its bookings were.
+
+## Acquisition Google rank: core city queries only (2026-11-09)
+
+- **Why Austin read 15.4 for Nov 1–7.** The old rank (exact queries "pickup soccer [city]", "pick up soccer
+  [city]" and "pickup soccer near me") had 7 impressions on the Austin page: pickup soccer austin 3 at 2.3,
+  pick up soccer austin 1 at 1.0, and pickup soccer near me 3 at 33.3. "Near me" alone moved it from ~2 to 15.
+  (acq_gsc_query_daily, read 2026-11-09.)
+- **Now** (`isCoreRankQuery`, `pageRanks`): queries naming the city or an alias AND pickup / pick up /
+  pick-up, whole words, case-insensitive; impression-weighted; no rank under 20 core impressions.
+  Oct 11–Nov 9 read: Austin 1.7 (80 impressions), Houston 3.4 (47), Dallas 5.8 (43), Atlanta 3.5 (57),
+  St. Louis 6.4 (46); San Antonio 10 and OKC 0 core impressions, so no rank. Nov 1–9: no city reaches 20.
+- The expanded rows' query chips keep the old exact-query list (`rankQueriesFor`).

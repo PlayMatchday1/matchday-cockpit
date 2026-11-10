@@ -222,7 +222,7 @@ export async function acquisitionResponse(auth: { supabase: import("@supabase/su
     });
     const markets: MarketRowView[] = keys.map((k) => ({
       key: k, label: marketLabel(k, mk),
-      pages: (wC.get(k)?.pages ?? []).map((p) => ({ ...p, ...(ranksC.get(p.path) ?? { rank: null, queries: [] }) })),
+      pages: (wC.get(k)?.pages ?? []).map((p) => ({ ...p, ...(ranksC.get(p.path) ?? { rank: null, coreImpressions: 0, queries: [] }) })),
       cur: { ...side(k, mC, metaCur, oC, wC), rank: k === OTHER_CITIES ? null : marketRank(k, ranksC, map) },
       prev: compare && oP && wP ? { ...side(k, mP, metaCmp, oP, wP), rank: k === OTHER_CITIES ? null : marketRank(k, ranksP, map) } : null,
     })).filter((r) => mk.keys.includes(r.key) || r.cur.ours.registrations > 0 || r.cur.ours.firstTime > 0 || r.cur.web.visits > 0);
