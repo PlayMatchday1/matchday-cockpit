@@ -42,8 +42,36 @@ export const barWidth = (part: number, chosen: number) => (chosen > 0 ? Math.max
 
 export type Step = { key: "chosen" | "canGetIt" | "saw" | "used" | "tapped"; label: string; count: number; pct: number | null; of: string; bar: number };
 export const isAnnouncementFunnel = (f: Pick<Funnel, "kind">) => f.kind === "ANNOUNCEMENT";
-// The note under an announcement's Can get it: only the newest app shows a popup with no discount.
-export const ANNOUNCEMENT_APP_NOTE = "needs the latest app update";
+// WHO "CAN GET IT" (backend offer-funnel.service.ts, production 8965437). The two kinds really do differ:
+// - an offer with a deal: on app 1.88 or newer (DEFAULT_MIN_APP_VERSION in audience.sql.ts, one value for every offer,
+//   compared part by part as numbers), from a device's X-App-Version or users.offers_app_seen_at.
+// - an announcement: on an app that has asked for popup version 2 (users.announcements_app_seen_at). Only 1.89 store
+//   builds running the over-the-air bundle released 2026-11-09 (iOS 19:24Z, Android 19:26Z, app commit d7d8e8d3) ask
+//   for it; the backend never hands a no-deal popup to 1.88, or to 1.89 on its built-in bundle, so "1.89+" alone would
+//   count players who cannot see it. The bundle is downloaded on one launch and used from the next cold start.
+// Both are counted once, at first launch (snapshotAt), and never again.
+export const OFFER_APP_NOTE = "on app 1.88+";
+export const ANNOUNCEMENT_APP_NOTE = "on app 1.89 with the Nov 9 update";
+
+// SAW IT NEVER OUTRUNS CAN GET IT. The backend's Can get it is that launch snapshot, while Saw it keeps counting, so an
+// announcement launched while players were still picking up the update shows more saw than could get (Oglethorpe,
+// 2026-11-10: 28 at launch, 38 saw). A player who saw it could get it, so Can get it here is at least Saw it. The true
+// figure (the snapshot's players plus the ones who saw it) needs per-player data only the backend has; the larger of
+// the two is the most the page can say without it, and never more than the truth.
+export const withSawCounted = (f: Funnel): Funnel => (f.saw > f.canGetIt ? { ...f, canGetIt: f.saw } : f);
+// The page as drawn: every offer's funnel through withSawCounted, and each kind's totals raised by what that added.
+export function countedPage(p: FunnelPage): FunnelPage {
+  const added = { OFFER: 0, ANNOUNCEMENT: 0 };
+  const offers = p.offers.map((o) => {
+    if (!o.funnel) return o; // a draft's funnel is null on the wire
+    const f = withSawCounted(o.funnel);
+    added[isAnnouncementFunnel(o.funnel) ? "ANNOUNCEMENT" : "OFFER"] += f.canGetIt - o.funnel.canGetIt;
+    return f === o.funnel ? o : { ...o, funnel: f };
+  });
+  const totals = { ...p.totals, canGetIt: p.totals.canGetIt + added.OFFER };
+  const announcements = p.announcements && { ...p.announcements, canGetIt: p.announcements.canGetIt + added.ANNOUNCEMENT };
+  return { ...p, offers, totals, ...(announcements ? { announcements } : {}) };
+}
 export function steps(f: Pick<Funnel, "chosen" | "canGetIt" | "saw" | "used"> & { kind?: Funnel["kind"]; tapped?: number }): Step[] {
   if (f.kind === "ANNOUNCEMENT") {
     const tapped = f.tapped ?? 0;

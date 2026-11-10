@@ -9139,3 +9139,36 @@ holdout 0 unless raised.
   Oct 11–Nov 9 read: Austin 1.7 (80 impressions), Houston 3.4 (47), Dallas 5.8 (43), Atlanta 3.5 (57),
   St. Louis 6.4 (46); San Antonio 10 and OKC 0 core impressions, so no rank. Nov 1–9: no city reaches 20.
 - The expanded rows' query chips keep the old exact-query list (`rankQueriesFor`).
+
+## Offer results: who "can get it", and why Saw it passed it (2026-11-10)
+
+**Evidence: backend production 8965437 (`offer-funnel.service.ts`, `audiences/audience.sql.ts`, `offers.controller.ts`,
+`offers.store.ts`, `user-devices/*`), app frontend-ota master and its OTA deploy records
+(`~/.matchday/ota-sourcemaps/production/*/deploy.json`), and paced production reads on 2026-11-10 ~20:48Z:
+`GET /admin/offers/campaigns/funnel`, `GET .../134/players-without-app`, `GET .../134`, `GET .../104/results`,
+`POST /admin/offers/campaigns/audience-count` and two `POST /admin/audiences/count` (counts only).**
+
+- **Two different rules, on purpose.** An offer with a deal: `offersAppSql`, i.e. `users.offers_app_seen_at` set (any
+  call to `GET /offers/popup`, which only 1.88+ makes) OR a `user_devices.app_version` at least `DEFAULT_MIN_APP_VERSION`
+  "1.88", compared as `string_to_array(...)::int[]` (so 1.9 < 1.88 < 1.100). There is no per-offer minimum. An
+  announcement (dealType NONE): `users.announcements_app_seen_at`, set only by `GET /offers/popup?popupVersion=2`.
+- **Popup version 2 is not a store version.** It is the OTA bundle of app commit d7d8e8d3, deployed to production on
+  2026-11-09 (iOS 19:24:42Z, Android 19:26:44Z). Only 1.89 store builds take OTA bundles (Hot Updater arrived after the
+  1.88 build), it downloads on one launch and runs from the next cold start, and X-App-Version still says 1.89 either
+  way. The backend never returns a no-deal popup without popupVersion=2, so a "1.89+" count would include players who
+  cannot see an announcement.
+- **Device versions are written** only when the app registers a push token (user-devices, with X-App-Version), which
+  1.88+ redoes on the first launch of a new version (frontend-ota `src/utils/pushRegistration.ts`); the row is created
+  or its changed version updated. Apps before 1.88 send no header, so their rows keep a null version, and a phone with
+  no push token has no row at all. That is why `offers_app_seen_at` finds more players than device versions do (222
+  against 149 in the Oglethorpe audience).
+- **Can get it is a snapshot at first launch** (`storeSnapshot`, `chosen_count` / `can_get_it_count`); Saw it, Tapped
+  and Used are live. Oglethorpe announcement 134 (audience City 4, `cityIds` []): snapshot 17:22:04Z chosen 2,061,
+  can get it 28; saw 38 by 20:48Z. The same audience counted live: 2,074 players, onAnnouncementsApp 53, on188 222;
+  with an APP_VERSION filter, 134 players have a device on 1.89+ and 149 on 1.88+; players-without-app 2,022.
+- **Tomball (104): `results.used` counts uses, the funnel's `used` counts players.** results: used 12, usesTaken 12,
+  maxRedemptions null, saw 10; funnel: used 7, saw 10. `resultsFor` is `COUNT(*)` of redemptions not released;
+  `funnelsFor` is `COUNT(DISTINCT g.user_id)`.
+- **What the Clubhouse does with it:** `countedPage` (`src/lib/offersFunnel.ts`) raises each offer's Can get it to at
+  least its Saw it, and each kind's totals by the same amount. The true figure (snapshot players plus those who saw it)
+  needs per-player data, so it is backend work.

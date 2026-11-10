@@ -8,7 +8,7 @@
 
 import { useEffect, useState } from "react";
 import {
-  ANNOUNCEMENT_APP_NOTE, DEFAULT_NEED, DEFAULT_RANGE, RANGES, dealLines, isAnnouncementFunnel, pctText, plannerView, rangeQuery, statusLine, steps, tileSub,
+  ANNOUNCEMENT_APP_NOTE, OFFER_APP_NOTE, countedPage, DEFAULT_NEED, DEFAULT_RANGE, RANGES, dealLines, isAnnouncementFunnel, pctText, plannerView, rangeQuery, statusLine, steps, tileSub,
   type FunnelPage, type Range,
 } from "@/lib/offersFunnel";
 import type { Campaign, FieldOpt, MatchOpt } from "@/lib/offersModel";
@@ -28,7 +28,8 @@ export default function OfferResults({ campaigns, matches, fields }: { campaigns
     (async () => {
       const r = await authed(`/api/offers/funnel${rangeQuery(range)}`);
       if (cancelled) return;
-      if (r.ok) setPage(r.json as unknown as FunnelPage); else setErr({ text: String(r.json.error), missing: r.json.missing === true });
+      // countedPage: Can get it is never below Saw it (offersFunnel.ts, "Saw it never outruns Can get it").
+      if (r.ok) setPage(countedPage(r.json as unknown as FunnelPage)); else setErr({ text: String(r.json.error), missing: r.json.missing === true });
     })();
     return () => { cancelled = true; };
   }, [range]);
@@ -56,7 +57,7 @@ export default function OfferResults({ campaigns, matches, fields }: { campaigns
         <>
           {page.fixture && <div className="rounded-[10px] px-3 py-2 text-[12px]" style={{ background: O.subtle, color: O.muted }}>Dev fixture: stand-in numbers shaped as the backend contract says. Nothing here is real.</div>}
           {/* THE TILES: offers with a deal (the planner's), then, when there are any, announcements on their own row. */}
-          <Tiles st={steps(t)} prefix="offers-results-tile" note={`on app 1.88+${t.estimatedOffers > 0 ? " (est.)" : ""}`} />
+          <Tiles st={steps(t)} prefix="offers-results-tile" note={`${OFFER_APP_NOTE}${t.estimatedOffers > 0 ? " (est.)" : ""}`} />
           {page.announcements && page.announcements.offers > 0 && (
             <div data-testid="offers-results-announcements" className="flex flex-col gap-2">
               <div className="text-[12px] font-semibold" style={{ color: O.muted }}>Announcements (no discount) · {n(page.announcements.offers)} · not in the use rate</div>

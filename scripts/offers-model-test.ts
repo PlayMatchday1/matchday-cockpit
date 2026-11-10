@@ -231,7 +231,7 @@ eq("N of M used when a limit is set", usedOfLimit({ ...results, usesTaken: 10, m
 eq("nothing when there is no limit", usedOfLimit({ ...results, usesTaken: 3, maxRedemptions: null }), null);
 eq("nothing when the backend sent no usesTaken (the control)", usedOfLimit({ ...results, maxRedemptions: 10 }), null);
 eq("the list says it", resultsLines(draftFrom({ state: "LIVE", status: "LAUNCHED", results: { ...results, usesTaken: 38, maxRedemptions: 50 } }))[0], "412 saw · 38 of 50 used");
-eq("...and keeps the plain count without a limit", resultsLines(draftFrom({ state: "LIVE", status: "LAUNCHED", results: { ...results, usesTaken: 38, maxRedemptions: null } }))[0], "412 saw · 38 used");
+eq("...and keeps the plain count without a limit", resultsLines(draftFrom({ state: "LIVE", status: "LAUNCHED", results: { ...results, usesTaken: 38, maxRedemptions: null } }))[0], "412 saw · 38 uses");
 
 console.log("photo rule:");
 eq("an http photo stops the save", formProblem({ ...nowF, name: "x", copy: { photoUrl: "http://covers.local/a.jpg" } }, matches), "The photo must be an https link.");
@@ -895,7 +895,7 @@ eq("the server refuses a link with no headers, and says why", photoLinkProblem({
   const withResults = { ...old[0], results };
   const { results: _dropped, ...noResults } = draftFrom({ id: 2, status: "LAUNCHED" });
   const fresh = campaignsAfter(old, { kind: "saved", campaign: { ...noResults, id: 8, state: "LIVE" } as Campaign })[0];
-  eq("a new one launched at once has empty results, so its row draws", resultsLines(fresh), ["0 saw · 0 used", "$0 off · 0 came back"]);
+  eq("a new one launched at once has empty results, so its row draws", resultsLines(fresh), ["0 saw · 0 uses", "$0 off · 0 came back"]);
   eq("what the read-back lacks stays", campaignsAfter([withResults], { kind: "saved", campaign: noResults as Campaign })[0].results, results);
 }
 

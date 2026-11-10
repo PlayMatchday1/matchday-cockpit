@@ -12,7 +12,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/useAuth";
 import {
-  STATE_LABEL, audienceText, extraBookingsLine, usedOfLimit, chicagoWallNow, campaignsAfter, comparisonLine, dealText, matchTitle, matchWhere, money, namedMatchIds, progressText, resultsLines, scopeFieldsLine, usedPct, usesText, wallLabel,
+  STATE_LABEL, audienceText, extraBookingsLine, usedOfLimit, chicagoWallNow, campaignsAfter, comparisonLine, dealText, matchTitle, matchWhere, money, namedMatchIds, progressText, resultsLines, scopeFieldsLine, usesText, wallLabel,
   withCovers, mergeMatches, refreshedLine, type Form, type ListChange, type Campaign, type City, type FieldOpt, type MatchOpt,
 } from "@/lib/offersModel";
 import OfferPanel, { type MatchRead } from "./OfferPanel";
@@ -234,7 +234,6 @@ function Stat({ value, label, testId }: { value: string; label: string; testId: 
 
 function ResultsCard({ c, nowWall, pushes, onLanded }: { c: Campaign; nowWall: string; pushes: boolean; onLanded: (o: WriteOutcome, selectId?: number, change?: ListChange) => void }) {
   const r = c.results;
-  const up = usedPct(r);
   const extra = extraBookingsLine(r);
   return (
     <div data-testid="offers-results" className="flex flex-col gap-3.5 rounded-[12px] border p-4" style={{ background: O.surface, borderColor: O.line }}>
@@ -244,7 +243,7 @@ function ResultsCard({ c, nowWall, pushes, onLanded }: { c: Campaign; nowWall: s
       </div>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Stat testId="offers-stat-saw" value={r.saw.toLocaleString("en-US")} label="Saw it" />
-        <Stat testId="offers-stat-used" value={r.used.toLocaleString("en-US")} label={[up ? `Used it · ${up}` : "Used it", usedOfLimit(r)].filter(Boolean).join(" · ")} />
+        <Stat testId="offers-stat-used" value={r.used.toLocaleString("en-US")} label={["Uses", usedOfLimit(r)].filter(Boolean).join(" · ")} />
         <Stat testId="offers-stat-discount" value={money(r.discountGiven)} label="Discount given" />
         <Stat testId="offers-stat-came-back" value={r.cameBackAtFullPrice.toLocaleString("en-US")} label="Came back at full price" />
       </div>

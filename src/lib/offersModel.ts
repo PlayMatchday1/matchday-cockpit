@@ -14,7 +14,7 @@
 // and its ticket is the button match's kickoff. The holdout defaults to 0.
 
 import { LOCAL_MDAPI_HOST } from "./localMode";
-import { canonicalAudience, offerOfSpec, specOfAudience, type ContractAudience, type ContractFilter } from "./audienceModel";
+import { canonicalAudience, offerOfSpec, specOfAudience, specText, type ContractAudience, type ContractFilter } from "./audienceModel";
 
 export type DealType = "PERCENT_OFF" | "AMOUNT_OFF" | "SET_PRICE" | "FREE_MATCH" | "NONE";
 export const isAnnouncement = (f: { dealType: DealType }) => f.dealType === "NONE";
@@ -326,8 +326,12 @@ export function matchesText(min: number, max: number | null): string | null {
 }
 
 // The list's audience line: "Austin · Not played in 30+ days".
-export function audienceText(a: Audience, cities: City[], fields: FieldOpt[]): string {
+// An offer saved in the shared format (audience / Form.audienceFilters) is read from its filter rows: its old cityIds can be
+// empty while a City filter narrows it (Oglethorpe, 2026-11-10: cityIds [], audience City is 4, once listed as All cities).
+export function audienceText(a: Audience & { audience?: ContractAudience; audienceFilters?: ContractFilter[] | null }, cities: City[], fields: FieldOpt[]): string {
   if (a.audienceMode === "PLAYERS") return `${a.playerIds.length.toLocaleString("en-US")} chosen ${a.playerIds.length === 1 ? "player" : "players"}`;
+  const shared = Array.isArray(a.audienceFilters) ? a.audienceFilters : a.audience?.mode === "FILTERS" ? a.audience.filters : null;
+  if (shared) return specText(specOfAudience({ mode: "FILTERS", filters: shared }).spec, cities, fields, 0).replace(/^Everyone$/, "All cities");
   const parts = [a.cityIds.length ? cityNames(a.cityIds, cities).join(", ") : "All cities"];
   if (a.lastPlayed === "LAPSED") parts.push(`Not played in ${a.lastPlayedDays}+ days`);
   if (a.lastPlayed === "NEVER") parts.push("Never played");
@@ -1049,7 +1053,9 @@ export function resultsLines(c: Campaign): [string, string] {
   if (c.state === "DRAFT") return ["Not launched", ""];
   if (c.state === "SCHEDULED") return [`Starts ${wallDate(c.startsLocal)}`, ""];
   const r = c.results;
-  const usedPart = typeof r.usesTaken === "number" && typeof r.maxRedemptions === "number" ? usedOfLimit(r)! : `${r.used.toLocaleString("en-US")} used`;
+  // r.used counts USES (every redemption not given back), not players: Tomball 2026-11-10 had 12 uses by 7 players. The
+  // Offer results table's Used is players (offersFunnel.ts), so this line says uses.
+  const usedPart = typeof r.usesTaken === "number" && typeof r.maxRedemptions === "number" ? usedOfLimit(r)! : `${r.used.toLocaleString("en-US")} ${r.used === 1 ? "use" : "uses"}`;
   return [`${r.saw.toLocaleString("en-US")} saw · ${usedPart}`, `${money(r.discountGiven)} off · ${r.cameBackAtFullPrice.toLocaleString("en-US")} came back`];
 }
 
@@ -1152,9 +1158,6 @@ export function progressText(c: Campaign, nowWall: string): string {
 const pct = (r: number) => `${Math.round(r * 100)}%`;
 // Below this many held-back players the comparison line shows no rates (Ryan, 2026-10-29).
 export const MIN_HELD_BACK_TO_COMPARE = 30;
-export function usedPct(r: Results): string | null {
-  return r.saw > 0 ? pct(r.used / r.saw) : null;
-}
 // "With the offer, 9% booked. The 46 players held back with no offer: 3% booked."
 export function comparisonLine(r: Results): string {
   const w = r.booked.withOffer, h = r.booked.heldBack;
