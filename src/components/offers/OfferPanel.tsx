@@ -31,7 +31,7 @@ import OfferPreview, { type PreviewTab } from "./OfferPreview";
 import { PushReach, PushSection, SendsTo } from "./OfferPush";
 import { defaultSendLocal, fillPush, pushBodyOf, pushDirty, pushFormOf, pushLocked, pushProblem, pushSuggestion, pushText, type PushForm } from "@/lib/offersPush";
 import { lookupInBatches, MAX_OFFER_PLAYER_IDS, pastedLine, playerLookupBlock } from "@/lib/offersModel";
-import { SHRINK_HINT, isShrunk, popupHeadlineFit, popupHeadlineParts } from "@/lib/headlineFit";
+import { SHRINK_HINT, TOO_LONG_WARNING, isShrunk, isTooLong, popupHeadlineFit, popupHeadlineParts } from "@/lib/headlineFit";
 import {
   Btn, Card, Chip, ConfirmDialog, Labeled, O, Toggle, VerdictLine, authed, inputCls, inputStyle, outcomeOf, settled, type WriteOutcome,
 } from "./offersUi";
@@ -313,9 +313,13 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
   // THE APP'S AUTO-FIT (lib/headlineFit): past 48pt on one line the headline is drawn smaller, then on two lines. The hint
   // sits under the headline inputs, full width.
   const headParts = popupHeadlineParts(copy.headline, f.headlineAccent, ann);
-  const headlineHint = isShrunk(popupHeadlineFit(headParts.lead, headParts.accent))
-    ? [<div key="headlineHint" data-testid="offers-headline-shrunk" className="-mt-2 text-[11.5px] sm:col-span-2" style={{ color: O.muted }}>{SHRINK_HINT}</div>]
-    : [];
+  const headFit = popupHeadlineFit(headParts.lead, headParts.accent);
+  // More than two lines: a warning to shorten it, in place of the hint.
+  const headlineHint = isTooLong(headFit)
+    ? [<div key="headlineHint" data-testid="offers-headline-too-long" className="-mt-2 text-[11.5px] font-semibold sm:col-span-2" style={{ color: O.warnInk }}>{TOO_LONG_WARNING}</div>]
+    : isShrunk(headFit)
+      ? [<div key="headlineHint" data-testid="offers-headline-shrunk" className="-mt-2 text-[11.5px] sm:col-span-2" style={{ color: O.muted }}>{SHRINK_HINT}</div>]
+      : [];
   const step = (dir: 1 | -1) => {
     const s = STEPPER[f.dealType];
     if (!s) return;

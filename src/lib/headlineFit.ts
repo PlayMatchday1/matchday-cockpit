@@ -1,5 +1,5 @@
-// THE POPUP HEADLINE'S AUTO-FIT, the app's own rule, ported line for line from frontend src/utils/headlineFit.ts as committed in
-// 099270ae on feature/headline-autofit (frontend-ota, 2026-11-09; not yet on feature/announcement-popups). Client-safe. Keep the two in
+// THE POPUP HEADLINE'S AUTO-FIT, the app's own rule, ported line for line from frontend src/utils/headlineFit.ts as of
+// e1f967d4 on feature/headline-autofit (099270ae + 815ede42; frontend-ota, 2026-11-10; not yet on feature/announcement-popups). Client-safe. Keep the two in
 // step: the preview is only right while this is the same arithmetic the phone does.
 //
 // The app's comment, kept:
@@ -54,7 +54,8 @@ const TAIL = 100;
 
 // The headline's padding, in points, whatever the size: pl-2 on the plain
 // part when there is an accent, ml-2 (or pl-2 alone) and pr-2 on the accent
-const PAD = 8;
+export const HEADLINE_PAD = 8;
+const PAD = HEADLINE_PAD;
 
 /** The card's width for the headline: 312pt at most, inside px-8 of
  * screen and px-5 of card (PromoPopup). */
@@ -220,6 +221,15 @@ export const popupHeadlineFit = (lead: string, accent: string) => fitHeadline(le
 // Shown smaller than the design: below 48pt, or on more than one line.
 export const isShrunk = (f: HeadlineFit) => f.size < POPUP_HEADLINE_SIZE || f.lines.length > 1;
 export const SHRINK_HINT = "Long title, shown smaller";
+// More than two lines (the app fills as many as it needs): staff should shorten it rather than ship it.
+export const isTooLong = (f: HeadlineFit) => f.lines.length > 2;
+export const TOO_LONG_WARNING = "Too long, shorten the title";
+
+// The line height, from the app's PromoPopup.tsx (e1f967d4) headlineLineHeight: a smaller headline keeps the design's
+// proportions, its line shrinking with it (52pt at 48, 30pt at 28).
+export const HEADLINE_LINE_HEIGHT = 52;
+export const headlineLineHeight = (size: number, designSize: number) =>
+  size === designSize ? HEADLINE_LINE_HEIGHT : Math.round((HEADLINE_LINE_HEIGHT * size) / designSize);
 
 // The two parts as the popup draws them: an announcement's typed accent, else the app's split (the last word is the
 // green one, "50% *OFF*"). {firstName} as the preview shows it.

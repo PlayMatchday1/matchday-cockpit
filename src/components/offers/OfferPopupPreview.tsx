@@ -12,7 +12,7 @@
 import Image from "next/image";
 import { Heebo, Titillium_Web } from "next/font/google";
 import { withPreviewName, type Copy } from "@/lib/offersModel";
-import { popupHeadlineFit, popupHeadlineParts } from "@/lib/headlineFit";
+import { HEADLINE_PAD, POPUP_HEADLINE_SIZE, headlineLineHeight, popupHeadlineFit, popupHeadlineParts } from "@/lib/headlineFit";
 
 const titillium = Titillium_Web({ subsets: ["latin"], weight: ["700"], style: ["normal", "italic"], display: "swap" });
 const heebo = Heebo({ subsets: ["latin"], weight: ["400", "500", "700"], display: "swap" });
@@ -29,6 +29,8 @@ export default function OfferPopupPreview({ copy: raw, ends, showTicket, width =
   // THE APP'S AUTO-FIT (lib/headlineFit): 48pt on one line when it fits, smaller down to 28pt, then two lines at 28pt. In
   // the half-size mock's units a point is 0.5, so 48pt is the 24 the short headline has always drawn at.
   const fit = popupHeadlineFit(lead, accent);
+  const lineHeight = headlineLineHeight(fit.size, POPUP_HEADLINE_SIZE);
+  const wrapped = fit.lines.length > 1;
   const s = width / POPUP_BASE_WIDTH;
   const px = (n: number) => `${Math.round(n * s * 100) / 100}px`;
   return (
@@ -50,9 +52,13 @@ export default function OfferPopupPreview({ copy: raw, ends, showTicket, width =
         ) : null}
       </div>
       <div className="flex w-full flex-col items-center" style={{ gap: px(7), padding: `${px(9)} ${px(10)}` }}>
-        <div className="flex flex-col items-center">
+        <div className="flex flex-col items-center" style={wrapped ? { alignSelf: "stretch", marginLeft: px(-HEADLINE_PAD / 2), marginRight: px(-HEADLINE_PAD / 2) } : undefined}>
           {fit.lines.map((l, i) => (
-            <p key={i} data-testid="offers-preview-headline" data-size={fit.size} data-lines={fit.lines.length} className={`${titillium.className} whitespace-nowrap font-bold uppercase`} style={{ color: "#0b4031", fontSize: px(fit.size / 2), lineHeight: px(26) }}>
+            // Wrapped (the app's 815ede42): each line may spill the 8pt of its blank padding into the card's own, and a word
+            // wider than that ends in "…".
+            <p key={i} data-testid="offers-preview-headline" data-size={fit.size} data-lines={fit.lines.length} data-line-height={lineHeight}
+              className={`${titillium.className} whitespace-nowrap font-bold uppercase ${wrapped ? "max-w-full overflow-hidden text-ellipsis" : ""}`}
+              style={{ color: "#0b4031", fontSize: px(fit.size / 2), lineHeight: px(lineHeight / 2) }}>
               {l.lead}{l.lead && l.accent ? " " : ""}{l.accent ? <span className="italic" style={{ color: "#2cdb87" }}>{l.accent}</span> : null}
             </p>
           ))}
