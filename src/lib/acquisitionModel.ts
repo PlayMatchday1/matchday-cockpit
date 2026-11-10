@@ -264,8 +264,20 @@ export type MetaSide = { spendCents: number; installs: number | null; metaRegs: 
  * (growth_player_profile): people whose first MatchDay match EVER was in the window, from any
  * source, in that match's city (Ryan, 2026-10-05; it replaced "Registrants who played", which
  * counted by signup and so never tied to Player Activity). */
-export type OursSide = { registrations: number; firstTime: number };
-export const emptyOurs = (): OursSide => ({ registrations: 0, firstTime: 0 });
+export type OursSide = { registrations: number; firstTime: number } & FirstMatchCost;
+/* WHAT THOSE FIRST MATCHES COST US (Ryan, 2026-11-09, "Fully loaded cost per new player"): over the
+ * same first-time players, in the same city, the value of each first-match-day booking that was
+ *   free   booked under FIRST-MATCH-AUTO, valued at the match's price (Free First Match's "Free spots
+ *          given", freeFirstMatchModel spotCents)
+ *   code   a new-user 100% code that is not a referral code, valued at match price − what the booking paid
+ *   ref    a per-player referral code ("123ref"), the same way
+ * The code sets are Free First Match's own (freeFirstMatchBuild, THE CODES). Cents. */
+export type FirstMatchCost = { freeCents: number; freeN: number; codeCents: number; codeN: number; refCents: number; refN: number };
+export const emptyOurs = (): OursSide => ({ registrations: 0, firstTime: 0, freeCents: 0, freeN: 0, codeCents: 0, codeN: 0, refCents: 0, refN: 0 });
+export const addOurs = (a: OursSide, b: OursSide) => {
+  a.registrations += b.registrations; a.firstTime += b.firstTime;
+  a.freeCents += b.freeCents; a.freeN += b.freeN; a.codeCents += b.codeCents; a.codeN += b.codeN; a.refCents += b.refCents; a.refN += b.refN;
+};
 /* A first match's city is an mdapi city code (HOU, ATX, …), not a declared city name. Warsaw, El
  * Paso and anything unknown fall into "Other cities", as declared cities do. */
 export const marketOfMatchCity = (code: string | null, mk: Markets) => (code && mk.byCode.get(code)) || OTHER_CITIES;
@@ -529,27 +541,24 @@ export function websiteFallbackOn(today: string, siteNamedInFeed: boolean): bool
 }
 export const websiteEstimate = (t: DownloadsTable): number | null => (t.split ? Math.max(0, t.top.web - t.split.sub.share - t.split.sub.google) : null);
 
-/* ── COST AND PAID SHARE (Ryan, 2026-11-09, item 4 of Miguel's list) ─────────────────────────────
- * Per market and in total, over the selected range:
- *   Meta new players (est.)       Meta registrations × the range's OVERALL conversion rate
- *                                 (all first-time players ÷ all registrations, every city together).
- *                                 Meta cannot see a first match, so this is an estimate and says so.
- *   Meta cost per new player      Meta spend over the Meta-registration window ÷ that estimate.
- *   Blended cost per registration all spend ÷ all registrations.
- *   Blended cost per new player   all spend ÷ all first-time players.
- *   Paid share of registrations   Meta registrations ÷ all registrations (word of mouth is the rest).
+/* ── COST PER NEW PLAYER (Ryan, 2026-11-09; replaces the est. columns the same day) ─────────────
+ * Per market and in total, over the selected range. Nothing here is an estimate:
+ *   Ad cost per registration       Meta spend ÷ all registrations.
+ *   Ad cost per new player         Meta spend ÷ all first-time players.
+ *   Fully loaded cost per new player (Meta spend + free first-match spots + first-match and referral
+ *                                  code discounts on those first-time players' first matches) ÷ all
+ *                                  first-time players.
+ *   Meta-reported share            Meta's own registration count ÷ all registrations. Meta's attribution.
  * A missing input reads null ("—"), never 0. Money is cents. */
-export type CostSide = { spendCents: number | null; regSpendCents: number; metaRegs: number | null; registrations: number; firstTime: number };
-export type CostMetrics = { metaNewEst: number | null; metaCostPerNew: number | null; blendedCpr: number | null; blendedCpn: number | null; paidShare: number | null };
-/** The range's overall registration → first-time-player rate, the estimate's multiplier. */
-export const overallConversion = (t: { registrations: number; firstTime: number }) => (t.registrations > 0 ? t.firstTime / t.registrations : null);
-export function costMetrics(s: CostSide, rate: number | null): CostMetrics {
-  const metaNewEst = s.metaRegs == null || rate == null ? null : s.metaRegs * rate;
+export type CostSide = { spendCents: number | null; metaRegs: number | null; registrations: number; firstTime: number } & FirstMatchCost;
+export type CostMetrics = { adCpr: number | null; adCpn: number | null; loadedCents: number | null; loadedCpn: number | null; metaShare: number | null };
+export function costMetrics(s: CostSide): CostMetrics {
+  const loadedCents = s.spendCents == null ? null : s.spendCents + s.freeCents + s.codeCents + s.refCents;
   return {
-    metaNewEst,
-    metaCostPerNew: costPer(s.regSpendCents, metaNewEst),
-    blendedCpr: s.spendCents == null ? null : costPer(s.spendCents, s.registrations),
-    blendedCpn: s.spendCents == null ? null : costPer(s.spendCents, s.firstTime),
-    paidShare: s.metaRegs == null || s.registrations <= 0 ? null : s.metaRegs / s.registrations,
+    adCpr: s.spendCents == null ? null : costPer(s.spendCents, s.registrations),
+    adCpn: s.spendCents == null ? null : costPer(s.spendCents, s.firstTime),
+    loadedCents,
+    loadedCpn: loadedCents == null ? null : costPer(loadedCents, s.firstTime),
+    metaShare: s.metaRegs == null || s.registrations <= 0 ? null : s.metaRegs / s.registrations,
   };
 }

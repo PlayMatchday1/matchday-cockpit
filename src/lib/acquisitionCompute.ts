@@ -17,12 +17,13 @@ import "server-only"; // no-op under --conditions=react-server
 import { selectAll } from "@/lib/supabasePagination";
 import { loadActiveCities } from "@/lib/activeCities";
 import {
-  OTHER_CITIES, marketsFrom, FIRST_TIME, WEB_FEED_FROM, addMeasures, androidAdsets, downloadsTable, metaIphoneDays, websiteDownloads, websiteEstimate, websiteFallbackOn, type Coverage, type DlRow, emptyMeasures, emptyOurs, marketLabel, marketOfDeclared, marketOfMatchCity, marketRank, pageRanks,
+  OTHER_CITIES, marketsFrom, FIRST_TIME, WEB_FEED_FROM, addMeasures, addOurs, androidAdsets, downloadsTable, metaIphoneDays, websiteDownloads, websiteEstimate, websiteFallbackOn, type Coverage, type DlRow, emptyMeasures, emptyOurs, marketLabel, marketOfDeclared, marketOfMatchCity, marketRank, pageRanks,
   comparisonWindow, sourceWindows, type CompareMode, webByMarket, websiteTable, type ClickRow, type GscRow, type MarketRowView, type MarketSide,
   type MetaSide, type OursSide, type PageMapRow, type PageRank, type QueryRow, type WebRow, type Window,
 } from "@/lib/acquisitionModel";
 import { buildAdsOverview, META_REG_FROM, type AcqRow, type DimRow, type FlatRow, type GeoRow } from "@/lib/adsOverview";
 import { META_ADSET_FLOOR_YMD } from "@/lib/metaAdSpend";
+import { firstMatchSpend } from "@/lib/firstMatchCost";
 
 const YMD = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -159,6 +160,9 @@ export async function acquisitionResponse(auth: { supabase: import("@supabase/su
     const firsts = await selectAll<{ user_id: number; first_match_date: string; first_match_city: string | null }>(() =>
       sb.from("growth_player_profile").select("user_id, first_match_date, first_match_city")
         .gte("first_match_date", oursFrom).lte("first_match_date", until).order("user_id"));
+    /* What each of those first matches cost us (free spot, first-match or referral code), for "Fully
+     * loaded cost per new player" (lib/firstMatchCost). */
+    const spendOf = await firstMatchSpend(sb, firsts);
     const oursSide = (w: Window | null) => {
       const by = new Map<string, OursSide>();
       if (!w) return by;
@@ -170,7 +174,13 @@ export async function acquisitionResponse(auth: { supabase: import("@supabase/su
       for (const f of firsts) {
         const d = String(f.first_match_date).slice(0, 10);
         if (d < w.since || d > w.until) continue;
-        at(marketOfMatchCity(f.first_match_city, mk)).firstTime += 1;
+        const e = at(marketOfMatchCity(f.first_match_city, mk));
+        e.firstTime += 1;
+        for (const x of spendOf.get(Number(f.user_id)) ?? []) {
+          if (x.kind === "free") { e.freeCents += x.cents; e.freeN += 1; }
+          else if (x.kind === "code") { e.codeCents += x.cents; e.codeN += 1; }
+          else { e.refCents += x.cents; e.refN += 1; }
+        }
       }
       return by;
     };
@@ -229,7 +239,7 @@ export async function acquisitionResponse(auth: { supabase: import("@supabase/su
       }
       for (const r of markets) {
         const s2 = sideOf(r); if (!s2) continue; addMeasures(web, s2.web);
-        ours.registrations += s2.ours.registrations; ours.firstTime += s2.ours.firstTime;
+        addOurs(ours, s2.ours);
         if (s2.meta) {
           anyMeta = true; spend += s2.meta.spendCents; regSpendCents += s2.meta.regSpendCents;
           if (s2.meta.installs != null) installs = (installs ?? 0) + s2.meta.installs;

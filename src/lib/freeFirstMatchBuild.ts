@@ -21,7 +21,7 @@ const chunks = <T,>(xs: T[], n: number): T[][] => { const out: T[][] = []; for (
 type Sb = SupabaseClient;
 
 /** `.in(col, ids)` in chunks, each chunk paged on its own stable key until a short page. */
-async function inChunks(sb: Sb, table: string, cols: string, col: string, ids: number[], orderKey: string, size = 200): Promise<Row[]> {
+export async function inChunks(sb: Sb, table: string, cols: string, col: string, ids: number[], orderKey: string, size = 200): Promise<Row[]> {
   const out: Row[] = [];
   for (const chunk of chunks(ids, size)) {
     for (let off = 0; ; off += 1000) {
@@ -91,13 +91,15 @@ export async function buildFreeFirstMatch(sb: SupabaseClient): Promise<Payload> 
   }
 
   // ── 6. THE MATCHES: the cohort's, plus every live match from launch for the card and the log ─
-  type M = { id: number; wall: string; day: string; city: string; field: string; price: number; freeMember: boolean; booked: number; cap: number | null; ffe: boolean | null };
+  type M = { id: number; wall: string; day: string; city: string; field: string; price: number | null; freeMember: boolean; booked: number; cap: number | null; ffe: boolean | null };
   // ffe: firstMatchFreeEnabled lives only in raw (docs/matchday-api-facts.md, FREE FIRST MATCH).
-  const matchCols = "api_id, start_date, city_identifier, field_title, registration_price, is_free_member, max_player_count, player_count, is_cancelled, deleted_at, ffe:raw->firstMatchFreeEnabled";
+  const matchCols = "api_id, start_date, city_identifier, field_title, registration_price, is_free_member, max_player_count, player_count, is_cancelled, deleted_at, ffe:raw->firstMatchFreeEnabled, currency:raw->>currency";
   const toM = (r: Row): M => ({
     id: num(r.api_id), wall: String(r.start_date ?? "").slice(0, 16), day: wallClockYmd(String(r.start_date ?? "")),
     city: String(r.city_identifier ?? ""), field: canonicalVenueName(String(r.field_title ?? "")) || String(r.field_title ?? ""),
-    price: num(r.registration_price), freeMember: r.is_free_member === true, booked: num(r.player_count),
+    // DOLLARS ONLY (Ryan, 2026-11-09): Warsaw is priced in złoty (raw.currency "pln"), so its price is
+    // null and never reaches a dollar figure. A match with no currency in raw is read as dollars.
+    price: r.currency == null || String(r.currency).toLowerCase() === "usd" ? num(r.registration_price) : null, freeMember: r.is_free_member === true, booked: num(r.player_count),
     cap: r.max_player_count == null ? null : num(r.max_player_count),
     ffe: typeof r.ffe === "boolean" ? r.ffe : null,
   });
@@ -178,7 +180,7 @@ export async function buildFreeFirstMatch(sb: SupabaseClient): Promise<Payload> 
     people.push({
       id: uid, name: names.get(uid) ?? `Player ${uid}`, group, anchor: anchor.day, matchId: anchor.match,
       city: am?.city || anchor.city, cityName: normalizeMatchCity(am?.city || anchor.city), field: am?.field ?? "",
-      spotCents: am?.price ?? 0, paidOffsets,
+      spotCents: am ? am.price : 0, paidOffsets,
     });
   }
 

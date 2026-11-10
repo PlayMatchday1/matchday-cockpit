@@ -9111,3 +9111,19 @@ holdout 0 unless raised.
 - The channel is Clubhouse-only: `match_promotion_push.channel`, CHECK `('wa','match_chat','fb','dm','klaviyo_email','klaviyo_sms')` (`supabase/migrations/0176_match_promotion_push.sql:40`). The parent's `dm` boolean (0128) has been inert since 0176. No backend enum is involved.
 - Relabelled, not renamed: the stored key stays `dm`, and `CHANNELS` (`src/lib/matchPromotion.ts`) shows it as "Popup" / "POP". No row was rewritten. Read on 2026-11-09 (Supabase, read-only): 47 `dm` rows over 31 matches, 17 marked sent, 28 with push_at after that day. Display rule (follow-up, same day): a `dm` push already marked sent (pushed_at set) really was a DM and shows as "DM"; an unsent one shows as Popup (`channelNames`, `src/lib/matchPromotion.ts`). A match tile or a day's filter chip reads DM only when every `dm` push in view is sent. The drawer toggle is always Popup.
 - "Create popup" / "View popup" (`src/components/MatchPopupButton.tsx`) reads `GET /api/offers/match-popups`, one `/admin/offers/page` read. A popup is for a match when popupEnabled isn't false and the match is in matchIds or is its MATCH button (`src/lib/matchPopups.ts`). On the staging backend the read returned real campaigns (e.g. 65 for match 2474). Offers ids and Match Promotion ids only line up on production, since Match Promotion always reads the production mirror.
+
+## Warsaw prices are złoty; first-match cost on Acquisition (2026-11-09)
+
+- **`mdapi_matches.raw->>currency` is `"pln"` on Warsaw matches and `"usd"` on US ones.** Read 2026-11-09:
+  Warsaw `registration_price` 3900 (39 PLN) and 0; Austin 800/900/1200/1500 `"usd"`. A cents field is
+  only dollars when the currency is USD. Free First Match (`freeFirstMatchBuild` toM) and Acquisition's
+  first-match cost (`lib/firstMatchCost`) now value a non-USD match at nothing (null), never as dollars.
+- **A booking's discount is not stored.** `mdapi_match_players.amount` is the pre-tax price after the
+  promo (a 50% code on a 900 match: amount 450; a NEW_USERS 100% code: amount 0, total 0). There is no
+  discount column in the row or its raw (keys read 2026-11-09). Discount = `registration_price − amount`.
+- **"Fully loaded cost per new player"** (Acquisition, `costMetrics`): (Meta spend + FIRST-MATCH-AUTO
+  spots at match price + NEW_USERS 100% code and `123ref` discounts on first-time players' first-match-day
+  bookings) ÷ first-time players. Oct 11–Nov 9 read: free $841 (76, equal to Free First Match's "Free
+  spots given"), codes $2,090 (186), referral $0, Total $8.97 vs ad-only $5.89.
+- **The promo mirror carries no city.** `mdapi_promocodes` has no city or field list (`target_match_type`
+  SPECIFIC_FIELDS says only that one exists). A code's city is read from where its bookings were.

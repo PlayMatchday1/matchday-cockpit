@@ -67,8 +67,9 @@ export type Person = {
   cityName: string;
   /** Canonical venue name of the anchor match. */
   field: string;
-  /** The anchor match's list price in cents — what the free spot was worth. */
-  spotCents: number;
+  /** The anchor match's list price in cents — what the free spot was worth. null when the match is not
+   *  priced in dollars (Warsaw is złoty): it is never added to a dollar figure (Ryan, 2026-11-09). */
+  spotCents: number | null;
   /** Days from the anchor to the 1st and 2nd paid follow-up match (own spot), at most two, ascending. */
   paidOffsets: number[];
 };
@@ -87,7 +88,8 @@ export type MatchRow = {
   field: string;
   booked: number;
   cap: number | null;
-  priceCents: number;
+  /** List price in cents; null when not priced in dollars (see Person.spotCents). */
+  priceCents: number | null;
   /** The match's firstMatchFreeEnabled (from mdapi_matches.raw). null when the payload lacks it. */
   ffe: boolean | null;
   freePlayers: { id: number; name: string }[];
@@ -165,16 +167,19 @@ export type GroupStats = {
 };
 
 export function groupStats(ps: readonly Person[], w: number, today: string): GroupStats {
-  let done = 0, paid2nd = 0, paid3rd = 0, spotCents = 0, doneCents = 0;
+  // Dollar figures count dollar-priced spots only: cost per payer is their spots over THEIR payers, so
+  // a non-dollar player is in the rates but in neither side of the dollar division.
+  let done = 0, paid2nd = 0, paid3rd = 0, spotCents = 0, doneCents = 0, paid2ndUsd = 0;
   for (const p of ps) {
-    spotCents += p.spotCents;
+    spotCents += p.spotCents ?? 0;
     if (!windowDone(p.anchor, w, today)) continue;
     done++;
-    doneCents += p.spotCents;
-    if (p.paidOffsets.length >= 1 && p.paidOffsets[0] <= w) paid2nd++;
+    doneCents += p.spotCents ?? 0;
+    const second = p.paidOffsets.length >= 1 && p.paidOffsets[0] <= w;
+    if (second) { paid2nd++; if (p.spotCents != null) paid2ndUsd++; }
     if (p.paidOffsets.length >= 2 && p.paidOffsets[1] <= w) paid3rd++;
   }
-  return { players: ps.length, done, tooEarly: ps.length - done, paid2nd, paid3rd, spotCents, costPerPayerCents: paid2nd > 0 ? doneCents / paid2nd : null };
+  return { players: ps.length, done, tooEarly: ps.length - done, paid2nd, paid3rd, spotCents, costPerPayerCents: paid2ndUsd > 0 ? doneCents / paid2ndUsd : null };
 }
 
 /* ── ACTIVATION ─────────────────────────────────────────────────────────────────────────────── */
@@ -232,8 +237,8 @@ export function soldOutByField(matches: readonly MatchRow[], free: readonly Pers
     const k = m.freePlayers.filter((p) => freeIds.has(p.id)).length;
     if (k === 0) continue;
     const r = row(m);
-    r.soldOutWithFree++; r.spotsLost += k; r.centsLost += k * m.priceCents;
-    nm++; ns += k; nc += k * m.priceCents;
+    r.soldOutWithFree++; r.spotsLost += k; r.centsLost += k * (m.priceCents ?? 0);
+    nm++; ns += k; nc += k * (m.priceCents ?? 0);
   }
   for (const m of matches) {
     if (m.day < today) continue;

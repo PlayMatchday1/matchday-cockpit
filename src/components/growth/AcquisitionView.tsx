@@ -25,7 +25,7 @@ import { createPortal } from "react-dom";
 import styles from "./growth.module.css";
 import { fmtInt } from "./format";
 import {
-  MILESTONES, SKEWED_BEFORE, clickRate, comparisonWindow, costMetrics, costPer, overallConversion, type CostMetrics, presetRange, type CompareMode,
+  MILESTONES, SKEWED_BEFORE, clickRate, comparisonWindow, costMetrics, costPer, type CostMetrics, type CostSide, type FirstMatchCost, presetRange, type CompareMode,
   type DownloadsTable, type DlSub, type DlTag, type DlTop, type Group, type MarketRowView, type Measures, type PageLine, type Preset, type RankedPage,
   type SourceKey, type SourceWindow, type WebsiteTable, type Window,
 } from "@/lib/acquisitionModel";
@@ -41,7 +41,7 @@ const money2 = (c: number | null | undefined) => (c == null ? "—" : `$${(c / 1
 type Totals = {
   spendCents: number | null; installs: number | null; metaRegs: number | null; regSpendCents: number;
   registrations: number; firstTime: number; web: Measures;
-};
+} & FirstMatchCost;
 
 /* EVERY (i) IN ONE PLACE, in Ryan's exact wording (2026-10-06). */
 const TIP = {
@@ -407,63 +407,71 @@ export default function AcquisitionView({ authHeaders }: { authHeaders: Record<s
             </div>
           </section>
 
-          {/* ── 3b · COST PER PLAYER AND PAID SHARE (Ryan, 2026-11-09; lib/acquisitionModel.costMetrics) ── */}
+          {/* ── 3b · COST PER NEW PLAYER (Ryan, 2026-11-09; lib/acquisitionModel.costMetrics; Figma sl6PTy5L… 52:3) ──
+           * No estimates. Meta spend over registrations and over first-time players, the same spend plus
+           * what first matches cost us (lib/firstMatchCost) over first-time players, and Meta's own
+           * registration count as a share. Unmapped ad sets have no city, so they have no row here; their
+           * spend is in the Total, as in the Meta ads table. */}
           {(() => {
-            const rate = overallConversion(t), rateP = tp ? overallConversion(tp) : null;
             const pct = (r: number | null) => (r == null ? "—" : `${(r * 100).toFixed(1)}%`);
-            const rateTxt = rate == null ? "no registrations in this range" : `${pct(rate)} (${fmtInt(t.firstTime)} first-time players ÷ ${fmtInt(t.registrations)} registrations, all cities)`;
             const tip = {
-              metaNew: `Estimate. Meta registrations × this period's overall registration-to-new-player rate: ${rateTxt}. Meta cannot see a first match.`,
-              metaCpn: "Estimate. Meta ad spend (over the Meta registrations window) ÷ Meta new players (est.).",
-              bCpr: "All ad spend ÷ all registrations, from every source.",
-              bCpn: "All ad spend ÷ all first-time players, from every source.",
-              share: "Meta registrations ÷ all registrations. The rest came from word of mouth, search and everything unpaid. Meta's own count can claim people who signed up in another city.",
+              adCpr: "Meta ad spend ÷ all registrations, from every source.",
+              adCpn: "Meta ad spend ÷ all first-time players, from every source.",
+              loaded: "(Meta ad spend + free first-match spots + first-match and referral code discounts) ÷ all first-time players. Free spots are valued at the match price, as on Free First Match; a code at the match price minus what the booking paid. Only first-time players' first-match bookings count. Tap a city's ⓘ for its parts.",
+              share: "Meta's own registration count ÷ all registrations. This is Meta's attribution, not ours: it can claim people who signed up in another city or would have joined anyway.",
             };
-            const sideOf = (m: { spendCents: number; regSpendCents: number; metaRegs: number | null } | null, regs: number, first: number) =>
-              ({ spendCents: m ? m.spendCents : null, regSpendCents: m?.regSpendCents ?? 0, metaRegs: m?.metaRegs ?? null, registrations: regs, firstTime: first });
-            const Cells = ({ c, p, noOurs }: { c: CostMetrics; p: CostMetrics | null; noOurs?: boolean }) => (
+            const sideOf = (m: { spendCents: number | null; metaRegs: number | null } | null, o: Omit<CostSide, "spendCents" | "metaRegs">): CostSide =>
+              ({ ...o, spendCents: m ? m.spendCents : null, metaRegs: m?.metaRegs ?? null });
+            const parts = (s: CostSide, c: CostMetrics) => [
+              `Meta ad spend ${money2(s.spendCents ?? 0)}`,
+              `Free first-match spots ${money2(s.freeCents)} (${fmtInt(s.freeN)})`,
+              `First-match codes ${money2(s.codeCents)} (${fmtInt(s.codeN)})`,
+              `Referral codes ${money2(s.refCents)} (${fmtInt(s.refN)})`,
+              `= ${money2(c.loadedCents ?? 0)} ÷ ${fmtInt(s.firstTime)} first-time players`,
+            ].join("\n");
+            const Bar = ({ v }: { v: number | null }) => v == null ? <>—</> : (
+              <span className="acq-share"><span className="acq-sharebar"><span style={{ width: `${Math.min(100, v * 100)}%` }} /></span>{pct(v)}</span>
+            );
+            const Cells = ({ s, c, p }: { s: CostSide; c: CostMetrics; p: CostMetrics | null }) => (
               <>
-                <Cell v={c.metaNewEst == null ? "—" : <>{fmtInt(Math.round(c.metaNewEst))}<span className="acq-est"> est.</span></>} cur={c.metaNewEst} prev={p?.metaNewEst} />
-                <Cell v={c.metaCostPerNew == null ? "—" : <>{money2(c.metaCostPerNew)}<span className="acq-est"> est.</span></>} cur={c.metaCostPerNew} prev={p?.metaCostPerNew} invert />
-                {noOurs ? <td colSpan={3} className="acq-muted">no city</td> : <>
-                  <Cell v={money2(c.blendedCpr)} cur={c.blendedCpr} prev={p?.blendedCpr} invert />
-                  <Cell v={money2(c.blendedCpn)} cur={c.blendedCpn} prev={p?.blendedCpn} invert />
-                  <Cell v={pct(c.paidShare)} cur={c.paidShare} prev={p?.paidShare} />
-                </>}
+                <Cell v={money2(c.adCpr)} cur={c.adCpr} prev={p?.adCpr} invert />
+                <Cell v={money2(c.adCpn)} cur={c.adCpn} prev={p?.adCpn} invert />
+                <Cell v={c.loadedCpn == null ? "—" : <><b>{money2(c.loadedCpn)}</b> <Info tip={parts(s, c)} testId="acq-loaded-i" /></>} cur={c.loadedCpn} prev={p?.loadedCpn} invert />
+                <Cell v={<Bar v={c.metaShare} />} cur={c.metaShare} prev={p?.metaShare} />
               </>
             );
-            const un = data.unmapped.cur, unP = compareOn ? data.unmapped.prev : null;
-            const unSide = (xs: UnmappedAdset[]) => sideOf({ spendCents: xs.reduce((a, u) => a + u.spendCents, 0), regSpendCents: xs.reduce((a, u) => a + u.regSpendCents, 0),
-              metaRegs: xs.some((u) => u.metaRegs != null) ? xs.reduce((a, u) => a + (u.metaRegs ?? 0), 0) : null }, 0, 0);
+            const tS = sideOf(t, t), tpS = tp ? sideOf(tp, tp) : null;
             return (
               <section className={`${styles.card} acq-card`} data-testid="acq-cost">
-                <h2 className="acq-h2">Cost per player and paid share</h2>
+                <h2 className="acq-h2">Cost per new player</h2>
+                <div className="acq-tsub">Every number is counted, nothing estimated.</div>
                 <div className={styles.tableWrap}>
                   <table className={`${styles.adsTable} acq-table`}>
                     <thead><tr>
                       <th>Market</th>
-                      <th>Meta new players <span className="acq-est">est.</span> <Info tip={tip.metaNew} /></th>
-                      <th>Meta cost per new player <span className="acq-est">est.</span> <Info tip={tip.metaCpn} /></th>
-                      <th>Blended cost per registration <Info tip={tip.bCpr} /></th>
-                      <th>Blended cost per new player <Info tip={tip.bCpn} /></th>
-                      <th>Paid share of registrations <Info tip={tip.share} /></th>
+                      <th>Ad cost per registration <Info tip={tip.adCpr} /></th>
+                      <th>Ad cost per new player <Info tip={tip.adCpn} /></th>
+                      <th>Fully loaded cost per new player <Info tip={tip.loaded} /></th>
+                      <th>Meta-reported share of registrations <Info tip={tip.share} /></th>
                     </tr></thead>
                     <tbody>
                       {data.markets.map((r) => {
                         const p = compareOn ? r.prev : null;
-                        const c = costMetrics(sideOf(r.cur.meta, r.cur.ours.registrations, r.cur.ours.firstTime), rate);
-                        const cp = p ? costMetrics(sideOf(p.meta, p.ours.registrations, p.ours.firstTime), rateP) : null;
-                        return <tr key={r.key} data-testid="acq-cost-row" data-market={r.key}><td>{r.label}</td><Cells c={c} p={cp} /></tr>;
+                        const s = sideOf(r.cur.meta, r.cur.ours), sp = p ? sideOf(p.meta, p.ours) : null;
+                        return <tr key={r.key} data-testid="acq-cost-row" data-market={r.key}><td>{r.label}</td>
+                          <Cells s={s} c={costMetrics(s)} p={sp ? costMetrics(sp) : null} /></tr>;
                       })}
-                      {un.length > 0 && (
-                        <tr data-testid="acq-cost-unmapped"><td className="acq-muted">Unmapped</td>
-                          <Cells c={costMetrics(unSide(un), rate)} p={unP ? costMetrics(unSide(unP), rateP) : null} noOurs /></tr>
-                      )}
                       <tr className={`${styles.adsTotal} acq-total`} data-testid="acq-cost-total"><td>Total</td>
-                        <Cells c={costMetrics(t, rate)} p={tp ? costMetrics(tp, rateP) : null} /></tr>
+                        <Cells s={tS} c={costMetrics(tS)} p={tpS ? costMetrics(tpS) : null} /></tr>
                     </tbody>
                   </table>
                 </div>
+                <dl className="acq-key" data-testid="acq-cost-key">
+                  <dt>Ad cost per new player</dt><dd>Meta spend ÷ all first-time players</dd>
+                  <dt>Fully loaded</dt><dd>(Meta spend + free first-match spots + first-match and referral code discounts) ÷ all first-time players</dd>
+                  <dt>Meta-reported share</dt><dd>Meta&apos;s own registration count ÷ all registrations. Meta&apos;s attribution, not exact</dd>
+                  {data.unmapped.cur.length > 0 && <><dt>Unmapped</dt><dd>Spend on ad sets with no city is in the Total only</dd></>}
+                </dl>
               </section>
             );
           })()}
@@ -804,6 +812,12 @@ const CSS = `
 .acq .acq-badge.amber{background:#fff1d2;color:#7a4b00}
 .acq .acq-badge.red{background:#fbe3e1;color:#8e1b14}
 .acq .acq-flag{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;background:#b42318;color:#fff;font-size:11px;font-weight:800}
+.acq .acq-share{display:inline-flex;align-items:center;gap:8px;justify-content:flex-end}
+.acq .acq-sharebar{display:inline-block;width:70px;height:6px;border-radius:3px;background:#e3e7e1;overflow:hidden}
+.acq .acq-sharebar span{display:block;height:100%;background:#3b6fd8;border-radius:3px}
+.acq .acq-key{display:grid;grid-template-columns:max-content 1fr;gap:4px 24px;margin:0;padding:12px 16px 4px;font-size:12px;color:var(--muted,#5c7168)}
+.acq .acq-key dt{font-weight:700;color:var(--ink,#003326)}
+.acq .acq-key dd{margin:0}
 .acq .acq-est{font-size:11px;color:var(--muted,#5c7168);font-weight:500}
 .acq .acq-dlsub td{background:#f7faf8}
 .acq .acq-chartcard{padding:4px 18px 10px}
