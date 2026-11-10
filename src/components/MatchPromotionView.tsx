@@ -29,7 +29,7 @@ import { weekQueueEntries, weekQueues, isPastWeek, defaultDayIdx, tabCounts, che
 import {
   CHANNELS, NEW_FLAG_LABEL, channelsOn, coverageCaption, coverageStateOf, coverageSummary, matchCodes,
   coverageOf, coverLabel, generalsCovering, generalPushDayIdx, pushReach, type GeneralPush,
-  datedPushes, draftFromPlan, draftToPushes, fmtPushIn, fromInputValue, isPushOverdue, isPushSent, leadToKickoff,
+  channelNames, datedPushes, draftFromPlan, draftToPushes, fmtPushIn, fromInputValue, isPushOverdue, isPushSent, leadToKickoff,
   sentStamp, skippedStamp, isPushSkipped, toInputValue, venueOffsetMs,
   type ChannelKey, type PromoMatch, type PromoPush, type PromoWeek, type PushDraft, type ZoneMode,
 } from "@/lib/matchPromotion";
@@ -807,6 +807,7 @@ function DayQueue({ week, zone, onMarked, onError, withPush, liveCount }: {
    * channel with nothing today still shows, at 0, so the filter that is hiding everything is on
    * screen to clear rather than invisible. */
   const perChan = channelCounts(dayQ);
+  const dayPushes = [...dayQ.late, ...dayQ.todo, ...dayQ.done].map((e) => e.p);
   const chips = CHANNELS.filter((c) => (perChan.get(c.key) ?? 0) > 0 || c.key === chan);
   const q = filterQueue(dayQ, chan);
   const shown = q.late.length + q.todo.length + q.done.length;
@@ -881,7 +882,7 @@ function DayQueue({ week, zone, onMarked, onError, withPush, liveCount }: {
         {total > 0 && (
           <div className="mb-1.5 mt-2 flex flex-wrap gap-1.5" role="group" aria-label="Channel" data-testid="chan-filter">
             {[{ key: null as ChannelKey | null, label: "All", n: total },
-              ...chips.map((c) => ({ key: c.key as ChannelKey | null, label: c.label, n: perChan.get(c.key) ?? 0 }))].map((c) => {
+              ...chips.map((c) => ({ key: c.key as ChannelKey | null, label: channelNames(c.key, dayPushes).label, n: perChan.get(c.key) ?? 0 }))].map((c) => {
               const on = chan === c.key;
               return (
                 <button key={c.key ?? "all"} type="button" aria-pressed={on}
@@ -898,7 +899,7 @@ function DayQueue({ week, zone, onMarked, onError, withPush, liveCount }: {
         )}
         {chan && (
           <div className="mb-1.5 text-[11.5px] text-deep-green/55" data-testid="chan-filter-note">
-            Showing {CHANNELS.find((c) => c.key === chan)?.label ?? chan} only · sorted by push time
+            Showing {chan ? channelNames(chan, dayPushes).label : chan} only · sorted by push time
           </div>
         )}
         {/* PAST DUE FIRST, IN ITS OWN GROUP. A push whose moment has gone is late; one whose moment
@@ -914,7 +915,7 @@ function DayQueue({ week, zone, onMarked, onError, withPush, liveCount }: {
         )}
         {total > 0 && shown === 0 && (
           <div className="py-1.5 text-[12px] text-deep-green/40" data-testid="queue-chan-empty">
-            No {CHANNELS.find((c) => c.key === chan)?.label ?? ""} pushes on this day.
+            No {chan ? channelNames(chan, dayPushes).label : ""} pushes on this day.
           </div>
         )}
         {shown > 0 && q.late.length === 0 && q.todo.length === 0 && (
@@ -998,7 +999,7 @@ function QueueRow({ e, zone, late, past, week, onMarked, onError }: {
       {/* THE CHIP CARRIES ITS OWN CODE. */}
       <span data-testid="queue-chan" className={`inline-flex h-[18px] items-center gap-1 rounded-[5px] border px-1 text-[9.5px] font-extrabold ${
         sent ? "border-cream-line bg-[#eef3f0] text-deep-green/40" : "border-mint/40 bg-mint-soft/40 text-emerald-700"}`}>
-        <i className="not-italic">{chan?.short ?? p.channel}</i>
+        <i className="not-italic">{chan ? channelNames(p.channel, [p]).short : p.channel}</i>
         {code && <i data-testid="queue-code" className="not-italic tracking-[0.03em] opacity-80">{code}</i>}
       </span>
       {check && (
@@ -1089,7 +1090,7 @@ function GeneralPushes({ city, week, onOpen }: {
                 {chans.map((c) => (
                   <i key={c.key} data-testid="general-push-chan"
                     className="inline-flex items-center rounded-[5px] border border-mint/40 bg-mint-soft/50 px-[5px] text-[9.5px] font-extrabold not-italic text-emerald-700">
-                    {c.short}
+                    {channelNames(c.key, [g]).short}
                   </i>
                 ))}
                 {/* AN UNDATED PUSH SAYS SO IN AMBER, where the time would be. It is the one thing
@@ -1725,7 +1726,7 @@ function Tile({ m, open, onOpen, zone, priorLabel, priorWeeks, risk, cover, shif
               {lit.map((c) => (
                 <i key={c.key} data-testid="chip" data-on="1"
                   className="inline-flex h-[18px] min-w-[24px] items-center justify-center rounded-[5px] border border-mint/40 bg-mint-soft/40 px-1 text-[9.5px] font-extrabold not-italic text-emerald-700">
-                  {c.short}
+                  {channelNames(c.key, m.plan?.pushes ?? []).short}
                 </i>
               ))}
             </span>
@@ -1834,7 +1835,7 @@ function Coverage({ week, zone }: { week: PromoWeek; zone: ZoneMode }) {
                           </div>
                           <span className="flex flex-wrap gap-[2px]">
                             {CHANNELS.filter((c) => channelsOn(m.plan).includes(c.key)).map((c) => (
-                              <i key={c.key} className="inline-flex h-[15px] min-w-[22px] items-center justify-center rounded-[5px] border border-mint/40 bg-mint-soft/40 px-[3px] text-[8.5px] font-extrabold not-italic text-emerald-700">{c.short}</i>
+                              <i key={c.key} className="inline-flex h-[15px] min-w-[22px] items-center justify-center rounded-[5px] border border-mint/40 bg-mint-soft/40 px-[3px] text-[8.5px] font-extrabold not-italic text-emerald-700">{channelNames(c.key, m.plan?.pushes ?? []).short}</i>
                             ))}
                           </span>
                         </div>

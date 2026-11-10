@@ -49,6 +49,18 @@ export const CHANNELS = [
 export type ChannelKey = (typeof CHANNELS)[number]["key"];
 export const CHANNEL_KEYS = CHANNELS.map((c) => c.key) as readonly ChannelKey[];
 
+/* SENT "dm" PUSHES WERE REAL DMs (2026-11-09). A push already marked sent on the old DM channel shows as DM; an unsent one
+ * is a Popup. Given the pushes in view for one channel (one push, a match's plan, a day's queue): DM only when there is
+ * at least one and every "dm" push among them is sent. Display only; the stored key is "dm" either way. */
+export const DM_NAMES = { short: "DM", label: "DM" } as const;
+export function channelNames(key: string, pushes: readonly { channel: string; pushedAt: string | null }[]): { short: string; label: string } {
+  const c = CHANNELS.find((x) => x.key === key);
+  const base = { short: c?.short ?? key, label: c?.label ?? key };
+  if (key !== "dm") return base;
+  const mine = pushes.filter((p) => p.channel === "dm");
+  return mine.length > 0 && mine.every((p) => p.pushedAt != null) ? DM_NAMES : base;
+}
+
 /* ── ONE ROW PER PUSH ─────────────────────────────────────────────────────────────────────────
  *
  * Migration 0176. A match has many pushes and a channel has many; each carries its own time, its

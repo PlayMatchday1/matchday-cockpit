@@ -18,7 +18,7 @@
 // SAME DATA, SAME ROUTES, SAME WRITES. Every figure here is computed by the desktop's own helpers
 // and passed in; nothing is re-derived and no count is redefined.
 
-import { CHANNELS, NEW_FLAG_LABEL, channelsOn, coverLabel, pushReach, coverageCaption, coverageOf, coverageStateOf, coverageSummary, datedPushes, fmtPushIn, isPushOverdue, isPushSent, isPushSkipped, leadToKickoff, matchCodes, sentStamp, skippedStamp, venueOffsetMs, type GeneralPush, type PromoMatch, type PromoPush, type PromoWeek, type PushDraft, type ZoneMode } from "@/lib/matchPromotion";
+import { CHANNELS, NEW_FLAG_LABEL, channelNames, channelsOn, coverLabel, pushReach, coverageCaption, coverageOf, coverageStateOf, coverageSummary, datedPushes, fmtPushIn, isPushOverdue, isPushSent, isPushSkipped, leadToKickoff, matchCodes, sentStamp, skippedStamp, venueOffsetMs, type GeneralPush, type PromoMatch, type PromoPush, type PromoWeek, type PushDraft, type ZoneMode } from "@/lib/matchPromotion";
 import { TAG_META, splitTags, tagTitle, tagsAtScope, type TagDates, type TagKey } from "@/lib/promoTags";
 import Starting11Control from "@/components/Starting11Control";
 /* THE VIEW LIST AND ITS LABELS COME FROM THE DESKTOP. Not a second list to keep in step — a
@@ -108,7 +108,7 @@ function Chips({ m, litOnly = false }: { m: PromoMatch; litOnly?: boolean }) {
           <i key={c.key} data-testid="m-chip" data-on={on ? "1" : "0"}
             className={`inline-flex h-[19px] min-w-[27px] items-center justify-center rounded-[5px] border px-[5px] text-[9.5px] font-extrabold not-italic ${
               on ? "border-mint/50 bg-mint-soft/50 text-emerald-700" : "border-cream-line bg-white text-deep-green/25"}`}>
-            {c.short}
+            {channelNames(c.key, m.plan?.pushes ?? []).short}
           </i>
         );
       })}
@@ -168,7 +168,7 @@ function Due({ week, jobs, overdue, now, zone, onOpen, onReload, onError }: {
               </span>
               <span data-testid="m-due-chan" className={`inline-flex h-[19px] min-w-[27px] items-center justify-center gap-1 rounded-[5px] border px-[5px] text-[9.5px] font-extrabold ${
                 sent ? "border-cream-line bg-[#eef3f0] text-deep-green/40" : "border-mint/50 bg-mint-soft/50 text-emerald-700"}`}>
-                <i className="not-italic">{chan?.short ?? p.channel}</i>
+                <i className="not-italic">{chan ? channelNames(p.channel, [p]).short : p.channel}</i>
                 {code && <i data-testid="m-due-code" className="not-italic tracking-[0.03em] opacity-80">{code}</i>}
               </span>
               {/* THE SCOPE, SAID OUT LOUD. A general push looks like a match push at a glance and
