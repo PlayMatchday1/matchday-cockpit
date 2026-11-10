@@ -1,5 +1,5 @@
-// THE POPUP HEADLINE'S AUTO-FIT, the app's own rule, ported line for line from frontend feature/announcement-popups
-// src/utils/headlineFit.ts (frontend-ota, read 2026-11-09 while still uncommitted there). Client-safe. Keep the two in
+// THE POPUP HEADLINE'S AUTO-FIT, the app's own rule, ported line for line from frontend src/utils/headlineFit.ts as committed in
+// 099270ae on feature/headline-autofit (frontend-ota, 2026-11-09; not yet on feature/announcement-popups). Client-safe. Keep the two in
 // step: the preview is only right while this is the same arithmetic the phone does.
 //
 // The app's comment, kept:
@@ -18,6 +18,7 @@ import { withPreviewName } from "./offersModel";
 // The font only ever kerns capitals closer together, so the sum is never
 // narrower than what the phone draws.
 
+// prettier-ignore
 const BOLD: Record<string, number> = {
   ' ': 220, '!': 280, '"': 411, '#': 560, $: 560, '%': 560, '&': 701,
   "'": 239, '(': 308, ')': 308, '*': 425, '+': 560, ',': 263, '-': 408,
@@ -29,6 +30,7 @@ const BOLD: Record<string, number> = {
   S: 544, T: 526, U: 654, V: 603, W: 930, X: 569, Y: 557, Z: 532,
 };
 
+// prettier-ignore
 const BOLD_ITALIC: Record<string, number> = {
   ' ': 220, '!': 163, '"': 306, '#': 560, $: 560, '%': 560, '&': 641,
   "'": 138, '(': 234, ')': 235, '*': 423, '+': 560, ',': 175, '-': 267,
@@ -80,7 +82,8 @@ const advance = (text: string, italic: boolean) => {
   return units;
 };
 
-/** The headline row's width in points (PromoPopup's two Texts). */
+/** The headline row's width in points (PromoPopup's two Texts), padding
+ * included. */
 export const headlineWidth = (
   lead: string,
   accent: string,
@@ -98,6 +101,19 @@ export const headlineWidth = (
   return width;
 };
 
+/**
+ * The part of the row that draws: without the blank pl-2 before and pr-2
+ * after (the hair space stays, for the italic's lean). Those may spill into
+ * the card's 20pt padding, as "STAY IN THE GAME" at 34pt always has: 287pt
+ * of row in 272pt, its letters inside (staging iPhone, 2026-11-07).
+ */
+export const headlineInkWidth = (
+  lead: string,
+  accent: string,
+  size: number,
+  fontScale = 1,
+) => headlineWidth(lead, accent, size, fontScale) - (accent ? 2 * PAD : 0);
+
 export interface HeadlineLine {
   lead: string;
   accent: string;
@@ -108,16 +124,13 @@ export interface HeadlineFit {
   lines: HeadlineLine[];
 }
 
-// A point to spare: the phone rounds each text's width up to its pixels
-const SLACK = 1;
-
 /**
  * The size and lines for a headline: one line at the design's size if it
  * fits, else the largest whole size down to 28pt that fits, else two lines
  * at 28pt. Two lines break between the plain and the green part when both
  * fit, otherwise where the longer line is shortest. Wider still (64
  * characters a part), it takes as many lines at 28pt as it needs, and a
- * single word wider than the card ends in "…".
+ * single word wider than the card ends in "…" (PromoPopup).
  */
 export function fitHeadline(
   lead: string,
@@ -127,7 +140,7 @@ export function fitHeadline(
   fontScale = 1,
 ): HeadlineFit {
   const fits = (l: string, a: string, size: number) =>
-    headlineWidth(l, a, size, fontScale) + SLACK <= maxWidth;
+    headlineInkWidth(l, a, size, fontScale) <= maxWidth;
 
   const smallest = Math.min(designSize, HEADLINE_MIN_SIZE);
   for (let size = designSize; size >= smallest; size--) {
@@ -138,19 +151,31 @@ export function fitHeadline(
 
   const size = smallest;
   const words = [
-    ...lead.split(/\s+/).filter(Boolean).map(w => ({w, italic: false})),
-    ...accent.split(/\s+/).filter(Boolean).map(w => ({w, italic: true})),
+    ...lead
+      .split(/\s+/)
+      .filter(Boolean)
+      .map(w => ({w, italic: false})),
+    ...accent
+      .split(/\s+/)
+      .filter(Boolean)
+      .map(w => ({w, italic: true})),
   ];
   const line = (from: number, to: number): HeadlineLine => {
     const part = words.slice(from, to);
     return {
-      lead: part.filter(x => !x.italic).map(x => x.w).join(' '),
-      accent: part.filter(x => x.italic).map(x => x.w).join(' '),
+      lead: part
+        .filter(x => !x.italic)
+        .map(x => x.w)
+        .join(' '),
+      accent: part
+        .filter(x => x.italic)
+        .map(x => x.w)
+        .join(' '),
     };
   };
   const width = (l: HeadlineLine) =>
-    headlineWidth(l.lead, l.accent, size, fontScale);
-  const fitsLine = (l: HeadlineLine) => width(l) + SLACK <= maxWidth;
+    headlineInkWidth(l.lead, l.accent, size, fontScale);
+  const fitsLine = (l: HeadlineLine) => width(l) <= maxWidth;
 
   if (lead && accent && fits(lead, '', size) && fits('', accent, size)) {
     const boundary = words.filter(x => !x.italic).length;

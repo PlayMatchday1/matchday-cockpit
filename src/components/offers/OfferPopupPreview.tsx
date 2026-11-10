@@ -52,7 +52,7 @@ export default function OfferPopupPreview({ copy: raw, ends, showTicket, width =
       <div className="flex w-full flex-col items-center" style={{ gap: px(7), padding: `${px(9)} ${px(10)}` }}>
         <div className="flex flex-col items-center">
           {fit.lines.map((l, i) => (
-            <p key={i} data-testid="offers-preview-headline" data-size={fit.size} data-lines={fit.lines.length} className={`${titillium.className} whitespace-nowrap font-bold`} style={{ color: "#0b4031", fontSize: px(fit.size / 2), lineHeight: px(26) }}>
+            <p key={i} data-testid="offers-preview-headline" data-size={fit.size} data-lines={fit.lines.length} className={`${titillium.className} whitespace-nowrap font-bold uppercase`} style={{ color: "#0b4031", fontSize: px(fit.size / 2), lineHeight: px(26) }}>
               {l.lead}{l.lead && l.accent ? " " : ""}{l.accent ? <span className="italic" style={{ color: "#2cdb87" }}>{l.accent}</span> : null}
             </p>
           ))}
