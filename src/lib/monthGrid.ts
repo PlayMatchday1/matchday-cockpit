@@ -17,6 +17,7 @@
  */
 
 import { MASTER_SCHEDULE_WEEK_START, weekEndOnOrAfter, weekStartOnOrBefore } from "./weekStart";
+import type { CancelShown } from "./cancelReasons";
 
 export type GridMatch = {
   apiId: number; city: string; date: string; time: string; minutes: number;
@@ -38,6 +39,9 @@ export type GridMatch = {
   /** `mdapi_matches.is_cancelled`. Cancelled matches are CARRIED, not dropped, so the grid's
    *  "Show cancelled" toggle has something to show. The endpoint used to filter them out. */
   cancelled?: boolean;
+  /** Why it was cancelled (cancelReasons.CancelShown), sent with cancelled matches only; null when
+   *  the reason could not be loaded. Drives the tile's bright or faded red and its hover. */
+  cancel?: CancelShown | null;
   /* ── THE COUNT IS TWO FIELDS, AND IT HAS TO BE ────────────────────────────────────────────
    * `players` is the TOTAL occupied count (real + fake); `fakePlayers` is the fakes among them.
    * They are `mdapi_matches.player_count` / `fake_player_count`, which the mirror sync writes

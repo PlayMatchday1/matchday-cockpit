@@ -35,6 +35,7 @@ import { canonicalVenueName } from "@/lib/venueResolver";
 import { MASTER_SCHEDULE_WEEK_START as WS, weekdayHeaders } from "@/lib/weekStart";
 import { CITY_SCOPES } from "@/lib/cityScope";
 import { CITY_CODE_TO_DISPLAY } from "@/lib/scheduleReconcile";
+import { CANCEL_LEGEND, cancelHover, isLowPlayerCancel } from "@/lib/cancelReasons";
 import { downloadCsv, plural } from "@/components/growth/format";
 import RefreshIcon from "@/components/RefreshIcon";
 import { buildCopyBody, copyConfirmLine, type SourceMatch } from "@/lib/copyMatch";
@@ -1346,6 +1347,9 @@ export default function VeoMasterSchedule() {
                 <span>Show cancelled in grid</span>
                 {monthCxCount > 0 && <i className="vms-mcxn">{monthCxCount}</i>}
               </label>
+              <span className="vms-mcxkey" data-testid="month-cx-legend">
+                <i className="low" aria-hidden /><i aria-hidden />{CANCEL_LEGEND}
+              </span>
               <span className="vms-mtitle" data-testid="month-title">{range ? rangeTitle(range.from, range.to) : ""}</span>
               <span className="vms-mstat" data-testid="month-count">
                 {monthBusy ? "Loading…" : `${monthCount} match${monthCount === 1 ? "" : "es"}`}
@@ -1921,6 +1925,14 @@ const CSS = `
 .vms-mcx{background:#fdeae4;border-color:#f0bda9;box-shadow:inset 2px 0 0 #a8391a}
 .vms-mcx b,.vms-mcx span{color:#a8391a;text-decoration:line-through;text-decoration-thickness:1px}
 .vms-mcx .vms-mcnt,.vms-mcx .vms-mprice{color:#a8391a;opacity:.75}
+/* NOT ENOUGH PLAYERS, and only when we are sure: a solid darker red border and red text, so it jumps out. */
+.vms-mcx.vms-mcxlow{background:#fbd9cf;border:1.5px solid #b3261e;box-shadow:inset 3px 0 0 #b3261e}
+.vms-mcx.vms-mcxlow b,.vms-mcx.vms-mcxlow span{color:#b3261e;font-weight:800}
+.vms-mcx.vms-mcxlow .vms-mcnt,.vms-mcx.vms-mcxlow .vms-mprice{color:#b3261e;opacity:1}
+.vms-mcxkey{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;color:#6E8076}
+.vms-mcxkey i{display:inline-block;width:12px;height:10px;border-radius:3px;background:#fdeae4;border:1px solid #f0bda9;box-shadow:inset 2px 0 0 #a8391a}
+.vms-mcxkey i.low{background:#fbd9cf;border:1.5px solid #b3261e;box-shadow:inset 2px 0 0 #b3261e}
+.vms-mcxkey i:last-of-type{margin-right:3px}
 .vms-mcount u{text-decoration:none;color:#a8391a;font-weight:700}
 /* The cancelled toggle — same shape and same accent as Slate Review's. */
 .vms-mtoggle{display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:600;color:#3d5245;cursor:pointer;user-select:none}
@@ -2210,6 +2222,9 @@ span.vms-cam:focus-visible{outline:2px solid var(--mintInk);outline-offset:2px}
   .vms-agi.cx{background:#FDF6F4}
   .vms-agi.cx>b,.vms-agi.cx>span,.vms-agi.cx>i,.vms-agi.cx>em{color:#b08278}
   .vms-agi.cx>span{text-decoration:line-through}
+  .vms-agi.cx.cxlow{background:#fbd9cf;box-shadow:inset 3px 0 0 #b3261e;outline:1.5px solid #b3261e;outline-offset:-1.5px}
+  .vms-agi.cx.cxlow>b,.vms-agi.cx.cxlow>span,.vms-agi.cx.cxlow>i,.vms-agi.cx.cxlow>em{color:#b3261e;font-weight:800}
+  .vms-agi.cx.cxlow .cxtag{color:#fff;background:#b3261e}
   .vms-agi .cxtag{flex:none;font-style:normal;font-size:9.5px;font-weight:900;letter-spacing:.05em;
     color:#a8391a;background:#fdeae4;border-radius:4px;padding:1px 5px}
 
@@ -2436,9 +2451,9 @@ function MonthAgenda({ weeks, allMatches, showCx, picked, onOpen }: {
               return (
                 /* THE CAMERA MARK, for the same reason the grid above carries one: Month is the
                    landing view now, and on a phone this agenda IS Month. Same glyph, same tokens. */
-                <button type="button" key={m.apiId} className={"vms-agi" + (m.cancelled ? " cx" : "") + (m.veo ? " vms-agveo" : "")}
+                <button type="button" key={m.apiId} className={"vms-agi" + (m.cancelled ? " cx" : "") + (m.cancelled && isLowPlayerCancel(m.cancel) ? " cxlow" : "") + (m.veo ? " vms-agveo" : "")}
                   data-testid="mob-match" data-id={m.apiId} data-tone={tone || "none"} data-veo={m.veo ? "1" : "0"}
-                  data-cancelled={m.cancelled ? "1" : "0"} onClick={() => onOpen(m.apiId)}>
+                  data-cancelled={m.cancelled ? "1" : "0"} title={m.cancelled ? cancelHover(m.cancel) : undefined} onClick={() => onOpen(m.apiId)}>
                   {m.veo && <CamIcon />}
                   <b>{m.time}</b>
                   {/* THE FIELD WRAPS, IT DOES NOT ELLIPSE. "LBJ Early College High School" is 207px
@@ -2614,7 +2629,10 @@ function MonthCell({ d, onOpen, selectedId, singleField, pick }: {
               data-veo={m.veo ? "1" : "0"}
               className={"vms-mitem" + (selectedId === m.apiId ? " vms-msel" : "")
                 + (m.veo ? " vms-mveo" : "")
-                + (m.cancelled ? " vms-mcx" : "")}
+                + (m.cancelled ? " vms-mcx" : "")
+                /* BRIGHT RED ONLY WHEN WE ARE SURE it was not enough players (cancelReasons.isLowPlayerCancel). */
+                + (m.cancelled && isLowPlayerCancel(m.cancel) ? " vms-mcxlow" : "")}
+              data-cxlow={m.cancelled && isLowPlayerCancel(m.cancel) ? "1" : undefined}
               /* IN PICK MODE THE WHOLE CELL IS THE CONTROL, matches included. Otherwise clicking a
                  day that holds matches both picks it and opens the editor over the calendar you
                  are picking on. */
@@ -2623,7 +2641,7 @@ function MonthCell({ d, onOpen, selectedId, singleField, pick }: {
                  this is where the whole of it lives, count and price included. */
               title={[m.time, m.venue, m.name, countLabel(m), priceLabel(m.price),
                 m.veo ? "Veo camera" : null,
-                m.cancelled ? "CANCELLED" : null].filter(Boolean).join(" · ")}>
+                m.cancelled ? cancelHover(m.cancel) : null].filter(Boolean).join(" · ")}>
               {m.veo && <CamIcon />}
               <b>{m.time}</b>
               {/* The field, unless the filter is already down to a single field — at which point

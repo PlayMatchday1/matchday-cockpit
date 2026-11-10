@@ -89,3 +89,22 @@ export function surfaceOf(source: string): string {
   if (source.startsWith("Master Schedule panel")) return "Match editor";
   return "Match panel";
 }
+
+/* ── THE MASTER SCHEDULE'S CANCELLED TILE (Ryan, 2026-11-10) ────────────────────────────────────────
+ * Bright red means we are SURE it was not enough players: a stored "Not enough players", or MatchDay's
+ * own auto-cancel read by cancelReasonFor above. Everything else is the faded red, including a cancel
+ * with no saved reason, an inferred Slate change, and a reason that could not be loaded. The hover
+ * says the reason, "No reason saved" when nothing was saved and it was not an auto-cancel. */
+export type CancelShown = { reason: CancelReason; stored: boolean; note: string | null };
+
+/** null: the reason could not be loaded for this match (faded, and the hover says so). */
+export const isLowPlayerCancel = (c: CancelShown | null | undefined): boolean => c?.reason === "players";
+
+export const CANCEL_LEGEND = "Red = not enough players, faded = other cancel";
+
+export function cancelHover(c: CancelShown | null | undefined): string {
+  if (!c) return "Cancelled: reason not loaded";
+  if (c.stored) return `Cancelled: ${REASON_LABEL[c.reason]}${c.note ? ` (${c.note})` : ""}`;
+  if (c.reason === "players") return "Cancelled: Not enough players (MatchDay cancelled it automatically)";
+  return "Cancelled: No reason saved";
+}

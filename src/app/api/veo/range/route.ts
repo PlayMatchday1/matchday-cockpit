@@ -14,6 +14,8 @@
 
 import { authenticateCrm } from "@/lib/crmAuth";
 import { fetchVeoRange } from "@/lib/veoSchedule";
+import { scheduleCancelReasons } from "@/lib/scheduleCancelReasons";
+import type { CancelShown } from "@/lib/cancelReasons";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -45,7 +47,13 @@ export async function GET(req: Request) {
 
   try {
     const range = await fetchVeoRange(auth.supabase, new Date(), from, to, auth.confinedCity ?? null);
-    return Response.json(range, { headers: { "Cache-Control": "no-store" } });
+    /* WHY EACH CANCELLED MATCH WAS CANCELLED, for the tile's colour and hover (scheduleCancelReasons).
+     * A failed read never fails the schedule: those tiles carry cancel null and draw faded. */
+    let reasons: Map<number, CancelShown> | null = null;
+    try { reasons = await scheduleCancelReasons(auth.supabase, range.matches.filter((m) => m.cancelled)); }
+    catch (e) { console.error(`[api/veo/range] cancel reasons not loaded: ${e instanceof Error ? e.message : String(e)}`); }
+    const matches = range.matches.map((m) => (m.cancelled ? { ...m, cancel: reasons?.get(m.apiId) ?? null } : m));
+    return Response.json({ ...range, matches }, { headers: { "Cache-Control": "no-store" } });
   } catch (e) {
     // LOUD. An empty grid and a failed read must never look the same.
     return Response.json({ error: e instanceof Error ? e.message : String(e) }, { status: 502 });
