@@ -40,7 +40,7 @@ import RefreshIcon from "@/components/RefreshIcon";
 import { buildCopyBody, copyConfirmLine, type SourceMatch } from "@/lib/copyMatch";
 import {
   buildMonthGrid, applyFilters, fieldsAvailable, reconcileFields, fieldCountLabel,
-  defaultRange, rangeTitle, priceLabel, shiftRangeMonth, countLabel, fillTone,
+  defaultRange, rangeTitle, priceLabel, shiftRangeMonth, countLabel, fillTone, daySpots, spotsLabel,
   fieldCounts, busiestDay, isoDow, visibleSpan, inRangeMatches, fieldsByCity,
   type GridDay, type GridMatch,
 } from "@/lib/monthGrid";
@@ -2427,6 +2427,7 @@ function MonthAgenda({ weeks, allMatches, showCx, picked, onOpen }: {
               <span className="n">
                 {d.matches.length} match{d.matches.length === 1 ? "" : "es"}
                 {cx > 0 && ` · ${cx} cancelled hidden`}
+                {` · ${spotsLabel(daySpots(d.matches))}`}
               </span>
             </div>
             {d.matches.map((m) => {
@@ -2592,7 +2593,7 @@ function MonthCell({ d, onOpen, selectedId, singleField, pick }: {
         {/* THE DAY'S COUNT, in the corner, so a scrolling cell says how much it holds. */}
         {d.matches.length > 0 && (
           <span className="vms-mcount" data-testid="month-daycount">
-            {d.matches.length}{cx > 0 && <u> · {cx} cx</u>}
+            {d.matches.length}{cx > 0 && <u> · {cx} cx</u>} · {spotsLabel(daySpots(d.matches))}
           </span>
         )}
       </div>

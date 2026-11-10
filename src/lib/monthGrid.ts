@@ -65,6 +65,15 @@ export function realCount(m: Pick<GridMatch, "players" | "fakePlayers">): number
   return Math.max(0, m.players - (m.fakePlayers ?? 0));
 }
 
+/* A DAY'S SPOTS BOOKED: the sum of realCount over the day's matches that are not cancelled, so the
+ * header always equals the tiles under it. realCount already leaves out fakes, and the mirror's
+ * player_count (_count.players) already leaves out WAITING checkouts and cancelled player rows. A
+ * match with no count adds nothing. The caller passes the day's matches as filtered for the grid. */
+export function daySpots(ms: Pick<GridMatch, "players" | "fakePlayers" | "cancelled">[]): number {
+  return ms.reduce((n, m) => (m.cancelled ? n : n + (realCount(m) ?? 0)), 0);
+}
+export const spotsLabel = (n: number) => `${n} spot${n === 1 ? "" : "s"}`;
+
 /* HOW FULL, AS A WORD. The only two states worth colouring:
  *   "full" — at or over capacity, anywhere in the month. Actionable in the useful direction: add
  *            a slot. This one is not time-sensitive, so it is not restricted to today.
