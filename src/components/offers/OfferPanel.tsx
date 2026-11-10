@@ -31,6 +31,7 @@ import OfferPreview, { type PreviewTab } from "./OfferPreview";
 import { PushReach, PushSection, SendsTo } from "./OfferPush";
 import { defaultSendLocal, fillPush, pushBodyOf, pushDirty, pushFormOf, pushLocked, pushProblem, pushSuggestion, pushText, type PushForm } from "@/lib/offersPush";
 import { lookupInBatches, MAX_OFFER_PLAYER_IDS, pastedLine, playerLookupBlock } from "@/lib/offersModel";
+import { SHRINK_HINT, isShrunk, popupHeadlineFit, popupHeadlineParts } from "@/lib/headlineFit";
 import {
   Btn, Card, Chip, ConfirmDialog, Labeled, O, Toggle, VerdictLine, authed, inputCls, inputStyle, outcomeOf, settled, type WriteOutcome,
 } from "./offersUi";
@@ -309,6 +310,12 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
       ...(isAnnouncement(f) ? { holdoutPercent: f.holdoutPercent === 0 ? DEFAULT_HOLDOUT_PERCENT : f.holdoutPercent, headlineAccent: null, buttonFieldId: null, buttonTarget: f.buttonTarget === "FIELD" ? "FIND_MATCH" : f.buttonTarget } : {}) });
   };
   const ann = isAnnouncement(f);
+  // THE APP'S AUTO-FIT (lib/headlineFit): past 48pt on one line the headline is drawn smaller, then on two lines. The hint
+  // sits under the headline inputs, full width.
+  const headParts = popupHeadlineParts(copy.headline, f.headlineAccent, ann);
+  const headlineHint = isShrunk(popupHeadlineFit(headParts.lead, headParts.accent))
+    ? [<div key="headlineHint" data-testid="offers-headline-shrunk" className="-mt-2 text-[11.5px] sm:col-span-2" style={{ color: O.muted }}>{SHRINK_HINT}</div>]
+    : [];
   const step = (dir: 1 | -1) => {
     const s = STEPPER[f.dealType];
     if (!s) return;
@@ -870,7 +877,7 @@ export default function OfferPanel({ c, data: loaded, matchRead, onRetryMatch, o
                   <input id="offers-headline-accent" data-testid="offers-headline-accent" maxLength={64} disabled={frozen} className={inputCls} style={inputStyle} placeholder="OPEN"
                     value={f.headlineAccent ?? ""} onChange={(e) => set({ headlineAccent: e.target.value || null })} />
                 </div>
-              )] : [copyField(k, label, max)]))}
+              ), ...headlineHint] : k === "headline" ? [copyField(k, label, max), ...headlineHint] : [copyField(k, label, max)]))}
             </div>}
             {popupOff ? null : ann ? (
               <div data-testid="offers-ticket" data-kind="announcement" className="flex flex-col gap-1">

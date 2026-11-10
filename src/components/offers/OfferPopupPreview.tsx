@@ -12,16 +12,10 @@
 import Image from "next/image";
 import { Heebo, Titillium_Web } from "next/font/google";
 import { withPreviewName, type Copy } from "@/lib/offersModel";
+import { popupHeadlineFit, popupHeadlineParts } from "@/lib/headlineFit";
 
 const titillium = Titillium_Web({ subsets: ["latin"], weight: ["700"], style: ["normal", "italic"], display: "swap" });
 const heebo = Heebo({ subsets: ["latin"], weight: ["400", "500", "700"], display: "swap" });
-
-// The app's split: the headline's last word is the italic green one ("50% *OFF*").
-function splitHeadline(headline: string) {
-  const words = headline.trim().split(/\s+/);
-  if (words.length < 2) return { lead: words[0] ?? "", accent: "" };
-  return { lead: words.slice(0, -1).join(" "), accent: words[words.length - 1] };
-}
 
 export const POPUP_BASE_WIDTH = 156;
 
@@ -31,8 +25,10 @@ export const POPUP_BASE_WIDTH = 156;
 export type AnnouncementLook = { accent: string | null; ticket: string | null };
 export default function OfferPopupPreview({ copy: raw, ends, showTicket, width = POPUP_BASE_WIDTH, announcement }: { copy: Copy; ends: string | null; showTicket: boolean; width?: number; announcement?: AnnouncementLook }) {
   const copy = Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, k === "photoUrl" ? v : withPreviewName(v as string | null)])) as Copy;
-  const typedAccent = announcement?.accent ? withPreviewName(announcement.accent) : null;
-  const { lead, accent } = announcement && typedAccent ? { lead: copy.headline.trim(), accent: typedAccent.trim() } : splitHeadline(copy.headline);
+  const { lead, accent } = popupHeadlineParts(raw.headline, announcement?.accent, !!announcement);
+  // THE APP'S AUTO-FIT (lib/headlineFit): 48pt on one line when it fits, smaller down to 28pt, then two lines at 28pt. In
+  // the half-size mock's units a point is 0.5, so 48pt is the 24 the short headline has always drawn at.
+  const fit = popupHeadlineFit(lead, accent);
   const s = width / POPUP_BASE_WIDTH;
   const px = (n: number) => `${Math.round(n * s * 100) / 100}px`;
   return (
@@ -55,9 +51,11 @@ export default function OfferPopupPreview({ copy: raw, ends, showTicket, width =
       </div>
       <div className="flex w-full flex-col items-center" style={{ gap: px(7), padding: `${px(9)} ${px(10)}` }}>
         <div className="flex flex-col items-center">
-          <p data-testid="offers-preview-headline" className={`${titillium.className} whitespace-nowrap font-bold`} style={{ color: "#0b4031", fontSize: px(24), lineHeight: px(26) }}>
-            {lead}{accent ? " " : ""}{accent ? <span className="italic" style={{ color: "#2cdb87" }}>{accent}</span> : null}
-          </p>
+          {fit.lines.map((l, i) => (
+            <p key={i} data-testid="offers-preview-headline" data-size={fit.size} data-lines={fit.lines.length} className={`${titillium.className} whitespace-nowrap font-bold`} style={{ color: "#0b4031", fontSize: px(fit.size / 2), lineHeight: px(26) }}>
+              {l.lead}{l.lead && l.accent ? " " : ""}{l.accent ? <span className="italic" style={{ color: "#2cdb87" }}>{l.accent}</span> : null}
+            </p>
+          ))}
           {copy.line ? <p className={`${titillium.className} text-center font-bold`} style={{ color: "#5d7a6f", fontSize: px(8), letterSpacing: px(1.25) }}>{copy.line}</p> : null}
         </div>
         {copy.body ? <p className={`${heebo.className} w-full text-center`} style={{ color: "#637973", fontSize: px(7.5), lineHeight: px(10.5) }}>{copy.body}</p> : null}
