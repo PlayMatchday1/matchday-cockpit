@@ -38,7 +38,10 @@ export const CHANNELS = [
   { key: "wa", short: "WA", label: "WhatsApp" },
   { key: "match_chat", short: "MC", label: "Match chat" },
   { key: "fb", short: "FB", label: "Facebook" },
-  { key: "dm", short: "DM", label: "DM" },
+  /* POPUP WAS "DM" (2026-11-09): DMs stopped and matches are promoted with in-app popups (Offers). The stored key
+   * stays "dm" — match_promotion_push.channel and its CHECK (0176) — so no row was rewritten; only the words changed.
+   * Rows saved before the change were DMs and now read as Popup. */
+  { key: "dm", short: "POP", label: "Popup" },
   { key: "klaviyo_email", short: "EM", label: "Klaviyo email" },
   { key: "klaviyo_sms", short: "SMS", label: "Klaviyo SMS" },
 ] as const;
@@ -1280,7 +1283,7 @@ export function codeAlsoOnChannels(
   return out;
 }
 
-/** "Klaviyo SMS", "Klaviyo SMS and DM", "Klaviyo SMS, DM and Facebook". */
+/** "Klaviyo SMS", "Klaviyo SMS and Popup", "Klaviyo SMS, Popup and Facebook". */
 export function listChannels(labels: readonly string[]): string {
   if (labels.length <= 1) return labels[0] ?? "";
   return `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}`;

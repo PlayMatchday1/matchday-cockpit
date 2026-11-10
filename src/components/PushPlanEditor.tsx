@@ -35,6 +35,7 @@
 
 import { useMemo } from "react";
 import MarkPushSent from "@/components/MarkPushSent";
+import MatchPopupButton from "@/components/MatchPopupButton";
 import {
   CHANNELS, codeAlsoOnChannels, defaultPushAt, draftSummary, fromInputValue, leadToKickoff,
   listChannels, newDraftKey,
@@ -167,6 +168,8 @@ export default function PushPlanEditor({
 
             {ch.on && (
               <div className="px-3 pb-2.5 pt-2">
+                {/* THE POPUP CHANNEL (stored key "dm", see matchPromotion CHANNELS): its popup lives in Offers. */}
+                {c.key === "dm" && <MatchPopupButton matchId={m.apiId} />}
                 {rows.map((r) => {
                   const lead = leadToKickoff(r.pushAt, kickoff);
                   /* READ OFF THE DRAFT, NOT OFF THE SAVED PLAN, so the note appears as the code is

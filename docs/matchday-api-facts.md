@@ -9105,3 +9105,9 @@ holdout 0 unless raised.
 
 - **The "15" was a count of `mdapi_matches` rows**, not of played matches: 2 cancelled (21242 Nov 8, 21241 Nov 12) and 13 scheduled from 21243 (Sat Nov 14). No page counts cancelled matches as played.
 - **`growth_participation` (0208) excludes cancelled matches but had no start-time cutoff.** On 2026-11-09 it held 104 bookings on 37 upcoming matches, and 11 people had a future `first_match_date`. Philadelphia's 1 "spot booked" in November was a booking on 21243. Migration 0268 adds the cutoff.
+
+## Match Promotion: the DM channel is now Popup (2026-11-09)
+
+- The channel is Clubhouse-only: `match_promotion_push.channel`, CHECK `('wa','match_chat','fb','dm','klaviyo_email','klaviyo_sms')` (`supabase/migrations/0176_match_promotion_push.sql:40`). The parent's `dm` boolean (0128) has been inert since 0176. No backend enum is involved.
+- Relabelled, not renamed: the stored key stays `dm`, and `CHANNELS` (`src/lib/matchPromotion.ts`) shows it as "Popup" / "POP". No row was rewritten. Read on 2026-11-09 (Supabase, read-only): 47 `dm` rows over 31 matches, 17 marked sent, 28 with push_at after that day. Those were planned as DMs and now read as Popup.
+- "Create popup" / "View popup" (`src/components/MatchPopupButton.tsx`) reads `GET /api/offers/match-popups`, one `/admin/offers/page` read. A popup is for a match when popupEnabled isn't false and the match is in matchIds or is its MATCH button (`src/lib/matchPopups.ts`). On the staging backend the read returned real campaigns (e.g. 65 for match 2474). Offers ids and Match Promotion ids only line up on production, since Match Promotion always reads the production mirror.
