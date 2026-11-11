@@ -178,7 +178,10 @@ export async function loadCreditsReport(sb: SupabaseClient) {
     const cancelledIds = [...caMatches.values()].filter((m) => m.is_cancelled).map((m) => m.api_id);
     if (cancelledIds.length) caBookings.push(...await selectAll<BookingIn>(() => sb.from("mdapi_match_players").select(BOOKING_COLS).in("match_api_id", cancelledIds).order("api_id")));
   }
-  const doubles = doubleCredits(creditAll, caMatches, caBookings);
+  const doubleRows = doubleCredits(creditAll, caMatches, caBookings);
+  const dPlayers = await playersById(sb, doubleRows.flatMap((d) => d.playerIds));
+  const nameOf = (id: number, p?: PlayerIn) => [p?.first_name, p?.last_name].filter(Boolean).join(" ").trim() || `#${id}`;
+  const doubles = doubleRows.map((d) => ({ ...d, players: d.playerIds.map((id) => ({ id, name: nameOf(id, dPlayers.get(id)) })) }));
 
   // Credits given to members: only matches not free for members can carry one (creditsReport.memberCredits).
   const paidMatches = await selectAll<MatchIn>(() => sb.from("mdapi_matches").select(MATCH_COLS).eq("is_free_member", false).gte("start_date_utc", sinceUtc(`${FIRST_MONTH}-01`)).order("api_id"));
@@ -206,16 +209,20 @@ export async function loadCreditsReport(sb: SupabaseClient) {
       memberships.set(x.user_id, list);
     }
   }
-  const toMembers = memberCredits(pmBookings, pmMap, pmPlayers, memberships, `${FIRST_MONTH}-01`, today).map((c) => ({
-    ...c, playerName: [pmPlayers.get(c.userId)?.first_name, pmPlayers.get(c.userId)?.last_name].filter(Boolean).join(" ").trim(),
-  }));
+  /* Only the ones since the last stored month count as new: a stored month is settled, so what it holds has been
+   * seen. No stored month (or a failed read, said on the page) counts everything since Aug 1. */
+  const lastStored = [...closed.keys()].sort().at(-1) ?? null;
+  const newSince = `${lastStored ? nextMonth(lastStored) : FIRST_MONTH}-01`;
+  const toMembers = memberCredits(pmBookings, pmMap, pmPlayers, memberships, `${FIRST_MONTH}-01`, today)
+    .filter((c) => c.day >= newSince)
+    .map((c) => ({ ...c, playerName: nameOf(c.userId, pmPlayers.get(c.userId)) }));
 
   const sync = await sb.from("fin_sync_log").select("completed_at").eq("source", "mdapi-matches").is("error_message", null).not("completed_at", "is", null).order("completed_at", { ascending: false }).limit(1).maybeSingle();
 
   return {
     today, rows, latestSnapshot: latest, snapshotsFrom: snapRows[0]?.day ?? null, snapshotError, closedError,
     rebuiltFrom: firstOpen,
-    negatives, doubles, creditAllMatches: caMatchIds.length, memberCredits: toMembers,
+    negatives, doubles, memberCredits: toMembers, lastStoredMonth: lastStored,
     matchesSyncedAt: sync.data?.completed_at ?? null,
   };
 }

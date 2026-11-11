@@ -136,7 +136,7 @@ export function monthlyCredits(
 // ── FLAGS ──────────────────────────────────────────────────────────────────────────────────────
 
 export type CreditAllIn = { match_id: number | null; endpoint: string; changes: { key: string; before: unknown; after: unknown }[] | null; created_at: string };
-export type DoubleCredit = { matchId: number; matchName: string | null; matchDay: string | null; players: number; cents: number; creditedAt: string };
+export type DoubleCredit = { matchId: number; matchName: string | null; matchDay: string | null; players: number; playerIds: number[]; cents: number; creditedAt: string };
 
 /** Matches where staff ran "credit everyone who paid" (landed production rows) and the match is now cancelled,
  *  so the cancel credited the same players again. The amount is what the staff run added to players whose
@@ -154,8 +154,9 @@ export function doubleCredits(
     if (!Number.isFinite(pid) || !Number.isFinite(cents) || cents <= 0) continue;
     const credited = bookings.some((b) => b.match_api_id === m.api_id && b.user_id === pid && cancellationCredit(b, m)?.kind === "match");
     if (!credited) continue;
-    const d = out.get(m.api_id) ?? { matchId: m.api_id, matchName: m.name ?? null, matchDay: m.start_date_utc ? centralDay(m.start_date_utc) : null, players: 0, cents: 0, creditedAt: r.created_at };
+    const d = out.get(m.api_id) ?? { matchId: m.api_id, matchName: m.name ?? null, matchDay: m.start_date_utc ? centralDay(m.start_date_utc) : null, players: 0, playerIds: [], cents: 0, creditedAt: r.created_at };
     d.players++; d.cents += cents;
+    if (!d.playerIds.includes(pid)) d.playerIds.push(pid);
     if (r.created_at < d.creditedAt) d.creditedAt = r.created_at;
     out.set(m.api_id, d);
   }

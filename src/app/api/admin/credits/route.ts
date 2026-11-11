@@ -1,6 +1,6 @@
 /* GET /api/admin/credits — THE CREDITS REPORT (Ryan, 2026-11-10). Admins only. Read-only.
  *
- * Finance › Credits, Monthly and Flags tabs. Our database only, no MatchDay API call:
+ * Finance › Credits, the Monthly tab and its warning line. Our database only, no MatchDay API call:
  *   cancellation credits and credits used   rebuilt from mdapi_matches + mdapi_match_players (lib/creditsReport)
  *   staff credits                           change_log, exactly as the Staff tab counts them (lib/staffCredits),
  *                                           less Warsaw players and our own test accounts

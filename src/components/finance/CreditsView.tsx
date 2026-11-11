@@ -1,11 +1,12 @@
 "use client";
 
-// FINANCE › CREDITS (Ryan, 2026-11-10). Admins only. Three tabs, Monthly the default:
+// FINANCE › CREDITS (Ryan, 2026-11-10). Admins only. Two tabs, Monthly the default:
 //   Monthly  the monthly player credits report: cancellation credits issued (rebuilt from bookings), staff credits
 //            issued, credits used, and the month-end balance from the nightly snapshot (/api/admin/credits)
 //   Staff    the Staff Credits page, moved in unchanged (StaffCreditsView); ?month=YYYY-MM opens it on that month
-//   Flags    negative balances, double credits from "credit everyone who paid" on a later-cancelled match,
-//            and the standing Retool note
+// Monthly opens with one warning line, only when there is something to act on (2026-11-11, replacing the Flags
+// tab): a negative balance, a match credited twice, or a member credited for a paid booking since the last stored
+// month. Each player links to Player Lookup. Nothing to act on, no line.
 // The tab is in the URL (?tab=). It is written with history.replaceState: /admin/finance/* is prerendered
 // static, and router.replace to the same path does not navigate there (FinanceShell, measured).
 
@@ -22,11 +23,13 @@ type Report = {
   today: string; rows: Row[]; latestSnapshot: Snap | null; snapshotsFrom: string | null; snapshotError: string | null; closedError: string | null; rebuiltFrom: string;
   memberCredits: { bookingId: number; userId: number; playerName: string; matchId: number; matchName: string | null; matchDay: string | null; kind: "match" | "player"; day: string; cents: number }[];
   negatives: { id: number; name: string; city: string | null; cents: number; syncedAt: string | null }[];
-  doubles: { matchId: number; matchName: string | null; matchDay: string | null; players: number; cents: number; creditedAt: string }[];
-  creditAllMatches: number; matchesSyncedAt: string | null;
+  doubles: { matchId: number; matchName: string | null; matchDay: string | null; players: { id: number; name: string }[]; cents: number; creditedAt: string }[];
+  lastStoredMonth: string | null; matchesSyncedAt: string | null;
 };
-type Tab = "monthly" | "staff" | "flags";
-const TABS: { key: Tab; label: string }[] = [{ key: "monthly", label: "Monthly" }, { key: "staff", label: "Staff" }, { key: "flags", label: "Flags" }];
+type Tab = "monthly" | "staff";
+const TABS: { key: Tab; label: string }[] = [{ key: "monthly", label: "Monthly" }, { key: "staff", label: "Staff" }];
+const lookup = (id: number) => `/match-ops/player-lookup?id=${id}`;
+const LINK = "font-semibold underline decoration-coral/40 hover:decoration-coral";
 
 const money = (c: number) => `${c < 0 ? "-" : ""}$${(Math.abs(c) / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const shortDay = (ymd: string) => new Date(`${ymd}T12:00:00Z`).toLocaleDateString("en-US", { timeZone: "UTC", month: "short", day: "numeric" });
@@ -42,7 +45,7 @@ export default function CreditsView() {
   const isAdmin = appUser?.is_admin === true && appUser.is_service_account !== true;
   const params = useSearchParams();
   const urlTab = params?.get("tab");
-  const tab: Tab = urlTab === "staff" || urlTab === "flags" ? urlTab : "monthly";
+  const tab: Tab = urlTab === "staff" ? "staff" : "monthly";
   const staffMonth = params?.get("month") ?? null;
   const [report, setReport] = useState<Report | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -125,6 +128,8 @@ export default function CreditsView() {
       {tab !== "staff" && err && <div className="mb-4 rounded-md border border-coral/40 bg-coral-soft/40 px-3 py-2 text-sm text-coral">Could not load: {err}</div>}
       {tab !== "staff" && !report && !err && <p className="text-sm text-deep-green/55">Loading…</p>}
 
+      {tab === "monthly" && report && <Warning report={report} />}
+
       {tab === "monthly" && report && (
         <section className={CARD} data-testid="cr-monthly">
           <div className="flex flex-wrap items-center justify-between gap-2 px-4 pt-3">
@@ -175,93 +180,50 @@ export default function CreditsView() {
           </div>
           <div className="space-y-1 px-4 py-3 text-xs text-deep-green/60">
             <p>Cancellation credits are rebuilt from bookings, because the app records none: a match we cancelled credits every booking still on it (what the player paid plus credit they spent), dated by the match; a player who cancels more than 24 hours ahead is credited for a paid booking, dated by the cancellation. Members cancelling 6 to 24 hours ahead get no credit and are not counted.</p>
-            <p>Members get credits too: neither credit rule checks membership. A member&apos;s own spot on a match free for members costs $0, so it is credited $0; a match that isn&apos;t free for members is paid and credited like anyone&apos;s (Flags lists them).</p>
+            <p>Members get credits too: neither credit rule checks membership. A member&apos;s own spot on a match free for members costs $0, so it is credited $0; a match that isn&apos;t free for members is paid and credited like anyone&apos;s (the warning above names any since the last stored month).</p>
             <p>Credits used is the credit spent on paid bookings, dated by the booking. Staff credits are the Staff tab&apos;s net for the month, less Warsaw players and test accounts; recorded from Aug 14, 2026.</p>
             <p>Month-end balance is the night snapshot taken on the 1st{report.snapshotsFrom ? `; snapshots start ${shortDay(report.snapshotsFrom)}` : "; no snapshot has been taken yet"}. Left out everywhere: @matchday.com and @playmatchday.com accounts, deleted accounts, fake players and Warsaw. A credit held in another currency&apos;s wallet reads $0.</p>
             <p>{report.rows.some((r) => r.closedAt) ? `Months before ${monthLabel(report.rebuiltFrom)} are stored as they closed, two days after they ended; ${monthLabel(report.rebuiltFrom)} on are rebuilt each time the page opens. Rebuild month reruns a stored month and overwrites it (logged in the Change Log); the night run never does.` : "Every month is rebuilt each time the page opens; months are stored once they close, two days after they end."}</p>
             {report.matchesSyncedAt && <p>Bookings as of the last match sync, {when(report.matchesSyncedAt)}.</p>}
+            <p data-testid="cr-retool-note">Credits changed in Retool aren&apos;t recorded anywhere and won&apos;t appear here. Use Player Lookup to give credits.</p>
           </div>
         </section>
       )}
 
-      {tab === "flags" && report && (
-        <div className="space-y-5">
-          <p className="rounded-md border border-coral/40 bg-coral-soft/40 px-3 py-2 text-sm text-deep-green" data-testid="cr-retool-note">
-            Credits changed in Retool aren&apos;t recorded anywhere and won&apos;t appear on any of these tabs. Use Player Lookup to give credits.
-          </p>
-
-          <section className={CARD} data-testid="cr-negatives">
-            <div className="px-4 pt-3 text-sm font-bold text-deep-green">Negative balances <span className="font-normal text-deep-green/60">({report.negatives.length}, the app shouldn&apos;t allow these)</span></div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-cream-soft text-[10px] font-bold uppercase tracking-wider text-deep-green/60">
-                  <tr className="border-b border-cream-line"><th className={TH}>Player</th><th className={TH}>City</th><th className={THR}>Balance</th><th className={TH}>Read</th></tr>
-                </thead>
-                <tbody>
-                  {report.negatives.length === 0 && <tr><td colSpan={4} className="px-3 py-6 text-center text-deep-green/55">No player has a negative balance.</td></tr>}
-                  {report.negatives.map((n) => (
-                    <tr key={n.id} className="border-b border-cream-line/60" data-testid="cr-negative" data-cents={n.cents}>
-                      <td className="px-3 py-2"><a className="font-semibold underline decoration-deep-green/30 hover:decoration-deep-green" href={`/match-ops/player-lookup?id=${n.id}`}>{n.name || `#${n.id}`}</a></td>
-                      <td className="px-3 py-2">{n.city ?? ""}</td>
-                      <td className={`${TDR} font-bold text-coral`}>{money(n.cents)}</td>
-                      <td className="px-3 py-2 text-xs text-deep-green/60">{n.syncedAt ? when(n.syncedAt) : ""}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <p className="px-4 py-3 text-xs text-deep-green/60">Balances as the night pass last read them; the Read column says when.</p>
-          </section>
-
-          <section className={CARD} data-testid="cr-doubles">
-            <div className="px-4 pt-3 text-sm font-bold text-deep-green">Credited twice <span className="font-normal text-deep-green/60">(&quot;credit everyone who paid&quot;, then the match was cancelled)</span></div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-cream-soft text-[10px] font-bold uppercase tracking-wider text-deep-green/60">
-                  <tr className="border-b border-cream-line"><th className={TH}>Match</th><th className={TH}>Match day</th><th className={TH}>Staff credit</th><th className={THR}>Players</th><th className={THR}>Paid twice</th></tr>
-                </thead>
-                <tbody>
-                  {report.doubles.length === 0 && <tr><td colSpan={5} className="px-3 py-6 text-center text-deep-green/55">None. Staff have used it on {report.creditAllMatches} match{report.creditAllMatches === 1 ? "" : "es"}, and none was cancelled afterwards.</td></tr>}
-                  {report.doubles.map((d) => (
-                    <tr key={d.matchId} className="border-b border-cream-line/60" data-testid="cr-double" data-cents={d.cents}>
-                      <td className="px-3 py-2">{d.matchName ?? `#${d.matchId}`} <span className="text-xs text-deep-green/55">#{d.matchId}</span></td>
-                      <td className="px-3 py-2">{d.matchDay ? shortDay(d.matchDay) : ""}</td>
-                      <td className="px-3 py-2">{when(d.creditedAt)}</td>
-                      <td className={TDR}>{d.players}</td>
-                      <td className={`${TDR} font-bold`}>{money(d.cents)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <p className="px-4 py-3 text-xs text-deep-green/60">The amount is what the staff run gave to players whose booking was still on the match when it was cancelled, so the cancel credited them again.</p>
-          </section>
-
-          <section className={CARD} data-testid="cr-members">
-            <div className="px-4 pt-3 text-sm font-bold text-deep-green">Credits given to members (paid matches) <span className="font-normal text-deep-green/60">({report.memberCredits.length}, {money(report.memberCredits.reduce((a, c) => a + c.cents, 0))} since Aug 1; counted on Monthly)</span></div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-cream-soft text-[10px] font-bold uppercase tracking-wider text-deep-green/60">
-                  <tr className="border-b border-cream-line"><th className={TH}>Player</th><th className={TH}>Match</th><th className={TH}>Match day</th><th className={TH}>Why</th><th className={THR}>Credit</th></tr>
-                </thead>
-                <tbody>
-                  {report.memberCredits.length === 0 && <tr><td colSpan={5} className="px-3 py-6 text-center text-deep-green/55">No member was credited for a paid booking since Aug 1.</td></tr>}
-                  {report.memberCredits.map((c) => (
-                    <tr key={c.bookingId} className="border-b border-cream-line/60" data-testid="cr-member-credit" data-cents={c.cents}>
-                      <td className="px-3 py-2"><a className="font-semibold underline decoration-deep-green/30 hover:decoration-deep-green" href={`/match-ops/player-lookup?id=${c.userId}`}>{c.playerName || `#${c.userId}`}</a></td>
-                      <td className="px-3 py-2">{c.matchName ?? `#${c.matchId}`} <span className="text-xs text-deep-green/55">#{c.matchId}</span></td>
-                      <td className="px-3 py-2">{c.matchDay ? shortDay(c.matchDay) : ""}</td>
-                      <td className="px-3 py-2">{c.kind === "match" ? "We cancelled the match" : `Left more than 24 hours ahead (${shortDay(c.day)})`}</td>
-                      <td className={`${TDR} font-bold`}>{money(c.cents)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <p className="px-4 py-3 text-xs text-deep-green/60">Bookings a member paid for on a match that isn&apos;t free for members, credited back because we cancelled the match or they left more than 24 hours ahead. Neither credit rule checks membership (backend matches.service.ts, cancelPaidMatchV2 and handleCreditRefund). A member is someone whose membership was active when they booked, by its activation and end dates. On a match free for members a member pays $0, so a charged booking there means the app didn&apos;t treat them as a member; those aren&apos;t listed.</p>
-          </section>
-        </div>
-      )}
     </div>
+  );
+}
+
+/* THE WARNING LINE. Renders nothing when there is nothing to act on. Negative balances are as the night pass last
+ * read them; "credited twice" is a "credit everyone who paid" run on a match later cancelled; member credits are
+ * bookings a member paid for on a match not free for members, credited back since the last stored month. */
+function Warning({ report }: { report: Report }) {
+  const { negatives, doubles, memberCredits } = report;
+  if (negatives.length === 0 && doubles.length === 0 && memberCredits.length === 0) return null;
+  const since = report.lastStoredMonth ? `since ${monthLabel(report.lastStoredMonth)} was stored` : "since Aug 1";
+  const parts: React.ReactNode[] = [];
+  if (negatives.length) parts.push(
+    <span key="neg" data-testid="cr-warn-negatives" data-count={negatives.length}>
+      {negatives.length} negative balance{negatives.length === 1 ? "" : "s"} ({money(negatives.reduce((a, n) => a + n.cents, 0))}):{" "}
+      {negatives.map((n, i) => <span key={n.id}>{i > 0 && ", "}<a className={LINK} href={lookup(n.id)}>{n.name || `#${n.id}`}</a> {money(n.cents)}</span>)}
+    </span>);
+  for (const d of doubles) parts.push(
+    <span key={`d${d.matchId}`} data-testid="cr-warn-double" data-match={d.matchId}>
+      {d.matchName ?? `Match #${d.matchId}`}{d.matchDay ? ` (${shortDay(d.matchDay)})` : ""} credited twice, {money(d.cents)}:{" "}
+      {d.players.map((p, i) => <span key={p.id}>{i > 0 && ", "}<a className={LINK} href={lookup(p.id)}>{p.name}</a></span>)}
+    </span>);
+  if (memberCredits.length) parts.push(
+    <span key="mem" data-testid="cr-warn-members" data-count={memberCredits.length}>
+      {memberCredits.length} credit{memberCredits.length === 1 ? "" : "s"} to members on paid matches {since}:{" "}
+      {memberCredits.map((c, i) => (
+        <span key={c.bookingId}>{i > 0 && ", "}<a className={LINK} href={lookup(c.userId)}>{c.playerName || `#${c.userId}`}</a> {money(c.cents)}{" "}
+          <span className="text-deep-green/60">({c.kind === "match" ? `we cancelled ${c.matchName ?? `#${c.matchId}`}` : `left ${c.matchName ?? `#${c.matchId}`} more than 24 hours ahead`}, {shortDay(c.day)})</span></span>
+      ))}
+    </span>);
+  return (
+    <p className="mb-4 rounded-md border border-coral/40 bg-coral-soft/40 px-3 py-2 text-sm leading-relaxed text-deep-green" data-testid="cr-warning">
+      <span className="font-bold text-coral">Check: </span>
+      {parts.map((p, i) => <span key={i}>{i > 0 && <span className="text-deep-green/40"> · </span>}{p}</span>)}
+    </p>
   );
 }
