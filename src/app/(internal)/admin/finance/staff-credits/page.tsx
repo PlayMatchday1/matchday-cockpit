@@ -1,8 +1,6 @@
-"use client";
-
-// Credits given by staff — admins only. See src/components/finance/StaffCreditsView.tsx.
-import StaffCreditsView from "@/components/finance/StaffCreditsView";
+// Staff Credits moved into Finance › Credits on 2026-11-10 (the Staff tab). Old links land there.
+import { redirect } from "next/navigation";
 
 export default function Page() {
-  return <StaffCreditsView />;
+  redirect("/admin/finance/credits?tab=staff");
 }

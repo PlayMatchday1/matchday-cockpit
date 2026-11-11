@@ -24,7 +24,15 @@ const INPUT = "rounded-md border border-cream-line bg-cream-soft px-3 py-1.5 tex
 const CARD = "overflow-hidden rounded-2xl border-[1.5px] border-cream-line bg-white shadow-md shadow-deep-green/10";
 const TH = "px-3 py-2 text-left";
 
-export default function StaffCreditsView() {
+/** Central days of a month: the 1st to its last day, or to today for the month in progress. */
+function monthRange(ym: string, today: string): { since: string; until: string } {
+  const y = Number(ym.slice(0, 4)), m = Number(ym.slice(5, 7));
+  const last = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+  return { since: `${ym}-01`, until: last < today ? last : today };
+}
+
+/** `month` (YYYY-MM) opens the page on that month, as the Monthly tab's Staff column links it. */
+export default function StaffCreditsView({ month, embedded = false }: { month?: string | null; embedded?: boolean } = {}) {
   const { appUser, isLoading } = useAuth();
   const isAdmin = appUser?.is_admin === true && appUser.is_service_account !== true;
   const today = chicagoDay(new Date().toISOString());
@@ -32,7 +40,8 @@ export default function StaffCreditsView() {
   const [names, setNames] = useState<Map<number, string>>(new Map());
   const [tags, setTags] = useState<Record<string, "warsaw" | "test">>({});
   const [err, setErr] = useState<string | null>(null);
-  const [f, setF] = useState<CreditFilter>({ since: `${today.slice(0, 8)}01`, until: today, staff: "", player: "", minCents: null, maxCents: null, reason: "", flaggedOnly: false });
+  const start = month && /^\d{4}-\d{2}$/.test(month) && month <= today.slice(0, 7) ? monthRange(month, today) : { since: `${today.slice(0, 8)}01`, until: today };
+  const [f, setF] = useState<CreditFilter>({ since: start.since, until: start.until, staff: "", player: "", minCents: null, maxCents: null, reason: "", flaggedOnly: false });
   const [minText, setMinText] = useState(""), [maxText, setMaxText] = useState("");
 
   useEffect(() => {
@@ -59,6 +68,13 @@ export default function StaffCreditsView() {
   const summary = useMemo(() => staffSummary(rangeOnly), [rangeOnly]);
   const months = useMemo(() => monthlyBreakdown(rangeOnly), [rangeOnly]);
   const staffList = useMemo(() => [...new Set((entries ?? []).map((e) => e.staff))].sort(), [entries]);
+  /* THE FIGURE THE MONTHLY REPORT USES: the same net, less players tagged Warsaw or Test account. Added
+   * beside the month's Net so the two pages can be compared; nothing here counts differently. */
+  const reportNet = useMemo(() => {
+    const by = new Map<string, number>();
+    for (const e of rangeOnly) if (e.counted && e.amountCents !== 0 && !(e.playerId != null && tags[e.playerId])) by.set(e.month, (by.get(e.month) ?? 0) + e.amountCents);
+    return by;
+  }, [rangeOnly, tags]);
   const monthStaff = useMemo(() => [...new Set(months.flatMap((m) => Object.keys(m.byStaff)))].sort(), [months]);
 
   const downloadCsv = () => {
@@ -75,7 +91,9 @@ export default function StaffCreditsView() {
   return (
     <div data-testid="staff-credits">
       <div className="mb-5">
-        <h1 className="font-display text-5xl uppercase leading-none tracking-tight text-deep-green md:text-6xl">Credits given by staff</h1>
+        {embedded
+          ? <h2 className="font-display text-3xl uppercase leading-none tracking-tight text-deep-green">Credits given by staff</h2>
+          : <h1 className="font-display text-5xl uppercase leading-none tracking-tight text-deep-green md:text-6xl">Credits given by staff</h1>}
         <p className="mt-2 text-sm text-deep-green/65">Every credit changed in the Clubhouse since Aug 14, 2026, with who did it and why. Dates are Central time. Warsaw players and our own test accounts are included and tagged.</p>
         <p className="mt-2 rounded-md border border-coral/40 bg-coral-soft/40 px-3 py-2 text-sm text-deep-green" data-testid="sc-retool-note">
           Credits changed in Retool aren&apos;t recorded and don&apos;t appear here. Use Player Lookup to give credits.
@@ -128,7 +146,7 @@ export default function StaffCreditsView() {
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="bg-cream-soft text-[10px] font-bold uppercase tracking-wider text-deep-green/60">
-                  <tr className="border-b border-cream-line"><th className={TH}>Month</th><th className={TH}>Credits given</th><th className={TH}>Added</th><th className={TH}>Removed</th><th className={TH}>Net</th>
+                  <tr className="border-b border-cream-line"><th className={TH}>Month</th><th className={TH}>Credits given</th><th className={TH}>Added</th><th className={TH}>Removed</th><th className={TH}>Net</th><th className={TH} title="Net less Warsaw players and test accounts: the Staff credits figure on the Monthly tab">In the report</th>
                     {monthStaff.map((s) => <th key={s} className={TH}>{s.split("@")[0]}</th>)}</tr>
                 </thead>
                 <tbody>
@@ -136,6 +154,7 @@ export default function StaffCreditsView() {
                     <tr key={m.month} className="border-b border-cream-line/60" data-testid="sc-month-row" data-month={m.month} data-net={m.netCents}>
                       <td className="px-3 py-2">{monthName(m.month)}</td><td className="px-3 py-2">{m.given}</td><td className="px-3 py-2">{money(m.addedCents)}</td>
                       <td className="px-3 py-2">{money(m.removedCents)}</td><td className="px-3 py-2 font-bold">{signed(m.netCents)}</td>
+                      <td className="px-3 py-2" data-testid="sc-month-report">{signed(reportNet.get(m.month) ?? 0)}</td>
                       {monthStaff.map((s) => <td key={s} className="px-3 py-2">{m.byStaff[s] ? signed(m.byStaff[s]) : ""}</td>)}
                     </tr>
                   ))}
