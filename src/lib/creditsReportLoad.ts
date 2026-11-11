@@ -122,7 +122,7 @@ export async function loadCreditsReport(sb: SupabaseClient) {
   }
   const doubles = doubleCredits(creditAll, caMatches, caBookings);
 
-  const sync = await sb.from("fin_sync_log").select("completed_at").eq("source", "mdapi-matches").is("error_message", null).order("completed_at", { ascending: false }).limit(1).maybeSingle();
+  const sync = await sb.from("fin_sync_log").select("completed_at").eq("source", "mdapi-matches").is("error_message", null).not("completed_at", "is", null).order("completed_at", { ascending: false }).limit(1).maybeSingle();
 
   return {
     today, rows, latestSnapshot: latest, snapshotsFrom: snapRows[0]?.day ?? null, snapshotError,
