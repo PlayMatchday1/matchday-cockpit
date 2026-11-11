@@ -30,6 +30,7 @@ const E2E = process.argv.includes("--e2e");
 // matchops-auth-test is KEPT despite testing reads: a route shipped with NO gate is invisible
 // on screen, which is exactly the case a suite has to cover.
 const NODE_SUITES = [
+  "scripts/ffm-soldout-test.ts",
   // The city boundary's decision table — including the one rule that disagrees with the
   // city-manager tier on purpose (confinement beats is_admin).
   "scripts/city-confinement-test.ts",

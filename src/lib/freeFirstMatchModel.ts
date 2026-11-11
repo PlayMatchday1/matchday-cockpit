@@ -87,7 +87,12 @@ export type MatchRow = {
   /** Canonical venue name. */
   field: string;
   booked: number;
+  /** The match's own capacity (max_player_count). A match often opens small and is expanded. */
   cap: number | null;
+  /** The field's max player spots, set on Field Ops (fin_venues.max_players, through fin_venue_fields). One
+   *  value per venue, shared by every MatchDay field linked to it. null when the venue has none set or the
+   *  field is linked to no venue. */
+  fieldMax: number | null;
   /** List price in cents; null when not priced in dollars (see Person.spotCents). */
   priceCents: number | null;
   /** The match's firstMatchFreeEnabled (from mdapi_matches.raw). null when the payload lacks it. */
@@ -213,32 +218,67 @@ export const signupsSinceLaunch = (signups: readonly Signup[], today: string): n
 export const firstAfterReadDay = (w: number): string => addDays(LAUNCH_DAY, w + 1);
 
 /* ── SOLD-OUT SPOTS ─────────────────────────────────────────────────────────────────────────── */
+//
+// SOLD OUT MEANS FULL AT THE FIELD'S MAX (Ryan, 2026-11-11). A match often opens at a smaller size and is
+// expanded, so full at its current capacity is not sold out: 22/22 on a field whose max is 40 could have
+// taken more players. Only booked at or above the field's max player spots (Field Ops) is sold out, and only
+// that counts as spots lost. Full at its own capacity but under the field max is "Full, can expand", shown and
+// counted on its own, never as lost. A field with no max set keeps the old rule (full at its own capacity) and
+// is marked, so the data can be fixed. "Booked" is the match's booked count now: a match that sold out and
+// then lost a player reads as not sold out.
 
-export const isSoldOut = (m: Pick<MatchRow, "booked" | "cap">): boolean => m.cap != null && m.cap > 0 && m.booked >= m.cap;
+export type CapacityState = "sold_out" | "full_can_expand" | "sold_out_no_field_max" | null;
+
+export function capacityState(m: Pick<MatchRow, "booked" | "cap" | "fieldMax">): CapacityState {
+  if (m.fieldMax != null && m.fieldMax > 0) {
+    if (m.booked >= m.fieldMax) return "sold_out";
+    return m.cap != null && m.cap > 0 && m.booked >= m.cap ? "full_can_expand" : null;
+  }
+  return m.cap != null && m.cap > 0 && m.booked >= m.cap ? "sold_out_no_field_max" : null;
+}
+/** Counts as sold out (and its free players as spots lost): full at the field max, or, with no max set, full. */
+export const isSoldOut = (m: Pick<MatchRow, "booked" | "cap" | "fieldMax">): boolean => {
+  const st = capacityState(m);
+  return st === "sold_out" || st === "sold_out_no_field_max";
+};
 
 export type FieldLoss = {
   city: string; cityName: string; field: string;
   soldOutWithFree: number; spotsLost: number; centsLost: number;
+  /** Matches with a free player that are full at their own capacity but under the field max. Not lost. */
+  fullCanExpand: number;
+  /** The field's max (Field Ops), or null when none is set: its sold-out count then uses the old rule. */
+  fieldMax: number | null;
   /** The field's matches from today on, and how many have the free first match on. */
   upcoming: number; upcomingOn: number; upcomingUnknown: number;
 };
 
 /** Sold-out matches with a free claimant on them (launch to today), by field, most spots lost first.
- *  "Sold out" is the match's booked count now against its cap: a match that sold out and then lost a
- *  player reads as not sold out. */
-export function soldOutByField(matches: readonly MatchRow[], free: readonly Person[], today: string): { rows: FieldLoss[]; matches: number; spots: number; cents: number } {
+ *  Sold out is full at the field's max (capacityState above); full at its own capacity under that max is
+ *  counted apart, in canExpand and each row's fullCanExpand, and is not lost. */
+export function soldOutByField(matches: readonly MatchRow[], free: readonly Person[], today: string): {
+  rows: FieldLoss[]; matches: number; spots: number; cents: number;
+  /** Full at their own capacity but under the field max, with a free player on them: matches and free players. */
+  canExpand: { matches: number; freePlayers: number };
+  /** Of the sold-out matches, how many were judged by the old rule because their field has no max set. */
+  noFieldMax: number;
+} {
   const freeIds = new Set(free.map((p) => p.id));
   const by = new Map<string, FieldLoss>();
   const key = (m: MatchRow) => `${m.city}|${m.field}`;
-  const row = (m: MatchRow) => by.get(key(m)) ?? by.set(key(m), { city: m.city, cityName: m.cityName, field: m.field, soldOutWithFree: 0, spotsLost: 0, centsLost: 0, upcoming: 0, upcomingOn: 0, upcomingUnknown: 0 }).get(key(m))!;
-  let nm = 0, ns = 0, nc = 0;
+  const row = (m: MatchRow) => by.get(key(m)) ?? by.set(key(m), { city: m.city, cityName: m.cityName, field: m.field, soldOutWithFree: 0, spotsLost: 0, centsLost: 0, fullCanExpand: 0, fieldMax: m.fieldMax, upcoming: 0, upcomingOn: 0, upcomingUnknown: 0 }).get(key(m))!;
+  let nm = 0, ns = 0, nc = 0, em = 0, ef = 0, nf = 0;
   for (const m of matches) {
-    if (m.day < LAUNCH_DAY || m.day > today || !isSoldOut(m)) continue;
+    if (m.day < LAUNCH_DAY || m.day > today) continue;
+    const st = capacityState(m);
+    if (st == null) continue;
     const k = m.freePlayers.filter((p) => freeIds.has(p.id)).length;
     if (k === 0) continue;
     const r = row(m);
+    if (st === "full_can_expand") { r.fullCanExpand++; em++; ef += k; continue; }
     r.soldOutWithFree++; r.spotsLost += k; r.centsLost += k * (m.priceCents ?? 0);
     nm++; ns += k; nc += k * (m.priceCents ?? 0);
+    if (st === "sold_out_no_field_max") nf++;
   }
   for (const m of matches) {
     if (m.day < today) continue;
@@ -248,8 +288,8 @@ export function soldOutByField(matches: readonly MatchRow[], free: readonly Pers
     if (m.ffe === true) r.upcomingOn++;
     else if (m.ffe == null) r.upcomingUnknown++;
   }
-  const rows = [...by.values()].sort((a, b) => b.spotsLost - a.spotsLost || b.centsLost - a.centsLost || a.field.localeCompare(b.field));
-  return { rows, matches: nm, spots: ns, cents: nc };
+  const rows = [...by.values()].sort((a, b) => b.spotsLost - a.spotsLost || b.centsLost - a.centsLost || b.fullCanExpand - a.fullCanExpand || a.field.localeCompare(b.field));
+  return { rows, matches: nm, spots: ns, cents: nc, canExpand: { matches: em, freePlayers: ef }, noFieldMax: nf };
 }
 
 /* ── BY CITY AND THE FREE MATCH LOG (restored 2026-11-08, on the selected window) ──────────── */
@@ -266,7 +306,7 @@ export function byCity(free: readonly Person[], w: number, today: string, cityNa
     .sort((a, b) => b.stats.players - a.stats.players || a.cityName.localeCompare(b.cityName));
 }
 
-export type LogMatch = MatchRow & { soldOut: boolean };
+export type LogMatch = MatchRow & { soldOut: boolean; capacity: CapacityState };
 export type LogField = { field: string; city: string; cityName: string; matches: number; stats: GroupStats };
 
 /** Matches since launch with a free claimant on them, newest first. */
@@ -274,7 +314,7 @@ export function logMatches(matches: readonly MatchRow[], free: readonly Person[]
   const ids = new Set(free.map((p) => p.id));
   return matches
     .filter((m) => m.day >= LAUNCH_DAY && m.day <= today)
-    .map((m) => ({ ...m, freePlayers: m.freePlayers.filter((p) => ids.has(p.id)), soldOut: isSoldOut(m) }))
+    .map((m) => ({ ...m, freePlayers: m.freePlayers.filter((p) => ids.has(p.id)), soldOut: isSoldOut(m), capacity: capacityState(m) }))
     .filter((m) => m.freePlayers.length > 0)
     .sort((a, b) => (a.wall < b.wall ? 1 : a.wall > b.wall ? -1 : b.id - a.id));
 }

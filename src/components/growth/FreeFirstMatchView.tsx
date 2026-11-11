@@ -85,6 +85,10 @@ export function FreeFirstMatchInfo() {
         <div className={pa.tip} role="tooltip" style={{ left: open.x, top: open.y, maxWidth: 300 }}>
           <span className={s.tipTitle}>Started Nov 5, 2026</span>
           App 1.89 made every new player&apos;s first match free, on iPhone and Android.
+          <span className={s.tipTitle} style={{ marginTop: 8 }}>Sold out</span>
+          A match is sold out when it is full at the field&apos;s max player spots (Field Ops). A match full at a smaller size
+          could have been expanded, so it is shown as &ldquo;Full, can expand&rdquo; and its free spots aren&apos;t counted as lost.
+          A field with no max set falls back to full at the match&apos;s own size, and is marked.
         </div>
       )}
     </>
@@ -219,6 +223,11 @@ export default function FreeFirstMatchView({ authHeaders }: { authHeaders: Recor
           <div className={g.kpiLabel}>Sold-out spots lost</div>
           <div className={g.kpiValue} data-testid="ffm-lost">{money(lost.cents)}</div>
           <div className={g.kpiFoot}>{fmtInt(lost.spots)} spots on {fmtInt(lost.matches)} sold-out matches</div>
+          {lost.canExpand.matches > 0 && (
+            <div className={g.kpiFoot} data-testid="ffm-can-expand">
+              Not counted: {fmtInt(lost.canExpand.matches)} full {lost.canExpand.matches === 1 ? "match" : "matches"} under the field max ({fmtInt(lost.canExpand.freePlayers)} free {lost.canExpand.freePlayers === 1 ? "player" : "players"})
+            </div>
+          )}
         </div>
       </div>
 
@@ -254,15 +263,15 @@ export default function FreeFirstMatchView({ authHeaders }: { authHeaders: Recor
         <div className={g.cardHead}>
           <div>
             <div className={g.cardTitle}>Where free players took sold-out spots</div>
-            <div className={g.cardSub}>Matches since Nov 5 that are sold out with a free player in them, by field. Free match = the switch on the field&apos;s upcoming matches.</div>
+            <div className={g.cardSub}>Matches since Nov 5 with a free player in them that are sold out: full at the field&apos;s max player spots (Field Ops). Full but under that max is counted under Full, can expand, not as lost. Free match = the switch on the field&apos;s upcoming matches.</div>
           </div>
         </div>
         {lost.rows.length === 0 ? (
-          <div className={s.empty}>No sold-out match has a free player in it yet.</div>
+          <div className={s.empty}>No full match has a free player in it yet.</div>
         ) : (
           <div className={pa.tw}>
             <table>
-              <thead><tr><th>Field</th><th>City</th><th>Sold out w/ free</th><th>Spots lost</th><th>Lost $</th><th>Free match</th></tr></thead>
+              <thead><tr><th>Field</th><th>City</th><th>Field max</th><th>Sold out w/ free</th><th>Spots lost</th><th>Lost $</th><th>Full, can expand</th><th>Free match</th></tr></thead>
               <tbody>
                 {lost.rows.map((r) => {
                   const st = ffeStatus(r);
@@ -270,16 +279,19 @@ export default function FreeFirstMatchView({ authHeaders }: { authHeaders: Recor
                     <tr key={`${r.city}|${r.field}`}>
                       <td><span className={s.rowTitle}>{r.field}</span></td>
                       <td>{r.cityName}</td>
+                      <td>{r.fieldMax != null ? fmtInt(r.fieldMax)
+                        : <span className={s.noMax} data-testid="ffm-no-field-max" title="No max player spots set on Field Ops for this field, so a match full at its own size counts as sold out here. Set it on Field Ops.">No max set</span>}</td>
                       <td>{fmtInt(r.soldOutWithFree)}</td>
                       <td>{fmtInt(r.spotsLost)}</td>
                       <td>{money(r.centsLost)}</td>
+                      <td>{r.fullCanExpand > 0 ? fmtInt(r.fullCanExpand) : dash}</td>
                       <td><span className={`${s.pill} ${st.on ? s.pillOn : s.pillOff}`} title={`${r.upcomingOn} of ${r.upcoming} upcoming matches on`}>{st.text}</span></td>
                     </tr>
                   );
                 })}
                 <tr className={s.totRow}>
-                  <td>All fields</td><td />
-                  <td>{fmtInt(lost.matches)}</td><td>{fmtInt(lost.spots)}</td><td>{money(lost.cents)}</td><td />
+                  <td>All fields</td><td /><td />
+                  <td>{fmtInt(lost.matches)}</td><td>{fmtInt(lost.spots)}</td><td>{money(lost.cents)}</td><td>{fmtInt(lost.canExpand.matches)}</td><td />
                 </tr>
               </tbody>
             </table>
@@ -331,8 +343,11 @@ export default function FreeFirstMatchView({ authHeaders }: { authHeaders: Recor
                   <td><span className={s.matchName}>{m.field} · {m.cityName}</span><span className={s.matchWhen}>{whenLabel(m.wall)}</span></td>
                   <td><div className={s.chips}>{m.freePlayers.map((p) => <span key={p.id} className={s.chip}>{p.name}</span>)}</div></td>
                   <td>
-                    {m.soldOut && <span className={s.soldOut}>Sold out</span>}
+                    {m.capacity === "sold_out" && <span className={s.soldOut} title={`Full at the field max of ${m.fieldMax}`}>Sold out</span>}
+                    {m.capacity === "sold_out_no_field_max" && <span className={s.soldOut} title="Full at its own size; the field has no max set on Field Ops">Sold out · no field max</span>}
+                    {m.capacity === "full_can_expand" && <span className={s.canExpand} title={`Full at ${m.cap}, under the field max of ${m.fieldMax}: not counted as lost`}>Full, can expand</span>}
                     <span className={s.booked}>{fmtInt(m.booked)} / {m.cap == null ? dash : fmtInt(m.cap)}</span>
+                    {m.fieldMax != null && m.cap != null && m.fieldMax > m.cap && <span className={s.matchWhen}>field max {fmtInt(m.fieldMax)}</span>}
                   </td>
                 </tr>
               ))}

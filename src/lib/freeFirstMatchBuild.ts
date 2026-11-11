@@ -91,9 +91,9 @@ export async function buildFreeFirstMatch(sb: SupabaseClient): Promise<Payload> 
   }
 
   // ── 6. THE MATCHES: the cohort's, plus every live match from launch for the card and the log ─
-  type M = { id: number; wall: string; day: string; city: string; field: string; price: number | null; freeMember: boolean; booked: number; cap: number | null; ffe: boolean | null };
+  type M = { id: number; wall: string; day: string; city: string; field: string; price: number | null; freeMember: boolean; booked: number; cap: number | null; fieldId: number | null; ffe: boolean | null };
   // ffe: firstMatchFreeEnabled lives only in raw (docs/matchday-api-facts.md, FREE FIRST MATCH).
-  const matchCols = "api_id, start_date, city_identifier, field_title, registration_price, is_free_member, max_player_count, player_count, is_cancelled, deleted_at, ffe:raw->firstMatchFreeEnabled, currency:raw->>currency";
+  const matchCols = "api_id, start_date, city_identifier, field_id, field_title, registration_price, is_free_member, max_player_count, player_count, is_cancelled, deleted_at, ffe:raw->firstMatchFreeEnabled, currency:raw->>currency";
   const toM = (r: Row): M => ({
     id: num(r.api_id), wall: String(r.start_date ?? "").slice(0, 16), day: wallClockYmd(String(r.start_date ?? "")),
     city: String(r.city_identifier ?? ""), field: canonicalVenueName(String(r.field_title ?? "")) || String(r.field_title ?? ""),
@@ -101,6 +101,7 @@ export async function buildFreeFirstMatch(sb: SupabaseClient): Promise<Payload> 
     // null and never reaches a dollar figure. A match with no currency in raw is read as dollars.
     price: r.currency == null || String(r.currency).toLowerCase() === "usd" ? num(r.registration_price) : null, freeMember: r.is_free_member === true, booked: num(r.player_count),
     cap: r.max_player_count == null ? null : num(r.max_player_count),
+    fieldId: r.field_id == null ? null : num(r.field_id),
     ffe: typeof r.ffe === "boolean" ? r.ffe : null,
   });
   const matches = new Map<number, M>();
@@ -206,12 +207,32 @@ export async function buildFreeFirstMatch(sb: SupabaseClient): Promise<Payload> 
     signups.push({ day, first });
   }
 
+  // ── 10b. EACH FIELD'S MAX PLAYER SPOTS (Ryan, 2026-11-11): fin_venues.max_players, set on Field Ops, reached
+  // from a match's field id through fin_venue_fields (a field links to one venue; a venue can group several
+  // fields and has one max). Sold out is full at this max. A read error FAILS the build: an empty map would
+  // quietly mark every field "no max set" and fall back to the old rule everywhere.
+  const fieldMaxById = new Map<number, number>();
+  {
+    const [links, venues] = await Promise.all([
+      sb.from("fin_venue_fields").select("fin_venue_id, mdapi_field_id"),
+      sb.from("fin_venues").select("id, max_players"),
+    ]);
+    if (links.error) throw new Error(`fin_venue_fields: ${links.error.message}`);
+    if (venues.error) throw new Error(`fin_venues: ${venues.error.message}`);
+    const maxByVenue = new Map<number, number>();
+    for (const v of (venues.data ?? []) as { id: number; max_players: number | null }[]) if (v.max_players != null && Number(v.max_players) > 0) maxByVenue.set(v.id, Number(v.max_players));
+    for (const l of (links.data ?? []) as { fin_venue_id: number; mdapi_field_id: number | null }[]) {
+      const n = maxByVenue.get(l.fin_venue_id);
+      if (n != null && l.mdapi_field_id != null) fieldMaxById.set(Number(l.mdapi_field_id), n);
+    }
+  }
+
   // ── 11. THE MATCH LIST, with the free claimants anchored on each ──────────────────────────
   const freeOn = new Map<number, { id: number; name: string }[]>();
   for (const p of people) if (p.group === "free") (freeOn.get(p.matchId) ?? freeOn.set(p.matchId, []).get(p.matchId)!).push({ id: p.id, name: p.name });
   const matchRows: MatchRow[] = live.map(toM).map((m) => ({
     id: m.id, day: m.day, wall: m.wall, city: m.city, cityName: normalizeMatchCity(m.city), field: m.field,
-    booked: m.booked, cap: m.cap, priceCents: m.price, ffe: m.ffe, freePlayers: freeOn.get(m.id) ?? [],
+    booked: m.booked, cap: m.cap, fieldMax: m.fieldId == null ? null : fieldMaxById.get(m.fieldId) ?? null, priceCents: m.price, ffe: m.ffe, freePlayers: freeOn.get(m.id) ?? [],
   }));
 
   const newest = await sb.from("mdapi_match_players").select("synced_at").order("api_id", { ascending: false }).limit(1);
