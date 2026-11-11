@@ -10,7 +10,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { selectAll } from "./supabasePagination";
 import { creditEntries, type LogRowIn } from "./staffCredits";
 import {
-  centralDay, doubleCredits, excludedPlayer, memberCredits, monthlyCredits,
+  centralDay, doubleCredits, excludedPlayer, memberCredits, monthlyCredits, unexplainedCents,
   type BookingIn, type CreditAllIn, type MatchIn, type MembershipIn, type MonthCredits, type MonthlyRow, type PlayerIn,
 } from "./creditsReport";
 
@@ -146,6 +146,9 @@ export async function loadCreditsReport(sb: SupabaseClient) {
     const current = ym === today.slice(0, 7);
     const endSnap = current ? null : nightOn.get(`${nextMonth(ym)}-01`) ?? null;
     const balance = current ? latest : endSnap;
+    /* The night snapshot on the month's own 1st is its opening balance. Both ends must be night snapshots, so the
+     * month in progress (no end yet) and any month before snapshots began stay blank. */
+    const startSnap = nightOn.get(`${ym}-01`) ?? null;
     const cancellationCents = matchCancelCents + playerCancelCents;
     rows.push({
       month: ym, partialThrough: current ? today : null, matchCancelCents, playerCancelCents,
@@ -153,6 +156,7 @@ export async function loadCreditsReport(sb: SupabaseClient) {
       monthEndCents: balance ? Number(balance.outstanding_cents) : null,
       // The night snapshot on the 1st is the balance at the end of the month before; any other is as of its day.
       balanceAsOf: !balance ? null : current ? balance.day : lastDay(ym),
+      unexplainedCents: unexplainedCents(startSnap ? Number(startSnap.outstanding_cents) : null, endSnap ? Number(endSnap.outstanding_cents) : null, cancellationCents + staffCents, usedCents),
       closedAt: k?.closed_at ?? null,
     });
   }
@@ -179,9 +183,9 @@ export async function loadCreditsReport(sb: SupabaseClient) {
     if (cancelledIds.length) caBookings.push(...await selectAll<BookingIn>(() => sb.from("mdapi_match_players").select(BOOKING_COLS).in("match_api_id", cancelledIds).order("api_id")));
   }
   const doubleRows = doubleCredits(creditAll, caMatches, caBookings);
-  const dPlayers = await playersById(sb, doubleRows.flatMap((d) => d.playerIds));
+  const dPlayers = await playersById(sb, doubleRows.flatMap((d) => d.playerCredits.map((p) => p.id)));
   const nameOf = (id: number, p?: PlayerIn) => [p?.first_name, p?.last_name].filter(Boolean).join(" ").trim() || `#${id}`;
-  const doubles = doubleRows.map((d) => ({ ...d, players: d.playerIds.map((id) => ({ id, name: nameOf(id, dPlayers.get(id)) })) }));
+  const doubles = doubleRows.map((d) => ({ ...d, players: d.playerCredits.map((p) => ({ ...p, name: nameOf(p.id, dPlayers.get(p.id)) })) }));
 
   // Credits given to members: only matches not free for members can carry one (creditsReport.memberCredits).
   const paidMatches = await selectAll<MatchIn>(() => sb.from("mdapi_matches").select(MATCH_COLS).eq("is_free_member", false).gte("start_date_utc", sinceUtc(`${FIRST_MONTH}-01`)).order("api_id"));

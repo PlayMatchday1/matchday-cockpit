@@ -136,7 +136,7 @@ export function monthlyCredits(
 // ── FLAGS ──────────────────────────────────────────────────────────────────────────────────────
 
 export type CreditAllIn = { match_id: number | null; endpoint: string; changes: { key: string; before: unknown; after: unknown }[] | null; created_at: string };
-export type DoubleCredit = { matchId: number; matchName: string | null; matchDay: string | null; players: number; playerIds: number[]; cents: number; creditedAt: string };
+export type DoubleCredit = { matchId: number; matchName: string | null; matchDay: string | null; players: number; playerCredits: { id: number; cents: number }[]; cents: number; creditedAt: string };
 
 /** Matches where staff ran "credit everyone who paid" (landed production rows) and the match is now cancelled,
  *  so the cancel credited the same players again. The amount is what the staff run added to players whose
@@ -154,9 +154,10 @@ export function doubleCredits(
     if (!Number.isFinite(pid) || !Number.isFinite(cents) || cents <= 0) continue;
     const credited = bookings.some((b) => b.match_api_id === m.api_id && b.user_id === pid && cancellationCredit(b, m)?.kind === "match");
     if (!credited) continue;
-    const d = out.get(m.api_id) ?? { matchId: m.api_id, matchName: m.name ?? null, matchDay: m.start_date_utc ? centralDay(m.start_date_utc) : null, players: 0, playerIds: [], cents: 0, creditedAt: r.created_at };
+    const d = out.get(m.api_id) ?? { matchId: m.api_id, matchName: m.name ?? null, matchDay: m.start_date_utc ? centralDay(m.start_date_utc) : null, players: 0, playerCredits: [], cents: 0, creditedAt: r.created_at };
     d.players++; d.cents += cents;
-    if (!d.playerIds.includes(pid)) d.playerIds.push(pid);
+    const pc = d.playerCredits.find((x) => x.id === pid);
+    if (pc) pc.cents += cents; else d.playerCredits.push({ id: pid, cents });
     if (r.created_at < d.creditedAt) d.creditedAt = r.created_at;
     out.set(m.api_id, d);
   }
@@ -215,7 +216,19 @@ export type MonthlyRow = {
   /** The balance shown in the last column: the month-end snapshot for a closed month, the latest snapshot for the
    *  month in progress. `balanceAsOf` is the Central day it is the balance at. */
   monthEndCents: number | null; balanceAsOf: string | null;
+  /** (end balance - start balance) - (total issued - credits used), only for a month with a night snapshot on its
+   *  1st and on the next month's 1st. Null otherwise: never estimated. */
+  unexplainedCents: number | null;
 };
+
+/** What the balance moved by that issued and used credits don't account for. Null unless both ends are real
+ *  snapshots. Positive: balances grew by more than the credits issued less those used. */
+export function unexplainedCents(startCents: number | null, endCents: number | null, totalIssuedCents: number, usedCents: number): number | null {
+  if (startCents == null || endCents == null) return null;
+  return (endCents - startCents) - (totalIssuedCents - usedCents);
+}
+/** Amber on the screen when the unexplained amount is over $25 either way. */
+export const UNEXPLAINED_FLAG_CENTS = 2500;
 
 const dollars = (c: number) => (c / 100).toFixed(2);
 const MON = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
@@ -228,11 +241,12 @@ export const rowLabel = (r: Pick<MonthlyRow, "month" | "partialThrough">) =>
 /** The Monthly table as the screen shows it, row for row. The balance is a number, with the day it is the balance
  *  at in its own column (the screen writes "as of Nov 10" beside the month in progress). UTF-8 with a BOM. */
 export function monthlyCsv(rows: readonly MonthlyRow[]): string {
-  const head = ["Month", "Cancellation credits issued", "Staff credits issued", "Total issued", "Credits used", "Month-end balance", "Balance as of"];
+  const head = ["Month", "Cancellation credits issued", "Staff credits issued", "Total issued", "Credits used", "Month-end balance", "Balance as of", "Unexplained"];
   const lines = [head.join(",")];
   for (const r of rows) {
     lines.push([rowLabel(r), dollars(r.cancellationCents), dollars(r.staffCents), dollars(r.totalIssuedCents), dollars(r.usedCents),
-      r.monthEndCents == null ? "" : dollars(r.monthEndCents), r.monthEndCents == null || !r.balanceAsOf ? "" : dayLabel(r.balanceAsOf)].join(","));
+      r.monthEndCents == null ? "" : dollars(r.monthEndCents), r.monthEndCents == null || !r.balanceAsOf ? "" : dayLabel(r.balanceAsOf),
+      r.unexplainedCents == null ? "" : dollars(r.unexplainedCents)].join(","));
   }
   return "\uFEFF" + lines.join("\r\n") + "\r\n";
 }
