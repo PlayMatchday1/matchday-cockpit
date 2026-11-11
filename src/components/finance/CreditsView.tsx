@@ -180,7 +180,7 @@ export default function CreditsView() {
             {report.closedError && <p className={`px-4 pt-1 ${NOTE}`} data-testid="cr-closed-error">{report.closedError}.</p>}
             {report.snapshotError && <p className={`px-4 pt-1 ${NOTE}`} data-testid="cr-snapshot-error">{report.snapshotError}. Month-end balances are missing because of it, not because none were taken.</p>}
             {busyMonth && <p className={`px-4 pt-1 ${NOTE}`}>Rebuilding {monthLabel(busyMonth)}…</p>}
-            {rebuilt && <p className={`px-4 pt-1 ${NOTE}`} data-testid="cr-rebuild-result" data-ok={rebuilt.ok}>{rebuilt.text}</p>}
+            {rebuilt && <p className={`px-4 pt-1 text-xs ${rebuilt.ok ? "text-deep-green/55" : "font-semibold text-attn"}`} data-testid="cr-rebuild-result" data-ok={rebuilt.ok}>{rebuilt.text}</p>}
             <div className="mt-2 overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="bg-cream-soft text-[10px] font-bold uppercase tracking-wider text-deep-green/60">
