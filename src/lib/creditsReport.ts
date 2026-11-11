@@ -68,7 +68,7 @@ export function balanceTotals(rows: readonly BalanceRowIn[]): BalanceTotals {
 
 // ── THE MONTHLY REBUILD ────────────────────────────────────────────────────────────────────────
 
-export type MatchIn = { api_id: number; city_name: string | null; start_date_utc: string | null; is_cancelled: boolean | null; name?: string | null };
+export type MatchIn = { api_id: number; city_name: string | null; start_date_utc: string | null; is_cancelled: boolean | null; name?: string | null; is_free_member?: boolean | null };
 export type BookingIn = {
   api_id: number; match_api_id: number; user_id: number | null; user_email: string | null; user_is_fake_player: boolean | null;
   paid_status: string | null; total_amount: number | null; credit_amount: number | null;
@@ -162,24 +162,76 @@ export function doubleCredits(
   return [...out.values()].sort((a, b) => (b.matchDay ?? "").localeCompare(a.matchDay ?? ""));
 }
 
+// ── CREDITS GIVEN TO MEMBERS ───────────────────────────────────────────────────────────────────
+//
+// Neither credit path checks membership: cancelPaidMatchV2 and handleCreditRefund credit totalAmount + creditAmount
+// to whoever paid. A member's own spot on a members-free match is free (join-pricing.ts priceJoin, MEMBER_FREE), so
+// it carries $0 and earns $0. A member pays full price on a match that is NOT free for members (isFreeMatch,
+// matches.service.ts ~1019), and that money comes back as credit like anyone's.
+//
+// WHO WAS A MEMBER WHEN THEY BOOKED: a mdapi_subscriptions row activated on or before the booking, with no end
+// marker (canceled_at, Stripe's canceled_at or ended_at, the earliest of them) on or before it. Counted only on
+// matches not free for members: on a members-free match a member pays $0, so a charged booking there is the
+// backend saying it did not see a member (a lapsed or suspended membership our dates still show as active).
+
+export type MembershipIn = { user_id: number; activation_date: string | null; ends: (string | null)[] };
+export type MemberCredit = {
+  bookingId: number; userId: number; matchId: number; matchName: string | null; matchDay: string | null;
+  kind: "match" | "player"; day: string; cents: number;
+};
+
+export function memberAt(spans: readonly MembershipIn[], iso: string): boolean {
+  return spans.some((x) => {
+    if (!x.activation_date || x.activation_date > iso) return false;
+    const end = x.ends.filter((e): e is string => !!e).sort()[0];
+    return !end || end > iso;
+  });
+}
+
+/** Credited bookings on matches not free for members, made while the player held a membership. */
+export function memberCredits(
+  bookings: readonly BookingIn[], matches: ReadonlyMap<number, MatchIn>,
+  players: ReadonlyMap<number, PlayerIn>, memberships: ReadonlyMap<number, readonly MembershipIn[]>, from: string, to: string,
+): MemberCredit[] {
+  const out: MemberCredit[] = [];
+  for (const b of bookings) {
+    const m = matches.get(b.match_api_id);
+    if (!m || m.is_free_member !== false || b.user_id == null || !b.created_at) continue;
+    if (excludedBooking(b, m, players)) continue;
+    const c = cancellationCredit(b, m);
+    if (!c || c.day < from || c.day > to) continue;
+    if (!memberAt(memberships.get(b.user_id) ?? [], b.created_at)) continue;
+    out.push({ bookingId: b.api_id, userId: b.user_id, matchId: m.api_id, matchName: m.name ?? null, matchDay: m.start_date_utc ? centralDay(m.start_date_utc) : null, kind: c.kind, day: c.day, cents: c.cents });
+  }
+  return out.sort((a, b) => b.day.localeCompare(a.day) || b.cents - a.cents);
+}
+
 // ── THE DOWNLOAD ───────────────────────────────────────────────────────────────────────────────
 
 export type MonthlyRow = {
   month: string; partialThrough: string | null;
-  cancellationCents: number; staffCents: number; totalIssuedCents: number; usedCents: number; monthEndCents: number | null;
+  cancellationCents: number; staffCents: number; totalIssuedCents: number; usedCents: number;
+  /** The balance shown in the last column: the month-end snapshot for a closed month, the latest snapshot for the
+   *  month in progress. `balanceAsOf` is the Central day it is the balance at. */
+  monthEndCents: number | null; balanceAsOf: string | null;
 };
 
 const dollars = (c: number) => (c / 100).toFixed(2);
 const MON = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 export const monthLabel = (ym: string) => `${MON[Number(ym.slice(5, 7)) - 1]} ${ym.slice(0, 4)}`;
+/** "Nov 10": the screen's and the file's way of writing a day. */
+export const dayLabel = (ymd: string) => `${MON[Number(ymd.slice(5, 7)) - 1].slice(0, 3)} ${Number(ymd.slice(8, 10))}`;
+export const rowLabel = (r: Pick<MonthlyRow, "month" | "partialThrough">) =>
+  r.partialThrough ? `${monthLabel(r.month)} (through ${dayLabel(r.partialThrough)})` : monthLabel(r.month);
 
-/** The Monthly table as the screen shows it. UTF-8 with a BOM so Excel reads it. */
+/** The Monthly table as the screen shows it, row for row. The balance is a number, with the day it is the balance
+ *  at in its own column (the screen writes "as of Nov 10" beside the month in progress). UTF-8 with a BOM. */
 export function monthlyCsv(rows: readonly MonthlyRow[]): string {
-  const head = ["Month", "Cancellation credits issued", "Staff credits issued", "Total issued", "Credits used", "Month-end balance"];
+  const head = ["Month", "Cancellation credits issued", "Staff credits issued", "Total issued", "Credits used", "Month-end balance", "Balance as of"];
   const lines = [head.join(",")];
   for (const r of rows) {
-    const label = r.partialThrough ? `${monthLabel(r.month)} (through ${r.partialThrough})` : monthLabel(r.month);
-    lines.push([label, dollars(r.cancellationCents), dollars(r.staffCents), dollars(r.totalIssuedCents), dollars(r.usedCents), r.monthEndCents == null ? "" : dollars(r.monthEndCents)].join(","));
+    lines.push([rowLabel(r), dollars(r.cancellationCents), dollars(r.staffCents), dollars(r.totalIssuedCents), dollars(r.usedCents),
+      r.monthEndCents == null ? "" : dollars(r.monthEndCents), r.monthEndCents == null || !r.balanceAsOf ? "" : dayLabel(r.balanceAsOf)].join(","));
   }
-  return "﻿" + lines.join("\r\n") + "\r\n";
+  return "\uFEFF" + lines.join("\r\n") + "\r\n";
 }
