@@ -294,6 +294,9 @@ is("authenticateAdmin guards the User access screen and the Fields mapping admin
     // +1 admin/credits (2026-11-10) — Finance › Credits, the monthly player credits report, READ-ONLY.
     // is_admin because it absorbed Staff Credits, which Ryan made admins only, and carries its figures.
     "admin/credits/route.ts",
+    // +1 admin/credits/rebuild (2026-11-10) — overwrite one stored month of the credits report with a fresh rebuild,
+    // logged to change_log. is_admin because the report it rewrites is admins only.
+    "admin/credits/rebuild/route.ts",
     "admin/users/all-tabs-preset/route.ts", "admin/users/auth-status/route.ts", "admin/users/city-manager-preset/route.ts", "admin/users/city-manager/route.ts", "admin/users/delete/route.ts",
     "admin/users/match-permissions/route.ts", "admin/users/permissions/route.ts",
     "admin/users/resend-invite/route.ts",

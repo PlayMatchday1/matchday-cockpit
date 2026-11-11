@@ -46,6 +46,12 @@ export default function CreditsView() {
   const staffMonth = params?.get("month") ?? null;
   const [report, setReport] = useState<Report | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
+  /* REBUILD MONTH: one stored month at a time. `confirm` is the month awaiting a second click; the result says
+   * what changed, or why it didn't. */
+  const [confirmMonth, setConfirmMonth] = useState<string | null>(null);
+  const [busyMonth, setBusyMonth] = useState<string | null>(null);
+  const [rebuilt, setRebuilt] = useState<{ month: string; text: string; ok: boolean } | null>(null);
 
   const go = (t: Tab, month?: string) => {
     const qs = new URLSearchParams();
@@ -69,7 +75,27 @@ export default function CreditsView() {
       setReport(j as Report);
     })().catch((e) => alive && setErr(String(e)));
     return () => { alive = false; };
-  }, [isAdmin]);
+  }, [isAdmin, reloadKey]);
+
+  const rebuildMonth = async (month: string) => {
+    setBusyMonth(month); setConfirmMonth(null); setRebuilt(null);
+    try {
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+      if (!token) { setRebuilt({ month, ok: false, text: "Sign in again." }); return; }
+      const r = await fetch("/api/admin/credits/rebuild", { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify({ month }) });
+      const j = await r.json().catch(() => null);
+      if (!r.ok || !j?.after) { setRebuilt({ month, ok: false, text: `Not rebuilt: ${j?.error ?? `HTTP ${r.status}`}` }); return; }
+      const total = (f: { match_cancel_cents: number; player_cancel_cents: number; staff_cents: number }) => f.match_cancel_cents + f.player_cancel_cents + f.staff_cents;
+      const same = JSON.stringify(j.before) === JSON.stringify(j.after);
+      setRebuilt({ month, ok: true, text: `${monthLabel(month)} rebuilt${same ? ", no change" : ""}: total issued ${money(total(j.before))} → ${money(total(j.after))}, credits used ${money(j.before.used_cents)} → ${money(j.after.used_cents)}.${j.logged ? "" : ` It was NOT logged to the change log: ${j.logError}`}` });
+      setReloadKey((k) => k + 1);
+    } catch (e) {
+      setRebuilt({ month, ok: false, text: `Not rebuilt: ${e instanceof Error ? e.message : String(e)}` });
+    } finally {
+      setBusyMonth(null);
+    }
+  };
 
   const download = () => {
     if (!report) return;
@@ -107,12 +133,13 @@ export default function CreditsView() {
             {report.snapshotError && <span className="w-full rounded-md border border-coral/40 bg-coral-soft/40 px-2 py-1 text-xs text-coral" data-testid="cr-snapshot-error">{report.snapshotError}. Month-end balances are missing because of it, not because none were taken.</span>}
             <button type="button" className="rounded-full bg-deep-green px-3 py-1 text-xs font-bold text-cream hover:bg-deep-green-soft" data-testid="cr-csv" onClick={download}>Download CSV</button>
           </div>
+          {rebuilt && <p className={`mx-4 mt-2 rounded-md border px-3 py-2 text-xs ${rebuilt.ok ? "border-cream-line bg-cream-soft text-deep-green" : "border-coral/40 bg-coral-soft/40 text-coral"}`} data-testid="cr-rebuild-result">{rebuilt.text}</p>}
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-cream-soft text-[10px] font-bold uppercase tracking-wider text-deep-green/60">
                 <tr className="border-b border-cream-line">
                   <th className={TH}>Month</th><th className={THR}>Cancellation credits issued</th><th className={THR}>Staff credits issued</th>
-                  <th className={THR}>Total issued</th><th className={THR}>Credits used</th><th className={THR}>Month-end balance</th>
+                  <th className={THR}>Total issued</th><th className={THR}>Credits used</th><th className={THR}>Month-end balance</th><th className={TH}><span className="sr-only">Stored</span></th>
                 </tr>
               </thead>
               <tbody>
@@ -131,6 +158,16 @@ export default function CreditsView() {
                       : r.partialThrough
                         ? <span className="text-deep-green/70">{money(r.monthEndCents)} <span className="text-xs">as of {r.balanceAsOf ? dayLabel(r.balanceAsOf) : ""}</span></span>
                         : money(r.monthEndCents)}</td>
+                    <td className="whitespace-nowrap px-3 py-2 text-right text-xs">
+                      {r.closedAt && (confirmMonth === r.month
+                        ? <span className="inline-flex items-center gap-1">
+                            <button type="button" className="rounded-full bg-coral px-2 py-0.5 font-bold text-white" data-testid="cr-rebuild-confirm" onClick={() => rebuildMonth(r.month)}>Overwrite {monthLabel(r.month)}</button>
+                            <button type="button" className="rounded-full border border-cream-line px-2 py-0.5 text-deep-green/70" onClick={() => setConfirmMonth(null)}>Cancel</button>
+                          </span>
+                        : <button type="button" className="rounded-full border border-cream-line px-2 py-0.5 text-deep-green/70 hover:text-deep-green disabled:opacity-40" disabled={busyMonth != null}
+                            title={`Stored ${new Date(r.closedAt).toLocaleDateString("en-US", { timeZone: "America/Chicago", month: "short", day: "numeric" })}. Rebuild it from the bookings and overwrite the stored figures.`}
+                            data-testid="cr-rebuild" data-month={r.month} onClick={() => setConfirmMonth(r.month)}>{busyMonth === r.month ? "Rebuilding…" : "Rebuild month"}</button>)}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -141,7 +178,7 @@ export default function CreditsView() {
             <p>Members get credits too: neither credit rule checks membership. A member&apos;s own spot on a match free for members costs $0, so it is credited $0; a match that isn&apos;t free for members is paid and credited like anyone&apos;s (Flags lists them).</p>
             <p>Credits used is the credit spent on paid bookings, dated by the booking. Staff credits are the Staff tab&apos;s net for the month, less Warsaw players and test accounts; recorded from Aug 14, 2026.</p>
             <p>Month-end balance is the night snapshot taken on the 1st{report.snapshotsFrom ? `; snapshots start ${shortDay(report.snapshotsFrom)}` : "; no snapshot has been taken yet"}. Left out everywhere: @matchday.com and @playmatchday.com accounts, deleted accounts, fake players and Warsaw. A credit held in another currency&apos;s wallet reads $0.</p>
-            <p>{report.rows.some((r) => r.closedAt) ? `Months before ${monthLabel(report.rebuiltFrom)} are stored as they closed, two days after they ended; ${monthLabel(report.rebuiltFrom)} on are rebuilt each time the page opens.` : "Every month is rebuilt each time the page opens; months are stored once they close, two days after they end."}</p>
+            <p>{report.rows.some((r) => r.closedAt) ? `Months before ${monthLabel(report.rebuiltFrom)} are stored as they closed, two days after they ended; ${monthLabel(report.rebuiltFrom)} on are rebuilt each time the page opens. Rebuild month reruns a stored month and overwrites it (logged in the Change Log); the night run never does.` : "Every month is rebuilt each time the page opens; months are stored once they close, two days after they end."}</p>
             {report.matchesSyncedAt && <p>Bookings as of the last match sync, {when(report.matchesSyncedAt)}.</p>}
           </div>
         </section>
@@ -201,7 +238,7 @@ export default function CreditsView() {
           </section>
 
           <section className={CARD} data-testid="cr-members">
-            <div className="px-4 pt-3 text-sm font-bold text-deep-green">Credits given to members <span className="font-normal text-deep-green/60">({report.memberCredits.length}, {money(report.memberCredits.reduce((a, c) => a + c.cents, 0))} since Aug 1; counted on Monthly)</span></div>
+            <div className="px-4 pt-3 text-sm font-bold text-deep-green">Credits given to members (paid matches) <span className="font-normal text-deep-green/60">({report.memberCredits.length}, {money(report.memberCredits.reduce((a, c) => a + c.cents, 0))} since Aug 1; counted on Monthly)</span></div>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="bg-cream-soft text-[10px] font-bold uppercase tracking-wider text-deep-green/60">

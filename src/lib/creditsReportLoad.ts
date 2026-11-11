@@ -220,3 +220,46 @@ export async function loadCreditsReport(sb: SupabaseClient) {
   };
 }
 export type CreditsReport = Awaited<ReturnType<typeof loadCreditsReport>>;
+
+export type MonthFigures = { match_cancel_cents: number; player_cancel_cents: number; staff_cents: number; used_cents: number };
+const FIGURE_KEYS = ["match_cancel_cents", "player_cancel_cents", "staff_cents", "used_cents"] as const;
+const FIGURE_LABEL: Record<(typeof FIGURE_KEYS)[number], string> = {
+  match_cancel_cents: "Credits from matches we cancelled", player_cancel_cents: "Credits from players cancelling 24h+ ahead",
+  staff_cents: "Staff credits", used_cents: "Credits used",
+};
+
+/** REBUILD ONE STORED MONTH (Ryan, 2026-11-10): the only thing that overwrites a credit_months row. Admins only, from
+ *  Monthly. Reruns the same rebuild, overwrites the row, reads it back, and logs who did it with the before and after
+ *  figures in change_log. A month that is not stored, or not over, is refused: the night run stores it first. */
+export async function rebuildStoredMonth(sb: SupabaseClient, month: string, actor: { email: string; name: string }, now = new Date()):
+  Promise<{ ok: true; before: MonthFigures; after: MonthFigures; logged: boolean; logError?: string } | { ok: false; status: number; error: string }> {
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return { ok: false, status: 400, error: "month must be YYYY-MM" };
+  const prev = await sb.from("credit_months").select("match_cancel_cents, player_cancel_cents, staff_cents, used_cents").eq("month", month).maybeSingle();
+  if (prev.error) return { ok: false, status: 500, error: `credit_months: ${prev.error.message}` };
+  if (!prev.data) return { ok: false, status: 409, error: `${month} isn't stored yet, so there is nothing to rebuild. The night run stores a month two days after it ends.` };
+  const before = Object.fromEntries(FIGURE_KEYS.map((k) => [k, Number((prev.data as MonthFigures)[k])])) as MonthFigures;
+
+  const { months, staffByMonth } = await rebuildCredits(sb, `${month}-01`, lastDay(month));
+  const after: MonthFigures = {
+    match_cancel_cents: months.get(month)?.matchCancelCents ?? 0, player_cancel_cents: months.get(month)?.playerCancelCents ?? 0,
+    staff_cents: staffByMonth.get(month) ?? 0, used_cents: months.get(month)?.usedCents ?? 0,
+  };
+  const up = await sb.from("credit_months").update({ ...after, closed_at: now.toISOString() }).eq("month", month);
+  if (up.error) return { ok: false, status: 500, error: `credit_months: ${up.error.message}` };
+  // A write that returned no error has not necessarily landed: read the row back.
+  const back = await sb.from("credit_months").select("match_cancel_cents, player_cancel_cents, staff_cents, used_cents").eq("month", month).maybeSingle();
+  const landed = !back.error && !!back.data && FIGURE_KEYS.every((k) => Number((back.data as MonthFigures)[k]) === after[k]);
+
+  const log = await sb.from("change_log").insert({
+    save_id: crypto.randomUUID(), created_at: now.toISOString(), actor_name: actor.name, actor_email: actor.email,
+    source: "Finance › Credits · Rebuild month", env: "production", match_id: null, match_name: null,
+    method: "POST", endpoint: "/api/admin/credits/rebuild", request_body: { month },
+    outcome: landed ? "landed" : back.error ? "unknown" : "failed", server_said: null,
+    changes: [
+      ...FIGURE_KEYS.map((k) => ({ key: k, field: FIGURE_LABEL[k], before: before[k], after: after[k] })),
+      { key: "total_issued_cents", field: "Total issued", before: before.match_cancel_cents + before.player_cancel_cents + before.staff_cents, after: after.match_cancel_cents + after.player_cancel_cents + after.staff_cents },
+    ],
+  });
+  if (!landed) return { ok: false, status: 500, error: back.error ? `Rebuilt, but the row couldn't be read back: ${back.error.message}` : "The row read back doesn't hold the rebuilt figures." };
+  return log.error ? { ok: true, before, after, logged: false, logError: log.error.message } : { ok: true, before, after, logged: true };
+}
