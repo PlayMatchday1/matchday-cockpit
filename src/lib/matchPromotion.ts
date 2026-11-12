@@ -33,7 +33,8 @@ import { CITY_CODE_TO_DISPLAY } from "./scheduleReconcile";
 import { canonicalVenueName } from "./venueResolver";
 import { realCount } from "./monthGrid";
 
-/** The six channels, fixed, and always rendered in this order. */
+/** The seven channels, fixed, and always rendered in this order. None of them sends anything from Clubhouse:
+ *  each is a plan that staff send by hand and then mark sent (pushed_at is written only by Mark sent). */
 export const CHANNELS = [
   { key: "wa", short: "WA", label: "WhatsApp" },
   { key: "match_chat", short: "MC", label: "Match chat" },
@@ -44,6 +45,9 @@ export const CHANNELS = [
   { key: "dm", short: "POP", label: "Popup" },
   { key: "klaviyo_email", short: "EM", label: "Klaviyo email" },
   { key: "klaviyo_sms", short: "SMS", label: "Klaviyo SMS" },
+  /* APP PUSH (2026-11-12): a push notification to the MatchDay app, planned and marked sent like the rest. Clubhouse
+   * does not send it; the stored key needs migration 0271, which adds it to match_promotion_push's CHECK. */
+  { key: "app_push", short: "PUSH", label: "App push" },
 ] as const;
 
 export type ChannelKey = (typeof CHANNELS)[number]["key"];

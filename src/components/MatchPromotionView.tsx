@@ -1341,6 +1341,16 @@ function Plan({ week, byCity, openId, onOpen, zone, editing, riskOf, coverage, c
               </span>
             ))}
           </div>
+          {/* THE CHANNELS, every one, in CHANNELS order: the badge and its name, so a new channel's
+              badge (PUSH, 2026-11-12) is explained where the badges are. */}
+          <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1" data-testid="key-channels">
+            {CHANNELS.map((c) => (
+              <span key={c.key} data-testid="key-channel" data-k={c.key} className="inline-flex items-baseline gap-1.5 text-[11px] text-deep-green/65">
+                <i className="inline-flex h-[16px] min-w-[24px] items-center justify-center rounded-[5px] border border-mint/40 bg-mint-soft/40 px-1 text-[9px] font-extrabold not-italic text-emerald-700">{c.short}</i>
+                <span>{c.label}</span>
+              </span>
+            ))}
+          </div>
           {/* THE TAGS IN USE THIS WEEK, in the key's own order: Starting 11, Priority, Key Field.
               NO SCOPE LABEL. The sentences carry it ("for this match", "for all matches here")
               better than a repeated lead-in did, and a label restating the sentence is noise. */}

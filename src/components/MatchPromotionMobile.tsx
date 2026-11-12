@@ -624,6 +624,9 @@ export default function MatchPromotionMobile(p: MobileProps) {
           field slate blast carried it. A dashed row has no plan at all. Amber needs a push date.
           The 1/4 to 4/4 chip is how often the slot cancelled in the last four weeks; it never
           changes the row&rsquo;s colour.
+          <div className="mt-1.5" data-testid="m-key-channels">
+            {CHANNELS.map((c) => `${c.short} ${c.label}`).join(" · ")}
+          </div>
         </div>
       )}
     </div>
