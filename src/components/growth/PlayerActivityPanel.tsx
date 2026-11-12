@@ -264,7 +264,7 @@ export default function PlayerActivityPanel({ data, months }: { data: GrowthData
   /* ── THE DEFAULT: THE LAST SIX MONTHS ENDING IN THE CURRENT MONTH ────────────────────────────
    * The current month is INCLUDED and is marked in progress. That is this page's own rule and the
    * reason it does not use the shared defaultPeriod, which filters to completed months: the change
-   * column compares the month so far against the same days of the month before (cmpWin below),
+   * column compares the month through yesterday against the same days of the month before (cmpWin),
    * so a partial column at the right edge cannot be mistaken for a collapse. */
   const defaultStart = axisMonths[Math.max(0, axisMonths.length - 6)] ?? first;
   const [from, setFrom] = useState("");
@@ -295,29 +295,34 @@ export default function PlayerActivityPanel({ data, months }: { data: GrowthData
   const dMonth = dayMonth && dayMonth >= first && dayMonth <= last ? dayMonth : last;
   const effRange: MonthRange = grain === "daily" ? { start: dMonth, end: dMonth } : range;
 
-  /* ── THE CHANGE AS TWO DAY WINDOWS (Ryan, 2026-11-12) ────────────────────────────────────────
+  /* ── THE CHANGE AS TWO DAY WINDOWS, ENDING YESTERDAY (Ryan, 2026-11-12) ──────────────────────
    * When the range reaches the current month, CHANGE answers "is what we are doing this month
-   * working": the period so far against the SAME DAYS of the one before.
-   *   Monthly  this month so far vs the same days of last month (Nov 1-12 vs Oct 1-12), clamped to
-   *            the previous month's length by matchedMonthWindow.
-   *   Weekly   this week so far (Monday to today) vs the same days last week.
-   *   Daily    today so far vs the same weekday last week. Not the day before: a Saturday against a
-   *            Friday is mostly the schedule, not a trend.
+   * working": the period through YESTERDAY against the SAME DAYS of the one before.
+   *   Monthly  the 1st through yesterday vs the same days of last month (Nov 1-11 vs Oct 1-11),
+   *            clamped to the previous month's length by matchedMonthWindow.
+   *   Weekly   Monday through yesterday vs the same days last week.
+   *   Daily    yesterday vs the same weekday a week before. Not the day before: a Saturday against
+   *            a Friday is mostly the schedule, not a trend.
+   * WHY YESTERDAY, NOT TODAY. Today has no play rows until its matches land (on Nov 12 at noon every
+   * play cell for the day was 0), so a window ending today counted one day short against a full day
+   * and read as a drop: spots Nov 1-12 vs Oct 1-12 was -4.8%, Nov 1-11 vs Oct 1-11 was +5.4%.
+   * On the 1st (Monthly) or a Monday (Weekly) yesterday closes the previous period, so cmpWin is null
+   * and the old rule applies, which is then the same comparison: the last two complete buckets.
    * Both sides are windows the route aggregates (windows[1] and [2]) with the same rows and
    * exclusions as the table, so the distinct counts are distinct over the window, not summed.
-   * A range that stops before this month keeps the old rule: the last two complete buckets for
-   * Monthly and Weekly (cmpWin null), and for Daily the shown month's last day against a week
-   * earlier. */
+   * A range that stops before this month keeps the old rule too, and Daily on a past month compares
+   * its last day against a week earlier. */
   type Span = { from: string; to: string };
   const cmpWin = useMemo<{ cur: Span; prev: Span; head: string; explain: string } | null>(() => {
     const span = (f: string, t: string) => f === t ? dLabel(f)
       : f.slice(0, 7) === t.slice(0, 7) ? `${dLabel(f)}-${Number(t.slice(8, 10))}` : `${dLabel(f)}-${dLabel(t)}`;
+    const yday = addDays(today, -1);
     if (grain === "daily") {
       if (dMonth === curMonth) {
-        const prev = addDays(today, -7);
-        return { cur: { from: today, to: today }, prev: { from: prev, to: prev },
-          head: `${wdLabel(today)} vs ${wdLabel(prev)}`,
-          explain: `Today so far (${wdLabel(today)}) compared with the same weekday last week (${wdLabel(prev)}).` };
+        const prev = addDays(yday, -7);
+        return { cur: { from: yday, to: yday }, prev: { from: prev, to: prev },
+          head: `${wdLabel(yday)} vs ${wdLabel(prev)}`,
+          explain: `Yesterday (${wdLabel(yday)}) compared with the same weekday a week before (${wdLabel(prev)}). Today is left out until its matches are in.` };
       }
       const last = monthEnd(dMonth), prev = addDays(last, -7);
       return { cur: { from: last, to: last }, prev: { from: prev, to: prev },
@@ -326,20 +331,22 @@ export default function PlayerActivityPanel({ data, months }: { data: GrowthData
     }
     if (range.end !== curMonth) return null;
     if (grain === "monthly") {
-      const w = matchedMonthWindow(curMonth, stepMonth(curMonth, -1), today);
+      if (yday < monthStart(curMonth)) return null;
+      const w = matchedMonthWindow(curMonth, stepMonth(curMonth, -1), yday);
       const c = span(w.last.from, w.last.to), p = span(w.prev.from, w.prev.to);
       /* THE WEEKEND COUNTS ARE NAMED when they differ (see matchedMonthWindow): spots booked is
-       * mostly weekend volume, so Nov 1-12 (3 weekend days) against Oct 1-12 (4) moves on that. */
+       * mostly weekend volume, so Nov 1-11 (3 weekend days) against Oct 1-11 (4) moves on that. */
       const wkd = w.lastWeekends === w.prevWeekends ? ""
         : ` ${c} has ${w.lastWeekends} weekend days and ${p} has ${w.prevWeekends}.`;
       return { cur: w.last, prev: w.prev, head: `${c} vs ${p}`,
-        explain: `This month so far (${c}) compared with the same days of last month (${p}), counted the same way as the table.${wkd}` };
+        explain: `This month through yesterday (${c}) compared with the same days of last month (${p}), counted the same way as the table.${wkd}` };
     }
     const wk = weekKey(today);
-    const cur = { from: wk, to: today }, prev = { from: addDays(wk, -7), to: addDays(today, -7) };
+    if (yday < wk) return null;
+    const cur = { from: wk, to: yday }, prev = { from: addDays(wk, -7), to: addDays(yday, -7) };
     const c = span(cur.from, cur.to), p = span(prev.from, prev.to);
     return { cur, prev, head: `${c} vs ${p}`,
-      explain: `This week so far (${c}) compared with the same days last week (${p}), counted the same way as the table.` };
+      explain: `This week from Monday through yesterday (${c}) compared with the same days last week (${p}), counted the same way as the table.` };
   }, [grain, dMonth, curMonth, today, range.end]);
   const rangeMonths = useMemo(
     () => axisMonths.filter((m) => m >= effRange.start && m <= effRange.end),
