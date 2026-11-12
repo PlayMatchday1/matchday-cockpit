@@ -41,7 +41,7 @@ export const CHANNELS = [
   { key: "fb", short: "FB", label: "Facebook" },
   /* POPUP WAS "DM" (2026-11-09): DMs stopped and matches are promoted with in-app popups (Offers). The stored key
    * stays "dm" — match_promotion_push.channel and its CHECK (0176) — so no row was rewritten; only the words changed.
-   * Rows saved before the change were DMs and now read as Popup. */
+   * Rows saved before the change were DMs and read as Popup too, sent or not (2026-11-12). */
   { key: "dm", short: "POP", label: "Popup" },
   { key: "klaviyo_email", short: "EM", label: "Klaviyo email" },
   { key: "klaviyo_sms", short: "SMS", label: "Klaviyo SMS" },
@@ -53,16 +53,13 @@ export const CHANNELS = [
 export type ChannelKey = (typeof CHANNELS)[number]["key"];
 export const CHANNEL_KEYS = CHANNELS.map((c) => c.key) as readonly ChannelKey[];
 
-/* SENT "dm" PUSHES WERE REAL DMs (2026-11-09). A push already marked sent on the old DM channel shows as DM; an unsent one
- * is a Popup. Given the pushes in view for one channel (one push, a match's plan, a day's queue): DM only when there is
- * at least one and every "dm" push among them is sent. Display only; the stored key is "dm" either way. */
-export const DM_NAMES = { short: "DM", label: "DM" } as const;
-export function channelNames(key: string, pushes: readonly { channel: string; pushedAt: string | null }[]): { short: string; label: string } {
+/* EVERY "dm" PUSH READS AS POPUP (Ryan, 2026-11-12). Until then a "dm" push already marked sent showed as DM, on the
+ * reasoning that it had been a real DM; that put "DM" on the day filter chips and general pushes while the match panel
+ * said Popup. DM is gone and "dm" means Popup, sent or not. The stored key stays "dm". `pushes` is no longer read; the
+ * signature stays so the callers did not have to change. */
+export function channelNames(key: string, _pushes?: readonly { channel: string; pushedAt: string | null }[]): { short: string; label: string } {
   const c = CHANNELS.find((x) => x.key === key);
-  const base = { short: c?.short ?? key, label: c?.label ?? key };
-  if (key !== "dm") return base;
-  const mine = pushes.filter((p) => p.channel === "dm");
-  return mine.length > 0 && mine.every((p) => p.pushedAt != null) ? DM_NAMES : base;
+  return { short: c?.short ?? key, label: c?.label ?? key };
 }
 
 /* ── ONE ROW PER PUSH ─────────────────────────────────────────────────────────────────────────
