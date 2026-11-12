@@ -213,6 +213,8 @@ export function memberCredits(
 export type MonthlyRow = {
   month: string; partialThrough: string | null;
   cancellationCents: number; staffCents: number; totalIssuedCents: number; usedCents: number;
+  /** False before Aug 2026: nothing recorded staff credits, so staffCents is 0 by absence, not a figure. */
+  staffRecorded: boolean;
   /** The balance shown in the last column: the month-end snapshot for a closed month, the latest snapshot for the
    *  month in progress. `balanceAsOf` is the Central day it is the balance at. */
   monthEndCents: number | null; balanceAsOf: string | null;
@@ -244,7 +246,7 @@ export function monthlyCsv(rows: readonly MonthlyRow[]): string {
   const head = ["Month", "Cancellation credits issued", "Staff credits issued", "Total issued", "Credits used", "Month-end balance", "Balance as of", "Unexplained"];
   const lines = [head.join(",")];
   for (const r of rows) {
-    lines.push([rowLabel(r), dollars(r.cancellationCents), dollars(r.staffCents), dollars(r.totalIssuedCents), dollars(r.usedCents),
+    lines.push([rowLabel(r), dollars(r.cancellationCents), r.staffRecorded ? dollars(r.staffCents) : "", dollars(r.totalIssuedCents), dollars(r.usedCents),
       r.monthEndCents == null ? "" : dollars(r.monthEndCents), r.monthEndCents == null || !r.balanceAsOf ? "" : dayLabel(r.balanceAsOf),
       r.unexplainedCents == null ? "" : dollars(r.unexplainedCents)].join(","));
   }

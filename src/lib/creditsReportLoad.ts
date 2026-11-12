@@ -14,8 +14,11 @@ import {
   type BookingIn, type CreditAllIn, type MatchIn, type MembershipIn, type MonthCredits, type MonthlyRow, type PlayerIn,
 } from "./creditsReport";
 
-/** The first month on the table. Staff credits are recorded from Aug 14, 2026. */
-export const FIRST_MONTH = "2026-08";
+/** The first month on the table: credits began Dec 23, 2025 (backend 04a7ef7 "C-190 - User credits", that day). */
+export const FIRST_MONTH = "2025-12";
+/** Staff credits are recorded from Aug 14, 2026 (the first Clubhouse change_log credit). Before this month nothing
+ *  recorded them: the table shows "–", never $0, and the CSV leaves the cell empty. */
+export const STAFF_FROM_MONTH = "2026-08";
 /** A month closes this many days after it ends: the 3 AM pass has re-read every roster twice by then. */
 export const CLOSE_AFTER_DAYS = 2;
 const BOOKING_COLS = "api_id, match_api_id, user_id, user_email, user_is_fake_player, paid_status, total_amount, credit_amount, is_cancelled, canceled_at, created_at";
@@ -26,6 +29,14 @@ const lastDay = (ym: string) => new Date(Date.UTC(Number(ym.slice(0, 4)), Number
 const addDays = (ymd: string, n: number) => new Date(Date.parse(`${ymd}T12:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
 /** A day before `fromDay` in UTC, so a Central day at the edge is not lost. */
 const sinceUtc = (fromDay: string) => `${addDays(fromDay, -1)}T00:00:00Z`;
+/** The range from `fromDay` read in month-sized windows: contiguous, non-overlapping, the last one open-ended (as
+ *  the single read was). A year read in one go timed out on mdapi_match_players (2026-11-11, Dec 2025 on). */
+function windows(fromDay: string, toDay: string): { gte: string; lt: string | null }[] {
+  const cuts: string[] = [];
+  for (let ym = nextMonth(fromDay.slice(0, 7)); ym <= toDay.slice(0, 7); ym = nextMonth(ym)) cuts.push(`${ym}-01T00:00:00Z`);
+  const starts = [sinceUtc(fromDay), ...cuts];
+  return starts.map((gte, i) => ({ gte, lt: cuts[i] ?? null }));
+}
 export const closable = (ym: string, today: string) => addDays(lastDay(ym), CLOSE_AFTER_DAYS) <= today;
 
 async function playersById(sb: SupabaseClient, ids: Iterable<number>): Promise<Map<number, PlayerIn>> {
@@ -43,16 +54,23 @@ async function playersById(sb: SupabaseClient, ids: Iterable<number>): Promise<M
  *  per month. Reads only bookings that can fall in the range. */
 export async function rebuildCredits(sb: SupabaseClient, fromDay: string, toDay: string):
   Promise<{ months: Map<string, MonthCredits>; staffByMonth: Map<string, number> }> {
-  const since = sinceUtc(fromDay);
   // Active bookings on a cancelled match, PAID bookings a player cancelled, and PAID bookings that spent credit.
-  const cancelledMatches = await selectAll<MatchIn>(() => sb.from("mdapi_matches").select(MATCH_COLS).eq("is_cancelled", true).gte("start_date_utc", since).order("api_id"));
+  type Q = { gte: (c: string, v: string) => Q; lt: (c: string, v: string) => Q };
+  const within = <B extends Q>(q: B, col: string, w: { gte: string; lt: string | null }) => (w.lt ? q.gte(col, w.gte).lt(col, w.lt) : q.gte(col, w.gte)) as B;
+  const wins = windows(fromDay, toDay);
+  const cancelledMatches: MatchIn[] = [];
+  const leftPaid: BookingIn[] = [];
+  const spent: BookingIn[] = [];
+  for (const w of wins) {
+    cancelledMatches.push(...await selectAll<MatchIn>(() => within(sb.from("mdapi_matches").select(MATCH_COLS).eq("is_cancelled", true), "start_date_utc", w).order("api_id")));
+    leftPaid.push(...await selectAll<BookingIn>(() => within(sb.from("mdapi_match_players").select(BOOKING_COLS).eq("is_cancelled", true).eq("paid_status", "PAID"), "canceled_at", w).order("api_id")));
+    spent.push(...await selectAll<BookingIn>(() => within(sb.from("mdapi_match_players").select(BOOKING_COLS).eq("paid_status", "PAID").gt("credit_amount", 0), "created_at", w).order("api_id")));
+  }
   const onCancelled: BookingIn[] = [];
   const cmIds = cancelledMatches.map((m) => m.api_id);
   for (let i = 0; i < cmIds.length; i += 200) {
     onCancelled.push(...await selectAll<BookingIn>(() => sb.from("mdapi_match_players").select(BOOKING_COLS).in("match_api_id", cmIds.slice(i, i + 200)).eq("is_cancelled", false).order("api_id")));
   }
-  const leftPaid = await selectAll<BookingIn>(() => sb.from("mdapi_match_players").select(BOOKING_COLS).eq("is_cancelled", true).eq("paid_status", "PAID").gte("canceled_at", since).order("api_id"));
-  const spent = await selectAll<BookingIn>(() => sb.from("mdapi_match_players").select(BOOKING_COLS).eq("paid_status", "PAID").gt("credit_amount", 0).gte("created_at", since).order("api_id"));
   const bookings = new Map<number, BookingIn>();
   for (const b of [...onCancelled, ...leftPaid, ...spent]) bookings.set(b.api_id, b);
 
@@ -152,7 +170,7 @@ export async function loadCreditsReport(sb: SupabaseClient) {
     const cancellationCents = matchCancelCents + playerCancelCents;
     rows.push({
       month: ym, partialThrough: current ? today : null, matchCancelCents, playerCancelCents,
-      cancellationCents, staffCents, totalIssuedCents: cancellationCents + staffCents, usedCents,
+      cancellationCents, staffCents, staffRecorded: ym >= STAFF_FROM_MONTH, totalIssuedCents: cancellationCents + staffCents, usedCents,
       monthEndCents: balance ? Number(balance.outstanding_cents) : null,
       // The night snapshot on the 1st is the balance at the end of the month before; any other is as of its day.
       balanceAsOf: !balance ? null : current ? balance.day : lastDay(ym),
@@ -188,7 +206,12 @@ export async function loadCreditsReport(sb: SupabaseClient) {
   const doubles = doubleRows.map((d) => ({ ...d, players: d.playerCredits.map((p) => ({ ...p, name: nameOf(p.id, dPlayers.get(p.id)) })) }));
 
   // Credits given to members: only matches not free for members can carry one (creditsReport.memberCredits).
-  const paidMatches = await selectAll<MatchIn>(() => sb.from("mdapi_matches").select(MATCH_COLS).eq("is_free_member", false).gte("start_date_utc", sinceUtc(`${FIRST_MONTH}-01`)).order("api_id"));
+  /* Only the ones since the last stored month count as new: a stored month is settled, so what it holds has been
+   * seen. No stored month (or a failed read, said on the page) counts everything from the first month. A credit
+   * dated on or after newSince is on a match that starts on or after it, so the matches are read from there. */
+  const lastStored = [...closed.keys()].sort().at(-1) ?? null;
+  const newSince = `${lastStored ? nextMonth(lastStored) : FIRST_MONTH}-01`;
+  const paidMatches = await selectAll<MatchIn>(() => sb.from("mdapi_matches").select(MATCH_COLS).eq("is_free_member", false).gte("start_date_utc", sinceUtc(newSince)).order("api_id"));
   const pmMap = new Map(paidMatches.map((m) => [m.api_id, m]));
   const pmBookings: BookingIn[] = [];
   const pmIds = paidMatches.map((m) => m.api_id);
@@ -213,12 +236,7 @@ export async function loadCreditsReport(sb: SupabaseClient) {
       memberships.set(x.user_id, list);
     }
   }
-  /* Only the ones since the last stored month count as new: a stored month is settled, so what it holds has been
-   * seen. No stored month (or a failed read, said on the page) counts everything since Aug 1. */
-  const lastStored = [...closed.keys()].sort().at(-1) ?? null;
-  const newSince = `${lastStored ? nextMonth(lastStored) : FIRST_MONTH}-01`;
-  const toMembers = memberCredits(pmBookings, pmMap, pmPlayers, memberships, `${FIRST_MONTH}-01`, today)
-    .filter((c) => c.day >= newSince)
+  const toMembers = memberCredits(pmBookings, pmMap, pmPlayers, memberships, newSince, today)
     .map((c) => ({ ...c, playerName: nameOf(c.userId, pmPlayers.get(c.userId)) }));
 
   const sync = await sb.from("fin_sync_log").select("completed_at").eq("source", "mdapi-matches").is("error_message", null).not("completed_at", "is", null).order("completed_at", { ascending: false }).limit(1).maybeSingle();

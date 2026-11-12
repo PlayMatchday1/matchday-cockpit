@@ -9194,3 +9194,25 @@ holdout 0 unless raised.
 - **A match's `max_player_count` is its current size**, often below the field max and expanded later (LBJ ran 18/22/28/36/40 the week of Nov 5).
 - **Fields with matches since Nov 5 and no max**, read 2026-11-11: Friends Select School (Philadelphia, venue 92, max_players null); Centrum Futbolu Warszawianka (field 2146) and Hala Piłkarska Bemowo (field 1684), Warsaw, linked to no venue. LBJ Early College's max is 36 though a match there ran at 40; Scissortail Park's max is 22.
 - **Free First Match counts sold out as booked ≥ the field max** (`freeFirstMatchModel.ts` `capacityState`). Full at the match's own size under the max is "Full, can expand" and not lost; no max set falls back to full at the match's own size, marked "No max set". On 2026-11-11 the card went from $1,138.00 / 116 spots / 32 matches to $971.00 / 102 spots / 26 matches, with 6 full-can-expand matches (14 free players) and 1 fallback match (Bemowo, Warsaw).
+
+## Credits back to Dec 2025, and where the rebuild differs from the backend's `refunded` flag (2026-11-12)
+
+- **Credits began Dec 23, 2025.** Backend commit `04a7ef7` "[feat]: C-190 - User credits", Tue Dec 23 10:21:38 2025 UTC
+  (`~/Code/backend`, `git log`). Its deploy time is UNKNOWN. No match was cancelled Dec 1 to 22, 2025 with a paid booking
+  still on it, so the start date changes nothing on the table (probe of `mdapi_matches` + `mdapi_match_players`, 2026-11-12).
+- **Finance › Credits now runs from Dec 2025** (`FIRST_MONTH`, `lib/creditsReportLoad.ts`). Staff credits before Aug 2026
+  are unrecorded and shown as "–" (`STAFF_FROM_MONTH`). The rebuild's booking reads go in month windows: one read from
+  Dec 2025 timed out on `mdapi_match_players` ("canceling statement due to statement timeout").
+- **Since Dec 23 the cancel path credits and sets `refunded` together.** `matches.service.ts` in backend `a3713c2`
+  (Dec 29, 2025): `updateCreditsByUserId(...)` then `updateRefund(userMatch.id)` for a PAID booking. So a PAID booking still
+  on a cancelled match with `refunded = false` and `error = null` had no credit recorded by the backend.
+- **The rebuild counts those anyway.** It credits every PAID/FREE booking still on a cancelled match (`cancellationCredit`).
+  By month (2026-11-12 mirror): Dec 2025 $308.58, Jan $58.47, Feb $3.25, Mar $32.47, Apr $12.99, May $10.82, Jun $5.41,
+  Jul $12.99, Aug $48.71, Sep $12.99, Oct $9.74. December's are matches 10558, 10559, 10563, 10571, 10608, 10687 and
+  10785 (Dec 24 to 27, 2025); from Dec 30 the same kind of match reads `refunded = true`.
+- **A booking whose payment intent was refunded through Stripe** (a `fin_txn` refund on its charge) is counted in full by
+  the rebuild. The Oct 21 report dropped the card part as a cash refund: Jan $57.37 (4 bookings), Feb $18.40, Mar $42.02,
+  May $83.18, Jun $21.11, Jul $9.74, Aug $46.55, Oct $51.96.
+- **The Oct 21 report's rule** (transcript 844c3696): bookings with `refunded = true`, from 2025-12-23T00:00Z, dated by the
+  match start if the match was cancelled else by `canceled_at`, classed by the backend's `cancelled_before_24h` flag; used =
+  `credit_amount` on non-WAITING bookings. Rerun on the 2026-11-12 mirror it reproduces Dec, Jan, Mar, Apr and Jun exactly.

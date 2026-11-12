@@ -197,8 +197,10 @@ export default function CreditsView() {
                       <td className="px-3 py-2">{monthLabel(r.month)}{r.partialThrough && <span className="ml-1 text-xs text-deep-green/55">(through {dayLabel(r.partialThrough)})</span>}</td>
                       <td className={TDR} title={`Matches we cancelled ${money(r.matchCancelCents)} · players cancelling more than 24 hours ahead ${money(r.playerCancelCents)}`}>{money(r.cancellationCents)}</td>
                       <td className={TDR}>
-                        <a className="underline decoration-deep-green/30 hover:decoration-deep-green" href={`/admin/finance/credits?tab=staff&month=${r.month}`}
-                          data-testid="cr-staff-link" onClick={(e) => { e.preventDefault(); go("staff", r.month); }}>{money(r.staffCents)}</a>
+                        {r.staffRecorded
+                          ? <a className="underline decoration-deep-green/30 hover:decoration-deep-green" href={`/admin/finance/credits?tab=staff&month=${r.month}`}
+                              data-testid="cr-staff-link" onClick={(e) => { e.preventDefault(); go("staff", r.month); }}>{money(r.staffCents)}</a>
+                          : <span className="text-deep-green/45" data-testid="cr-staff-unrecorded" title="Not recorded before Aug 14, 2026">–</span>}
                       </td>
                       <td className={`${TDR} font-bold`}>{money(r.totalIssuedCents)}</td>
                       <td className={TDR}>{money(r.usedCents)}</td>
@@ -219,6 +221,7 @@ export default function CreditsView() {
           </section>
 
           <div className="mt-3 space-y-2 px-1">
+            {report.rows.some((r) => !r.staffRecorded) && <p className={NOTE} data-testid="cr-staff-footnote">– Staff credits weren&apos;t recorded before Aug 14, 2026, so those months show cancellation credits only.</p>}
             <Flags report={report} open={flagsOpen} onToggle={() => setFlagsOpen((o) => !o)} />
             <div>
               <button type="button" className={TOGGLE} aria-expanded={notesOpen} data-testid="cr-notes-toggle" onClick={() => setNotesOpen((o) => !o)}>How these numbers are calculated</button>
@@ -239,7 +242,7 @@ function Flags({ report, open, onToggle }: { report: Report; open: boolean; onTo
   const { negatives, doubles, memberCredits } = report;
   const twice = doubles.flatMap((d) => d.players.map((p) => ({ ...p, d })));
   if (negatives.length === 0 && twice.length === 0 && memberCredits.length === 0) return null;
-  const since = report.lastStoredMonth ? `since ${monthLabel(report.lastStoredMonth)} was stored` : "since Aug 1";
+  const since = report.lastStoredMonth ? `since ${monthLabel(report.lastStoredMonth)} was stored` : "since Dec 2025";
   const counts = [
     negatives.length ? `${plural(negatives.length, "negative balance")} (${money(negatives.reduce((a, n) => a + n.cents, 0))})` : null,
     doubles.length ? `${plural(doubles.length, "match", "matches")} credited twice (${money(doubles.reduce((a, d) => a + d.cents, 0))})` : null,
@@ -300,10 +303,10 @@ function Notes({ report }: { report: Report }) {
   const stored = report.rows.some((r) => r.closedAt);
   const lines: [string, string][] = [
     ["Month", stored
-      ? `Central time, in USD. Months before ${monthLabel(report.rebuiltFrom)} are stored two days after they end; later months are rebuilt each time the page opens.`
-      : "Central time, in USD. Every month is rebuilt each time the page opens, and stored two days after it ends."],
+      ? `Central time, in USD. Credits began Dec 23, 2025. Months before ${monthLabel(report.rebuiltFrom)} are stored two days after they end; later months are rebuilt each time the page opens.`
+      : "Central time, in USD. Credits began Dec 23, 2025. Every month is rebuilt each time the page opens, and stored two days after it ends."],
     ["Cancellation credits issued", "Rebuilt from bookings, because the app records none. A match we cancel credits everyone still on it, on the match day. A player who leaves more than 24 hours ahead gets a paid booking back as credit, on the day they left. Members leaving 6 to 24 hours ahead get nothing."],
-    ["Staff credits issued", "The Staff tab's net for the month, without Warsaw players or test accounts. Recorded from Aug 14, 2026."],
+    ["Staff credits issued", "The Staff tab's net for the month, without Warsaw players or test accounts. Recorded from Aug 14, 2026; earlier months show – because nothing recorded them, and their Total issued is cancellation credits only."],
     ["Total issued", "Cancellation credits plus staff credits."],
     ["Credits used", "Credit spent on paid bookings, on the booking day."],
     ["Month-end balance", `The night snapshot on the 1st of the next month${report.snapshotsFrom ? `; snapshots start ${shortDay(report.snapshotsFrom)}` : "; no snapshot has been taken yet"}. Blank when there isn't one. The current month shows the latest snapshot and its date.`],
