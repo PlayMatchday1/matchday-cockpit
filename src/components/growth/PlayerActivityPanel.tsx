@@ -31,13 +31,13 @@
  */
 
 import { supabase } from "@/lib/supabase";
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type FocusEvent, type MouseEvent, type ReactNode } from "react";
 import type { GrowthData, BehaviorPoint } from "@/lib/growthAnalytics";
 import { metricValue, isAdditive, sumAcrossBuckets, type GridMetric } from "@/lib/growthMetricGrid";
 import { downloadCsv } from "./format";
 import { exportBody, exportHeader } from "@/lib/behaviorExport";
 import MonthRangeBar, { orderRange, type MonthRange } from "./MonthRangeBar";
-import { addDays, chicagoToday, isBucketComplete, monthEnd, type Granularity } from "@/lib/weekBuckets";
+import { addDays, chicagoToday, isBucketComplete, matchedMonthWindow, monthEnd, weekKey, type Granularity } from "@/lib/weekBuckets";
 import styles from "./playerActivity.module.css";
 import pb from "../finance/periodBar.module.css";
 
@@ -180,12 +180,23 @@ function Info({ label, desc, testId, api }: { label: string; desc: string; testI
  * selectors can find, so without these the suite cannot address the structure it is checking.
  * THEY CARRY NO STYLES — every rule lives on the hashed class beside them — so deleting one breaks
  * the suite and changes nothing on screen, which is the failure mode worth naming here. */
-type ThApi = { sortFor: (k: string) => SortState; onSort: (k: string, c: string) => void; grain: Granularity };
+type ThApi = {
+  sortFor: (k: string) => SortState; onSort: (k: string, c: string) => void; grain: Granularity;
+  show: (el: HTMLElement, text: string) => void; hide: () => void;
+};
 
-function Th({ inner, col, sortKey, cls, api }: {
-  inner: ReactNode; col: string; sortKey?: string; cls?: string; api: ThApi;
+/* `tip` is a one-line explanation shown on hover or focus of the header, in the page's own
+ * tooltip. A header with one drops the native "Sort by this column" title so two do not stack. */
+function Th({ inner, col, sortKey, cls, api, tip }: {
+  inner: ReactNode; col: string; sortKey?: string; cls?: string; api: ThApi; tip?: string;
 }) {
-  if (!sortKey) return <th className={cls} data-col={col}>{inner}</th>;
+  const tipProps = tip ? {
+    onMouseEnter: (e: MouseEvent<HTMLElement>) => api.show(e.currentTarget, tip),
+    onMouseLeave: api.hide,
+    onFocus: (e: FocusEvent<HTMLElement>) => api.show(e.currentTarget, tip),
+    onBlur: api.hide,
+  } : {};
+  if (!sortKey) return <th className={cls} data-col={col} tabIndex={tip ? 0 : undefined} {...tipProps}>{inner}</th>;
   const st = api.sortFor(sortKey);
   const on = st.col === col;
   return (
@@ -193,8 +204,9 @@ function Th({ inner, col, sortKey, cls, api }: {
       className={`${styles.sortable} sortable ${cls ?? ""} ${on ? styles.sorted : ""}`}
       data-col={col} data-sortkey={sortKey}
       aria-sort={on ? (st.dir === "desc" ? "descending" : "ascending") : "none"}
-      tabIndex={0} title="Sort by this column"
+      tabIndex={0} title={tip ? undefined : "Sort by this column"}
       data-testid={`pa-sort-${sortKey}-${col}`}
+      {...tipProps}
       onClick={() => api.onSort(sortKey, col)}
       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); api.onSort(sortKey, col); } }}
     >
@@ -252,8 +264,8 @@ export default function PlayerActivityPanel({ data, months }: { data: GrowthData
   /* ── THE DEFAULT: THE LAST SIX MONTHS ENDING IN THE CURRENT MONTH ────────────────────────────
    * The current month is INCLUDED and is marked in progress. That is this page's own rule and the
    * reason it does not use the shared defaultPeriod, which filters to completed months: the change
-   * column here compares the last two COMPLETE buckets, so a partial column at the right edge
-   * cannot be mistaken for a collapse. */
+   * column compares the month so far against the same days of the month before (cmpWin below),
+   * so a partial column at the right edge cannot be mistaken for a collapse. */
   const defaultStart = axisMonths[Math.max(0, axisMonths.length - 6)] ?? first;
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
@@ -283,19 +295,52 @@ export default function PlayerActivityPanel({ data, months }: { data: GrowthData
   const dMonth = dayMonth && dayMonth >= first && dayMonth <= last ? dayMonth : last;
   const effRange: MonthRange = grain === "daily" ? { start: dMonth, end: dMonth } : range;
 
-  /* ── DAILY'S CHANGE: THE LATEST COMPLETE DAY AGAINST THE SAME WEEKDAY A WEEK EARLIER ─────────
-   * Not the day before: a Saturday against a Friday is mostly the schedule, not a trend. The
-   * latest complete day of the shown month — its last day for a past month, yesterday for this one
-   * (today is in progress). On the 1st of the month there is none, and the column says so. The
-   * week-earlier day falls in the PREVIOUS month on the 1st–7th, outside the 31-day axis, so both
-   * days are also asked for as one-day windows and read from there when they are not on the axis. */
-  const dayCmp = useMemo(() => {
-    if (grain !== "daily") return null;
-    const end = monthEnd(dMonth);
-    const lastDay = end < today ? end : addDays(today, -1);
-    if (lastDay < monthStart(dMonth)) return null;
-    return { last: lastDay, prev: addDays(lastDay, -7) };
-  }, [grain, dMonth, today]);
+  /* ── THE CHANGE AS TWO DAY WINDOWS (Ryan, 2026-11-12) ────────────────────────────────────────
+   * When the range reaches the current month, CHANGE answers "is what we are doing this month
+   * working": the period so far against the SAME DAYS of the one before.
+   *   Monthly  this month so far vs the same days of last month (Nov 1-12 vs Oct 1-12), clamped to
+   *            the previous month's length by matchedMonthWindow.
+   *   Weekly   this week so far (Monday to today) vs the same days last week.
+   *   Daily    today so far vs the same weekday last week. Not the day before: a Saturday against a
+   *            Friday is mostly the schedule, not a trend.
+   * Both sides are windows the route aggregates (windows[1] and [2]) with the same rows and
+   * exclusions as the table, so the distinct counts are distinct over the window, not summed.
+   * A range that stops before this month keeps the old rule: the last two complete buckets for
+   * Monthly and Weekly (cmpWin null), and for Daily the shown month's last day against a week
+   * earlier. */
+  type Span = { from: string; to: string };
+  const cmpWin = useMemo<{ cur: Span; prev: Span; head: string; explain: string } | null>(() => {
+    const span = (f: string, t: string) => f === t ? dLabel(f)
+      : f.slice(0, 7) === t.slice(0, 7) ? `${dLabel(f)}-${Number(t.slice(8, 10))}` : `${dLabel(f)}-${dLabel(t)}`;
+    if (grain === "daily") {
+      if (dMonth === curMonth) {
+        const prev = addDays(today, -7);
+        return { cur: { from: today, to: today }, prev: { from: prev, to: prev },
+          head: `${wdLabel(today)} vs ${wdLabel(prev)}`,
+          explain: `Today so far (${wdLabel(today)}) compared with the same weekday last week (${wdLabel(prev)}).` };
+      }
+      const last = monthEnd(dMonth), prev = addDays(last, -7);
+      return { cur: { from: last, to: last }, prev: { from: prev, to: prev },
+        head: `${wdLabel(last)} vs ${wdLabel(prev)}`,
+        explain: `The last day of ${mLabel(dMonth)} (${wdLabel(last)}) compared with the same weekday a week earlier (${wdLabel(prev)}).` };
+    }
+    if (range.end !== curMonth) return null;
+    if (grain === "monthly") {
+      const w = matchedMonthWindow(curMonth, stepMonth(curMonth, -1), today);
+      const c = span(w.last.from, w.last.to), p = span(w.prev.from, w.prev.to);
+      /* THE WEEKEND COUNTS ARE NAMED when they differ (see matchedMonthWindow): spots booked is
+       * mostly weekend volume, so Nov 1-12 (3 weekend days) against Oct 1-12 (4) moves on that. */
+      const wkd = w.lastWeekends === w.prevWeekends ? ""
+        : ` ${c} has ${w.lastWeekends} weekend days and ${p} has ${w.prevWeekends}.`;
+      return { cur: w.last, prev: w.prev, head: `${c} vs ${p}`,
+        explain: `This month so far (${c}) compared with the same days of last month (${p}), counted the same way as the table.${wkd}` };
+    }
+    const wk = weekKey(today);
+    const cur = { from: wk, to: today }, prev = { from: addDays(wk, -7), to: addDays(today, -7) };
+    const c = span(cur.from, cur.to), p = span(prev.from, prev.to);
+    return { cur, prev, head: `${c} vs ${p}`,
+      explain: `This week so far (${c}) compared with the same days last week (${p}), counted the same way as the table.` };
+  }, [grain, dMonth, curMonth, today, range.end]);
   const rangeMonths = useMemo(
     () => axisMonths.filter((m) => m >= effRange.start && m <= effRange.end),
     [axisMonths, effRange.start, effRange.end],
@@ -310,19 +355,18 @@ export default function PlayerActivityPanel({ data, months }: { data: GrowthData
    * the weekly payload out of cache and rendered week sums in day columns. */
   const winKey = `${grain}:${effRange.start}:${effRange.end}`;
 
-  /* ── THE DISTINCT WINDOW, AS DAYS ────────────────────────────────────────────────────────────
-   * One window: the displayed period. The CHANGE column does not need its own — it compares two
-   * complete BUCKETS, and a per-bucket distinct count is already correct; only a count over a RANGE
-   * cannot be derived from buckets. */
+  /* ── THE DISTINCT WINDOWS, AS DAYS ───────────────────────────────────────────────────────────
+   * windows[0] is the displayed period. windows[1] and [2] are CHANGE's two sides when it compares
+   * day windows (cmpWin); when it compares two complete buckets it needs none, since a per-bucket
+   * distinct count is already correct. Every cmpWin window lies in or before the range, so when
+   * they exist windows[0] does too and the indices hold; winValue also checks each `from`. */
   const winSpec = useMemo(() => {
     if (!rangeMonths.length) return "";
     const f = monthStart(rangeMonths[0]);
     const t = monthLastElapsed(rangeMonths[rangeMonths.length - 1], today);
     if (f > t) return "";
-    // windows[1] and [2] are Daily's two compared days. A complete day implies an elapsed one, so
-    // when these exist windows[0] always does and the indices hold.
-    return `${f}:${t}` + (dayCmp ? `,${dayCmp.last}:${dayCmp.last},${dayCmp.prev}:${dayCmp.prev}` : "");
-  }, [rangeMonths, today, dayCmp]);
+    return `${f}:${t}` + (cmpWin ? `,${cmpWin.cur.from}:${cmpWin.cur.to},${cmpWin.prev.from}:${cmpWin.prev.to}` : "");
+  }, [rangeMonths, today, cmpWin]);
 
   const [winAgg, setWinAgg] = useState<WindowAgg | null>(null);
   const [winErr, setWinErr] = useState<string | null>(null);
@@ -506,35 +550,40 @@ export default function PlayerActivityPanel({ data, months }: { data: GrowthData
     return { prev: done[done.length - 2], last: done[done.length - 1] };
   }, [buckets]);
 
-  const changeHead = grain === "daily"
-    ? (dayCmp ? `${wdLabel(dayCmp.last)} vs ${wdLabel(dayCmp.prev)}` : "needs a complete day")
+  const changeHead = cmpWin
+    ? cmpWin.head
     : cmpPair
       ? `${cmpPair.last.b.label} vs ${cmpPair.prev.b.label}`
       : `needs two complete ${grain === "monthly" ? "month" : "week"}s`;
+  /** One line, on hover of the CHANGE header. */
+  const changeExplain = cmpWin
+    ? cmpWin.explain
+    : cmpPair
+      ? grain === "monthly"
+        ? `${cmpPair.last.b.label} compared with ${cmpPair.prev.b.label}, the last two full months.`
+        : `Week of ${cmpPair.last.b.label} compared with week of ${cmpPair.prev.b.label}, the last two full weeks.`
+      : `Change needs two complete ${grain === "monthly" ? "months" : "weeks"} in the range.`;
 
-  /** One of Daily's compared days for one scope: the rendered cell when the day is on the axis,
-   *  else its one-day window (the 1st–7th reach into the previous month). Same metricValue either
-   *  way, so a window and a cell cannot compute the rate differently. */
-  const dayValue = (e: Entity, k: PaKey, cells: (number | null)[], day: string, wi: 0 | 1): number | null => {
-    const i = buckets.findIndex((b) => b.id === day);
-    if (i >= 0) return cells[i];
+  /** One side of a day-window comparison for one scope, read from its window aggregate (wi 0 is
+   *  windows[1], the current side). Same metricValue as a cell, so a window and a cell cannot
+   *  compute the rate differently. */
+  const winValue = (e: Entity, k: PaKey, from: string, wi: 0 | 1): number | null => {
     if (k === "registrations" && e.type === "field") return null;
     const w = winDays?.[wi];
-    if (!w || w.from !== day) return null;
+    if (!w || w.from !== from) return null;
     const sc = e.type === "overall" ? w
       : (e.type === "city" ? w.byCity : w.byField)?.[e.id]
         ?? { registrations: 0, newPlayers: 0, spots: 0, totalPlayers: 0, recurring: 0 };
-    return metricValue({ m: day, registrations: sc.registrations, newPlayers: sc.newPlayers,
+    return metricValue({ m: from, registrations: sc.registrations, newPlayers: sc.newPlayers,
       totalPlayers: sc.totalPlayers, spots: sc.spots }, GRID_OF[k]);
   };
 
   /** Percent for a count, POINTS for a rate. Reporting a rate's relative move overstates it. */
   const changeOf = (e: Entity, k: PaKey, cells: (number | null)[]): Change => {
     let a: number | null, b: number | null;
-    if (grain === "daily") {
-      if (!dayCmp) return { v: 0, pts: false, nA: true, isNew: false };
-      a = dayValue(e, k, cells, dayCmp.last, 0);
-      b = dayValue(e, k, cells, dayCmp.prev, 1);
+    if (cmpWin) {
+      a = winValue(e, k, cmpWin.cur.from, 0);
+      b = winValue(e, k, cmpWin.prev.from, 1);
     } else {
       if (!cmpPair) return { v: 0, pts: false, nA: true, isNew: false };
       a = cells[cmpPair.last.i]; b = cells[cmpPair.prev.i];
@@ -631,7 +680,7 @@ export default function PlayerActivityPanel({ data, months }: { data: GrowthData
   /* ── SHARED RENDER BITS ──────────────────────────────────────────────────────────────────────*/
   /* Th / BucketTh / ChangeCell / Info ARE MODULE-SCOPE COMPONENTS, deliberately — see the note
    * above Info. These three lines are the only state they need. */
-  const thApi: ThApi = { sortFor, onSort, grain };
+  const thApi: ThApi = { sortFor, onSort, grain, show, hide };
   const unitTag = (k: PaKey) =>
     M[k].kind === "distinct" ? <span className={styles.u}>unique</span>
       : M[k].kind === "rate" ? <span className={styles.u}>avg</span> : null;
@@ -653,7 +702,7 @@ export default function PlayerActivityPanel({ data, months }: { data: GrowthData
               <th>Metric</th>
               {buckets.map((b) => <BucketTh key={b.id} b={b} api={thApi} />)}
               <th className={styles.tot}>Period total</th>
-              <th className={styles.chg}>Change<span className={styles.ip}>{changeHead}</span></th>
+              <Th api={thApi} inner={<>Change<span className={styles.ip}>{changeHead}</span></>} col="change" cls={styles.chg} tip={changeExplain} />
             </tr></thead>
             <tbody>
               {METRICS.map((m) => {
@@ -724,11 +773,11 @@ export default function PlayerActivityPanel({ data, months }: { data: GrowthData
     const totalChange: Change = (() => {
       const na = { v: 0, pts: false, nA: true, isNew: false };
       let a: number | null, b: number | null;
-      if (grain === "daily") {
-        if (!dayCmp) return na;
-        const dv = (kk: PaKey, day: string, wi: 0 | 1) => sumOf(rows.map((r) => dayValue(r.e, kk, cellsOf(r.e, kk), day, wi)));
-        a = isRate ? rateOf(dv("returning", dayCmp.last, 0), dv("totalPlayers", dayCmp.last, 0)) : dv(k, dayCmp.last, 0);
-        b = isRate ? rateOf(dv("returning", dayCmp.prev, 1), dv("totalPlayers", dayCmp.prev, 1)) : dv(k, dayCmp.prev, 1);
+      if (cmpWin) {
+        const dv = (kk: PaKey, from: string, wi: 0 | 1) => sumOf(rows.map((r) => winValue(r.e, kk, from, wi)));
+        const c = cmpWin.cur.from, p = cmpWin.prev.from;
+        a = isRate ? rateOf(dv("returning", c, 0), dv("totalPlayers", c, 0)) : dv(k, c, 0);
+        b = isRate ? rateOf(dv("returning", p, 1), dv("totalPlayers", p, 1)) : dv(k, p, 1);
       } else {
         if (!cmpPair) return na;
         a = totalCells[cmpPair.last.i]; b = totalCells[cmpPair.prev.i];
@@ -770,7 +819,7 @@ export default function PlayerActivityPanel({ data, months }: { data: GrowthData
               <Th api={thApi} inner={isField ? "Field" : "City"} col="name" sortKey={k} />
               {buckets.map((b) => <BucketTh key={b.id} b={b} sortKey={k} api={thApi} />)}
               <Th api={thApi} inner="Period total" col="total" sortKey={k} cls={styles.tot} />
-              <Th api={thApi} inner={<>Change<span className={styles.ip}>{changeHead}</span></>} col="change" sortKey={k} cls={styles.chg} />
+              <Th api={thApi} inner={<>Change<span className={styles.ip}>{changeHead}</span></>} col="change" sortKey={k} cls={styles.chg} tip={changeExplain} />
             </tr></thead>
             <tbody>
               {rows.map((r, i) => {
@@ -929,7 +978,7 @@ export default function PlayerActivityPanel({ data, months }: { data: GrowthData
               <th>Metric</th>
               {buckets.map((b) => <BucketTh key={b.id} b={b} api={thApi} />)}
               <th className={styles.tot}>Period total</th>
-              <th className={styles.chg}>Change<span className={styles.ip}>{changeHead}</span></th>
+              <Th api={thApi} inner={<>Change<span className={styles.ip}>{changeHead}</span></>} col="change" cls={styles.chg} tip={changeExplain} />
             </tr></thead>
             <tbody>
               {METRICS.map((m) => {
