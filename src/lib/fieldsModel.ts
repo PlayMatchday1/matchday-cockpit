@@ -167,7 +167,7 @@ export function missingRequired(draft: Draft): string[] {
  * a receipt and a manager-pay row. */
 export function deleteBlock(matchCount: number): { ok: boolean; reason: string } {
   if (matchCount > 0) {
-    return { ok: false, reason: `Cannot delete — ${matchCount.toLocaleString("en-US")} match${matchCount === 1 ? "" : "es"}` };
+    return { ok: false, reason: `Cannot delete: this field has hosted ${matchCount.toLocaleString("en-US")} match${matchCount === 1 ? "" : "es"}` };
   }
   return { ok: true, reason: "Delete field" };
 }

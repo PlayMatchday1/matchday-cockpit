@@ -137,8 +137,8 @@ console.log("\ndelete — Clubhouse refuses what the API allows");
    * /admin/fields, and leaves the match pointing at a row nothing renders. The API does not check.
    * ANY match ever, not just future ones — a past match still renders its field on a report. */
   is("a field with matches cannot be deleted", deleteBlock(574).ok, false);
-  is("…and the button says the count", deleteBlock(574).reason, "Cannot delete — 574 matches");
-  is("one match is singular", deleteBlock(1).reason, "Cannot delete — 1 match");
+  is("…and the button says the count", deleteBlock(574).reason, "Cannot delete: this field has hosted 574 matches");
+  is("one match is singular", deleteBlock(1).reason, "Cannot delete: this field has hosted 1 match");
   is("a field with no matches may be deleted", deleteBlock(0).ok, true);
 
   // TYPE THE NAME. Not the word DELETE — the thing being destroyed.
@@ -186,7 +186,7 @@ console.log("\nthe wiring");
   const phones = readFileSync("src/app/api/fields/phones/route.ts", "utf8");
   const view = readFileSync("src/components/FieldsView.tsx", "utf8");
   // POSITIVE CONTROLS: the files were actually read.
-  if (/FORMATS/.test(model) && /DELETE_ENABLED/.test(route) && /fv-drawer/.test(view)) ok("control: all four files were read");
+  if (/FORMATS/.test(model) && /deleteBlock/.test(route) && /fv-drawer/.test(view)) ok("control: all four files were read");
   else bad("control: all four files were read");
 
   // Comments are stripped before any "must not contain" check — a grep that reads prose as code
@@ -198,8 +198,16 @@ console.log("\nthe wiring");
 
   if (/"PUT"/.test(routeCode) && !/"PATCH"/.test(routeCode)) ok("the update uses PUT — PATCH is a 404 on this resource");
   else bad("the update uses PUT, not PATCH");
-  if (/DELETE_ENABLED = false/.test(route)) ok("delete is bolted off for production");
-  else bad("delete is bolted off for production", "IT WOULD REACH PRODUCTION");
+  /* DELETE IS ON SINCE 2026-11-12 (Ryan), behind the caller's own EDIT MATCHES. A source check because the
+   * right is read from the database per request and the write is a production HTTP call, neither observable
+   * here. Pairing, both ways: the DELETE's apiWrite carries the caller's flag, and never a literal true. */
+  const delWrite = routeCode.match(/apiWrite\(envNow\(\), "DELETE"[^\n]*/)?.[0] ?? "";
+  if (delWrite) ok("control: the field DELETE write was found"); else bad("control: the field DELETE write was found");
+  if (/canEditMatches: auth\.canEditMatches === true/.test(delWrite)) ok("the delete passes the caller's own EDIT MATCHES");
+  else bad("the delete passes the caller's own EDIT MATCHES", "ANYONE WITH MATCH OPS COULD DELETE A FIELD");
+  if (!/canEditMatches: true/.test(delWrite)) ok("…and never a literal true"); else bad("the delete passes canEditMatches: true");
+  if (/auth\.canEditMatches !== true\) return Response\.json\(\{ error: deleteOffFor\(false\) \}, \{ status: 403 \}\)/.test(routeCode)) ok("the route refuses a delete without EDIT MATCHES before any read");
+  else bad("the route refuses a delete without EDIT MATCHES");
   if (/recordWrite\(/.test(routeCode)) ok("the field writes go through recordWrite");
   else bad("the field writes go through recordWrite");
   if (/recordWrite\(/.test(phonesCode)) ok("the phone writes go through recordWrite");

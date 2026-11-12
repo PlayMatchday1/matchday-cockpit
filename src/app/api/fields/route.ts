@@ -6,7 +6,7 @@
  *   GET    /api/fields              the list, plus fin_venue_fields links and per-field match counts
  *   POST   /api/fields              -> POST /admin/fields          create
  *   PUT    /api/fields?id=          -> PUT  /admin/fields/{id}      update, diff-as-body
- *   DELETE /api/fields?id=          -> DELETE /admin/fields/{id}    BOLTED, see DELETE_ENABLED
+ *   DELETE /api/fields?id=          -> DELETE /admin/fields/{id}    a field that never hosted a match, EDIT MATCHES only
  *
  * WHO. authenticateMatchOpsRead for the read; the writes additionally require EDIT MATCHES via
  * apiWrite's own guard, which is the unbypassable chokepoint. A field record decides what a match
@@ -35,12 +35,13 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-/* THE DELETE BOLT. The write is built, guarded and proven on staging, and it does NOT reach
- * production from this page in this pass — by ruling. Flipping this to true is the whole of
- * enabling it; there is no second switch and no migration. What it would take is in the report:
- * a decision that soft-deleting a field with zero matches is safe, and an owner for the orphaned
- * phone-number rows the API leaves behind. */
-const DELETE_ENABLED = false;
+/* DELETE IS ON (Ryan, 2026-11-12), for a field that has never hosted a match, and only for someone
+ * holding EDIT MATCHES. It was bolted off here (DELETE_ENABLED = false) from the first build, which is
+ * why field 2047 "Richardson" read "never hosted a match" with the button greyed and no reason given.
+ * The delete is SOFT (deleted_at only; docs/matchday-api-facts.md "Duplicate fields retired"), so
+ * the field's phone numbers and covers stay on the backend with it. */
+const deleteOffFor = (canEditMatches: boolean): string | null =>
+  canEditMatches ? null : "Deleting a field needs the EDIT MATCHES right. Ask an admin to grant it.";
 
 type ApiField = {
   id: number; title: string; abbr: string | null; address: string | null;
@@ -90,7 +91,7 @@ export async function GET(req: Request) {
           cover: f.cover ?? null, images: (f.images ?? []).map((i) => ({ id: i.id, url: i.url })), matchCount: 0,
         })),
         links: [], activeFieldIds: [], cities: cities.map((c) => ({ id: Number(c.id), name: c.name })),
-        deleteEnabled: false, localMode: true,
+        deleteEnabled: false, deleteOff: "Delete is off in local mode: its check counts production matches.", localMode: true,
       });
     } catch (e) {
       return Response.json({ error: e instanceof Error ? e.message.slice(0, 200) : "read failed" }, { status: 500 });
@@ -177,7 +178,8 @@ export async function GET(req: Request) {
        * New field form, and a city's first field has to be creatable — less El Paso and New York
        * City, which run on their own rules (EXCLUDED_CITY_ABBRS). */
       cities: fieldFormCities(buildCityDirectory(cities, fields)).map((c) => ({ id: c.id, name: c.name, fieldCount: c.fields.length })),
-      deleteEnabled: DELETE_ENABLED,
+      deleteEnabled: auth.canEditMatches === true,
+      deleteOff: deleteOffFor(auth.canEditMatches === true),
       // Named so the page can say "Showing Poland fields only" and hide the venue half.
       scope: scope ? { marketName: scope.marketName } : null,
     });
@@ -300,7 +302,7 @@ export async function PUT(req: Request) {
 
 /* ── DELETE ────────────────────────────────────────────────────────────────────────────────────
  * THREE GUARDS, and the API supplies none of them.
- *   1. DELETE_ENABLED — bolted off for production in this pass, by ruling.
+ *   1. EDIT MATCHES — the caller's own right, checked here and passed to apiWrite as it is.
  *   2. MATCH COUNT — refused if the field has ever hosted a match. The API does NOT check: a
  *      field with a live match on it deletes with a 2xx and leaves the match pointing at a row
  *      nothing will render. Proven on staging.
@@ -319,12 +321,7 @@ export async function DELETE(req: Request) {
   const inScope = await assertFieldInScope(boundOf(auth), id);
   if (!inScope.ok) return Response.json({ error: inScope.error }, { status: inScope.status });
 
-  if (!DELETE_ENABLED) {
-    return Response.json({
-      error: "Deleting fields is not enabled from Clubhouse. The write is built and proven on staging; " +
-        "it is bolted off for production in this pass.",
-    }, { status: 403 });
-  }
+  if (auth.canEditMatches !== true) return Response.json({ error: deleteOffFor(false) }, { status: 403 });
 
   try {
     const sb = makeServerClient();
@@ -355,7 +352,7 @@ export async function DELETE(req: Request) {
       },
       {
         readResource: async () => ({ present: (await readBack(envNow(), id)) != null }),
-        write: () => apiWrite(envNow(), "DELETE", `/admin/fields/${id}`, undefined, { canEditMatches: true, email: auth.email }),
+        write: () => apiWrite(envNow(), "DELETE", `/admin/fields/${id}`, undefined, { canEditMatches: auth.canEditMatches === true, email: auth.email }),
         now: () => new Date().toISOString(),
       },
       supabaseLogStore(),

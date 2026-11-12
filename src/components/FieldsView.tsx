@@ -38,6 +38,8 @@ type Field = {
 type Payload = {
   fields: Field[]; links: { fieldId: number; venueId: number | null }[];
   activeFieldIds: number[]; cities: { id: number; name: string }[]; deleteEnabled: boolean;
+  /** Why Delete is off for this person (no EDIT MATCHES, local mode); null when it is on. */
+  deleteOff?: string | null;
   /** Set when the server scoped the list to the account's market ("Poland"). */
   scope?: { marketName: string } | null;
 };
@@ -924,7 +926,12 @@ export default function FieldsView() {
                   the API does not check. The paragraph explaining it came off on 2026-09-10. */}
               <div className="fv-locked" data-testid="fv-delete-block">
                 <span>⚠</span>
-                <div><b>{delBlock.ok ? "This field has never hosted a match" : delBlock.reason}</b></div>
+                <div>
+                  <b>{delBlock.ok ? "This field has never hosted a match" : delBlock.reason}</b>
+                  {/* WHEN DELETE IS OFF, THE PANEL SAYS WHY (Ryan, 2026-11-12): a greyed button with no reason is what hid the bolt. */}
+                  {!delBlock.ok && <span data-testid="fv-delete-off">Its past matches still point at it, so it stays.</span>}
+                  {delBlock.ok && !data?.deleteEnabled && <span data-testid="fv-delete-off">{data?.deleteOff ?? "Delete is not available right now."}</span>}
+                </div>
               </div>
               {delBlock.ok && (
                 /* ONE QUESTION AND TWO BUTTONS, the shape approved for reduce-to-2-teams in
