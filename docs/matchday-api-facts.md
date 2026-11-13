@@ -9372,11 +9372,37 @@ is Ryan's, and the older entries it supersedes are named so they are not read as
 - **An in-app cancel now reaches Stripe immediately.** Supersedes, for cancels from this release on, the
   2026-09-30 and 2026-10-31 entries ("calls no Stripe at all", "every in-app cancel is charged once more on
   the next 1st"). Rows cancelled before it still carry the old schedule: Stripe told only after the next paid
-  invoice. What "reaches Stripe" sets (cancel_at_period_end, or an immediate cancel) is UNKNOWN here; the
-  nightly sub-ends job now stores `stripe_cancel_at` / `stripe_cancel_at_period_end` / `stripe_current_period_end`
-  (0272, applied 2026-11-13), and the first rows it writes will show it.
+  invoice. What "reaches Stripe" sets is now MEASURED, see the next section.
 - **Removing a strike log no longer restarts a suspension.** Supersedes "Removing a strike log … can RESTART a
   suspension" (2026-11-13, strike.service.ts:51-57 at 8965437). Clubhouse turned strike Remove on in response
   (`STRIKE_BACKEND_FIX_LIVE`, `src/lib/membersPageModel.ts`).
 - **Strike fines carry no tax.** Supersedes the 2026-11-13 finding that createInvoiceForStrike sets the city's
   `default_tax_rates`.
+
+## What Stripe holds for the 102 cancelling members, first read (2026-11-13)
+
+**Evidence: `POST /api/sync/stripe-people?job=sub-ends&limit=300` on production, 19:42–19:43 UTC, as Ryan's session:
+102 candidates, 102 `subscriptions.retrieve`, 102 written, 0 missing, 0 errors. Then read-only PostgREST reads of
+`mdapi_subscriptions` (status ACTIVE with a `canceled_at`) joined to `mdapi_subscription_stripe_end` on
+`membership_id`. Dates below are America/Chicago.**
+
+| Pressed cancel | Members | Stripe | End |
+|---|---|---|---|
+| October | 61 | `cancel_at_period_end: true`, end = the period end | Nov 30 |
+| Nov 1 to Nov 5 | 33 | `cancel_at_period_end: true`, end = the period end | Nov 30 |
+| Nov 6 onward | 8 | `cancel_at_period_end: false`, **`cancel_at` set** one month past the period end | Dec 31 |
+
+- **The two shapes are two different mechanisms.** Through Nov 5 the schedule is `cancel_at_period_end` (in Austin,
+  e.g. membership 41910, pressed Nov 1: `cancel_at` = `current_period_end` = `2026-12-01T04:59:59Z`). From Nov 6
+  it is an explicit `cancel_at` on the following month's boundary with `cancel_at_period_end` false (e.g. 39534,
+  pressed Nov 8: `cancel_at 2027-01-01T04:59:59Z`, `current_period_end 2026-12-01T04:59:59Z`). That is the "cancel
+  on or after the 5th is charged once more" policy (2026-10-31 entry), now expressed in Stripe at cancel time.
+  Which backend code sets it was not read; the release is v407/v408 per Ryan.
+- **Nobody is left unscheduled.** All 102 have an end; none reads `cancel_at_period_end` false with no `cancel_at`.
+- **Both boundary instants still occur** (`04:59:59Z` and `05:59:59Z`), as the 2026-11-07 entry found; both are the
+  same Central date, so the page prints Nov 30 / Dec 31 for either.
+- **Two of the Nov 6+ rows are `trialing`** in Stripe (Austin 42835, 43066): members still in the first-month $1
+  trial who have already cancelled. Their `cancel_at` is the same Jan 1 boundary.
+- **Shown on the Members page:** Austin's Cancelling tab, 34 rows, read 30 "Ends Nov 30" and 4 "Ends Dec 31" on
+  production; the panels for 41910 and 39534 read "Last charge $71.99 (incl. tax) on Nov 1 · Ends Nov 30 / Dec 31 ·
+  Stripe scheduled ✓".
