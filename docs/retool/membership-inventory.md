@@ -201,7 +201,7 @@ Hidden: `userId`, `cancelReason`, `membershipId`.
 
 ## 3. Feature by feature: does the Clubhouse have it?
 
-> **Update 2026-11-13: the Members page** (`/membership/members`, `src/components/MembersView.tsx`) now covers
+> **Update 2026-11-13: the Members page** (Match Ops › Daily Ops, `/match-ops/members`, `src/components/MembersView.tsx`) now covers
 > the per-member list and tabs, cross-city search, CSV, member price, strike fine, comment, change price and end.
 > Strike Remove is built but switched off (`STRIKE_BACKEND_FIX_LIVE`). Not built: Email Members (no way to send to
 > exactly the filter), Keep membership (no admin resume), Add Member and Add Strike. The table below is how things

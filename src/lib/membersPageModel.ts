@@ -356,8 +356,13 @@ export const trimPct = (n: number): string => String(Math.round(n * 1000) / 1000
  * Wraps Player Lookup's own rule (strikeControl) so a strike that would be refused there reads the
  * same here. With the switch off, every Remove is disabled and says why. */
 export function membersStrikeControl(base: { label: string; enabled: boolean; why: string }): { label: string; enabled: boolean; why: string } {
-  if (!STRIKE_BACKEND_FIX_LIVE) return { label: base.label.replace(/^Remove \d+$/, "Remove"), enabled: false, why: STRIKE_REMOVE_OFF_REASON };
-  return base;
+  const g = gateStrikeRemove(base);
+  return STRIKE_BACKEND_FIX_LIVE ? g : { ...g, label: g.label.replace(/^Remove \d+$/, "Remove") };
+}
+/** THE SAME SWITCH FOR PLAYER LOOKUP (Ryan, 2026-11-13): its label is kept, only enabled/why change.
+ *  The strikes route refuses too while the switch is off, so the button is not the only guard. */
+export function gateStrikeRemove<T extends { enabled: boolean; why: string }>(base: T): T {
+  return STRIKE_BACKEND_FIX_LIVE ? base : { ...base, enabled: false, why: STRIKE_REMOVE_OFF_REASON };
 }
 
 /* ═══ COMMENT ════════════════════════════════════════════════════════════════════════════════════

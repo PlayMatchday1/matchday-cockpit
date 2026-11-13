@@ -10,7 +10,7 @@ import { readFileSync } from "node:fs";
 import {
   searchMembers, searchSummary, tabCounts, inTab, tabRows, pageOf, nextCell, statusChip, isCustomPrice,
   listPriceLabel, nextFirstLabel, membersCsv, planPriceRefusal, strikeFineRefusal, strikeFineTaxLine,
-  membersStrikeControl, commentRefusal, twoFacts, factsFromVerdict, endConfirmCopy,
+  membersStrikeControl, gateStrikeRemove, commentRefusal, twoFacts, factsFromVerdict, endConfirmCopy,
   STRIKE_BACKEND_FIX_LIVE, STRIKE_REMOVE_OFF_REASON, type MemberRow, type RowStripe,
 } from "../src/lib/membersPageModel";
 import { priceRefusal, endRefusal, centsFromDollars } from "../src/lib/membershipAdminModel";
@@ -115,6 +115,9 @@ yes("the switch is off in this build", STRIKE_BACKEND_FIX_LIVE === false);
 yes("so Remove is disabled on the Members page", gated.enabled === false);
 is("  and says why", gated.why, STRIKE_REMOVE_OFF_REASON);
 yes("an expired strike stays disabled for its own reason", membersStrikeControl(strikeControl({ id: 1, penaltyPoint: 1, active: true }, "2026-11-01T00:00:00Z", NOW)).enabled === false);
+const pl = gateStrikeRemove(removable);
+is("Player Lookup: the same switch disables Remove and keeps its own label", [pl.enabled, pl.label, pl.why], [false, "Remove 1", STRIKE_REMOVE_OFF_REASON]);
+is("CONTROL: the gate changes nothing but enabled and why", { ...pl, enabled: removable.enabled, why: removable.why }, removable);
 is("the same switch keeps the fine's tax line honest", strikeFineTaxLine(8.25), "plus 8.25% tax · clears strikes and suspension");
 
 console.log("\n— price edits refuse invalid input —");
@@ -198,6 +201,14 @@ yes("NEGATIVE: the members route makes no MatchDay call of its own", !/\bapiGet\
 yes("POSITIVE: the route searches in memory", /searchMembers\(pool, q\)/.test(route));
 yes("POSITIVE: the Remove button's state comes from membersStrikeControl", /membersStrikeControl\(strikeControl\(/.test(view) && /data-testid="strike-remove" disabled=\{!ctl\.enabled\}/.test(view));
 yes("NEGATIVE: no strike DELETE is wired on the Members page", !/\/strikes\/\$\{/.test(view));
+
+const lookup = strip(readFileSync("src/components/PlayerLookup.tsx", "utf8"));
+const strikeRoute = strip(readFileSync("src/app/api/matchday/[env]/strikes/[strikeLogId]/route.ts", "utf8"));
+yes("POSITIVE: Player Lookup's Remove state goes through the switch", /gateStrikeRemove\(strikeControl\(/.test(lookup));
+yes("NEGATIVE: Player Lookup has no ungated strikeControl call", !/(?<!gateStrikeRemove\()strikeControl\(\{/.test(lookup));
+const gateAt = strikeRoute.indexOf("if (!STRIKE_BACKEND_FIX_LIVE)"), firstCall = strikeRoute.search(/\bapi(Get|Write)\(/);
+yes("POSITIVE: the strikes route refuses while the switch is off", gateAt > 0);
+yes("NEGATIVE: and no MatchDay call comes before that refusal", firstCall > gateAt, `gate ${gateAt}, first call ${firstCall}`);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail > 0 || pass === 0) process.exit(1);

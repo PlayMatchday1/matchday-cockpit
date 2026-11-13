@@ -33,6 +33,7 @@ import { cityNameFor } from "@/lib/cityScope";
 import { makeServerClient } from "@/lib/supabaseServer";
 import { strikeControl, removalEffect, strikeRemovalApplied, STRIKE_LIMIT } from "@/lib/playerLookupModel";
 import type { Change } from "@/lib/changeLogModel";
+import { STRIKE_BACKEND_FIX_LIVE, STRIKE_REMOVE_OFF_REASON } from "@/lib/membersPageModel";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -70,6 +71,10 @@ export async function DELETE(req: Request, ctx: { params: Promise<{ env: string;
   if (!isEnv(env)) return Response.json({ error: `unknown environment ${JSON.stringify(env)}` }, { status: 400 });
   if (!/^\d+$/.test(strikeLogId)) return Response.json({ error: "strikeLogId must be numeric" }, { status: 400 });
 
+  /* OFF UNTIL THE BACKEND DEPLOY (Ryan, 2026-11-13). Removing a log while 4+ points remain restarts the
+   * 7-day suspension (strike.service.ts:51-57 at 8965437). Refused here, before any MatchDay call, so
+   * the disabled button is not the only guard. One switch: membersPageModel.STRIKE_BACKEND_FIX_LIVE. */
+  if (!STRIKE_BACKEND_FIX_LIVE) return Response.json({ error: STRIKE_REMOVE_OFF_REASON }, { status: 409 });
   const body = (await req.json().catch(() => null)) as Body | null;
   const playerId = Number(body?.playerId);
   if (!Number.isFinite(playerId)) return Response.json({ error: "playerId required" }, { status: 400 });

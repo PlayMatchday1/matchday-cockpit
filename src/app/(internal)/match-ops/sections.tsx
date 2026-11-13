@@ -32,7 +32,8 @@ export type MatchOpsGroup =
 // from fifteen people the server would have served — five of them admins. The WRITE controls on
 // the screen carry the flag now; the link does not.
 // in visibleSections. The Promo Codes screen ships behind MANAGE PROMOS (Phase 18b).
-export type MatchOpsAccess = "matchops" | "tech" | "chats" | "admin" | "finance";
+// "membership" (2026-11-13): the Members page reads /api/membership/members, gated on that capability.
+export type MatchOpsAccess = "matchops" | "tech" | "chats" | "admin" | "finance" | "membership";
 
 // WHAT A RAIL DRAWS, independent of who may open it. The rail, the mobile app bar and the screen
 // sheet render THIS; Match Ops adds its own permission/tab fields on top. Splitting the shape out
@@ -72,6 +73,7 @@ export const MATCH_OPS_SECTIONS: MatchOpsSection[] = [
   { key: "gameday", section: "daily", group: "Operations", label: "Gameday Ops", href: "/match-ops/gameday", desc: "Today's matches, soonest first — what's about to go wrong", access: "matchops", icon: <I><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></I> },
   { key: "veo", section: "daily", group: "Operations", label: "Veo", href: "/match-ops/veo", desc: "One day of camera matches — which films landed, which missed", access: "matchops", icon: <I><rect x="2.5" y="6.5" width="12" height="11" rx="2.5" /><path d="m14.5 11 6-3.5v9L14.5 13z" /></I> },
   { key: "player-lookup", section: "daily", group: "Operations", label: "Player Lookup", href: "/match-ops/player-lookup", desc: "One player — account, membership, matches; add or remove them", access: "matchops", icon: <I><circle cx="11" cy="8" r="3.6" /><path d="M4 20a7 7 0 0 1 12.2-4.6" /><circle cx="17.5" cy="16.5" r="3.2" /><path d="M19.8 18.8 22 21" /></I> },
+  { key: "members", section: "daily", group: "Operations", label: "Members", href: "/match-ops/members", desc: "Every member by city — price, strikes, comment, end or re-price", access: "membership", icon: <I><circle cx="12" cy="8" r="3.6" /><path d="M5 20a7 7 0 0 1 14 0" /><path d="M16.5 4.5l1.5 1.5 3-3" /></I> },
   { key: "promos", section: "daily", group: "Operations", label: "Promo Codes", href: "/match-ops/promos", desc: "Discount codes — live and past; create a new one", access: "matchops", icon: <I><path d="M8.5 3.5h7l5 5v7l-5 5h-7l-5-5v-7z" /><circle cx="12" cy="12" r="2.4" /></I> },
   // OFFERS: popup deals in the app. Moved from Growth (2026-10-31); /growth/offers 308s here. Match Ops
   // access, decided on the server by offersGate (src/lib/offersServer.ts), so the link and the routes agree.

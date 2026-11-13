@@ -81,13 +81,6 @@ export const LIFECYCLE_SECTIONS: RailItem[] = [
   // own; Members by City is the second page of that section and sits immediately after it, named
   // by its neighbour rather than by its position. Both are gated on the MEMBERSHIP permission,
   // not on `lifecycle` — see SECTION_PAGE below.
-  /* MEMBERS (2026-11-13) — the Retool MEMBERSHIPS page, rebuilt. First in the group because it is
-   * the page staff open to act on one member; the two after it are reports. */
-  {
-    key: "membership-members", group: "Membership", label: "Members", href: "/membership/members",
-    desc: "Every member by city — price, strikes, comment, end or re-price",
-    icon: <I><circle cx="12" cy="8" r="3.6" /><path d="M5 20a7 7 0 0 1 14 0" /><path d="M16.5 4.5l1.5 1.5 3-3" /></I>,
-  },
   {
     key: "membership", group: "Membership", label: "Membership", href: "/membership",
     desc: "Members and retention across markets",
@@ -104,7 +97,6 @@ export const LIFECYCLE_SECTIONS: RailItem[] = [
 // gated on `lifecycle`, Membership on `membership`. A user with one permission and not the other sees
 // only their half rather than links that bounce off a guard.
 export const SECTION_PAGE: Record<string, "lifecycle" | "membership"> = {
-  "membership-members": "membership",
   membership: "membership",
   "membership-by-city": "membership",
 };

@@ -30,6 +30,7 @@ import { validateAdjustment, fmtUsd, MAX_ADJUSTMENT_CENTS, REASON_REQUIRED } fro
 import { MATCH_STATE_LABEL, atPitchClock, attachCharges, chargeLabel, hoursBeforeKickoff, isCancelled, type ChargeOnRow, type HistoryRow as MatchHistoryRow, type MatchState } from "@/lib/matchHistory";
 import { useDockSubject } from "@/lib/useDockSubject";
 import { FULL_EDITOR_ENV } from "@/lib/matchEnv";
+import { gateStrikeRemove, STRIKE_BACKEND_FIX_LIVE, STRIKE_REMOVE_OFF_REASON } from "@/lib/membersPageModel";
 import { envBadge } from "@/lib/matchEnvBadge";
 import {
   detectKind, SEARCH_HINT, money, openSpots as openSpotsOf, suggestSpot, STRIKE_LIMIT, strikeReasonLabel, isKnownStrikeReason,
@@ -1364,7 +1365,8 @@ function StrikePanel({ s, isMember, playerId, playerName, canManage, onRemoved }
             : l.reason === "NO_SHOW" ? "Never checked in"
             : l.reason === "LATE" ? "Arrived after kickoff"
             : known ? "" : "Reason not recorded on the linked match";
-          const ctl = strikeControl({ id: l.id, penaltyPoint: l.penaltyPoint, active: l.active }, s.expiredAt);
+          // STRIKE_BACKEND_FIX_LIVE (membersPageModel): off until the backend stops a removal restarting a suspension.
+          const ctl = gateStrikeRemove(strikeControl({ id: l.id, penaltyPoint: l.penaltyPoint, active: l.active }, s.expiredAt));
           return (
             <div className="row srow" data-testid="row" data-id={l.id ?? ""} key={l.id ?? i}>
               <span className="stitle"><span className="l1">{l.matchName ?? "Match"}</span>
@@ -1384,6 +1386,7 @@ function StrikePanel({ s, isMember, playerId, playerName, canManage, onRemoved }
           );
         })}
       </div>
+      {!STRIKE_BACKEND_FIX_LIVE && s.logs.length > 0 && <p className="pfoot" data-testid="strike-off">{STRIKE_REMOVE_OFF_REASON}</p>}
       {err && <p className="pfoot" data-testid="strike-err" style={{ color: "var(--bad)" }}>{err}</p>}
       {note && <p className="pfoot" data-testid="strike-note">{note}</p>}
       {pending && (
