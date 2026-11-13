@@ -18,15 +18,15 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
-import { useAuth, canEditMemberships } from "@/lib/useAuth";
+import { useAuth, canEditMemberships, canManagePlayers } from "@/lib/useAuth";
 import { FULL_EDITOR_ENV } from "@/lib/matchEnv";
 import { envBadge } from "@/lib/matchEnvBadge";
 import { centsFromDollars, dollarsFromCents, priceRefusal, endRefusal } from "@/lib/membershipAdminModel";
-import { strikeControl, strikeReasonLabel, STRIKE_LIMIT } from "@/lib/playerLookupModel";
+import { strikeControl, strikeReasonLabel, removalEffect, STRIKE_LIMIT } from "@/lib/playerLookupModel";
 import {
   TABS, dayCT, dateCT, usd, trimPct, strikesLabel, owedLabel, scheduledEnd, endConfirmCopy,
   membersStrikeControl, commentRefusal, planPriceRefusal, strikeFineRefusal, strikeFineTaxLine,
-  factsFromVerdict, twoFacts, STRIKE_BACKEND_FIX_LIVE, SEARCH_MIN, COMMENT_MAX,
+  factsFromVerdict, twoFacts, strikeRemoveFacts, STRIKE_BACKEND_FIX_LIVE, STRIKE_REMOVE_OFF_REASON, SEARCH_MIN, COMMENT_MAX,
   type Tab, type Chip, type NextCell, type Fact,
 } from "@/lib/membersPageModel";
 
@@ -75,6 +75,7 @@ export default function MembersView() {
   const { appUser } = useAuth();
   const canMember = canEditMemberships(appUser);   // courtesy only — every route re-checks
   const isAdmin = appUser?.is_admin === true;       // courtesy only — the city routes re-check
+  const canManage = canManagePlayers(appUser);      // courtesy only — the strikes route re-checks (MANAGE PLAYERS)
   const badge = envBadge(ENV);
 
   const [city, setCity] = useState<string>("ATX");
@@ -243,7 +244,7 @@ export default function MembersView() {
         </p>
       </div>
 
-      {sel && <MemberPanel key={sel.membershipId} row={sel} canMember={canMember} onClose={() => setSel(null)} onResult={afterWrite} />}
+      {sel && <MemberPanel key={sel.membershipId} row={sel} canMember={canMember} canManage={canManage} onClose={() => setSel(null)} onResult={afterWrite} />}
 
       {dlg === "plan" && s && <PlanDialog city={city} cityName={cityName} settings={s} currentMembers={list?.counts.current ?? 0} onClose={() => setDlg(null)} onResult={(r) => { setDlg(null); afterWrite(r); }} />}
       {dlg === "fine" && s && <FineDialog city={city} cityName={cityName} settings={s} onClose={() => setDlg(null)} onResult={(r) => { setDlg(null); afterWrite(r); }} />}
@@ -257,7 +258,7 @@ function ChipView({ c }: { c: NonNullable<Chip> }) {
 }
 
 /* ═══ THE MEMBER PANEL (frame 1, right) ═══════════════════════════════════════════════════════ */
-function MemberPanel({ row, canMember, onClose, onResult }: { row: ViewRow; canMember: boolean; onClose: () => void; onResult: (r: Result) => void }) {
+function MemberPanel({ row, canMember, canManage, onClose, onResult }: { row: ViewRow; canMember: boolean; canManage: boolean; onClose: () => void; onResult: (r: Result) => void }) {
   const [extras, setExtras] = useState<Extras | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -265,6 +266,7 @@ function MemberPanel({ row, canMember, onClose, onResult }: { row: ViewRow; canM
   const [comment, setComment] = useState(row.comment ?? "");
   const [savingComment, setSavingComment] = useState(false);
   const past = row.status.toUpperCase() === "CANCELED";
+  const [readKey, setReadKey] = useState(0); // bumped after a strike removal so the panel re-reads the player
 
   useEffect(() => {
     let live = true;
@@ -282,7 +284,7 @@ function MemberPanel({ row, canMember, onClose, onResult }: { row: ViewRow; canM
       } catch (e) { if (live) setErr(e instanceof Error ? e.message : String(e)); }
     })();
     return () => { live = false; };
-  }, [row.userId, row.membershipId]);
+  }, [row.userId, row.membershipId, readKey]);
 
   /* IS THIS MEMBERSHIP ON MATCHDAY'S PLAYER RECORD? The price and end routes key their read-back on
    * it, and GET /admin/players/{id} keeps only ACTIVE memberships with an unexpired period. */
@@ -360,7 +362,8 @@ function MemberPanel({ row, canMember, onClose, onResult }: { row: ViewRow; canM
         })()} />
       </div>
 
-      <StrikesSection row={row} profile={profile} />
+      <StrikesSection row={row} profile={profile} canManage={canManage}
+        onResult={(r) => { setReadKey((k) => k + 1); onResult(r); }} />
 
       <div className="mbr-ps">
         <div className="mbr-kh"><span className="mbr-k">COMMENT</span><span className="mbr-sp" />
@@ -418,10 +421,14 @@ function Fact({ k, v }: { k: string; v: React.ReactNode }) {
   return <div className="mbr-fact"><span>{k}</span><b>{v}</b></div>;
 }
 
-/* ── STRIKES — the list, with Remove built and switched off ──────────────────────────────────── */
-function StrikesSection({ row, profile }: { row: ViewRow; profile: Profile | null }) {
+/* ── STRIKES — the list, with Remove behind STRIKE_BACKEND_FIX_LIVE and MANAGE PLAYERS ──────────────
+ * Remove goes through the existing strikes route (the one Player Lookup uses): MANAGE PLAYERS, a
+ * required reason, and the route's own read-back. Off when the switch is off; the route refuses then
+ * too, before any MatchDay call. */
+function StrikesSection({ row, profile, canManage, onResult }: { row: ViewRow; profile: Profile | null; canManage: boolean; onResult: (r: Result) => void }) {
   const st = profile?.strikes;
   const logs = (st?.logs ?? []).filter((l) => l.penaltyPoint > 0 || l.active);
+  const [pending, setPending] = useState<StrikeLog | null>(null);
   return (
     <div className="mbr-ps" data-testid="strikes">
       <div className="mbr-kh"><span className="mbr-k">STRIKES</span><span className="mbr-sp" />
@@ -432,18 +439,54 @@ function StrikesSection({ row, profile }: { row: ViewRow; profile: Profile | nul
       {logs.map((l, i) => {
         const ctl = membersStrikeControl(strikeControl({ id: l.id, penaltyPoint: l.penaltyPoint, active: l.active }, st?.expiredAt ?? null));
         const why = l.reason ? strikeReasonLabel(l.reason) : "Strike";
+        const blocked = !ctl.enabled ? ctl.why : !canManage ? "Removing a strike needs MANAGE PLAYERS" : null;
         return (
           <div key={l.id ?? i} className="mbr-strike" data-testid="strike-row">
             <span className="mbr-who"><b>{why}{l.hoursBefore != null && l.reason === "CANCEL_W_IN_SOME_HOURS" ? ` (${fmtHours(l.hoursBefore)} before)` : ""}</b>
               <small>{[l.matchName, l.when ? dateCT(l.when) : null].filter(Boolean).join(" · ")}</small></span>
             <span className="mbr-sp" />
             <b className="mbr-pts">+{l.penaltyPoint}</b>
-            <button className="mbr-link" data-testid="strike-remove" disabled={!ctl.enabled} title={ctl.why || undefined}>Remove</button>
+            <button className="mbr-link" data-testid="strike-remove" disabled={!ctl.enabled || !canManage} title={blocked ?? undefined}
+              onClick={() => setPending(l)}>{ctl.label}</button>
           </div>
         );
       })}
-      {!STRIKE_BACKEND_FIX_LIVE && logs.length > 0 && <p className="mbr-fine" data-testid="strike-off">Remove is off until the backend stops a removal from restarting a suspension.</p>}
+      {!STRIKE_BACKEND_FIX_LIVE && logs.length > 0 && <p className="mbr-fine" data-testid="strike-off">{STRIKE_REMOVE_OFF_REASON}</p>}
+      {pending && st && (
+        <StrikeRemoveDialog row={row} log={pending} activeCount={st.activeCount} isSuspended={st.isSuspended}
+          onClose={() => setPending(null)} onResult={(r) => { setPending(null); onResult(r); }} />
+      )}
     </div>
+  );
+}
+
+function StrikeRemoveDialog({ row, log, activeCount, isSuspended, onClose, onResult }: {
+  row: ViewRow; log: StrikeLog; activeCount: number; isSuspended: boolean; onClose: () => void; onResult: (r: Result) => void;
+}) {
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const eff = removalEffect(activeCount, log.penaltyPoint, isSuspended, STRIKE_LIMIT);
+  const go = async () => {
+    if (!reason.trim() || log.id == null) return;
+    setBusy(true);
+    try {
+      const r = await authFetch(`/api/matchday/${ENV}/strikes/${log.id}`, {
+        method: "DELETE",
+        body: JSON.stringify({ playerId: row.userId, userMatchId: log.userMatchId, reason: reason.trim(), playerName: row.name, source: "Members" }),
+      });
+      const j = await r.json().catch(() => ({}));
+      onResult(strikeRemoveFacts(r.ok, j));
+    } finally { setBusy(false); }
+  };
+  return (
+    <Modal title={`Remove ${row.name}'s strike?`} onClose={onClose} testid="strike-dialog">
+      <div className="mbr-box">{eff.sentence}</div>
+      <label className="mbr-lbl">Reason (required)</label>
+      <input className="mbr-in" data-testid="strike-reason" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Why this penalty is being reversed" autoFocus />
+      {!reason.trim() && <p className="mbr-fine" data-testid="strike-why">A reason is required.</p>}
+      <div className="mbr-acts"><button className="mbr-btn" onClick={onClose}>Keep it</button>
+        <button className="mbr-btn dark" data-testid="strike-go" disabled={!reason.trim() || busy} onClick={go}>{busy ? "Removing…" : "Remove strike"}</button></div>
+    </Modal>
   );
 }
 const fmtHours = (h: number) => { const m = Math.round(h * 60); return `${Math.floor(m / 60)}h ${m % 60}m`; };

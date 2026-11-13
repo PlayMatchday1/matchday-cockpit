@@ -26,8 +26,11 @@ import { STRIKE_LIMIT } from "./playerLookupModel";
  *     (createInvoiceForStrike, default_tax_rates). The card says "plus N% tax" until the deploy, then
  *     "no tax".
  *
- * Flip to true only when Ryan confirms that deploy is live. Nothing else needs to change. */
-export const STRIKE_BACKEND_FIX_LIVE = false;
+ * FLIPPED ON 2026-11-13: Ryan confirmed the backend release is live in production (v407/v408) —
+ * strike removals no longer restart a suspension, and strike fines carry no tax. Not re-read from
+ * the backend source here; the statement is Ryan's. To turn both back off, set this to false: the
+ * Members page and Player Lookup disable Remove and the strikes route refuses with 409 again. */
+export const STRIKE_BACKEND_FIX_LIVE = true;
 
 export const STRIKE_REMOVE_OFF_REASON =
   "Turned off until the backend deploy that stops a removal from restarting a suspension is confirmed.";
@@ -344,25 +347,41 @@ export function strikeFineRefusal(input: string, currentCents: number | null): {
 }
 
 /** The strike fine's tax line — the second half of the one switch. */
-export function strikeFineTaxLine(taxRatePct: number | null): string {
-  if (STRIKE_BACKEND_FIX_LIVE) return "no tax · clears strikes and suspension";
+export function strikeFineTaxLine(taxRatePct: number | null, live: boolean = STRIKE_BACKEND_FIX_LIVE): string {
+  if (live) return "no tax · clears strikes and suspension";
   return taxRatePct && taxRatePct > 0
     ? `plus ${trimPct(taxRatePct)}% tax · clears strikes and suspension`
     : "no tax rate set · clears strikes and suspension";
 }
 export const trimPct = (n: number): string => String(Math.round(n * 1000) / 1000);
 
-/* ═══ STRIKE REMOVE — BUILT, AND OFF UNTIL THE SWITCH ═══════════════════════════════════════════
+/* ═══ STRIKE REMOVE ═════════════════════════════════════════════════════════════════════════════
  * Wraps Player Lookup's own rule (strikeControl) so a strike that would be refused there reads the
- * same here. With the switch off, every Remove is disabled and says why. */
-export function membersStrikeControl(base: { label: string; enabled: boolean; why: string }): { label: string; enabled: boolean; why: string } {
-  const g = gateStrikeRemove(base);
-  return STRIKE_BACKEND_FIX_LIVE ? g : { ...g, label: g.label.replace(/^Remove \d+$/, "Remove") };
+ * same here. With the switch off, every Remove is disabled and says why. The Members row shows the
+ * points as "+N" beside it (frame 1), so its label is just "Remove". */
+export function membersStrikeControl(base: { label: string; enabled: boolean; why: string }, live: boolean = STRIKE_BACKEND_FIX_LIVE): { label: string; enabled: boolean; why: string } {
+  const g = gateStrikeRemove(base, live);
+  return { ...g, label: g.label.replace(/^Remove \d+$/, "Remove") };
 }
 /** THE SAME SWITCH FOR PLAYER LOOKUP (Ryan, 2026-11-13): its label is kept, only enabled/why change.
  *  The strikes route refuses too while the switch is off, so the button is not the only guard. */
-export function gateStrikeRemove<T extends { enabled: boolean; why: string }>(base: T): T {
-  return STRIKE_BACKEND_FIX_LIVE ? base : { ...base, enabled: false, why: STRIKE_REMOVE_OFF_REASON };
+export function gateStrikeRemove<T extends { enabled: boolean; why: string }>(base: T, live: boolean = STRIKE_BACKEND_FIX_LIVE): T {
+  return live ? base : { ...base, enabled: false, why: STRIKE_REMOVE_OFF_REASON };
+}
+
+/** The strikes route's answer as the frame-5 result. One fact: MatchDay. A strike has no Stripe
+ *  object. "Landed" is the route's own read-back (the log gone, or carrying zero points). */
+export function strikeRemoveFacts(ok: boolean, res: {
+  status?: string; error?: string; ambiguous?: boolean;
+  before?: { activeStrikes: number; isSuspended: boolean }; after?: { activeStrikes: number; isSuspended: boolean };
+}): { title: string; facts: Fact[]; allGood: boolean } {
+  if (!ok) return { title: "Strike not removed", facts: [{ who: "MatchDay", state: res.ambiguous ? "unknown" : "bad", text: res.error ?? "The request failed." }], allGood: false };
+  const b = res.before, a = res.after;
+  const pts = b && a ? `${b.activeStrikes} → ${a.activeStrikes} of 4 points` : "points not read back";
+  const susp = b && a ? (b.isSuspended && !a.isSuspended ? " · suspension lifted" : a.isSuspended ? " · still suspended" : "") : "";
+  if (res.status === "LANDED") return { title: "Strike removed", facts: [{ who: "MatchDay", state: "ok", text: `${pts}${susp}` }], allGood: true };
+  if (res.status === "NOT APPLIED") return { title: "Strike not removed", facts: [{ who: "MatchDay", state: "bad", text: "Reported success, but the strike is still there. Nothing was applied." }], allGood: false };
+  return { title: "Strike removal unconfirmed", facts: [{ who: "MatchDay", state: "unknown", text: `Could not confirm from the player record (${pts}). Check before trying again.` }], allGood: false };
 }
 
 /* ═══ COMMENT ════════════════════════════════════════════════════════════════════════════════════

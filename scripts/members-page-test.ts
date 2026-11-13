@@ -10,7 +10,7 @@ import { readFileSync } from "node:fs";
 import {
   searchMembers, searchSummary, tabCounts, inTab, tabRows, pageOf, nextCell, statusChip, isCustomPrice,
   listPriceLabel, nextFirstLabel, membersCsv, planPriceRefusal, strikeFineRefusal, strikeFineTaxLine,
-  membersStrikeControl, gateStrikeRemove, commentRefusal, twoFacts, factsFromVerdict, endConfirmCopy,
+  membersStrikeControl, gateStrikeRemove, strikeRemoveFacts, commentRefusal, twoFacts, factsFromVerdict, endConfirmCopy,
   STRIKE_BACKEND_FIX_LIVE, STRIKE_REMOVE_OFF_REASON, type MemberRow, type RowStripe,
 } from "../src/lib/membersPageModel";
 import { priceRefusal, endRefusal, centsFromDollars } from "../src/lib/membershipAdminModel";
@@ -107,18 +107,36 @@ yes("an unchanged comment is not sent", commentRefusal("Asked to cancel", "Asked
 is("CONTROL: a new comment is allowed", commentRefusal("Moved to Dallas", "Asked to cancel"), null);
 is("CONTROL: a first comment on an empty one is allowed", commentRefusal("First note", null), null);
 
-console.log("\n— strike Remove is built and switched off —");
+console.log("\n— strike Remove: one switch, both states checked explicitly —");
+/* FLIPPED ON 2026-11-13 (backend v407/v408, per Ryan). Every off-state assertion below is the one this
+ * suite carried while the switch was off, now called with live=false explicitly, so turning the switch
+ * back off is still covered; the on-state assertions are new. */
 const removable = strikeControl({ id: 38035, penaltyPoint: 1, active: true }, "2026-12-30T00:00:00Z", NOW);
 yes("PRECONDITION: Player Lookup's own rule would allow this strike", removable.enabled);
-const gated = membersStrikeControl(removable);
-yes("the switch is off in this build", STRIKE_BACKEND_FIX_LIVE === false);
-yes("so Remove is disabled on the Members page", gated.enabled === false);
-is("  and says why", gated.why, STRIKE_REMOVE_OFF_REASON);
-yes("an expired strike stays disabled for its own reason", membersStrikeControl(strikeControl({ id: 1, penaltyPoint: 1, active: true }, "2026-11-01T00:00:00Z", NOW)).enabled === false);
-const pl = gateStrikeRemove(removable);
-is("Player Lookup: the same switch disables Remove and keeps its own label", [pl.enabled, pl.label, pl.why], [false, "Remove 1", STRIKE_REMOVE_OFF_REASON]);
+yes("the switch is ON in this build", STRIKE_BACKEND_FIX_LIVE === true);
+const gated = membersStrikeControl(removable, false);
+yes("OFF: Remove is disabled on the Members page", gated.enabled === false);
+is("OFF:   and says why", gated.why, STRIKE_REMOVE_OFF_REASON);
+const onCtl = membersStrikeControl(removable, true);
+is("ON: Remove is enabled on the Members page, labelled Remove", [onCtl.enabled, onCtl.label], [true, "Remove"]);
+is("ON: and the build's default is the ON state", membersStrikeControl(removable), onCtl);
+yes("an expired strike stays disabled for its own reason, switch on", membersStrikeControl(strikeControl({ id: 1, penaltyPoint: 1, active: true }, "2026-11-01T00:00:00Z", NOW), true).enabled === false);
+const pl = gateStrikeRemove(removable, false);
+is("OFF: Player Lookup's Remove is disabled and keeps its own label", [pl.enabled, pl.label, pl.why], [false, "Remove 1", STRIKE_REMOVE_OFF_REASON]);
 is("CONTROL: the gate changes nothing but enabled and why", { ...pl, enabled: removable.enabled, why: removable.why }, removable);
-is("the same switch keeps the fine's tax line honest", strikeFineTaxLine(8.25), "plus 8.25% tax · clears strikes and suspension");
+is("ON: Player Lookup's control is exactly its own rule", gateStrikeRemove(removable, true), removable);
+is("OFF: the fine's tax line names the city rate", strikeFineTaxLine(8.25, false), "plus 8.25% tax · clears strikes and suspension");
+is("ON: the fine has no tax", strikeFineTaxLine(8.25), "no tax · clears strikes and suspension");
+
+console.log("\n— a strike removal's result is the route's read-back, never the status code —");
+const sr = (st: string, b: [number, boolean], a: [number, boolean]) =>
+  strikeRemoveFacts(true, { status: st, before: { activeStrikes: b[0], isSuspended: b[1] }, after: { activeStrikes: a[0], isSuspended: a[1] } });
+is("LANDED, suspension lifted", sr("LANDED", [4, true], [3, false]).facts, [{ who: "MatchDay", state: "ok", text: "4 → 3 of 4 points · suspension lifted" }]);
+is("LANDED, still suspended", sr("LANDED", [5, true], [4, true]).facts[0].text, "5 → 4 of 4 points · still suspended");
+is("NOT APPLIED is red", sr("NOT APPLIED", [2, false], [2, false]).facts[0].state, "bad");
+is("UNKNOWN is unknown, not ok", sr("UNKNOWN", [2, false], [2, false]).facts[0].state, "unknown");
+is("a refused request shows the server's reason", strikeRemoveFacts(false, { error: "A reason is required" }).facts[0], { who: "MatchDay", state: "bad", text: "A reason is required" });
+is("an ambiguous failure is unknown", strikeRemoveFacts(false, { error: "timeout", ambiguous: true }).facts[0].state, "unknown");
 
 console.log("\n— price edits refuse invalid input —");
 is("dollars to cents", centsFromDollars("66.50"), 6650);
@@ -199,8 +217,13 @@ yes("POSITIVE: the staging walk calls the list endpoint, with sortColumn members
 yes("NEGATIVE: no list-endpoint call carries email or q", listCalls.length > 0 && listCalls.every((c) => !/\b(email|q)\b/.test(c)));
 yes("NEGATIVE: the members route makes no MatchDay call of its own", !/\bapiGet\(|\bapiWrite\(/.test(route));
 yes("POSITIVE: the route searches in memory", /searchMembers\(pool, q\)/.test(route));
-yes("POSITIVE: the Remove button's state comes from membersStrikeControl", /membersStrikeControl\(strikeControl\(/.test(view) && /data-testid="strike-remove" disabled=\{!ctl\.enabled\}/.test(view));
-yes("NEGATIVE: no strike DELETE is wired on the Members page", !/\/strikes\/\$\{/.test(view));
+// SELECTOR-PATH EDIT (2026-11-13): the disabled expression gained `|| !canManage` when Remove was wired.
+yes("POSITIVE: the Remove button's state comes from membersStrikeControl", /membersStrikeControl\(strikeControl\(/.test(view) && /data-testid="strike-remove" disabled=\{!ctl\.enabled \|\| !canManage\}/.test(view));
+// REPLACES "no strike DELETE is wired" — the switch is on, so Remove now does something; what it must
+// do is send a reason, and only from the confirm.
+const strikeCalls = [...view.matchAll(/authFetch\(`\/api\/matchday\/\$\{ENV\}\/strikes\/\$\{([^}]+)\}`, \{([\s\S]*?)\}\);/g)];
+yes("POSITIVE: the Members page sends exactly one strike removal, with a reason", strikeCalls.length === 1 && /reason: reason\.trim\(\)/.test(strikeCalls[0][2]) && /method: "DELETE"/.test(strikeCalls[0][2]));
+yes("NEGATIVE: that removal is refused without a reason before it is sent", /if \(!reason\.trim\(\) \|\| log\.id == null\) return;/.test(view));
 
 const lookup = strip(readFileSync("src/components/PlayerLookup.tsx", "utf8"));
 const strikeRoute = strip(readFileSync("src/app/api/matchday/[env]/strikes/[strikeLogId]/route.ts", "utf8"));
