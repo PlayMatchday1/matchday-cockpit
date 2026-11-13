@@ -226,6 +226,37 @@ export function scheduledEnd(s: RowStripe | undefined): string | null {
   return null;
 }
 
+/* ═══ THE FINAL CHARGE OF A CANCELLING MEMBERSHIP ═════════════════════════════════════════════════
+ * "Last charge" in the cancel callout means the LAST ONE THERE WILL BE, not the last one paid (Ryan,
+ * 2026-11-13). Derived from Stripe's own dates, never from the cancel day:
+ *   - Stripe's end is AFTER the current period end → the period end is a renewal still to come, and it
+ *     is the final charge, at the price Stripe will charge (the item's unit amount) plus tax.
+ *     (Cancels from Nov 6 on: cancel_at one month past the period end — facts doc, 2026-11-13.)
+ *   - Otherwise (end at or before the period end: cancel_at_period_end) → no renewal remains, and the
+ *     final charge is the last one paid.
+ * A minute of slack absorbs the two boundary instants (04:59:59Z / 05:59:59Z) never being compared to
+ * themselves wrongly; real gaps are a month. */
+export type FinalCharge =
+  | { kind: "upcoming"; at: string; cents: number | null }
+  | { kind: "paid"; at: string; cents: number }
+  | { kind: "unknown" };
+export function finalCharge(end: string | null, periodEnd: string | null, upcomingCents: number | null, lastPaid: { cents: number; at: string } | null): FinalCharge {
+  const e = end ? Date.parse(end) : NaN, p = periodEnd ? Date.parse(periodEnd) : NaN;
+  if (!Number.isNaN(e) && !Number.isNaN(p) && e > p + 60_000) return { kind: "upcoming", at: periodEnd as string, cents: upcomingCents };
+  if (!Number.isNaN(e) && lastPaid) return { kind: "paid", at: lastPaid.at, cents: lastPaid.cents };
+  return { kind: "unknown" };
+}
+/** The renewal instant is the last second of the month in Central, so the charge lands on the 1st:
+ *  the UTC date of that instant, which is how Stripe and the API name it ("Dec 1"). */
+export function finalChargeLine(f: FinalCharge): string {
+  if (f.kind === "upcoming") {
+    const day = new Intl.DateTimeFormat("en-US", { timeZone: "UTC", month: "short", day: "numeric" }).format(new Date(Date.parse(f.at) + 1000));
+    return `Last charge ${f.cents != null ? `${usd(f.cents)} + tax` : "the current price + tax"} on ${day}, still to come`;
+  }
+  if (f.kind === "paid") return `Last charge ${usd(f.cents)} (incl. tax) on ${dayCT(f.at)}`;
+  return "Last charge unknown";
+}
+
 export const strikesLabel = (points: number): string => (points > 0 ? `${points} of ${STRIKE_LIMIT}` : "0");
 export const owedLabel = (dollars: number): string => (dollars > 0 ? `$${dollars}` : "—");
 

@@ -10,7 +10,7 @@ import { readFileSync } from "node:fs";
 import {
   searchMembers, searchSummary, tabCounts, inTab, tabRows, pageOf, nextCell, statusChip, isCustomPrice,
   listPriceLabel, nextFirstLabel, membersCsv, planPriceRefusal, strikeFineRefusal, strikeFineTaxLine,
-  membersStrikeControl, gateStrikeRemove, strikeRemoveFacts, commentRefusal, twoFacts, factsFromVerdict, endConfirmCopy,
+  membersStrikeControl, gateStrikeRemove, strikeRemoveFacts, finalCharge, finalChargeLine, commentRefusal, twoFacts, factsFromVerdict, endConfirmCopy,
   STRIKE_BACKEND_FIX_LIVE, STRIKE_REMOVE_OFF_REASON, type MemberRow, type RowStripe,
 } from "../src/lib/membersPageModel";
 import { priceRefusal, endRefusal, centsFromDollars } from "../src/lib/membershipAdminModel";
@@ -95,6 +95,20 @@ is("past due: the failed charge from Stripe", nextCell(ROWS[5], { failedAt: "202
 is("past: Stripe's end date beats MatchDay's", nextCell(ROWS[3], { endedAt: "2026-09-01T04:59:59Z" }, NOW, 6650).main, "Ended Aug 31");
 is("past, another year: the year is shown", nextCell(ROWS[8], undefined, NOW, 6650).main, "Ended May 31, 2024");
 is("a comp has not joined", nextCell(ROWS[7], undefined, NOW, 6650).main, "Not joined");
+
+console.log("\n— the cancel callout's last charge is the final one still to come —");
+const paidNov1 = { cents: 7199, at: "2026-11-01T11:02:00Z" };
+// 41910's shape: cancel_at_period_end, end == period end → no renewal left; the final charge was Nov 1.
+const f41910 = finalCharge("2026-12-01T04:59:59Z", "2026-12-01T04:59:59Z", 6650, paidNov1);
+is("ends Nov 30 (end = period end): the final charge is the one paid Nov 1", finalChargeLine(f41910), "Last charge $71.99 (incl. tax) on Nov 1");
+// 39534's shape: cancel_at a month past the period end → the Dec 1 renewal is the final charge.
+const f39534 = finalCharge("2027-01-01T04:59:59Z", "2026-12-01T04:59:59Z", 6650, paidNov1);
+is("ends Dec 31 (end after the period end): the Dec 1 renewal is the final charge", finalChargeLine(f39534), "Last charge $66.50 + tax on Dec 1, still to come");
+is("  the renewal date is the period end, not the cancel day", f39534.kind === "upcoming" && f39534.at, "2026-12-01T04:59:59Z");
+is("the 05:59:59Z boundary names the same day", finalChargeLine(finalCharge("2027-01-01T05:59:59Z", "2026-12-01T05:59:59Z", 6650, paidNov1)), "Last charge $66.50 + tax on Dec 1, still to come");
+is("an end a few seconds off the period end is not a renewal", finalCharge("2026-12-01T05:00:10Z", "2026-12-01T04:59:59Z", 6650, paidNov1).kind, "paid");
+is("no Stripe end at all: unknown, not a guess", finalChargeLine(finalCharge(null, "2026-12-01T04:59:59Z", 6650, paidNov1)), "Last charge unknown");
+is("an upcoming renewal with no price read says so", finalChargeLine(finalCharge("2027-01-01T04:59:59Z", "2026-12-01T04:59:59Z", null, null)), "Last charge the current price + tax on Dec 1, still to come");
 
 console.log("\n— no write without a reason —");
 const live = { id: 5, statusRaw: "ACTIVE", stripeSubscriptionId: "sub_x", canceledAt: null, price: 6650 };

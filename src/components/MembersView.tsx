@@ -26,7 +26,7 @@ import { strikeControl, strikeReasonLabel, removalEffect, STRIKE_LIMIT } from "@
 import {
   TABS, dayCT, dateCT, usd, trimPct, strikesLabel, owedLabel, scheduledEnd, endConfirmCopy,
   membersStrikeControl, commentRefusal, planPriceRefusal, strikeFineRefusal, strikeFineTaxLine,
-  factsFromVerdict, twoFacts, strikeRemoveFacts, STRIKE_BACKEND_FIX_LIVE, STRIKE_REMOVE_OFF_REASON, SEARCH_MIN, COMMENT_MAX,
+  factsFromVerdict, twoFacts, strikeRemoveFacts, finalCharge, finalChargeLine, STRIKE_BACKEND_FIX_LIVE, STRIKE_REMOVE_OFF_REASON, SEARCH_MIN, COMMENT_MAX,
   type Tab, type Chip, type NextCell, type Fact,
 } from "@/lib/membersPageModel";
 
@@ -295,6 +295,8 @@ function MemberPanel({ row, canMember, canManage, onClose, onResult }: { row: Vi
   const stripeEnd = extras ? (extras.stripe.found
     ? (extras.stripe.cancelAt ?? (extras.stripe.cancelAtPeriodEnd ? extras.stripe.currentPeriodEnd : null))
     : scheduledEnd(extras.stored ?? undefined)) : null;
+  // The current period's end: Stripe's live read, else what the nightly job stored.
+  const periodEnd = extras ? (extras.stripe.found ? extras.stripe.currentPeriodEnd : extras.stored?.currentPeriodEnd ?? null) : null;
   const scheduled = extras?.stripe.found ? !!(extras.stripe.cancelAt || extras.stripe.cancelAtPeriodEnd) : false;
 
   const blocked = !canMember ? "You do not hold EDIT MEMBERSHIPS."
@@ -336,7 +338,8 @@ function MemberPanel({ row, canMember, canManage, onClose, onResult }: { row: Vi
           <div className="mbr-call warn" data-testid="cancel-callout">
             <b>Cancelled in the app on {dayCT(row.canceledAt)}</b>
             <span>
-              {extras?.lastPaid ? `Last charge ${usd(extras.lastPaid.cents)} (incl. tax) on ${dayCT(extras.lastPaid.at)}` : "No paid charge on file"}
+              {/* THE FINAL CHARGE, NOT THE LAST PAID ONE: a Dec 31 end has a Dec 1 renewal still to come. */}
+              {finalChargeLine(finalCharge(stripeEnd, periodEnd, extras?.stripe.unitAmount ?? exactCents, extras?.lastPaid ?? null))}
               {" · "}{stripeEnd ? `Ends ${dayCT(stripeEnd)}` : "End date not set yet"}
               {" · "}{stripeLine(extras, scheduled)}
             </span>
