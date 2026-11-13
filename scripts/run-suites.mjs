@@ -358,6 +358,10 @@ const NODE_SUITES = [
   "scripts/roster-edit-model-test.ts",
   "scripts/credits-model-test.ts",
   "scripts/membership-model-test.ts",
+  /* THE MEMBERS PAGE (2026-11-13) — ends memberships, re-prices them and sets city prices and strike
+   * fines. Search across cities with the text never sent to MatchDay, no write without a reason,
+   * strike Remove off behind STRIKE_BACKEND_FIX_LIVE, invalid prices refused, two facts after a write. */
+  "scripts/members-page-test.ts",
   "scripts/promo-edit-model-test.ts",
   // The 🎥 name transform — a MatchDay match-name write that reaches players in the live app.
   "scripts/veo-name-sync-test.ts",

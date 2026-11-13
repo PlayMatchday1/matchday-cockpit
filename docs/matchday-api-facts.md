@@ -9329,3 +9329,36 @@ to the MatchDay API. Full page inventory: `docs/retool/membership-inventory.md`.
     Stripe ends it.
   - Which `customer.subscription.*` events Stripe sends to `/stripe/webhook/subscription/update`: UNKNOWN (the
     dashboard was not checked). That rows from before October have all flipped shows at least the end event arrives.
+
+## Members page build: what staging and production showed (2026-11-13)
+
+**Evidence: the local Members page (`src/components/MembersView.tsx`) against the STAGING API on 2026-11-13,
+through its own routes, signed in as Ryan; two read-only GETs on production with the service account (2.1 s
+apart); `change_log` rows for env staging written 17:46–17:47 UTC. Scratch scripts not committed.**
+
+- **The list endpoint DOES return comps, on staging, today.** `GET /admin/subscriptions?status=ACTIVE&cityIdentifier=ATX`
+  on staging returned `ADDED_FROM_ADMIN` rows for memberships 58, 70 and 989. Membership 989 belongs to player 570,
+  the comp the 2026-09-30 staging measurement created and then found in no list ("0 rows under every status",
+  `src/lib/membershipAdminModel.ts`). So that measurement is stale. The deployed staging backend has changed since,
+  or the earlier call carried a filter that excluded the row; which of the two is UNKNOWN. **`GET /admin/players/{id}`
+  still drops all three** (the player read's `userSubscriptions` held no row with their id), so a comp can be LISTED
+  and still not be priced or ended through routes that read the player record. This resolves the 2026-11-07 CONTESTED
+  note for staging. Production's mirror held 0 comps at 10:40 UTC the same day.
+- **The service account can read both city settings on production.** `GET /admin/subscriptions/cities/ATX` → 200
+  `{ price: 6650, stripePriceId, taxRate: 8.25, … }`. `GET /strikes/cities/ATX` → 200 `{ amount: 2000, city: { …, stripeTaxRate } }`.
+  The second is the PLAYER route (`CompletedSignUpAndPhoneVerifiedAuthGuard`), and the service account passes it.
+  Staging ATX: plan 6000, taxRate 6.25, fine 2000.
+- **Staging writes, all LANDED per `change_log`:**
+  - `PUT /api/v1/admin/user-subscriptions/1190` (a comment), read back from the player record.
+  - `PATCH /admin/subscriptions/1190` $60 → $59, then restored to $60.
+  - `POST /admin/subscriptions/1121/unsubscribe`: the row was gone from the player read afterwards, the presence-then-absence signal.
+  - `POST /admin/strikes/cities/ATX` $20 → $21 → $20.
+  - `POST /admin/subscriptions { name, price, cityAbbr: "ATX" }` $60.00 → $60.50 → $60.00. Each change minted a new
+    staging `stripePriceId` (`price_1UbOYk…`, then `price_1UbOYn…`), so staging ATX now points at a different price id
+    than before (`price_1PEswo…`), for the same $60.00.
+- **A comment on a membership the player read drops answers 2xx, and the read-back cannot see it.** Saving a comment
+  on staging membership 1121 after it was ended gave outcome UNKNOWN (the row is absent from `GET /admin/players/1475`).
+  Whether the text was stored is UNKNOWN from the API.
+- **Our production Stripe key cannot read staging subscriptions.** `subscriptions.retrieve` on a staging `sub_…` came
+  back as an error, not `resource_missing`, so every staging write's Stripe fact reads "unreadable". Staging can
+  prove the MatchDay half of a write, never the Stripe half.

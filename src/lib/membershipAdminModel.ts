@@ -162,6 +162,11 @@ export const dollarsFromCents = (cents: number | null | undefined): string =>
  * disabled and says why. The free add is unaffected: it writes ACTIVE with a period end, passes
  * both terms of the filter, and was verified end to end on staging 571.
  *
+ * CORRECTED 2026-11-13: on staging GET /admin/subscriptions?status=ACTIVE now DOES return this row
+ * (membership 989, player 570) and two other comps; GET /admin/players/{id} still does not. So a comp can
+ * be listed but still cannot be priced or ended through these routes, which read the player record. The
+ * switch stays off. See docs/matchday-api-facts.md, "Members page build" (2026-11-13).
+ *
  * TO RE-ENABLE: widen that include to carry ADDED_FROM_ADMIN (and drop or relax the
  * currentPeriodEnd term, which also hides cancelled and lapsed rows). Nothing here needs to change
  * but this constant. */

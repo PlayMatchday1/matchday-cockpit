@@ -110,6 +110,13 @@ is("authenticateMatchOpsRead is imported by EXACTLY the 23 intended routes", imp
   "matchday/[env]/memberships/[subscriptionId]/end/route.ts",
   "matchday/[env]/memberships/[subscriptionId]/price/route.ts",
   "matchday/[env]/memberships/add/route.ts",
+  /* MEMBERS PAGE (2026-11-13) — three more membership writes on the same gate, for the same reason:
+   * the gate hands the route its confinement scope. The comment save adds EDIT MEMBERSHIPS; the city
+   * member price and strike fine add is_admin (read fresh per request) and refuse a confined account,
+   * and apiWrite re-checks with requires:"memberships" / "admin". */
+  "matchday/[env]/memberships/[subscriptionId]/comment/route.ts",
+  "matchday/[env]/memberships/city/[cityAbbr]/price/route.ts",
+  "matchday/[env]/memberships/city/[cityAbbr]/strike-fine/route.ts",
   /* 0266 — Player Lookup's Former staff switch. Clubhouse data only (player_former_staff), no MatchDay call. GET is
    * a Match Ops read; POST adds MANAGE PLAYERS on top, the ban route's authority, read fresh per request. */
   "lookup/former-staff/route.ts",

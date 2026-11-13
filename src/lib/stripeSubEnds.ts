@@ -224,8 +224,8 @@ export async function probeLowPricePlans(sb: SupabaseClient) {
 
 /* ═══ THE BACKFILL AND THE NIGHTLY ADDITION (0261, 2026-11-07) ═══════════════════════════════════
  *
- * WRITES mdapi_subscription_stripe_end, one row per CANCELED membership: Stripe's status, canceled_at
- * and ended_at. Every Stripe call is a GET (subscriptions.retrieve).
+ * WRITES mdapi_subscription_stripe_end, one row per CANCELED membership and (0272) per ACTIVE one
+ * with a canceled_at: Stripe's status, canceled_at, ended_at, and its cancel schedule. Every Stripe call is a GET (subscriptions.retrieve).
  *
  * WHERE THE STRIPE ID COMES FROM. Not MatchDay (GET /admin/players/{id} returns no CANCELED row, probe
  * of 2026-10-14) and not an email match: our own stripe_member_invoices carries `subscription_id` on
@@ -248,6 +248,9 @@ export type EndRow = {
   match_method: "stripe_metadata" | "unmatched"; candidate_count: number;
   stripe_status: string | null; stripe_canceled_at: string | null; stripe_ended_at: string | null;
   stripe_start_date: string | null; stripe_trial_end: string | null; lookup_error: string | null;
+  // 0272 (2026-11-13): Stripe's schedule for a CANCELLING membership — ACTIVE at MatchDay with a
+  // canceled_at. Null on a row read before 0272, and on any subscription Stripe has not scheduled.
+  stripe_cancel_at: string | null; stripe_cancel_at_period_end: boolean | null; stripe_current_period_end: string | null;
   fetched_at: string;
 };
 export type EndCandidate = { membership_id: number; user_id: number; subIds: string[] };
@@ -259,11 +262,18 @@ export const FINAL_STRIPE_STATUSES = new Set(["canceled", "incomplete_expired"])
 export const NO_SUBSCRIPTION = "no stripe subscription";
 export const STRIPE_MISSING = "stripe: no such subscription";
 
-/** PURE. Which CANCELED memberships to ask Stripe about, oldest membership first:
+/** PURE. Which memberships to ask Stripe about, oldest membership first:
  *  never asked; or asked, but Stripe's status was not final and the answer is a day old.
- *  A final answer, and a row with no subscription to ask about, are never asked again. */
+ *  A final answer, and a row with no subscription to ask about, are never asked again.
+ *
+ *  TWO KINDS (0272, Ryan 2026-11-13): every CANCELED membership, as since 0261; and every ACTIVE one
+ *  that carries a canceled_at — a player who cancelled in the app, whose real end date only Stripe
+ *  knows. Stripe's status for those is `active`, which is not final, so they are re-read daily until
+ *  Stripe ends them. */
+export const isEndCandidate = (s: { status: string | null; canceled_at?: string | null }): boolean =>
+  s.status === "CANCELED" || (s.status === "ACTIVE" && !!s.canceled_at);
 export function planSubEnds(
-  subs: { membership_id: number; user_id: number; status: string | null }[],
+  subs: { membership_id: number; user_id: number; status: string | null; canceled_at?: string | null }[],
   invoices: SubIdInvoice[],
   existing: ExistingEnd[],
   now: Date,
@@ -277,7 +287,7 @@ export function planSubEnds(
   }
   const out: EndCandidate[] = [];
   for (const s of [...subs].sort((a, b) => Number(a.membership_id) - Number(b.membership_id))) {
-    if (s.status !== "CANCELED") continue;
+    if (!isEndCandidate(s)) continue;
     const e = have.get(Number(s.membership_id));
     if (e) {
       if (e.stripe_status == null || FINAL_STRIPE_STATUSES.has(e.stripe_status)) continue;
@@ -299,6 +309,7 @@ export function endRowFrom(c: EndCandidate, sub: Stripe.Subscription | null, err
     membership_id: c.membership_id, user_id: c.user_id, stripe_subscription_id: c.subIds[0] ?? null,
     candidate_count: c.subIds.length, fetched_at: now.toISOString(),
     stripe_status: null, stripe_canceled_at: null, stripe_ended_at: null, stripe_start_date: null, stripe_trial_end: null,
+    stripe_cancel_at: null, stripe_cancel_at_period_end: null, stripe_current_period_end: null,
   };
   if (!c.subIds.length) return { ...base, match_method: "unmatched", lookup_error: NO_SUBSCRIPTION };
   if (!sub) return { ...base, match_method: "unmatched", lookup_error: error ?? STRIPE_MISSING };
@@ -312,6 +323,10 @@ export function endRowFrom(c: EndCandidate, sub: Stripe.Subscription | null, err
     stripe_ended_at: isoOf(sub.ended_at),
     stripe_start_date: isoOf(sub.start_date),
     stripe_trial_end: isoOf(sub.trial_end),
+    stripe_cancel_at: isoOf(sub.cancel_at),
+    stripe_cancel_at_period_end: typeof sub.cancel_at_period_end === "boolean" ? sub.cancel_at_period_end : null,
+    // In this Stripe API version the period lives on the item (stripe v22 SubscriptionItems.d.ts:50).
+    stripe_current_period_end: isoOf((sub.items?.data?.[0] as { current_period_end?: number } | undefined)?.current_period_end),
     lookup_error: mismatch ? `stripe metadata names membership ${meta}` : null,
   };
 }
@@ -325,8 +340,8 @@ export async function syncSubEnds(sb: SupabaseClient, stripe: Stripe, opts: { li
   const started = opts.now ?? new Date();
   const gap = opts.gapMs ?? STRIPE_GAP_MS;
   const [subs, invoices, existing] = await Promise.all([
-    selectAll<{ membership_id: number; user_id: number; status: string | null }>(() =>
-      sb.from("mdapi_subscriptions").select("membership_id,user_id,status").order("membership_id")),
+    selectAll<{ membership_id: number; user_id: number; status: string | null; canceled_at: string | null }>(() =>
+      sb.from("mdapi_subscriptions").select("membership_id,user_id,status,canceled_at").order("membership_id")),
     selectAll<SubIdInvoice>(() =>
       sb.from("stripe_member_invoices").select("md_membership_id,subscription_id,created_at_utc").order("invoice_id")),
     selectAll<ExistingEnd>(() =>
