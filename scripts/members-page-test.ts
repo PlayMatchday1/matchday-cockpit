@@ -88,7 +88,7 @@ const sched: RowStripe = { cancelAtPeriodEnd: true, currentPeriodEnd: "2026-12-0
 is("cancelling with Stripe scheduled: Ends Nov 30 (the last second of November, Chicago)", nextCell(ROWS[4], sched, NOW, 6650).main, "Ends Nov 30");
 is("cancel_at wins when set", nextCell(ROWS[4], { cancelAt: "2026-12-15T12:00:00Z" }, NOW, 6650).main, "Ends Dec 15");
 is("cancelling, read but not scheduled: says so, no date", nextCell(ROWS[4], { cancelAtPeriodEnd: false, endReadAt: "2026-11-13T09:15:00Z" }, NOW, 6650),
-  { main: "Cancelling", sub: "Stripe not scheduled yet", tone: "warn" });
+  { main: "Cancelling", sub: "Stripe not scheduled", tone: "warn" });
 is("cancelling, never read: says so, no date", nextCell(ROWS[4], undefined, NOW, 6650).sub, "end not read from Stripe yet");
 is("past due: the failed charge from Stripe", nextCell(ROWS[5], { failedAt: "2026-11-01T11:00:00Z", failedAmountCents: 7199 }, NOW, 6650),
   { main: "Failed Nov 1", sub: "$71.99", tone: "bad" });

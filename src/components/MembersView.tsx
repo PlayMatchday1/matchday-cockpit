@@ -406,13 +406,15 @@ function MemberPanel({ row, canMember, canManage, onClose, onResult }: { row: Vi
 
 /* WHAT STRIPE SAID, AND ONLY WHAT IT SAID. "Not scheduled" is a claim about a subscription we read;
  * with no id on file nothing was read, and the line says that instead (staging, or a member with no
- * paid invoice in our tables). */
+ * paid invoice in our tables). NO REASON IS GIVEN FOR "not scheduled": since the Nov 13 2026 backend
+ * release an in-app cancel reaches Stripe at once (Ryan), so for a new cancel it is an anomaly, and for
+ * an older one it was the old next-invoice rule. Saying which would be a guess. */
 function stripeLine(extras: Extras | null, scheduled: boolean): string {
   if (!extras) return "reading Stripe…";
   if (!extras.subscriptionId) return "Stripe not checked (no subscription id on file)";
   if (extras.stripe.error) return "Stripe unreadable";
   if (!extras.stripe.found) return `Stripe has no subscription ${extras.subscriptionId}`;
-  return scheduled ? "Stripe scheduled ✓" : "Stripe not scheduled yet (set when the next invoice is paid)";
+  return scheduled ? "Stripe scheduled ✓" : "Stripe not scheduled";
 }
 
 const short = (id: string) => (id.length > 14 ? `${id.slice(0, 8)}…${id.slice(-3)}` : id);

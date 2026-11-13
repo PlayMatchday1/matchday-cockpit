@@ -1,8 +1,10 @@
 -- 0272: STRIPE'S SCHEDULED END FOR A CANCELLING MEMBERSHIP (Ryan, 2026-11-13).
 --
--- WHY. A member who cancels in the app keeps status ACTIVE at MatchDay with a canceled_at (the press),
--- and Stripe is told to stop only after the next invoice is paid (backend 8965437,
--- subscriptions.service.ts:543-559 and stripe.service.ts:854-858). The Members page shows those
+-- WHY. A member who cancels in the app keeps status ACTIVE at MatchDay with a canceled_at (the press)
+-- until Stripe ends the subscription. As of the Nov 13 2026 backend release, an in-app cancel reaches
+-- Stripe immediately (Ryan, 2026-11-13; not re-read from source here). Before it, Stripe was told to
+-- stop only after the next invoice was paid (backend 8965437, subscriptions.service.ts:543-559 and
+-- stripe.service.ts:854-858), and rows cancelled then still carry that schedule. The Members page shows those
 -- members on a Cancelling tab with their END DATE, and Ryan's ruling is that the date is Stripe's real
 -- one, not an estimate. MatchDay stores no period end that we mirror, so the nightly sub-ends job
 -- (lib/stripeSubEnds.ts) now also reads ACTIVE memberships that carry a canceled_at and saves these

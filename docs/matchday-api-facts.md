@@ -9362,3 +9362,21 @@ apart); `change_log` rows for env staging written 17:46–17:47 UTC. Scratch scr
 - **Our production Stripe key cannot read staging subscriptions.** `subscriptions.retrieve` on a staging `sub_…` came
   back as an error, not `resource_missing`, so every staging write's Stripe fact reads "unreadable". Staging can
   prove the MatchDay half of a write, never the Stripe half.
+
+## Backend release of 2026-11-13 (v407/v408): three behaviour changes, per Ryan
+
+**Evidence: Ryan's statement on 2026-11-13 that the release is live in production. NOT re-read from source:
+the local backend checkout read for this file is `8965437` (2026-11-09), which predates it. Each line below
+is Ryan's, and the older entries it supersedes are named so they are not read as current.**
+
+- **An in-app cancel now reaches Stripe immediately.** Supersedes, for cancels from this release on, the
+  2026-09-30 and 2026-10-31 entries ("calls no Stripe at all", "every in-app cancel is charged once more on
+  the next 1st"). Rows cancelled before it still carry the old schedule: Stripe told only after the next paid
+  invoice. What "reaches Stripe" sets (cancel_at_period_end, or an immediate cancel) is UNKNOWN here; the
+  nightly sub-ends job now stores `stripe_cancel_at` / `stripe_cancel_at_period_end` / `stripe_current_period_end`
+  (0272, applied 2026-11-13), and the first rows it writes will show it.
+- **Removing a strike log no longer restarts a suspension.** Supersedes "Removing a strike log … can RESTART a
+  suspension" (2026-11-13, strike.service.ts:51-57 at 8965437). Clubhouse turned strike Remove on in response
+  (`STRIKE_BACKEND_FIX_LIVE`, `src/lib/membersPageModel.ts`).
+- **Strike fines carry no tax.** Supersedes the 2026-11-13 finding that createInvoiceForStrike sets the city's
+  `default_tax_rates`.

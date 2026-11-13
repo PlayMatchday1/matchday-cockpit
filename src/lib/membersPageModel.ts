@@ -191,8 +191,9 @@ export function nextFirstLabel(now: number): string {
  *   Past        Stripe's ended_at (0261), else MatchDay's canceled_at, else just "Ended".
  *   Past due    the failed invoice's date and amount (stripe_member_unpaid_invoices).
  *   Cancelling  Stripe's scheduled end (0272: cancel_at, or current_period_end when
- *               cancel_at_period_end). If Stripe is not scheduled yet — the next invoice has not
- *               been paid, so the backend has not told Stripe — it says so instead of a date.
+ *               cancel_at_period_end). If Stripe is not scheduled, it says so instead of a date.
+ *               Since the Nov 13 2026 backend release an in-app cancel reaches Stripe at once (Ryan);
+ *               before it, Stripe was told only after the next paid invoice.
  *   Comped      not joined: no Stripe subscription exists until the player checks out.
  *   Current     the 1st of next month at the member's price. */
 export type NextCell = { main: string; sub: string | null; tone: "plain" | "warn" | "bad" | "muted" };
@@ -210,7 +211,7 @@ export function nextCell(r: MemberRow, s: RowStripe | undefined, now: number, pl
   if (isCancelling(r)) {
     const end = scheduledEnd(s);
     if (end) return { main: `Ends ${dayCT(end)}`, sub: null, tone: "warn" };
-    if (s?.endReadAt) return { main: "Cancelling", sub: "Stripe not scheduled yet", tone: "warn" };
+    if (s?.endReadAt) return { main: "Cancelling", sub: "Stripe not scheduled", tone: "warn" };
     return { main: "Cancelling", sub: "end not read from Stripe yet", tone: "warn" };
   }
   if (isComped(r)) return { main: "Not joined", sub: "no Stripe subscription", tone: "muted" };
