@@ -9216,3 +9216,116 @@ holdout 0 unless raised.
 - **The Oct 21 report's rule** (transcript 844c3696): bookings with `refunded = true`, from 2025-12-23T00:00Z, dated by the
   match start if the match was cancelled else by `canceled_at`, classed by the backend's `cancelled_before_24h` flag; used =
   `credit_amount` on non-WAITING bookings. Rerun on the 2026-11-12 mirror it reproduces Dec, Jan, Mar, Apr and Jun exactly.
+
+## Retool MEMBERSHIPS page, read against backend 8965437 (2026-11-13)
+
+**Evidence: a read of source at `~/Code/backend` commit `8965437` (= `heroku-prod/master` = `origin/master` on
+2026-11-13), paths relative to `apps/api/`. The Retool side is `docs/retool/membership-app.json` (export of
+2026-11-13). Two read-only counts came from `mdapi_subscriptions` (synced 2026-11-13 10:40 UTC). No call was made
+to the MatchDay API. Full page inventory: `docs/retool/membership-inventory.md`.**
+
+- **`ADDED_FROM_ADMIN` is a held-price INVITATION, not a comp.** This corrects the 2026-09-30 "the COMP … Nothing is
+  ever charged". Nothing is charged at add time (`subscribeSpecificUser`, `src/core/subscriptions/subscriptions.service.ts:341-375`).
+  - **The player is not a member while the row has this status.** `isMember` needs `status = ACTIVE` and
+    `currentPeriodEnd ≥ now` (`src/core/user-subscriptions/user-subscriptions.repository.ts:76-88`).
+  - **The app shows them a $1 join price** (`getSubscription`, `subscriptions.service.ts:119-134`).
+  - **On subscribe**, `subscribe` routes the row to `subscribeFromAdmin` (`:195-201`, `:283-331`). That creates a
+    real Stripe subscription at the row's stored `stripePriceId`, with a one-time $1.00 invoice item
+    (`minOneTimeSubscriptionPrice = 100`, `:47`) and a trial to the end of the month (`src/core/stripe/stripe.service.ts:228-232`).
+  - The invoice webhook then writes Stripe's status, `trialing` → `ACTIVE` (`stripe.service.ts:837-842`).
+  - Net effect: price locked at the add date, $1 for the rest of the month.
+- **The 2026-11-07 CONTESTED note on comps, resolved as far as source and mirror can resolve it.**
+  - The list endpoint admits `ADDED_FROM_ADMIN` under `status=ACTIVE` (`subscriptions.repository.ts:56-58`).
+  - `src/lib/mdapiSubscriptionsSync.ts:270-305` stores every row the ACTIVE call returns, with no status filter
+    on the store.
+  - The mirror at 2026-11-13 10:40 UTC: ACTIVE 356 (the positive control), **ADDED_FROM_ADMIN 0**, CANCELED 2,669,
+    PAST_DUE 1.
+  - So production most likely held no such rows at sync time. Rows also leave the status when the player checks
+    out. Not confirmed by a live list call.
+  - `GET /admin/players/{id}` hides them in its include, which keeps only `ACTIVE` with an unexpired period
+    (`src/core/users/users.repository.ts:478-487`).
+  - **Correction:** `COMP_DISABLED_REASON` (`src/lib/membershipAdminModel.ts:168`) says "returns it from no
+    endpoint". That is wrong for the list endpoint.
+- **The master price (`POST /admin/subscriptions`, `createOrUpdateSubscription`, `subscriptions.service.ts:64-104`)
+  affects NEW signups only.**
+  - It is a no-op when the price is unchanged (`:72-74`).
+  - Otherwise: a new Stripe Product named from the body, a new monthly recurring Price, then the city
+    `subscriptions` row's `price` / `stripeProductId` / `stripePriceId` are written.
+  - No existing Stripe subscription is touched.
+  - An `ADDED_FROM_ADMIN` row keeps the `stripePriceId` stored at its add (`:369`).
+  - Validation: `@IsNumber() @Min(50)` cents. No integer check.
+- **CORRECTION to 2026-09-30 ("identical shape" / "a Stripe failure is swallowed and the row still changes"): that
+  holds for END, not for PRICE.**
+  - `updatePriceForSubscription` (`stripe.service.ts:256-267`) has no try/catch, so a Stripe error propagates as a
+    500 **before** the row update (`subscriptions.service.ts:588-596`). The `res instanceof Error` branch at `:589`
+    can never fire.
+  - What a failed price change leaves behind: an orphan Stripe Product and Price, created first
+    (`createRecurringProductAndPrice`, `stripe.service.ts:366-377`), and an unchanged row.
+  - `cancelSubscription` (`stripe.service.ts:340-346`) does catch, so END keeps the swallow.
+  - Retool's `×100` on a dollar input sends fractional cents (`19.99*100` = `1998.9999999999998`; computed in
+    node). Stripe takes integer `unit_amount` only (Stripe API; not probed).
+- **The strike price lives only in our database, and its body is not validated.**
+  - `POST /admin/strikes/cities/:cityAbbr` (`src/core/strikes/admin-strike.controller.ts:35-38`) takes
+    `@Body() dto: { price: number }`, an inline type with no DTO class, so the global `ValidationPipe` checks
+    nothing.
+  - It upserts `strike_prices.amount` (`strike.repository.ts:102-115`). No Stripe object is created.
+  - A player is invoiced the amount current when they pay (`createPayment`, `strike.service.ts:107-145`).
+  - Every admin strike route is `CityManagerOrAdminAuthGuard` (`admin-strike.controller.ts:12`).
+- **`POST /admin/strikes { userId }` is a 7-DAY SUSPENSION.** `createStrikeByAdmin` (`strike.service.ts:25-36`) sets
+  `expiredAt` and `suspendedTo` to now + `StrikeSuspendedTo`, which is 7 days (`src/common/constants/strike/index.ts:1`).
+  It does this on the current strike, or creates a strike with no logs. The staging "three days" (2026-09-17) was
+  the change from an existing `expiredAt`. Retool hides its button.
+- **Removing a strike log ignores the request body and can RESTART a suspension.**
+  - `removeStrikeLog` takes the path id only (`admin-strike.controller.ts:60-62`). Retool's `{ userId, matchId }`
+    is dropped.
+  - After zeroing the log, if the remaining points are still ≥ 4 it sets `suspendedTo` = now + 7 days
+    (`strike.service.ts:51-57`). The week starts over.
+  - Below 4 it sets `suspendedTo` to `null`.
+- **Email Members (`POST /admin/subscriptions/email`, `emailActiveSubscribers`, `subscriptions.service.ts:524-541`).**
+  - **Recipients:** every `user_subscriptions` row with `status ACTIVE` and `deletedAt null`, in **all cities**,
+    unique emails. That includes the player-cancelled rows still ACTIVE (102 in the mirror on 2026-11-13).
+  - **The send:** one SendGrid `mail/send` with one personalization per address (`src/core/email/email.service.ts:52-59`).
+    Subject "MatchDay SC Member Notice"; body = the posted HTML verbatim (`email-template-factory.ts:274-279`).
+  - **Failure:** a SendGrid error is caught; the endpoint still returns `true`, and the catch logs **every recipient
+    and the whole body** (`email.service.ts:98-112`).
+- **Comment.**
+  - Stored in `user_subscriptions.comment` (nullable TEXT, `prisma/schema.prisma` model `UserSubscription`).
+  - Written by `PUT /api/v1/admin/user-subscriptions/:id` `{ comment }`
+    (`src/core/subscriptions/api/v1/api-v1-admin-subscriptions.controller.ts:33-39`). It is the only membership
+    route under `/api/v1`.
+  - **The repository's `updateById` catches every error and returns `null`** (`user-subscriptions.repository.ts:123-131`).
+    A 2xx with an empty body is NOT APPLIED.
+  - Retool prefills the box from `/admin/players/{id}` `userSubscriptions[0]`, which is empty for a hidden row (see
+    above). Saving that box writes `""` over the stored comment.
+- **Absent owed (list endpoint, `subscriptions.repository.ts:84-93`).** It sums `matches.registration_price / 100`
+  (Int ÷ Int: **truncated whole dollars**) over the player's user-matches that are all of:
+  - `is_absent`, which is `userStatus = NO_SHOW` (`src/core/user-matches/user-matches.service.ts:302-307`);
+  - `paid_status = 'FREE'`;
+  - `canceled_at IS NULL`;
+  - `created_at` between the membership's `created_at` and its `current_period_end`.
+
+  Consequences:
+  - The window covers the membership's whole life, because `current_period_end` rolls forward.
+  - A NULL period end gives 0.
+  - **Display-only.** Nothing in the backend charges or reads it.
+- **Membership length (`:79`)** = whole days elapsed since `user_subscriptions.created_at`, for every status, so it
+  keeps counting after a cancel. "Activation date" (`:77`) is that same `created_at`: row creation, not first payment.
+- **The list's PRICE is `(amount / 100)::INTEGER` (`:80`)**, truncated dollars. **STRIKE POINT** counts only the
+  current (unexpired) strike (`:82`, join `:96`).
+- **The list endpoint interpolates `email` and `cityIdentifier` into `$queryRawUnsafe`**
+  (`subscriptions.repository.ts:53-54`, `:63-64`). `email` is `@IsString()` only; `cityIdentifier` has no
+  validator. Any admin or city-manager token reaches it. `sortColumn` is allow-listed (`dto/subscribers-filtering-queries-for-admin.dto.ts:66`).
+  This is a backend defect to report to its owner; it does not change how we call the endpoint.
+- **Retool's `makeAbsentPlayerFromMatch` (`PATCH /admin/matches/:matchId/user-matches/:id/absent`) has no route.**
+  No controller matches "absent" at `8965437`. It would 404.
+- **Deleting a player (`DELETE /player/profile/:id`, `softDeleteUser`, `src/core/users/users.service.ts:562-580`)
+  does not touch `user_subscriptions` or Stripe.** A deleted account's membership keeps billing until someone
+  ends it.
+- **Why ACTIVE rows carry a past `canceled_at`, measured.** On 2026-11-13 the mirror had 102 ACTIVE rows with
+  `canceled_at`.
+  - **All were pressed on or after 2026-10-01** (Oct 60, Nov 42); none had a future date.
+  - That matches the sequence: the in-app cancel writes the date only; the next `invoice.paid` sets
+    `cancel_at_period_end`; then `webhookSubscriptionUpdate` (`stripe.service.ts:911-967`) writes CANCELED when
+    Stripe ends it.
+  - Which `customer.subscription.*` events Stripe sends to `/stripe/webhook/subscription/update`: UNKNOWN (the
+    dashboard was not checked). That rows from before October have all flipped shows at least the end event arrives.
