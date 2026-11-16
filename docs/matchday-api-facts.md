@@ -6,6 +6,14 @@ secondary source with at least two known errors (see below), and because the
 match-editing screens in this app are built directly on these facts. If you are
 reading this cold six months from now to build the next screen, start here.
 
+## Shipping rule: build, read the result, then push (Ryan, 2026-11-16)
+
+**Never chain a push after a build in one command.** Run `npm run build` on its own, read its result
+(the exit code and the "Compiled successfully" line), and push only if it passed. `npm run build ...;
+git push ...` pushes whatever the build did. On 2026-11-16 a chained command pushed 24fa7a6 after a
+failed local build. The failure was the known Google Fonts download, a rebuild passed, and nothing broken
+shipped. The rule stands anyway: a failed build has to stop the push, and only reading its result does that.
+
 ## Authority order
 
 When the spec, the code, and the observed behaviour disagree, trust them in this
