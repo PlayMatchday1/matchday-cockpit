@@ -187,8 +187,9 @@ export type MdapiSubscriptionsSyncResult = {
  * request every 2 seconds (about 12 requests), and never the CANCELED dump.
  *
  * NOT PAST_DUE (2026-11-16). The first run walked ACTIVE and PAST_DUE and made 47 requests, writing 2,669
- * CANCELED rows, so one of those two filters returned the whole CANCELED + PAST_DUE dump (which one is
- * UNKNOWN; docs/matchday-api-facts.md, "Paid since start, and how fresh"). Ryan's rule is to go easy on the API,
+ * CANCELED rows. The ACTIVE-only run after it (22:17 UTC, 13 requests, no stop) showed ACTIVE still
+ * narrows, so it is PAST_DUE that returns the whole CANCELED + PAST_DUE dump (docs/matchday-api-facts.md,
+ * "Paid since start, and how fresh"). Ryan's rule is to go easy on the API,
  * so a card that fails moves to Past due at the 10:40 UTC walk, like an ended membership.
  * IF ACTIVE EVER STOPS NARROWING, this pass stops at the first page carrying a non-ACTIVE row rather
  * than walk the dump every 15 minutes, and the run is logged as failed.

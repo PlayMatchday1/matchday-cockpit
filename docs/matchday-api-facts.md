@@ -9446,6 +9446,8 @@ Read on production's database copy, 2026-11-16, no MatchDay API calls.
 - **One of the ACTIVE / PAST_DUE filters on `GET /admin/subscriptions` no longer narrows.** The first
   current-members run (2026-11-16 22:02 UTC, ACTIVE and PAST_DUE loops only, no CANCELED loop) made 47 requests
   and wrote 3,034 rows: 364 ACTIVE, 1 PAST_DUE and 2,669 CANCELED. A loop that narrowed could not return a
-  CANCELED row, so at least one returned the CANCELED + PAST_DUE dump. WHICH ONE is UNKNOWN (the run does not
-  log per-loop counts). The pass now walks ACTIVE only and stops at the first page carrying a non-ACTIVE row,
-  so its next run answers it: about 12 requests and a clean finish means ACTIVE narrows and PAST_DUE does not.
+  CANCELED row, so at least one returned the CANCELED + PAST_DUE dump. The pass now walks ACTIVE only and
+  stops at the first page carrying a non-ACTIVE row. **Answered by its next run** (2026-11-16 22:17 UTC):
+  13 requests, 364 rows, finished cleanly with no stop, so every ACTIVE page held ACTIVE rows only. ACTIVE
+  narrows; it is PAST_DUE that returns the dump. The "PAST_DUE strict" note in the mdapiSubscriptionsSync
+  header is stale. The nightly walk is unaffected because its rows carry their own status.
