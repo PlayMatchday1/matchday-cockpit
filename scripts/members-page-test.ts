@@ -10,6 +10,7 @@ import { readFileSync } from "node:fs";
 import {
   searchMembers, searchSummary, tabCounts, inTab, tabRows, pageOf, nextCell, statusChip, isCustomPrice,
   listPriceLabel, nextFirstLabel, membersCsv, planPriceRefusal, strikeFineRefusal, strikeFineTaxLine,
+  durationDays, durationLabel, personTag, paidByMembership, rowView, sortRows, defaultSort, pageList, rangeLabel, PAGE_SIZE, CSV_HEADERS,
   membersStrikeControl, gateStrikeRemove, strikeRemoveFacts, finalCharge, finalChargeLine, commentRefusal, twoFacts, factsFromVerdict, endConfirmCopy,
   STRIKE_BACKEND_FIX_LIVE, STRIKE_REMOVE_OFF_REASON, type MemberRow, type RowStripe,
 } from "../src/lib/membersPageModel";
@@ -71,16 +72,23 @@ yes("a suspension in the past is not Suspended", !inTab(M({ suspendedTo: "2026-1
 yes("a comped member is Current", inTab(ROWS[7], "current", NOW));
 yes("Past is CANCELED only", inTab(ROWS[3], "past", NOW) && !inTab(ROWS[3], "current", NOW));
 is("a tab is one city", tabRows(ROWS, "HOU", "current", NOW).map((r) => r.membershipId), [3]);
-const pg = pageOf(Array.from({ length: 51 }, (_, i) => i), 3);
+// CHANGED 2026-11-16: the page size went from 25 to 50 (Ryan), so this case passes its old size of 25
+// explicitly; the 50 case below it is new.
+const pg = pageOf(Array.from({ length: 51 }, (_, i) => i), 3, 25);
 is("paging: page 3 of 51 rows is the last row", [pg.rows, pg.page, pg.pages, pg.total], [[50], 3, 3, 51]);
+const pg50 = pageOf(Array.from({ length: 101 }, (_, i) => i), 3);
+is("paging at 50: page 3 of 101 rows is the last row", [pg50.rows, pg50.page, pg50.pages, pg50.total], [[100], 3, 3, 101]);
 is("paging: a page past the end is clamped", pageOf([1, 2], 9).page, 1);
 
 console.log("\n— the Next column comes from evidence only —");
 is("the billing rule: the 1st of next month in Chicago", nextFirstLabel(NOW), "Dec 1");
 is("  across a year end", nextFirstLabel(Date.parse("2026-12-15T18:00:00Z")), "Jan 1, 2027");
 is("  CONTROL: 23:30 on Nov 30 in Chicago is still November", nextFirstLabel(Date.parse("2026-12-01T05:30:00Z")), "Dec 1");
-is("an active member: Dec 1 at the plan price", nextCell(ROWS[0], undefined, NOW, 6650), { main: "Dec 1", sub: "$66.50", tone: "plain" });
-is("a custom price shows whole dollars", nextCell(ROWS[1], undefined, NOW, 6650).sub, "$59");
+/* CHANGED 2026-11-16 (Ryan): Next payment is the date only; the price moved to its own column. The two
+ * assertions that read the price from nextCell's sub now read it from listPriceLabel, the Price column. */
+is("an active member: Dec 1, the date only", nextCell(ROWS[0], undefined, NOW, 6650), { main: "Dec 1", sub: null, tone: "plain", at: "2026-12-01T06:00:00Z" });
+is("the Price column: the plan price", listPriceLabel(ROWS[0], 6650), "$66.50");
+is("a custom price shows whole dollars", listPriceLabel(ROWS[1], 6650), "$59");
 yes("…and is marked Custom price", isCustomPrice(ROWS[1], 6650) && statusChip(ROWS[1], NOW, 6650)?.label === "Custom price");
 yes("CONTROL: a plan-priced member is not", !isCustomPrice(ROWS[0], 6650) && statusChip(ROWS[0], NOW, 6650) === null);
 is("with no plan read, the list does not guess cents", listPriceLabel(ROWS[0], null), "$66");
@@ -88,13 +96,67 @@ const sched: RowStripe = { cancelAtPeriodEnd: true, currentPeriodEnd: "2026-12-0
 is("cancelling with Stripe scheduled: Ends Nov 30 (the last second of November, Chicago)", nextCell(ROWS[4], sched, NOW, 6650).main, "Ends Nov 30");
 is("cancel_at wins when set", nextCell(ROWS[4], { cancelAt: "2026-12-15T12:00:00Z" }, NOW, 6650).main, "Ends Dec 15");
 is("cancelling, read but not scheduled: says so, no date", nextCell(ROWS[4], { cancelAtPeriodEnd: false, endReadAt: "2026-11-13T09:15:00Z" }, NOW, 6650),
-  { main: "Cancelling", sub: "Stripe not scheduled", tone: "warn" });
+  { main: "Cancelling", sub: "Stripe not scheduled", tone: "warn", at: null });
 is("cancelling, never read: says so, no date", nextCell(ROWS[4], undefined, NOW, 6650).sub, "end not read from Stripe yet");
-is("past due: the failed charge from Stripe", nextCell(ROWS[5], { failedAt: "2026-11-01T11:00:00Z", failedAmountCents: 7199 }, NOW, 6650),
-  { main: "Failed Nov 1", sub: "$71.99", tone: "bad" });
+// CHANGED 2026-11-16 (Ryan): past due shows the next retry date, the failed charge underneath.
+is("past due: Stripe's next retry, the failed charge underneath", nextCell(ROWS[5], { failedAt: "2026-11-01T11:00:00Z", failedAmountCents: 7199, nextRetryAt: "2026-11-16T12:00:00Z" }, NOW, 6650),
+  { main: "Retries Nov 16", sub: "Failed Nov 1 · $71.99", tone: "bad", at: "2026-11-16T12:00:00Z" });
+is("past due with no retry scheduled says so, no date", nextCell(ROWS[5], { failedAt: "2026-11-01T11:00:00Z", failedAmountCents: 7199, nextRetryAt: null }, NOW, 6650).main, "No retry scheduled");
 is("past: Stripe's end date beats MatchDay's", nextCell(ROWS[3], { endedAt: "2026-09-01T04:59:59Z" }, NOW, 6650).main, "Ended Aug 31");
 is("past, another year: the year is shown", nextCell(ROWS[8], undefined, NOW, 6650).main, "Ended May 31, 2024");
-is("a comp has not joined", nextCell(ROWS[7], undefined, NOW, 6650).main, "Not joined");
+// CHANGED 2026-11-16 (Ryan): $0 members read "No charge"; a comp is one.
+is("a comp has no charge", nextCell(ROWS[7], undefined, NOW, 6650).main, "No charge");
+is("a $0 member has no charge", nextCell(M({ priceDollars: 0 }), undefined, NOW, 6650), { main: "No charge", sub: null, tone: "muted", at: null });
+is("CONTROL: a $66 member has a Dec 1 charge", nextCell(M({}), undefined, NOW, 6650).main, "Dec 1");
+is("cancelling: the end date, labelled", nextCell(ROWS[4], { cancelAt: "2027-01-01T05:59:59Z" }, NOW, 6650).main, "Ends Dec 31");
+
+console.log("\n— duration, tags and paid since start —");
+is("duration: under 60 days in days", durationLabel(59), "59 days");
+is("  one day is singular", durationLabel(1), "1 day");
+is("  60 days is 1 month (whole months only)", durationLabel(60), "1 mo");
+is("  224 days is 7 months", durationLabel(224), "7 mo");
+is("  23 months stays months", durationLabel(730), "23 mo");
+is("  two years and more: years and months", durationLabel(1000), "2 yr 8 mo");
+is("  an exact two years has no months part", durationLabel(731), "2 yr");
+is("a current member's duration runs to now", durationDays(M({ activationDate: "2026-11-01T00:00:00Z" }), undefined, NOW), 13);
+is("a past member's duration runs to Stripe's end, not to now", durationDays(ROWS[3], { endedAt: "2024-04-01T15:00:00Z" }, NOW), 31);
+is("  without Stripe's end, to MatchDay's cancel date", durationDays(ROWS[8], undefined, NOW), 152);
+is("@playmatchday.com is Staff", personTag("ryan@playmatchday.com"), "Staff");
+is("@matchday.com is Test", personTag("qa+1@MatchDay.com"), "Test");
+is("CONTROL: a player is neither", personTag("kofi.m@example.com"), null);
+is("CONTROL: a lookalike domain is neither", personTag("x@notmatchday.com"), null);
+const paid = paidByMembership({
+  invoices: [{ membershipId: 5, cents: 7199, paymentIntent: "pi_a" }, { membershipId: 5, cents: 7199, paymentIntent: "pi_b" }, { membershipId: 6, cents: 0, paymentIntent: null }],
+  reversals: [{ paymentIntent: "pi_b", cents: -7199 }, { paymentIntent: "pi_a", cents: -7199 }, { paymentIntent: "pi_a", cents: 7199 }, { paymentIntent: "pi_other", cents: -500 }],
+});
+is("paid: invoices summed, a refund and a lost dispute taken off, a won dispute added back", paid.get(5), 7199);
+is("  a reversal on a charge that is not a membership invoice touches nothing", [...paid.keys()].sort(), [5, 6]);
+is("  a $0 member has paid $0, not nothing", paid.get(6), 0);
+const rv = rowView(M({ email: "x@playmatchday.com", priceDollars: 59 }), undefined, 14398, NOW, 6650);
+is("rowView carries the tag, the custom price and the paid total", [rv.tag, rv.custom, rv.listPrice, rv.paidCents], ["Staff", true, "$59", 14398]);
+
+console.log("\n— sorting covers the whole tab, then pages —");
+const many = Array.from({ length: 120 }, (_, i) => M({ membershipId: i + 1, userId: i + 1, firstName: `P${String(120 - i).padStart(3, "0")}`, activationDate: new Date(Date.parse("2025-01-01T00:00:00Z") + i * 86_400_000).toISOString(), strikePoints: i % 5 }));
+const vMany = many.map((r) => ({ ...r, ...rowView(r, undefined, r.membershipId * 100, NOW, 6650) }));
+is("the page size is 50", PAGE_SIZE, 50);
+is("default: Since, oldest first", defaultSort("current"), { key: "since", dir: "asc" });
+is("Past opens on its most recent ends", defaultSort("past"), { key: "next", dir: "desc" });
+const byName = sortRows(vMany, { key: "member", dir: "asc" });
+is("sorted by name, page 3 starts at the 101st name of the WHOLE tab", pageOf(byName, 3).rows[0].name, "P101 Mensah");
+is("  descending flips it", sortRows(vMany, { key: "member", dir: "desc" })[0].name, "P120 Mensah");
+is("sorted by paid, highest first", sortRows(vMany, { key: "paid", dir: "desc" })[0].paidCents, 12000);
+is("sorted by since, newest first", sortRows(vMany, { key: "since", dir: "desc" })[0].membershipId, 120);
+const withEmpty = [{ ...vMany[0], paidCents: null }, vMany[1], vMany[2]];
+is("an empty value sorts last ascending…", sortRows(withEmpty, { key: "paid", dir: "asc" }).map((r) => r.membershipId), [2, 3, 1]);
+is("  …and last descending", sortRows(withEmpty, { key: "paid", dir: "desc" }).map((r) => r.membershipId), [3, 2, 1]);
+is("ties keep the membership id order, so a page never reshuffles", sortRows(vMany, { key: "strikes", dir: "asc" }).slice(0, 3).map((r) => r.membershipId), [1, 6, 11]);
+const nexts = [ROWS[0], ROWS[4], ROWS[7]].map((r) => ({ ...r, ...rowView(r, r.membershipId === 5 ? { cancelAt: "2026-11-30T12:00:00Z" } : undefined, 0, NOW, 6650) }));
+is("sorted by next payment: Ends Nov 30 before Dec 1, No charge last", sortRows(nexts, { key: "next", dir: "asc" }).map((r) => r.next.main), ["Ends Nov 30", "Dec 1", "No charge"]);
+is("the range label", rangeLabel(1, 167), "1–50 of 167");
+is("  the last page", rangeLabel(4, 167), "151–167 of 167");
+is("page buttons with gaps", pageList(6, 12), [1, null, 4, 5, 6, 7, 8, null, 12]);
+is("  CONTROL: a short list has no gaps", pageList(1, 3), [1, 2, 3]);
+is("search is no longer capped at 50 results", searchMembers(many, "mensah").length, 120);
 
 console.log("\n— the cancel callout's last charge is the final one still to come —");
 const paidNov1 = { cents: 7199, at: "2026-11-01T11:02:00Z" };
@@ -196,11 +258,17 @@ yes("end confirm says immediate and no refund", /immediately/.test(endConfirmCop
 yes("  and names the player's own end date when they already cancelled", endConfirmCopy("Hudson Reyes", true, "2026-12-01T05:59:59Z").includes("ends Nov 30"));
 
 console.log("\n— CSV is the filter, every page, and cannot run a formula —");
-const csv = membersCsv([M({ firstName: "=HYPERLINK(1)", comment: 'said "hi", left' })], new Map(), NOW, 6650);
+/* CHANGED 2026-11-16 (Ryan): the CSV exports the table's columns, from rows already viewed and sorted.
+ * The comment is no longer a column, so the quote-and-comma escape is now exercised on the name. */
+const cr = M({ firstName: "=HYPERLINK(1)", lastName: 'said "hi", left' });
+const csv = membersCsv([{ ...cr, ...rowView(cr, undefined, 14398, NOW, 6650) }]);
 const lines = csv.trim().split("\r\n");
 is("a header and one row", lines.length, 2);
+is("the header is the table's columns", lines[0], CSV_HEADERS.join(","));
+yes("  with Paid since start and Duration, and no Owed", lines[0].includes("Paid since start") && lines[0].includes("Duration") && !/Owed/.test(lines[0]));
 yes("a cell starting with = is neutralised", lines[1].includes("'=HYPERLINK(1)"));
-yes("quotes and commas are escaped", lines[1].includes('"said ""hi"", left"'));
+yes("quotes and commas are escaped", lines[1].includes('said ""hi"", left"'));
+yes("the paid total is in dollars", lines[1].includes("$143.98"));
 
 console.log("\n— the nightly job also reads cancelling members (0272) —");
 yes("ACTIVE with a cancel date is a candidate", isEndCandidate({ status: "ACTIVE", canceled_at: "2026-10-31T21:00:00Z" }));

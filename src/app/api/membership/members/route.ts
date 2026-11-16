@@ -3,12 +3,13 @@
 //   GET ?env=production|staging&city=ATX&tab=current&page=1      one page of one tab, with counts
 //   GET ?env=…&q=garcia&city=ATX                                  search: EVERY city, EVERY status
 //   GET ?env=…&city=ATX&tab=current&format=csv                    the current filter, every page
+//   …&sort=since|member|phone|duration|price|next|paid|strikes&dir=asc|desc   on every mode, every page
 //
 // THE GATE IS THE MEMBERSHIP CAPABILITY, the same one /api/membership uses: anyone who can open the
 // Membership section can read members. Writes are separate routes with their own grants.
 //
 // SEARCH NEVER REACHES MATCHDAY. It runs in memory over rows this route already loaded (production:
-// our mirror). MatchDay's list endpoint pastes `email` into raw SQL (subscriptions.repository.ts:53-54
+// our mirror, read with a fixed query; the search text is never part of any query, SQL or HTTP). MatchDay's list endpoint pastes `email` into raw SQL (subscriptions.repository.ts:53-54
 // at backend 8965437), so the search text is never sent to it — not on production, not on staging.
 //
 // A CONFINED ACCOUNT sees its own city only: the picker is pinned, and search is narrowed to that
@@ -18,10 +19,10 @@ import { assertScope } from "@/lib/cityConfinement";
 import { resolveCityScope, cityNameFor, CITY_SCOPES } from "@/lib/cityScope";
 import { makeServerClient } from "@/lib/supabaseServer";
 import { countActiveMembers } from "@/lib/membershipStats";
-import { loadMemberRows, loadRowStripe, readCitySettings } from "@/lib/membersPageData";
+import { loadMemberRows, loadAllRowStripe, loadPaidSinceStart, readCitySettings } from "@/lib/membersPageData";
 import {
-  TABS, tabCounts, tabRows, pageOf, searchMembers, searchSummary, membersCsv, nextCell, statusChip,
-  listPriceLabel, daysSince, type Tab, type MemberRow, type RowStripe,
+  TABS, tabCounts, tabRows, pageOf, searchMembers, searchSummary, membersCsv, rowView, sortRows, defaultSort, isSortKey,
+  type Tab, type MemberRow, type RowStripe, type Sort,
 } from "@/lib/membersPageModel";
 
 export const runtime = "nodejs";
@@ -49,36 +50,49 @@ export async function GET(req: Request) {
   const sb = makeServerClient();
   const now = Date.now();
   try {
-    const { rows: all, syncedAt, source } = await loadMemberRows(env, sb, url.searchParams.get("fresh") === "1");
+    const fresh = url.searchParams.get("fresh") === "1";
+    const [{ rows: all, syncedAt, source }, stripe, paid] = await Promise.all([
+      // A refresh after an edit re-reads the rows and Stripe facts; no edit here changes what was paid.
+      loadMemberRows(env, sb, fresh), loadAllRowStripe(sb, env, fresh), loadPaidSinceStart(sb, env),
+    ]);
     const settings = url.searchParams.get("settings") === "0" ? null : await readCitySettings(env, city);
     const planCents = settings?.planCents ?? null;
 
-    const view = (rows: readonly MemberRow[], stripe: Map<number, RowStripe>, plan: (c: string) => number | null) =>
+    /* Every row of the tab (or the search) is viewed and sorted here, then paged, so a sort or a search
+     * covers every page. A paid figure is 0 for a production membership with no invoice, null on staging. */
+    const view = (rows: readonly MemberRow[], st: Map<number, RowStripe>, plan: (c: string) => number | null) =>
       rows.map((r) => ({
         ...r,
-        name: [r.firstName, r.lastName].filter(Boolean).join(" ") || "(no name)",
+        ...rowView(r, st.get(r.membershipId), paid ? paid.get(r.membershipId) ?? 0 : null, now, plan(r.city)),
         cityName: cityNameFor(r.city) ?? r.city,
-        chip: statusChip(r, now, plan(r.city)),
-        next: nextCell(r, stripe.get(r.membershipId), now, plan(r.city)),
-        days: daysSince(r.activationDate, now),
-        listPrice: listPriceLabel(r, plan(r.city)),
-        hasComment: !!(r.comment ?? "").trim(),
-        stripe: stripe.get(r.membershipId) ?? null,
       }));
+    const sk = url.searchParams.get("sort"), sd = url.searchParams.get("dir");
+    const askedSort: Sort | null = isSortKey(sk) ? { key: sk, dir: sd === "desc" ? "desc" : "asc" } : null;
+    const csvOut = (rows: ReturnType<typeof view>, name: string) => new Response(membersCsv(rows), {
+      headers: {
+        "Content-Type": "text/csv; charset=utf-8",
+        "Content-Disposition": `attachment; filename="${name}-${new Date().toISOString().slice(0, 10)}.csv"`,
+        "Cache-Control": "no-store",
+      },
+    });
 
     /* ── SEARCH ───────────────────────────────────────────────────────────────────────────── */
     const q = (url.searchParams.get("q") ?? "").trim();
     if (q) {
       const pool = confined ? all.filter((r) => r.city === confined) : all;
       const hits = searchMembers(pool, q);
-      const stripe = await loadRowStripe(sb, env, hits.map((h) => h.membershipId));
       /* The plan price of a result's OWN city is only known for the picked one; other cities show
        * whole dollars (and no Custom price chip) rather than a guess. */
       const plan = (c: string) => (c === city ? planCents : null);
+      // Unsorted, a search keeps its own order: live memberships first, newest first.
+      const viewed = view(hits, stripe, plan);
+      const ordered = askedSort ? sortRows(viewed, askedSort) : viewed;
+      if (url.searchParams.get("format") === "csv") return csvOut(ordered, `members-search`);
+      const pg = pageOf(ordered, Number(url.searchParams.get("page") ?? 1));
       return Response.json({
-        mode: "search", env, source, syncedAt, q, city,
+        mode: "search", env, source, syncedAt, q, city, sort: askedSort,
         summary: searchSummary(hits, cityNameFor(city) ?? city),
-        confinedTo: confined, rows: view(hits, stripe, plan),
+        confinedTo: confined, page: pg.page, pages: pg.pages, total: pg.total, rows: pg.rows,
       });
     }
 
@@ -87,29 +101,17 @@ export async function GET(req: Request) {
     const tab: Tab = isTab(tabParam) ? tabParam : "current";
     const cityRows = all.filter((r) => r.city === city);
     const counts = tabCounts(cityRows, now);
-    const inTab = tabRows(all, city, tab, now);
+    const sort = askedSort ?? defaultSort(tab);
+    const ordered = sortRows(view(tabRows(all, city, tab, now), stripe, () => planCents), sort);
 
-    if (url.searchParams.get("format") === "csv") {
-      const stripe = await loadRowStripe(sb, env, inTab.map((r) => r.membershipId));
-      const body = membersCsv(inTab, stripe, now, planCents);
-      const stamp = new Date().toISOString().slice(0, 10);
-      return new Response(body, {
-        headers: {
-          "Content-Type": "text/csv; charset=utf-8",
-          "Content-Disposition": `attachment; filename="members-${city}-${tab}-${stamp}.csv"`,
-          "Cache-Control": "no-store",
-        },
-      });
-    }
+    if (url.searchParams.get("format") === "csv") return csvOut(ordered, `members-${city}-${tab}`);
 
-    const pg = pageOf(inTab, Number(url.searchParams.get("page") ?? 1));
-    const stripe = await loadRowStripe(sb, env, pg.rows.map((r) => r.membershipId));
+    const pg = pageOf(ordered, Number(url.searchParams.get("page") ?? 1));
     return Response.json({
-      mode: "list", env, source, syncedAt, city, tab, counts, confinedTo: confined,
+      mode: "list", env, source, syncedAt, city, tab, counts, confinedTo: confined, sort,
       cities: confined ? CITY_SCOPES.filter((c) => c.identifier === confined) : CITY_SCOPES,
       settings: settings && { ...settings, payingCount: countActiveMembers(cityMirrorShape(cityRows), new Date(now)) },
-      page: pg.page, pages: pg.pages, total: pg.total,
-      rows: view(pg.rows, stripe, () => planCents),
+      page: pg.page, pages: pg.pages, total: pg.total, rows: pg.rows,
     });
   } catch (e) {
     return Response.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });

@@ -185,37 +185,150 @@ export function nextFirstLabel(now: number): string {
   const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   return `${MON[nm - 1]} 1${ny !== y ? `, ${ny}` : ""}`;
 }
+/** The same 1st as an instant, for sorting only: 6 AM UTC is the 1st in Chicago in any season. */
+export function nextFirstIso(now: number): string {
+  const p = fmt({ year: "numeric", month: "numeric" }).formatToParts(new Date(now));
+  const y = Number(p.find((x) => x.type === "year")?.value);
+  const m = Number(p.find((x) => x.type === "month")?.value);
+  const ny = m === 12 ? y + 1 : y, nm = m === 12 ? 1 : m + 1;
+  return `${ny}-${String(nm).padStart(2, "0")}-01T06:00:00Z`;
+}
 
-/* ═══ THE NEXT COLUMN ═══════════════════════════════════════════════════════════════════════════
- * What happens next to this membership, from evidence only:
- *   Past        Stripe's ended_at (0261), else MatchDay's canceled_at, else just "Ended".
- *   Past due    the failed invoice's date and amount (stripe_member_unpaid_invoices).
- *   Cancelling  Stripe's scheduled end (0272: cancel_at, or current_period_end when
+/* ═══ THE NEXT PAYMENT COLUMN ═══════════════════════════════════════════════════════════════════
+ * The date of the next charge, or what replaces it, from evidence only (Ryan, 2026-11-16: the date
+ * only; the price has its own column now):
+ *   Past        "Ended" + Stripe's ended_at (0261), else MatchDay's canceled_at, else just "Ended".
+ *   Past due    "Retries" + Stripe's next attempt (stripe_member_unpaid_invoices); the failed charge
+ *               underneath. No attempt scheduled says so.
+ *   Cancelling  "Ends" + Stripe's scheduled end (0272: cancel_at, or current_period_end when
  *               cancel_at_period_end). If Stripe is not scheduled, it says so instead of a date.
  *               Since the Nov 13 2026 backend release an in-app cancel reaches Stripe at once (Ryan);
  *               before it, Stripe was told only after the next paid invoice.
- *   Comped      not joined: no Stripe subscription exists until the player checks out.
- *   Current     the 1st of next month at the member's price. */
-export type NextCell = { main: string; sub: string | null; tone: "plain" | "warn" | "bad" | "muted" };
-export function nextCell(r: MemberRow, s: RowStripe | undefined, now: number, planCents: number | null): NextCell {
-  const price = listPriceLabel(r, planCents);
+ *   Comped, $0  "No charge".
+ *   Current     the 1st of next month.
+ * `at` is the instant the cell names, for sorting; null when it names none. */
+export type NextCell = { main: string; sub: string | null; tone: "plain" | "warn" | "bad" | "muted"; at: string | null };
+export function nextCell(r: MemberRow, s: RowStripe | undefined, now: number, _planCents?: number | null): NextCell {
   if (isPast(r)) {
     const at = s?.endedAt ?? r.canceledAt;
-    return { main: at ? `Ended ${dayOrDateCT(at, now)}` : "Ended", sub: null, tone: "muted" };
+    return { main: at ? `Ended ${dayOrDateCT(at, now)}` : "Ended", sub: null, tone: "muted", at: at ?? null };
   }
   if (isPastDue(r)) {
-    return s?.failedAt
-      ? { main: `Failed ${dayCT(s.failedAt)}`, sub: s.failedAmountCents != null ? usd(s.failedAmountCents) : price, tone: "bad" }
-      : { main: "Payment failed", sub: "date not synced", tone: "bad" };
+    const failed = s?.failedAt ? `Failed ${dayCT(s.failedAt)}${s.failedAmountCents != null ? ` · ${usd(s.failedAmountCents)}` : ""}` : "failed charge not synced";
+    return s?.nextRetryAt
+      ? { main: `Retries ${dayCT(s.nextRetryAt)}`, sub: failed, tone: "bad", at: s.nextRetryAt }
+      : { main: "No retry scheduled", sub: failed, tone: "bad", at: null };
   }
   if (isCancelling(r)) {
     const end = scheduledEnd(s);
-    if (end) return { main: `Ends ${dayCT(end)}`, sub: null, tone: "warn" };
-    if (s?.endReadAt) return { main: "Cancelling", sub: "Stripe not scheduled", tone: "warn" };
-    return { main: "Cancelling", sub: "end not read from Stripe yet", tone: "warn" };
+    if (end) return { main: `Ends ${dayCT(end)}`, sub: null, tone: "warn", at: end };
+    if (s?.endReadAt) return { main: "Cancelling", sub: "Stripe not scheduled", tone: "warn", at: null };
+    return { main: "Cancelling", sub: "end not read from Stripe yet", tone: "warn", at: null };
   }
-  if (isComped(r)) return { main: "Not joined", sub: "no Stripe subscription", tone: "muted" };
-  return { main: nextFirstLabel(now), sub: price, tone: "plain" };
+  if (isComped(r)) return { main: "No charge", sub: "added by staff", tone: "muted", at: null };
+  if (r.priceDollars === 0) return { main: "No charge", sub: null, tone: "muted", at: null };
+  return { main: nextFirstLabel(now), sub: null, tone: "plain", at: nextFirstIso(now) };
+}
+
+/* ═══ DURATION ═══════════════════════════════════════════════════════════════════════════════════
+ * How long the membership has run: to now, or for a Past one to its end (the same end the Next
+ * payment column names). Short (Ryan, 2026-11-16): days up to 60, then months, then years and months
+ * from two years. A month is 30.4375 days, so the label never claims a month that has not passed. */
+export function durationDays(r: MemberRow, s: RowStripe | undefined, now: number): number | null {
+  const start = r.activationDate ? Date.parse(r.activationDate) : NaN;
+  if (Number.isNaN(start)) return null;
+  const endIso = isPast(r) ? (s?.endedAt ?? r.canceledAt) : null;
+  const end = endIso && !Number.isNaN(Date.parse(endIso)) ? Date.parse(endIso) : now;
+  return Math.max(0, Math.floor((end - start) / 86_400_000));
+}
+export function durationLabel(days: number | null): string {
+  if (days == null) return "—";
+  if (days < 60) return `${days} day${days === 1 ? "" : "s"}`;
+  const months = Math.floor(days / 30.4375);
+  if (months < 24) return `${months} mo`;
+  return `${Math.floor(months / 12)} yr${months % 12 ? ` ${months % 12} mo` : ""}`;
+}
+
+/* ═══ STAFF AND TEST ACCOUNTS ═══════════════════════════════════════════════════════════════════
+ * Shown in every list with a tag, never hidden (Ryan, 2026-11-16): @playmatchday.com is Staff,
+ * @matchday.com is Test. Both stay out of the paying count (membershipStats INTERNAL_EMAIL_RX). */
+export type PersonTag = "Staff" | "Test" | null;
+export function personTag(email: string | null | undefined): PersonTag {
+  const e = (email ?? "").trim();
+  if (/@playmatchday\./i.test(e)) return "Staff";
+  if (/@matchday\./i.test(e)) return "Test";
+  return null;
+}
+
+/* ═══ PAID SINCE START ═══════════════════════════════════════════════════════════════════════════
+ * What this membership has actually been charged, net (Ryan, 2026-11-16): every paid membership
+ * invoice for THIS membership id (stripe_member_invoices, tax included, as charged), minus refunds and
+ * chargebacks on those charges (fin_txn refund and dispute rows, signed as Stripe signs them, so a
+ * won dispute adds back). A rejoined member's earlier memberships are not counted, to match Since.
+ * null where we hold no Stripe data (staging). */
+export type PaidParts = { invoices: readonly { membershipId: number; cents: number; paymentIntent: string | null }[]; reversals: readonly { paymentIntent: string | null; cents: number }[] };
+export function paidByMembership(p: PaidParts): Map<number, number> {
+  const out = new Map<number, number>();
+  const byPi = new Map<string, number>();
+  for (const i of p.invoices) {
+    out.set(i.membershipId, (out.get(i.membershipId) ?? 0) + i.cents);
+    if (i.paymentIntent) byPi.set(i.paymentIntent, i.membershipId);
+  }
+  for (const r of p.reversals) {
+    const m = r.paymentIntent ? byPi.get(r.paymentIntent) : undefined;
+    if (m != null) out.set(m, (out.get(m) ?? 0) + r.cents);
+  }
+  return out;
+}
+
+/* ═══ ONE ROW AS THE TABLE SHOWS IT ═════════════════════════════════════════════════════════════ */
+export type RowView = {
+  name: string; tag: PersonTag; chip: Chip; next: NextCell; days: number | null; duration: string;
+  listPrice: string | null; paidCents: number | null; hasComment: boolean;
+  /** Priced off the city plan. Shown as its own chip beside the name whatever the status chip says. */
+  custom: boolean;
+};
+export function rowView(r: MemberRow, s: RowStripe | undefined, paidCents: number | null, now: number, planCents: number | null): RowView {
+  const days = durationDays(r, s, now);
+  return {
+    name: fullName(r), tag: personTag(r.email), chip: statusChip(r, now, planCents), next: nextCell(r, s, now, planCents),
+    days, duration: durationLabel(days), listPrice: listPriceLabel(r, planCents), paidCents, hasComment: !!(r.comment ?? "").trim(),
+    custom: isCustomPrice(r, planCents),
+  };
+}
+
+/* ═══ SORTING — EVERY COLUMN, ACROSS EVERY PAGE ══════════════════════════════════════════════════
+ * Done on the server over the whole tab (or the whole search), then paged. Empty values sort last
+ * in either direction; ties fall back to the membership id so a page boundary never moves. */
+export const SORT_KEYS = ["member", "phone", "since", "duration", "price", "next", "paid", "strikes"] as const;
+export type SortKey = (typeof SORT_KEYS)[number];
+export type SortDir = "asc" | "desc";
+export type Sort = { key: SortKey; dir: SortDir };
+export const isSortKey = (x: unknown): x is SortKey => SORT_KEYS.includes(x as SortKey);
+/** The order a tab opens in: Since, oldest first; Past opens on its most recent ends. */
+export const defaultSort = (tab: Tab): Sort => (tab === "past" ? { key: "next", dir: "desc" } : { key: "since", dir: "asc" });
+
+type Sortable = MemberRow & Pick<RowView, "name" | "days" | "next" | "paidCents">;
+export function sortValue(v: Sortable, k: SortKey): string | number | null {
+  switch (k) {
+    case "member": return v.name.toLowerCase();
+    case "phone": { const d = (v.phone ?? "").replace(/\D/g, ""); return d || null; }
+    case "since": { const t = Date.parse(v.activationDate ?? ""); return Number.isNaN(t) ? null : t; }
+    case "duration": return v.days;
+    case "price": return v.priceDollars;
+    case "next": { const t = v.next.at ? Date.parse(v.next.at) : NaN; return Number.isNaN(t) ? null : t; }
+    case "paid": return v.paidCents;
+    case "strikes": return v.strikePoints;
+  }
+}
+export function sortRows<T extends Sortable>(rows: readonly T[], sort: Sort): T[] {
+  const sign = sort.dir === "asc" ? 1 : -1;
+  return rows.slice().sort((a, b) => {
+    const x = sortValue(a, sort.key), y = sortValue(b, sort.key);
+    if (x == null || y == null) return x == null && y == null ? a.membershipId - b.membershipId : x == null ? 1 : -1;
+    const c = typeof x === "string" && typeof y === "string" ? x.localeCompare(y) : (x as number) - (y as number);
+    return c !== 0 ? sign * c : a.membershipId - b.membershipId;
+  });
 }
 
 /** Stripe's own end for a cancelling subscription, or null when Stripe has not been told. */
@@ -258,7 +371,6 @@ export function finalChargeLine(f: FinalCharge): string {
 }
 
 export const strikesLabel = (points: number): string => (points > 0 ? `${points} of ${STRIKE_LIMIT}` : "0");
-export const owedLabel = (dollars: number): string => (dollars > 0 ? `$${dollars}` : "—");
 
 /* ═══ SEARCH ═════════════════════════════════════════════════════════════════════════════════════
  * EVERY CITY AND EVERY STATUS, whatever the picker says (frame 6). Each word must match the name, the
@@ -269,7 +381,7 @@ export const owedLabel = (dollars: number): string => (dollars > 0 ? `$${dollars
  * ONE ROW PER PERSON. A player who rejoined has a CANCELED row and a newer one; the newest live
  * membership wins, else the newest ended one. */
 export const SEARCH_MIN = 2;
-export function searchMembers(rows: readonly MemberRow[], q: string, limit = 50): MemberRow[] {
+export function searchMembers(rows: readonly MemberRow[], q: string, limit = Infinity): MemberRow[] {
   const words = q.toLowerCase().split(/\s+/).map((w) => w.trim()).filter(Boolean);
   if (!words.length || q.trim().length < SEARCH_MIN) return [];
   const hits = rows.filter((r) => {
@@ -299,7 +411,7 @@ export function searchSummary(hits: readonly MemberRow[], pickedCityName: string
 }
 
 /* ═══ ONE PAGE OF ONE TAB ═══════════════════════════════════════════════════════════════════════ */
-export const PAGE_SIZE = 25;
+export const PAGE_SIZE = 50;
 export function tabRows(rows: readonly MemberRow[], city: string, tab: Tab, now: number): MemberRow[] {
   return rows
     .filter((r) => r.city === city && inTab(r, tab, now))
@@ -314,10 +426,24 @@ export function pageOf<T>(rows: readonly T[], page: number, size = PAGE_SIZE): {
   return { rows: rows.slice((p - 1) * size, p * size), page: p, pages, total: rows.length };
 }
 
+/** The page buttons: first, last, and two either side of the current one, with null for a gap. */
+export function pageList(page: number, pages: number): (number | null)[] {
+  const keep = new Set([1, pages, page - 2, page - 1, page, page + 1, page + 2].filter((n) => n >= 1 && n <= pages));
+  const out: (number | null)[] = [];
+  let last = 0;
+  for (const n of [...keep].sort((a, b) => a - b)) { if (n - last > 1) out.push(null); out.push(n); last = n; }
+  return out;
+}
+/** "1–50 of 167". */
+export const rangeLabel = (page: number, total: number, size = PAGE_SIZE): string =>
+  total ? `${((page - 1) * size + 1).toLocaleString()}–${Math.min(page * size, total).toLocaleString()} of ${total.toLocaleString()}` : "0 of 0";
+
 /* ═══ CSV — THE CURRENT FILTER, EVERY PAGE OF IT ════════════════════════════════════════════════ */
+/** The table's columns (Ryan, 2026-11-16), with the Member cell split into its parts so a sheet can
+ *  filter on them, and the member id first so a row can be found again. */
 export const CSV_HEADERS = [
-  "Member ID", "First name", "Last name", "Email", "Phone", "City", "Status", "Since", "Days",
-  "Next", "Price", "Strike points", "Suspended to", "Absent owed", "Cancelled at", "Cancel reason", "Comment",
+  "Member ID", "Name", "Email", "Tag", "Status", "City", "Phone", "Since", "Duration", "Price",
+  "Next payment", "Paid since start", "Strikes",
 ];
 const cell = (v: unknown): string => {
   const s = v == null ? "" : String(v);
@@ -325,15 +451,14 @@ const cell = (v: unknown): string => {
   const safe = /^[=+\-@\t\r]/.test(s) ? `'${s}` : s;
   return /[",\n\r]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
 };
-export function membersCsv(rows: readonly MemberRow[], stripe: ReadonlyMap<number, RowStripe>, now: number, planCents: number | null): string {
+/** Rows already viewed (rowView) and sorted, exactly as the table shows them, every page. */
+export function membersCsv(rows: readonly (MemberRow & RowView & { cityName?: string })[]): string {
   const lines = [CSV_HEADERS.map(cell).join(",")];
   for (const r of rows) {
-    const n = nextCell(r, stripe.get(r.membershipId), now, planCents);
     lines.push([
-      r.slug, r.firstName, r.lastName, r.email, r.phone, r.city, r.status, dateCT(r.activationDate),
-      daysSince(r.activationDate, now), [n.main, n.sub].filter(Boolean).join(" · "),
-      listPriceLabel(r, planCents), r.strikePoints, r.suspendedTo ? dateCT(r.suspendedTo) : "", r.absentOwed,
-      r.canceledAt ? dateCT(r.canceledAt) : "", r.cancelReason, r.comment,
+      r.slug, r.name, r.email, r.tag ?? "", r.chip?.label ?? "", r.cityName ?? r.city, r.phone, dateCT(r.activationDate),
+      r.duration, r.listPrice ?? "", [r.next.main, r.next.sub].filter(Boolean).join(" · "),
+      r.paidCents != null ? usd(r.paidCents) : "", r.strikePoints,
     ].map(cell).join(","));
   }
   return lines.join("\r\n") + "\r\n";

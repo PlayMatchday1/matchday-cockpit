@@ -24,10 +24,10 @@ import { envBadge } from "@/lib/matchEnvBadge";
 import { centsFromDollars, dollarsFromCents, priceRefusal, endRefusal } from "@/lib/membershipAdminModel";
 import { strikeControl, strikeReasonLabel, removalEffect, STRIKE_LIMIT } from "@/lib/playerLookupModel";
 import {
-  TABS, dayCT, dateCT, usd, trimPct, strikesLabel, owedLabel, scheduledEnd, endConfirmCopy,
+  TABS, dayCT, dateCT, usd, trimPct, strikesLabel, scheduledEnd, endConfirmCopy, pageList, rangeLabel,
   membersStrikeControl, commentRefusal, planPriceRefusal, strikeFineRefusal, strikeFineTaxLine,
   factsFromVerdict, twoFacts, strikeRemoveFacts, finalCharge, finalChargeLine, STRIKE_BACKEND_FIX_LIVE, STRIKE_REMOVE_OFF_REASON, SEARCH_MIN, COMMENT_MAX,
-  type Tab, type Chip, type NextCell, type Fact,
+  type Tab, type Chip, type NextCell, type Fact, type Sort, type SortKey, type PersonTag,
 } from "@/lib/membersPageModel";
 
 const ENV = FULL_EDITOR_ENV;
@@ -45,7 +45,8 @@ type ViewRow = {
   name: string; email: string | null; phone: string | null; status: string; priceDollars: number | null;
   activationDate: string | null; canceledAt: string | null; comment: string | null; suspendedTo: string | null;
   strikePoints: number; absentOwed: number; chip: Chip; next: NextCell; days: number | null;
-  listPrice: string | null; hasComment: boolean;
+  duration: string; listPrice: string | null; paidCents: number | null; hasComment: boolean;
+  tag: PersonTag; custom: boolean;
 };
 type Settings = {
   city: string; planCents: number | null; taxRatePct: number | null; fineCents: number | null;
@@ -54,9 +55,9 @@ type Settings = {
 type ListRes = {
   mode: "list"; city: string; tab: Tab; counts: Record<Tab, number>; confinedTo: string | null;
   cities: { identifier: string; name: string }[]; settings: Settings | null; syncedAt: string | null;
-  source: string; page: number; pages: number; total: number; rows: ViewRow[];
+  source: string; page: number; pages: number; total: number; rows: ViewRow[]; sort: Sort;
 };
-type SearchRes = { mode: "search"; q: string; summary: string; rows: ViewRow[]; syncedAt: string | null };
+type SearchRes = { mode: "search"; q: string; summary: string; rows: ViewRow[]; syncedAt: string | null; page: number; pages: number; total: number; sort: Sort | null };
 type Extras = {
   subscriptionId: string | null;
   stripe: { found: boolean; status: string | null; cancelAtPeriodEnd: boolean | null; cancelAt: string | null; currentPeriodEnd: string | null; unitAmount: number | null; card: string | null; error: string | null };
@@ -81,6 +82,9 @@ export default function MembersView() {
   const [city, setCity] = useState<string>("ATX");
   const [tab, setTab] = useState<Tab>("current");
   const [page, setPage] = useState(1);
+  const [sort, setSort] = useState<Sort | null>(null);        // null: the tab's own default order
+  const [qSort, setQSort] = useState<Sort | null>(null);      // null: search relevance order
+  const [qPage, setQPage] = useState(1);
   const [list, setList] = useState<ListRes | null>(null);
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -97,7 +101,7 @@ export default function MembersView() {
     const my = ++reqRef.current;
     setLoading(true); setLoadErr(null);
     try {
-      const r = await authFetch(`/api/membership/members?env=${ENV}&city=${encodeURIComponent(city)}&tab=${tab}&page=${page}${fresh ? "&fresh=1" : ""}`);
+      const r = await authFetch(`/api/membership/members?env=${ENV}&city=${encodeURIComponent(city)}&tab=${tab}&page=${page}${sortQs(sort)}${fresh ? "&fresh=1" : ""}`);
       const j = await r.json();
       if (my !== reqRef.current) return;
       if (!r.ok) { setLoadErr(j.error ?? `HTTP ${r.status}`); return; }
@@ -105,7 +109,7 @@ export default function MembersView() {
       if ((j as ListRes).confinedTo && (j as ListRes).confinedTo !== city) setCity((j as ListRes).confinedTo as string);
     } catch (e) { if (my === reqRef.current) setLoadErr(e instanceof Error ? e.message : String(e)); }
     finally { if (my === reqRef.current) setLoading(false); }
-  }, [city, tab, page]);
+  }, [city, tab, page, sort]);
   useEffect(() => { void load(); }, [load]);
 
   // SEARCH — every city, every status; the picker does not move (frame 6).
@@ -113,28 +117,32 @@ export default function MembersView() {
     const t = q.trim();
     if (t.length < SEARCH_MIN) { setSearch(null); return; }
     const h = setTimeout(async () => {
-      const r = await authFetch(`/api/membership/members?env=${ENV}&city=${encodeURIComponent(city)}&q=${encodeURIComponent(t)}&settings=0`);
+      const r = await authFetch(`/api/membership/members?env=${ENV}&city=${encodeURIComponent(city)}&q=${encodeURIComponent(t)}&page=${qPage}${sortQs(qSort)}&settings=0`);
       const j = await r.json().catch(() => ({}));
       if (r.ok) setSearch(j as SearchRes); else setLoadErr(j.error ?? `HTTP ${r.status}`);
     }, 250);
     return () => clearTimeout(h);
-  }, [q, city]);
+  }, [q, city, qPage, qSort]);
+  // A new search text starts on its first page.
+  useEffect(() => { setQPage(1); }, [q]);
 
   const pickCity = (c: string) => {
     setCity(c); setPage(1); setSel(null);
     try { window.localStorage.setItem(CITY_KEY, c); } catch { /* storage blocked */ }
   };
-  const searchFresh = !!search && search.q === q.trim();
+  const searchFresh = !!search && search.q === q.trim() && search.page === qPage;
+  const searching = q.trim().length >= SEARCH_MIN;
   const cityName = list?.cities.find((c) => c.identifier === city)?.name ?? city;
   const s = list?.settings ?? null;
 
   const downloadCsv = async () => {
-    const r = await authFetch(`/api/membership/members?env=${ENV}&city=${encodeURIComponent(city)}&tab=${tab}&format=csv&settings=1`);
+    const what = searching ? `q=${encodeURIComponent(q.trim())}${sortQs(qSort)}` : `tab=${tab}${sortQs(sort)}`;
+    const r = await authFetch(`/api/membership/members?env=${ENV}&city=${encodeURIComponent(city)}&${what}&format=csv&settings=1`);
     if (!r.ok) { setLoadErr((await r.json().catch(() => ({}))).error ?? `CSV failed (HTTP ${r.status})`); return; }
     const blob = await r.blob();
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = `members-${city}-${tab}-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.download = `${searching ? "members-search" : `members-${city}-${tab}`}-${new Date().toISOString().slice(0, 10)}.csv`;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 2000);
   };
@@ -183,7 +191,7 @@ export default function MembersView() {
         <div className="mbr-tabs">
           {TABS.map((t) => (
             <button key={t.tab} className={`mbr-tab${tab === t.tab && q.trim().length < SEARCH_MIN ? " on" : ""}`} data-testid={`tab-${t.tab}`}
-              onClick={() => { setTab(t.tab); setPage(1); setQ(""); }}>
+              onClick={() => { setTab(t.tab); setPage(1); setSort(null); setQ(""); }}>
               {t.label}<span>{list ? list.counts[t.tab].toLocaleString() : "…"}</span>
             </button>
           ))}
@@ -194,53 +202,33 @@ export default function MembersView() {
 
         {loadErr && <div className="mbr-err" role="alert">{loadErr}</div>}
 
-        {q.trim().length >= SEARCH_MIN ? (
+        {searching ? (
           <div className="mbr-card" data-testid="search-results">
             {/* ONLY RESULTS FOR THE TEXT ON SCREEN ARE CLICKABLE. While a new search is in flight the
               * old hits are not shown: clicking one opened the previous query's member. */}
             <div className="mbr-qline" data-testid="search-summary">{searchFresh ? search!.summary : "Searching…"}</div>
             {searchFresh && search!.rows.length === 0 && <div className="mbr-empty">No member matches “{q.trim()}” in any city.</div>}
-            {searchFresh && search!.rows.map((r) => (
-              <button key={r.membershipId} className={`mbr-hit${sel?.membershipId === r.membershipId ? " sel" : ""}`} data-testid="search-hit" onClick={() => setSel(r)}>
-                <span className="mbr-who"><b>{r.name}</b>{r.chip && <ChipView c={r.chip} />}<small>{r.email ?? "—"}</small></span>
-                <span className={`mbr-chip ${r.city === city ? "city" : "info"}`} data-testid="search-city">{r.cityName}</span>
-                <span className="mbr-hnext">{[r.next.main, r.next.sub].filter(Boolean).join(" · ")}</span>
-              </button>
-            ))}
+            {searchFresh && search!.rows.length > 0 && (
+              <MembersTable rows={search!.rows} sort={search!.sort} sel={sel} onSel={setSel} showCity pickedCity={city} rowTestId="search-hit"
+                onSort={(k) => { setQSort(nextSort(search!.sort, k)); setQPage(1); }}
+                page={search!.page} pages={search!.pages} total={search!.total} onPage={setQPage} />
+            )}
             <div className="mbr-note">Search always covers every city and every status. Clicking a result opens their panel without changing the city you&apos;re on.</div>
           </div>
         ) : (
           <div className="mbr-card" data-testid="members-table">
-            <div className="mbr-tr mbr-th">
-              <span className="c-m">MEMBER</span><span className="c-p">PHONE</span><span className="c-s">SINCE</span>
-              <span className="c-n">NEXT</span><span className="c-k">STRIKES</span><span className="c-o">OWED</span><span className="c-c" />
-            </div>
             {list && list.rows.length === 0 && <div className="mbr-empty" data-testid="members-empty">No members on this tab in {cityName}.</div>}
-            {list?.rows.map((r) => (
-              <button key={r.membershipId} className={`mbr-tr${sel?.membershipId === r.membershipId ? " sel" : ""}`} data-testid="member-row" onClick={() => setSel(r)}>
-                <span className="c-m"><span className="mbr-nm"><b>{r.name}</b>{r.chip && <ChipView c={r.chip} />}</span><small>{r.email ?? "—"}</small></span>
-                <span className="c-p">{r.phone ?? "—"}</span>
-                <span className="c-s">{dateCT(r.activationDate)}<small>{r.days != null ? `${r.days} days` : ""}</small></span>
-                <span className={`c-n t-${r.next.tone}`}>{r.next.main}{r.next.sub && <small>{r.next.sub}</small>}</span>
-                <span className={`c-k${r.strikePoints > 0 ? " hot" : " dim"}`}>{strikesLabel(r.strikePoints)}</span>
-                <span className={`c-o${r.absentOwed > 0 ? "" : " dim"}`}>{owedLabel(r.absentOwed)}</span>
-                <span className="c-c" title={r.hasComment ? "Has a comment" : undefined}>{r.hasComment ? "💬" : ""}</span>
-              </button>
-            ))}
-            {list && (
-              <div className="mbr-foot">
-                <span>{list.total ? `Showing ${(list.page - 1) * 25 + 1}–${Math.min(list.page * 25, list.total)} of ${list.total.toLocaleString()}` : "Showing 0"}</span>
-                <span className="mbr-sp" />
-                <button className="mbr-pg" disabled={list.page <= 1} onClick={() => setPage(list.page - 1)} aria-label="Previous page">‹</button>
-                <span>{list.page} of {list.pages}</span>
-                <button className="mbr-pg" disabled={list.page >= list.pages} onClick={() => setPage(list.page + 1)} aria-label="Next page">›</button>
-              </div>
+            {list && list.rows.length > 0 && (
+              <MembersTable rows={list.rows} sort={list.sort} sel={sel} onSel={setSel} rowTestId="member-row"
+                onSort={(k) => { setSort(nextSort(list.sort, k)); setPage(1); }}
+                page={list.page} pages={list.pages} total={list.total} onPage={setPage} />
             )}
           </div>
         )}
         <p className="mbr-fine">
           {list?.source === "mirror" ? `From our copy of MatchDay's member list, synced ${list.syncedAt ? `${dayCT(list.syncedAt)} ${new Date(list.syncedAt).toLocaleTimeString("en-US", { timeZone: "America/Chicago", hour: "numeric", minute: "2-digit" })} CT` : "at an unknown time"}. ` : list ? "Read live from the staging member list. " : ""}
           The list knows prices in whole dollars only; a member at the city plan&apos;s dollars is shown at the plan price, and the panel shows each member&apos;s exact amount.
+          {" "}Paid since start is every membership charge for this membership, tax included, less refunds and chargebacks. Staff marks @playmatchday.com accounts and Test marks @matchday.com accounts; neither counts as paying.
         </p>
       </div>
 
@@ -250,6 +238,70 @@ export default function MembersView() {
       {dlg === "fine" && s && <FineDialog city={city} cityName={cityName} settings={s} onClose={() => setDlg(null)} onResult={(r) => { setDlg(null); afterWrite(r); }} />}
       {result && <ResultDialog r={result} onClose={() => setResult(null)} />}
     </div>
+  );
+}
+
+const sortQs = (s: Sort | null) => (s ? `&sort=${s.key}&dir=${s.dir}` : "");
+/** A click on the sorted column flips it; a click on another sorts it ascending. */
+const nextSort = (cur: Sort | null, key: SortKey): Sort => (cur?.key === key ? { key, dir: cur.dir === "asc" ? "desc" : "asc" } : { key, dir: "asc" });
+
+const COLS: { key: SortKey; label: string; cls: string }[] = [
+  { key: "member", label: "Member", cls: "c-m" }, { key: "phone", label: "Phone", cls: "c-p" },
+  { key: "since", label: "Since", cls: "c-s" }, { key: "duration", label: "Duration", cls: "c-d" },
+  { key: "price", label: "Price", cls: "c-r" }, { key: "next", label: "Next payment", cls: "c-n" },
+  { key: "paid", label: "Paid since start", cls: "c-y" }, { key: "strikes", label: "Strikes", cls: "c-k" },
+];
+
+/* ═══ THE TABLE — every tab and the search results alike ════════════════════════════════════════
+ * Sorting and paging happen on the server over the whole tab or search; this draws one page. */
+function MembersTable({ rows, sort, sel, onSel, onSort, page, pages, total, onPage, showCity, pickedCity, rowTestId }: {
+  rows: ViewRow[]; sort: Sort | null; sel: ViewRow | null; onSel: (r: ViewRow) => void; onSort: (k: SortKey) => void;
+  page: number; pages: number; total: number; onPage: (p: number) => void; showCity?: boolean; pickedCity?: string; rowTestId: string;
+}) {
+  return (
+    <>
+      <div className="mbr-tr mbr-th" data-testid="members-head">
+        {COLS.map((c) => {
+          const on = sort?.key === c.key;
+          return (
+            <button key={c.key} type="button" className={`mbr-sorth ${c.cls}${on ? " on" : ""}`} data-testid={`sort-${c.key}`}
+              aria-sort={on ? (sort!.dir === "asc" ? "ascending" : "descending") : "none"} onClick={() => onSort(c.key)}>
+              {c.label}<i aria-hidden>{on ? (sort!.dir === "asc" ? "▲" : "▼") : ""}</i>
+            </button>
+          );
+        })}
+      </div>
+      {rows.map((r) => (
+        <button key={r.membershipId} className={`mbr-tr${sel?.membershipId === r.membershipId ? " sel" : ""}`} data-testid={rowTestId} onClick={() => onSel(r)}>
+          <span className="c-m">
+            <span className="mbr-nm"><b>{r.name}</b>
+              {r.tag && <span className={`mbr-chip ${r.tag === "Staff" ? "staff" : "test"}`} data-testid="person-tag">{r.tag}</span>}
+              {r.chip && <ChipView c={r.chip} />}
+              {r.custom && r.chip?.label !== "Custom price" && <span className="mbr-chip info">Custom price</span>}
+              {showCity && <span className={`mbr-chip ${r.city === pickedCity ? "city" : "info"}`} data-testid="search-city">{r.cityName}</span>}
+              {r.hasComment && <span title="Has a comment">💬</span>}
+            </span>
+            <small>{r.email ?? "—"}</small>
+          </span>
+          <span className="c-p">{r.phone ?? "—"}</span>
+          <span className="c-s">{dateCT(r.activationDate)}</span>
+          <span className="c-d">{r.duration}</span>
+          <span className="c-r">{r.listPrice ?? "—"}</span>
+          <span className={`c-n t-${r.next.tone}`}>{r.next.main}{r.next.sub && <small>{r.next.sub}</small>}</span>
+          <span className={`c-y${r.paidCents ? "" : " dim"}`}>{r.paidCents != null ? usd(r.paidCents) : "—"}</span>
+          <span className={`c-k${r.strikePoints > 0 ? " hot" : " dim"}`}>{strikesLabel(r.strikePoints)}</span>
+        </button>
+      ))}
+      <div className="mbr-foot" data-testid="members-pager">
+        <span data-testid="members-range">{rangeLabel(page, total)}</span>
+        <span className="mbr-sp" />
+        <button className="mbr-pg" disabled={page <= 1} onClick={() => onPage(page - 1)} aria-label="Previous page">‹ Previous</button>
+        {pageList(page, pages).map((n, i) => n == null
+          ? <span key={`gap${i}`} className="mbr-gap">…</span>
+          : <button key={n} className={`mbr-pg num${n === page ? " on" : ""}`} aria-current={n === page ? "page" : undefined} onClick={() => onPage(n)}>{n}</button>)}
+        <button className="mbr-pg" disabled={page >= pages} onClick={() => onPage(page + 1)} aria-label="Next page">Next ›</button>
+      </div>
+    </>
   );
 }
 
@@ -324,6 +376,7 @@ function MemberPanel({ row, canMember, canManage, onClose, onResult }: { row: Vi
         <div className="mbr-ph"><h2>{row.name}</h2><span className="mbr-sp" /><button className="mbr-x" onClick={onClose} aria-label="Close">✕</button></div>
         <div className="mbr-sub2">{[row.email, row.phone].filter(Boolean).join(" · ")}</div>
         <div className="mbr-chips">
+          {row.tag && <span className={`mbr-chip ${row.tag === "Staff" ? "staff" : "test"}`}>{row.tag}</span>}
           {row.chip && <ChipView c={row.chip} />}
           {row.slug && <span className="mbr-chip muted">{row.slug}</span>}
           <span className="mbr-chip city">{row.cityName}</span>
@@ -352,7 +405,8 @@ function MemberPanel({ row, canMember, canManage, onClose, onResult }: { row: Vi
           </div>
         )}
         <Fact k="Price" v={exactCents != null ? `${usd(exactCents)}/mo (+ tax)` : row.priceDollars != null ? `$${row.priceDollars}/mo (+ tax), whole dollars` : "—"} />
-        <Fact k="Member since" v={`${dateCT(row.activationDate)}${row.days != null ? ` · ${row.days} days` : ""}`} />
+        <Fact k="Member since" v={`${dateCT(row.activationDate)} · ${row.duration}`} />
+        <Fact k="Paid since start" v={row.paidCents != null ? `${usd(row.paidCents)} (incl. tax, net of refunds and chargebacks)` : "—"} />
         {past && <Fact k="Ended" v={row.next.main.replace(/^Ended /, "")} />}
         <Fact k="Card" v={!extras ? "…" : extras.stripe.card ?? (extras.stripe.error ? "Stripe unreadable" : "—")} />
         <Fact k="Absent owed" v={row.absentOwed > 0 ? `$${row.absentOwed} · free spots marked no-show` : "—"} />
@@ -636,7 +690,7 @@ function ResultDialog({ r, onClose }: { r: Result; onClose: () => void }) {
 /* ═══ STYLE — frame 1's tokens ═════════════════════════════════════════════════════════════════ */
 const CSS = [
   ".mbr{display:flex;gap:18px;align-items:flex-start;color:#0b2e22;font-size:13px}",
-  ".mbr-main{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:16px;max-width:820px}",
+  ".mbr-main{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:16px}",
   ".mbr-head{display:flex;gap:10px;align-items:center}",
   ".mbr-head h1{font-size:22px;font-weight:700;margin:0}",
   ".mbr-sp{flex:1 1 auto}",
@@ -666,18 +720,21 @@ const CSS = [
   ".mbr-search{flex:0 1 280px;min-width:180px;background:#fff;border:1px solid #e0e0db;border-radius:8px;padding:8px 12px;font-size:13px}",
   ".mbr-search:focus,.mbr-in:focus,.mbr-ta:focus{outline:none;border-color:#2cdb87}",
   ".mbr-card{background:#fff;border:1px solid #e0e0db;border-radius:12px;overflow:hidden;display:flex;flex-direction:column}",
-  ".mbr-tr{display:flex;align-items:center;padding:12px 16px;border:0;border-top:1px solid #e0e0db;background:#fff;text-align:left;font:inherit;color:inherit;cursor:pointer;width:100%}",
+  ".mbr-tr{display:grid;grid-template-columns:minmax(180px,2.6fr) minmax(100px,1.2fr) minmax(84px,1fr) minmax(64px,.8fr) minmax(60px,.7fr) minmax(96px,1.2fr) minmax(84px,1fr) minmax(52px,.6fr);column-gap:12px;align-items:center;padding:12px 16px;border:0;border-top:1px solid #e0e0db;background:#fff;text-align:left;font:inherit;color:inherit;cursor:pointer;width:100%;box-sizing:border-box}",
   ".mbr-tr:hover{background:#f6f8f7}",
   ".mbr-tr.sel{background:#f0fbf5;box-shadow:inset 3px 0 0 #2cdb87}",
-  ".mbr-th{background:#eef2ef;border-top:0;padding:10px 16px;cursor:default;font-size:10px;font-weight:600;letter-spacing:.6px;color:#8aa59a}",
+  ".mbr-th{background:#eef2ef;border-top:0;padding:8px 16px;cursor:default}",
+  ".mbr-sorth{background:none;border:0;padding:2px 0;font:inherit;font-size:10px;font-weight:600;letter-spacing:.6px;text-transform:uppercase;color:#8aa59a;cursor:pointer;text-align:left;display:flex;gap:4px;align-items:center;white-space:nowrap;overflow:hidden}",
+  ".mbr-sorth:hover,.mbr-sorth.on{color:#0b2e22}",
+  ".mbr-sorth i{font-style:normal;font-size:9px}",
   ".mbr-th:hover{background:#eef2ef}",
   ".mbr-tr>span{display:flex;flex-direction:column;gap:2px;overflow:hidden}",
   ".mbr-tr small,.mbr-who small{font-size:11px;color:#5d7a6f;font-weight:400}",
   ".mbr-tr .c-m small{font-size:12px}",
   ".mbr-tr>span>small,.mbr-tr .mbr-nm b{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}",
-  ".mbr-tr .c-m{padding-right:12px;box-sizing:border-box}",
-  ".c-m{width:240px;flex:none}.c-p{width:120px;flex:none}.c-s{width:110px;flex:none}.c-n{width:120px;flex:none}.c-k{width:70px;flex:none}.c-o{width:60px;flex:none}.c-c{flex:1 1 auto}",
-  ".mbr-nm{display:flex;gap:6px;align-items:center}",
+  ".mbr-tr>span{min-width:0}",
+  ".mbr-nm{display:flex;gap:6px;align-items:center;min-width:0;overflow:hidden}",
+  ".mbr-chip.staff{background:#e8e3fb;color:#4b3a9c}.mbr-chip.test{background:#eef2ef;color:#5d7a6f;border:1px dashed #b9c8c0}",
   ".mbr-nm b,.mbr-who b{font-weight:600}",
   ".dim{color:#8aa59a}.hot{color:#a33a2a;font-weight:600}",
   ".t-warn{color:#8a6a12}.t-bad{color:#a33a2a;font-weight:600}.t-muted{color:#5d7a6f}",
@@ -686,7 +743,9 @@ const CSS = [
   ".mbr-chip.info{background:#e6f4ff;color:#1f5f99}.mbr-chip.muted{background:#eef2ef;color:#5d7a6f}",
   ".mbr-chip.city{background:#e6efea;color:#16794a}",
   ".mbr-foot{display:flex;gap:8px;align-items:center;padding:10px 16px;border-top:1px solid #e0e0db;font-size:12px;color:#5d7a6f}",
-  ".mbr-pg{background:none;border:0;font-size:14px;color:#5d7a6f;cursor:pointer;padding:0 4px}",
+  ".mbr-pg{background:none;border:0;font-size:12px;color:#5d7a6f;cursor:pointer;padding:3px 6px;border-radius:6px}",
+  ".mbr-pg.num.on{background:#063d2c;color:#fff;font-weight:600}",
+  ".mbr-gap{padding:0 2px}",
   ".mbr-pg:disabled{opacity:.35;cursor:default}",
   ".mbr-empty{padding:18px 16px;color:#5d7a6f;border-top:1px solid #e0e0db}",
   ".mbr-qline{padding:12px 16px;font-size:12px;color:#5d7a6f}",

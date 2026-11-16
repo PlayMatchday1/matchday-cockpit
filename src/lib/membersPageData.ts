@@ -17,7 +17,7 @@ import { selectAll } from "./supabasePagination";
 import { apiGet, type MatchdayEnv } from "./matchdayStageApi";
 import { CITY_SCOPES } from "./cityScope";
 import { getStripe } from "./stripePayments";
-import type { MemberRow, RowStripe } from "./membersPageModel";
+import { paidByMembership, type MemberRow, type RowStripe } from "./membersPageModel";
 
 const num = (v: unknown): number | null => { const n = Number(v); return v != null && v !== "" && Number.isFinite(n) ? n : null; };
 const str = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v : null);
@@ -133,6 +133,83 @@ export async function loadRowStripe(sb: SupabaseClient, env: MatchdayEnv, ids: r
     }
   }
   return out;
+}
+
+/* ── EVERY ROW'S STRIPE FACTS AT ONCE ─────────────────────────────────────────────────────────
+ * Sorting by Next payment or Duration runs over a whole tab or a whole search, so the list route reads
+ * both tables whole (a few thousand rows, a handful of pages) instead of per page, and keeps them a
+ * minute. The panel still reads one membership with loadRowStripe. Production only. */
+const STRIPE_ALL_MS = 60_000;
+let stripeAll: { at: number; map: Map<number, RowStripe> } | null = null;
+export async function loadAllRowStripe(sb: SupabaseClient, env: MatchdayEnv, fresh = false): Promise<Map<number, RowStripe>> {
+  if (env !== "production") return new Map();
+  if (!fresh && stripeAll && Date.now() - stripeAll.at < STRIPE_ALL_MS) return stripeAll.map;
+  type End = { membership_id: number; stripe_status: string | null; stripe_ended_at: string | null; stripe_cancel_at: string | null; stripe_cancel_at_period_end: boolean | null; stripe_current_period_end: string | null; fetched_at: string | null };
+  type Unpaid = { invoice_id: string; md_membership_id: number | null; amount_due_cents: number | null; created_at_utc: string; next_payment_attempt_utc: string | null };
+  const [ends, unpaid] = await Promise.all([
+    selectAll<End>(() => sb.from("mdapi_subscription_stripe_end")
+      .select("membership_id,stripe_status,stripe_ended_at,stripe_cancel_at,stripe_cancel_at_period_end,stripe_current_period_end,fetched_at")
+      .order("membership_id")),
+    selectAll<Unpaid>(() => sb.from("stripe_member_unpaid_invoices")
+      .select("invoice_id,md_membership_id,amount_due_cents,created_at_utc,next_payment_attempt_utc")
+      .eq("status", "open").not("md_membership_id", "is", null).order("invoice_id")),
+  ]);
+  const out = new Map<number, RowStripe>();
+  for (const e of ends) {
+    out.set(Number(e.membership_id), {
+      endStatus: e.stripe_status, endedAt: e.stripe_ended_at, cancelAt: e.stripe_cancel_at,
+      cancelAtPeriodEnd: e.stripe_cancel_at_period_end, currentPeriodEnd: e.stripe_current_period_end, endReadAt: e.fetched_at,
+    });
+  }
+  // The newest open invoice per membership, as loadRowStripe keeps it.
+  const newest = new Map<number, Unpaid>();
+  for (const u of unpaid) {
+    const k = Number(u.md_membership_id), cur = newest.get(k);
+    if (!cur || u.created_at_utc > cur.created_at_utc) newest.set(k, u);
+  }
+  for (const [k, u] of newest) {
+    out.set(k, { ...(out.get(k) ?? {}), failedAt: u.created_at_utc, failedAmountCents: num(u.amount_due_cents), nextRetryAt: u.next_payment_attempt_utc });
+  }
+  stripeAll = { at: Date.now(), map: out };
+  return out;
+}
+
+/* ── PAID SINCE START ─────────────────────────────────────────────────────────────────────────
+ * Every paid membership invoice (stripe_member_invoices: md_membership_id, amount as charged with tax,
+ * payment intent), then every refund and dispute in fin_txn, reached through the charge it reverses:
+ * a reversal carries no payment intent of its own (0213), only charge_id, and the invoice rows carry
+ * no charge_id, so the charge row in fin_txn supplies charge -> payment intent. The rule is
+ * paidByMembership (membersPageModel.ts). Kept five minutes: both tables sync every 15. Production only. */
+const PAID_MS = 5 * 60_000;
+let paidCache: { at: number; map: Map<number, number> } | null = null;
+export async function loadPaidSinceStart(sb: SupabaseClient, env: MatchdayEnv, fresh = false): Promise<Map<number, number> | null> {
+  if (env !== "production") return null;
+  if (!fresh && paidCache && Date.now() - paidCache.at < PAID_MS) return paidCache.map;
+  type Inv = { invoice_id: string; md_membership_id: number | null; amount_paid_cents: number; payment_intent_id: string | null };
+  type Rev = { id: number; charge_id: string | null; gross_cents: number };
+  const [inv, rev] = await Promise.all([
+    selectAll<Inv>(() => sb.from("stripe_member_invoices").select("invoice_id,md_membership_id,amount_paid_cents,payment_intent_id")
+      .not("md_membership_id", "is", null).order("invoice_id")),
+    selectAll<Rev>(() => sb.from("fin_txn").select("id,charge_id,gross_cents").in("kind", ["refund", "dispute"])
+      .not("charge_id", "is", null).order("id")),
+  ]);
+  const piOfCharge = new Map<string, string>();
+  const chargeIds = [...new Set(rev.map((r) => r.charge_id as string))];
+  const parts = chunks(chargeIds, 200);
+  for (let i = 0; i < parts.length; i += 4) {
+    const got = await Promise.all(parts.slice(i, i + 4).map((part) =>
+      sb.from("fin_txn").select("charge_id,payment_intent_id").eq("kind", "charge").in("charge_id", part)));
+    for (const { data, error } of got) {
+      if (error) throw new Error(`fin_txn charges: ${error.message}`);
+      for (const c of data ?? []) if (c.charge_id && c.payment_intent_id) piOfCharge.set(String(c.charge_id), String(c.payment_intent_id));
+    }
+  }
+  const map = paidByMembership({
+    invoices: inv.map((i) => ({ membershipId: Number(i.md_membership_id), cents: Number(i.amount_paid_cents) || 0, paymentIntent: i.payment_intent_id })),
+    reversals: rev.map((r) => ({ paymentIntent: piOfCharge.get(String(r.charge_id)) ?? null, cents: Number(r.gross_cents) || 0 })),
+  });
+  paidCache = { at: Date.now(), map };
+  return map;
 }
 
 /* ── CITY SETTINGS, READ LIVE ─────────────────────────────────────────────────────────────────

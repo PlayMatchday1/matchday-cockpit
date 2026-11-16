@@ -9406,3 +9406,32 @@ is Ryan's, and the older entries it supersedes are named so they are not read as
 - **Shown on the Members page:** Austin's Cancelling tab, 34 rows, read 30 "Ends Nov 30" and 4 "Ends Dec 31" on
   production; the panels for 41910 and 39534 read "Last charge $71.99 (incl. tax) on Nov 1 · Ends Nov 30 / Dec 31 ·
   Stripe scheduled ✓".
+
+## Paid since start, and how fresh the Members page is (2026-11-16)
+
+Read on production's database copy, 2026-11-16, no MatchDay API calls.
+
+- **Every paid membership invoice is in `stripe_member_invoices` with its membership id.** 10,658 rows, all
+  `status = paid`, every one with `md_membership_id`, created 2024-02-29 to 2026-11-16; the oldest membership's
+  `activation_date` is also 2024-02-29. 1,239 rows are $0 (amount 0, no payment intent); every row above $0 has
+  a payment intent. `amount_paid_cents` includes tax, as charged.
+- **Coverage, checked against current members:** of 361 ACTIVE memberships, 298 have one paid invoice per month
+  since activation (or one fewer, the month not yet billed). The 63 that fall short are 36 staff or test
+  accounts (@playmatchday.com, @matchday.com) and 27 at price 0. No paying non-staff member falls short.
+- **Refunds and chargebacks are not on the invoice row** (`charge_id` is empty on all 10,658). They are reached
+  through `fin_txn`: invoice `payment_intent_id` → the `kind = charge` row's `charge_id` → `kind in (refund,
+  dispute)` rows on that `charge_id` (reversals carry no payment intent of their own, 0213). On membership
+  charges: 21 refunds totalling −$1,146.96 and 119 dispute rows netting −$4,960.75 (a won dispute is a positive
+  row). The rule is `paidByMembership` (`src/lib/membersPageModel.ts`); the read is `loadPaidSinceStart`
+  (`src/lib/membersPageData.ts`).
+- **Staff on the Members list:** the list never excluded them; only the paying count did (`INTERNAL_EMAIL_RX`,
+  `src/lib/membershipStats.ts`). Current memberships on 2026-11-16: 10 @playmatchday.com (tagged Staff), 33
+  @matchday.com (tagged Test).
+- **The daily subscriptions sync:** `/api/sync/job/subscriptions` at 10:40 UTC walks every city × ACTIVE,
+  CANCELED, PAST_DUE; the 2026-11-11 run made 81 requests in 110 s (`fin_sync_log`, `api_calls` 81). The new
+  current-members pass (`/api/sync/job/subscriptions-current`, every 15 minutes, ACTIVE and PAST_DUE only, one
+  request every 2 s) logs as `mdapi-subscriptions-current` (migration 0273). Ended memberships still move only
+  at the 10:40 walk.
+- **The Stripe syncs behind the page are short:** `stripe-people/recent` (customers 1-2 s, member invoices 6-11
+  s) and `fin-txn/recent` (19-22 s), runs of 2026-11-16 15:50-21:20 UTC. Both moved from hourly to every 15
+  minutes.
