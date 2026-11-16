@@ -181,13 +181,27 @@ export type MdapiSubscriptionsSyncResult = {
   durationMs: number;
 };
 
+/* ── THE CURRENT-MEMBERS PASS (Ryan, 2026-11-16) ─────────────────────────────────────────────
+ * Every 15 minutes (/api/sync/job/subscriptions-current), so a new member, an in-app cancel or a card
+ * that failed shows on the Members page within minutes instead of the next morning. It walks ACTIVE
+ * and PAST_DUE only (both strict filters, about 20 requests), one request every 2 seconds, and never
+ * the CANCELED dump. A membership that has ENDED leaves the ACTIVE list and is simply not returned:
+ * this pass never infers "ended" from an absence (that is how the June 1 2026 mass flip happened), so
+ * an ended membership still moves to Past at the 10:40 UTC full walk. Upsert only; nothing is deleted.
+ * The collapse breaker below still applies: the member base it compares is exactly what this reads. */
+export const CURRENT_STATUSES = ["ACTIVE", "PAST_DUE"] as const;
+export const CURRENT_PACE_MS = 2000;
+
 export async function syncMdapiSubscriptions(
   supabase: SupabaseClient,
+  opts: { mode?: "full" | "current" } = {},
 ): Promise<MdapiSubscriptionsSyncResult> {
   const startedAt = Date.now();
-  // PACED (2026-10-21): one request a second, no retries, the first error stops the run. What was
-  // read before it is still written (upsert only), then the run fails.
-  const client = getPacedClient();
+  const current = opts.mode === "current";
+  const statuses: readonly string[] = current ? CURRENT_STATUSES : STATUSES;
+  // PACED (2026-10-21): one request a second (the current pass: one every 2 seconds), no retries, the
+  // first error stops the run. What was read before it is still written (upsert only), then the run fails.
+  const client = getPacedClient(current ? { paceMs: CURRENT_PACE_MS } : {});
   let stoppedBy: string | null = null;
 
   // --- 1. Enumerate cities ---
@@ -238,7 +252,7 @@ export async function syncMdapiSubscriptions(
   const syncedAt = new Date().toISOString();
 
   walk: for (const cityAbbr of cityAbbrs) {
-    for (const status of STATUSES) {
+    for (const status of statuses) {
       const loopKey = `${cityAbbr}/${status}`;
       for (let page = 1; ; page++) {
         let res: ApiPage;
@@ -425,7 +439,7 @@ export async function syncMdapiSubscriptions(
     uniqueMemberships: dbRows.length,
     upserted,
     cities: cityAbbrs.length,
-    statuses: STATUSES.length,
+    statuses: statuses.length,
     apiCalls: client.calls,
     loopErrors,
     loopSanity: sanity,

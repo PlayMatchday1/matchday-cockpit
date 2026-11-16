@@ -17,7 +17,7 @@ import { syncLogWritable, type SourceName } from "./syncLogging";
  *  mdapi-users-lens-snapshot (its nightly rebuild was removed on purpose). */
 export const WATCHED_SOURCES: SourceName[] = [
   "stripe-api", "google-calendar", "mdapi-users", "telnyx-sms",
-  "mdapi-subscriptions", "membership-snapshots", "membership-prices", "mdapi-promocodes",
+  "mdapi-subscriptions", "mdapi-subscriptions-current", "membership-snapshots", "membership-prices", "mdapi-promocodes",
   "mdapi-matches", "mdapi-reviews", "firstmatch-ledger", "manager-pay-recompute",
   "play-installs", "app-store-installs", "mdapi-users-full", "meta-ad-spend", "wp-submissions",
   "stripe-txn", "stripe-customers", "stripe-member-invoices", "gsc-pages", "ga4-web", "ga4-app", "asc-analytics",

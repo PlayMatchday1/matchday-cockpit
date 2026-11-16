@@ -19,6 +19,7 @@ export type SourceName =
   | "stripe-api"
   | "mdapi-reviews"
   | "mdapi-subscriptions"
+  | "mdapi-subscriptions-current"
   | "mdapi-promocodes"
   | "mdapi-matches"
   | "mdapi-users"
