@@ -1,6 +1,6 @@
 // POST|GET /api/sync/job/subscriptions-current: every 15 minutes (vercel.json), the current-members
-// pass of the subscriptions sync (Ryan, 2026-11-16). ACTIVE and PAST_DUE only, one request every 2
-// seconds, about 20 requests a run; ended memberships still move at the 10:40 UTC full walk
+// pass of the subscriptions sync (Ryan, 2026-11-16). ACTIVE only, one request every 2 seconds, about 12
+// requests a run; ended and past-due memberships move at the 10:40 UTC full walk
 // (lib/mdapiSubscriptionsSync.ts, "THE CURRENT-MEMBERS PASS"). Logs as mdapi-subscriptions-current
 // (migration 0273) so its clean runs never hide a failing nightly. No snapshots: those stay nightly.
 // CRON_SECRET only.

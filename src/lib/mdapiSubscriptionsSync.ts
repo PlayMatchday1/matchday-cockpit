@@ -183,13 +183,21 @@ export type MdapiSubscriptionsSyncResult = {
 
 /* ── THE CURRENT-MEMBERS PASS (Ryan, 2026-11-16) ─────────────────────────────────────────────
  * Every 15 minutes (/api/sync/job/subscriptions-current), so a new member, an in-app cancel or a card
- * that failed shows on the Members page within minutes instead of the next morning. It walks ACTIVE
- * and PAST_DUE only (both strict filters, about 20 requests), one request every 2 seconds, and never
- * the CANCELED dump. A membership that has ENDED leaves the ACTIVE list and is simply not returned:
+ * shows on the Members page within minutes instead of the next morning. It walks ACTIVE only, one
+ * request every 2 seconds (about 12 requests), and never the CANCELED dump.
+ *
+ * NOT PAST_DUE (2026-11-16). The first run walked ACTIVE and PAST_DUE and made 47 requests, writing 2,669
+ * CANCELED rows, so one of those two filters returned the whole CANCELED + PAST_DUE dump (which one is
+ * UNKNOWN; docs/matchday-api-facts.md, "Paid since start, and how fresh"). Ryan's rule is to go easy on the API,
+ * so a card that fails moves to Past due at the 10:40 UTC walk, like an ended membership.
+ * IF ACTIVE EVER STOPS NARROWING, this pass stops at the first page carrying a non-ACTIVE row rather
+ * than walk the dump every 15 minutes, and the run is logged as failed.
+ *
+ * A membership that has ENDED leaves the ACTIVE list and is simply not returned:
  * this pass never infers "ended" from an absence (that is how the June 1 2026 mass flip happened), so
  * an ended membership still moves to Past at the 10:40 UTC full walk. Upsert only; nothing is deleted.
  * The collapse breaker below still applies: the member base it compares is exactly what this reads. */
-export const CURRENT_STATUSES = ["ACTIVE", "PAST_DUE"] as const;
+export const CURRENT_STATUSES = ["ACTIVE"] as const;
 export const CURRENT_PACE_MS = 2000;
 
 export async function syncMdapiSubscriptions(
@@ -281,6 +289,10 @@ export async function syncMdapiSubscriptions(
           break walk;
         }
         const rows = Array.isArray(res?.data) ? res.data : [];
+        if (current && rows.some((r) => r.status !== status)) {
+          stoppedBy = `${loopKey}: the ${status} filter returned other statuses; the current-members pass stops rather than walk the full list`;
+          break walk;
+        }
         for (const r of rows) {
           if (typeof r.membershipId !== "number" || typeof r.userId !== "number") {
             // Skip malformed rows rather than crashing the upsert.

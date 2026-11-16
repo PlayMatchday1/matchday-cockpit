@@ -9435,3 +9435,9 @@ Read on production's database copy, 2026-11-16, no MatchDay API calls.
 - **The Stripe syncs behind the page are short:** `stripe-people/recent` (customers 1-2 s, member invoices 6-11
   s) and `fin-txn/recent` (19-22 s), runs of 2026-11-16 15:50-21:20 UTC. Both moved from hourly to every 15
   minutes.
+- **One of the ACTIVE / PAST_DUE filters on `GET /admin/subscriptions` no longer narrows.** The first
+  current-members run (2026-11-16 22:02 UTC, ACTIVE and PAST_DUE loops only, no CANCELED loop) made 47 requests
+  and wrote 3,034 rows: 364 ACTIVE, 1 PAST_DUE and 2,669 CANCELED. A loop that narrowed could not return a
+  CANCELED row, so at least one returned the CANCELED + PAST_DUE dump. WHICH ONE is UNKNOWN (the run does not
+  log per-loop counts). The pass now walks ACTIVE only and stops at the first page carrying a non-ACTIVE row,
+  so its next run answers it: about 12 requests and a clean finish means ACTIVE narrows and PAST_DUE does not.

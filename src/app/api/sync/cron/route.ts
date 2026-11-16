@@ -129,7 +129,7 @@ export async function POST(req: Request) {
   // This job used to run fifteen steps in its 300s and from Oct 22 the platform killed it mid-step.
   // The slow steps now run on their own schedules (vercel.json, lib/syncJob.ts):
   //   10:40  /api/sync/job/subscriptions   mdapi-subscriptions, membership-snapshots, membership-prices
-  //   :02/:17/:32/:47  /api/sync/job/subscriptions-current   current members only (ACTIVE, PAST_DUE)
+  //   :02/:17/:32/:47  /api/sync/job/subscriptions-current   current members only (ACTIVE)
   //   10:50  /api/sync/job/promocodes      mdapi-promocodes
   //   11:10  /api/sync/job/matches         mdapi-matches (and mdapi-reviews from its rosters)
   //   11:20  /api/sync/job/after-matches   firstmatch-ledger, manager-pay-recompute
