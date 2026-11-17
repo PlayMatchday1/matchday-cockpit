@@ -440,11 +440,12 @@ export const rangeLabel = (page: number, total: number, size = PAGE_SIZE): strin
 
 /* ═══ CSV — THE CURRENT FILTER, EVERY PAGE OF IT ════════════════════════════════════════════════ */
 /** The table's columns (Ryan, 2026-11-16), with the Member cell split into its parts so a sheet can
- *  filter on them, and the member id first so a row can be found again. Cancel reason and Comment
- *  go back on the end (Ryan, 2026-11-16): the export carried them before the redesign. */
+ *  filter on them, and the member id first so a row can be found again. Cancel date, Cancel reason and
+ *  Comment go on the end (Ryan, 2026-11-16); the last two were in the export before the redesign.
+ *  Cancel date is when the member cancelled (canceledAt), blank if they have not. */
 export const CSV_HEADERS = [
   "Member ID", "Name", "Email", "Tag", "Status", "City", "Phone", "Since", "Duration", "Price",
-  "Next payment", "Paid since start", "Strikes", "Cancel reason", "Comment",
+  "Next payment", "Paid since start", "Strikes", "Cancel date", "Cancel reason", "Comment",
 ];
 const cell = (v: unknown): string => {
   const s = v == null ? "" : String(v);
@@ -459,7 +460,8 @@ export function membersCsv(rows: readonly (MemberRow & RowView & { cityName?: st
     lines.push([
       r.slug, r.name, r.email, r.tag ?? "", r.chip?.label ?? "", r.cityName ?? r.city, r.phone, dateCT(r.activationDate),
       r.duration, r.listPrice ?? "", [r.next.main, r.next.sub].filter(Boolean).join(" · "),
-      r.paidCents != null ? usd(r.paidCents) : "", r.strikePoints, r.cancelReason, r.comment,
+      r.paidCents != null ? usd(r.paidCents) : "", r.strikePoints,
+      r.canceledAt ? dateCT(r.canceledAt) : "", r.cancelReason, r.comment,
     ].map(cell).join(","));
   }
   return lines.join("\r\n") + "\r\n";
