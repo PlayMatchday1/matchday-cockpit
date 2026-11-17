@@ -3,9 +3,15 @@
 // math and src/lib/healthLoad.ts for the read (the Gameday Ops board's own live read and shaping).
 //
 //   GET ?period=week|month&start=YYYY-MM-DD[&city=<name>][&fresh=1]
-//       fresh=1 (pull to refresh): the chosen period is read live and replaces its cached copy.
+//       fresh=1 (pull to refresh): the CURRENT period is read again when its copy is over a minute
+//       old (healthLoad). An ended period is never re-read.
 //       start defaults to the last full week, or the current month so far; forward stops at the
 //       current period. city: just that city (404 when it is not in the caller's view).
+//
+// THE SAME CACHE AS EVERYTHING ELSE, NEVER A SIX-PERIOD READ (Ryan, 2026-11-17): the shown period comes
+// from the cache or, when the cache does not hold it, one read. The five trend periods come from the
+// cache only; any it does not hold yet are read AFTER the response, one at a time through healthLoad's
+// queue, stopping at the first failure, and show as gaps until then.
 //
 // ACCESS: Match Ops, through the app's read check. A city-confined account reads only its own city,
 // filtered on the server before anything is counted; the request cannot name another.
@@ -13,7 +19,8 @@
 import { authenticateApp, readRefusal } from "@/lib/appAuth";
 import { isEnv } from "@/lib/appLive";
 import { todayBusinessDate } from "@/lib/goalPace";
-import { loadPeriod } from "@/lib/healthLoad";
+import { after } from "next/server";
+import { cachedPeriod, loadPeriod, type LoadedPeriod } from "@/lib/healthLoad";
 import { defaultStart, periodOf, stepPeriod, type Period } from "@/lib/healthModel";
 import { reviewMasked } from "@/lib/reviewAccount";
 
@@ -44,12 +51,23 @@ async function getRoute(req: Request, ctx: { params: Promise<{ env: string }> })
     const periods: Period[] = [p];
     for (let i = 1; i < TREND; i++) periods.unshift(stepPeriod(periods[0], -1, today));
     const fresh = q.get("fresh") === "1";
-    const loaded = await Promise.all(periods.map((x, i) => loadPeriod(auth.supabase, env, x.from, x.to, scope, x.current, fresh && i === periods.length - 1)));
-    const now = loaded[loaded.length - 1], prev = loaded.length > 1 ? loaded[loaded.length - 2] : null;
+    const shown = await loadPeriod(auth.supabase, env, p.from, p.to, scope, p.current, fresh);
+    const before = await Promise.all(periods.slice(0, -1).map((x) => cachedPeriod(auth.supabase, env, x.from, x.to, scope, x.current)));
+    const missing = periods.slice(0, -1).filter((_, i) => before[i] == null);
+    if (missing.length) {
+      after(async () => {
+        for (const x of missing) {
+          try { await loadPeriod(auth.supabase, env, x.from, x.to, null, x.current); }
+          catch (e) { console.warn(`[app-health] trend fill stopped at ${x.from}: ${e instanceof Error ? e.message.split(" Body:")[0] : String(e)}`); return; }
+        }
+      });
+    }
+    const loaded: (LoadedPeriod | null)[] = [...before, shown];
+    const now = shown, prev = loaded.length > 1 ? loaded[loaded.length - 2] : null;
     const next = stepPeriod(p, 1, today);
     const label = p.current ? "So far" : kind === "week" ? (stepPeriod(p, 1, today).current ? "Last full week" : null) : (next.current ? "Last full month" : null);
     const trendOf = (city: string | null) => loaded.map((x, i) => {
-      const r = city == null ? x.total : x.cities.find((c) => c.city === city) ?? null;
+      const r = x == null ? null : city == null ? x.total : x.cities.find((c) => c.city === city) ?? null;
       return { from: periods[i].from, cancelRate: r?.cancelRate ?? null, fillRate: r?.fillRate ?? null, scheduled: r?.scheduled ?? 0, capacity: r?.capacity ?? 0 };
     });
     let cities = now.cities.map((c) => ({ ...c, trend: trendOf(c.city) }));
@@ -67,7 +85,7 @@ async function getRoute(req: Request, ctx: { params: Promise<{ env: string }> })
       spotsError: now.spotsError,
       // readAt: when the shown period was read from MatchDay (it can be up to 5 minutes old).
       readAt: now.readAt,
-      timing: { ms: Date.now() - t0, cached: loaded.map((x) => x.cached) },
+      timing: { ms: Date.now() - t0, cached: [...before.map((x) => x != null), shown.cached], filling: missing.length },
     }, { headers: { "Cache-Control": "no-store" } });
   } catch (e) {
     return Response.json({ error: e instanceof Error ? e.message : String(e) }, { status: 502 });

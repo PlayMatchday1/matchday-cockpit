@@ -2,7 +2,12 @@
 // waits on them. CRON_SECRET only; nothing a person can call. Every 5 minutes (vercel.json).
 //
 //   HEALTH    each default view's periods (the current week and month, and the ended periods of
-//             their trends), for all cities and for each city a Match Ops account is confined to.
+//             their trends), ONCE for all cities (a confined account's view is cut from the same
+//             copy), one range after another, stopping at the first failure. Ended periods are read
+//             only when the cache does not hold them yet; the current ones refresh once stale. Through
+//             healthLoad's queue: one request a second, none while a failure is backing off.
+//             (Ryan, 2026-11-17: the old per-scope, parallel version took production down. This job is
+//             out of vercel.json until Ryan turns it back on.)
 //   PLAYERS   the default period of each kind and the five before it, for both pages.
 //   GOALS     the year's field rollup (src/lib/fieldGoalsRollup.ts) that Field Goals and Goals read.
 //
@@ -15,9 +20,8 @@
 import { makeServerClient } from "@/lib/supabaseServer";
 import { fieldGoalsRollup } from "@/lib/fieldGoalsRollup";
 import { GOAL_YEAR, businessYesterday } from "@/lib/fieldGoals";
-import { confinedCity } from "@/lib/cityConfinement";
 import { todayBusinessDate } from "@/lib/goalPace";
-import { loadPeriod } from "@/lib/healthLoad";
+import { healthBackoff, healthRequestsMade, loadPeriod } from "@/lib/healthLoad";
 import { defaultStart, periodOf, stepPeriod, type Period } from "@/lib/healthModel";
 import { acquisitionPeriod, activityPeriods, androidPeriod, periodOf as playersPeriodOf, stepOf, type Kind } from "@/lib/appPlayers";
 
@@ -42,13 +46,7 @@ export async function POST(req: Request) {
     try { await f(); done.push(`${label} ${Date.now() - s}ms`); } catch (e) { failed.push(`${label}: ${e instanceof Error ? e.message : String(e)}`); }
   };
 
-  // The city scopes in use: every Match Ops account confined to a city, plus all cities.
-  const users = await sb.from("app_users").select("*");
-  const scopes: (string | null)[] = [null, ...new Set((users.data ?? [])
-    .filter((u) => u.can_access_matchops === true && u.is_service_account !== true)
-    .map((u) => confinedCity(u)).filter((c): c is string => c != null))];
-
-  // HEALTH: each default view's six periods; the current ones live (fresh), the rest from the cache.
+  // HEALTH: each default view's periods, all cities, each range once.
   const healthViews: Period[][] = (["week", "month"] as const).map((kind) => {
     const ps: Period[] = [periodOf(kind, defaultStart(kind, today), today)];
     for (let i = 1; i < TREND; i++) ps.unshift(stepPeriod(ps[0], -1, today));
@@ -56,11 +54,15 @@ export async function POST(req: Request) {
     if (next.from !== ps[ps.length - 1].from) ps.push(next);   // the current week, after the last full one
     return ps;
   });
+  const ranges = [...new Map(healthViews.flat().map((p) => [`${p.from}:${p.to}:${p.current}`, p])).values()];
+  const requestsBefore = healthRequestsMade();
   const health = async () => {
-    for (const scope of scopes) {
-      for (const ps of healthViews) {
-        await Promise.all(ps.map((p) => run(`health ${scope ?? "all"} ${p.from}`, () => loadPeriod(sb, "production", p.from, p.to, scope, p.current))));
-      }
+    const paused = healthBackoff("production");
+    if (paused) { failed.push(`health skipped: paused until ${new Date(paused.until).toISOString()}`); return; }
+    for (const p of ranges) {
+      const before = failed.length;
+      await run(`health ${p.from}`, () => loadPeriod(sb, "production", p.from, p.to, null, p.current));
+      if (failed.length > before) return;   // the first failure stops Health for this run
     }
   };
 
@@ -77,8 +79,9 @@ export async function POST(req: Request) {
   }));
 
   await Promise.all([health(), players(), run("goals rollup", () => fieldGoalsRollup(sb, GOAL_YEAR, businessYesterday(new Date())))]);
-  console.log(`[app-warm] ${done.length} warmed, ${failed.length} failed in ${Date.now() - t0} ms; scopes ${scopes.map((x) => x ?? "all").join(",")}${failed.length ? `; first failure: ${failed[0]}` : ""}`);
-  return Response.json({ ok: failed.length === 0, ms: Date.now() - t0, scopes: scopes.map((s) => s ?? "all"), done: done.length, failed });
+  const apiRequests = healthRequestsMade() - requestsBefore;
+  console.log(`[app-warm] ${done.length} warmed, ${failed.length} failed in ${Date.now() - t0} ms; ${apiRequests} MatchDay requests${failed.length ? `; first failure: ${failed[0].split(" Body:")[0]}` : ""}`);
+  return Response.json({ ok: failed.length === 0, ms: Date.now() - t0, apiRequests, done: done.length, failed: failed.map((f) => f.split(" Body:")[0]) });
 }
 
 export const GET = POST;

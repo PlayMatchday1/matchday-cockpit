@@ -141,10 +141,6 @@
       "schedule": "25 9 * * *"
     },
     {
-      "path": "/api/app/cron/warm",
-      "schedule": "*/5 * * * *"
-    },
-    {
       "path": "/api/sync/credit-balance-snapshot",
       "schedule": "15 8 * * *"
     },
