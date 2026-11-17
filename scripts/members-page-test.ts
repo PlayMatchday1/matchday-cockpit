@@ -15,6 +15,7 @@ import {
   STRIKE_BACKEND_FIX_LIVE, STRIKE_REMOVE_OFF_REASON, type MemberRow, type RowStripe,
 } from "../src/lib/membersPageModel";
 import { priceRefusal, endRefusal, centsFromDollars } from "../src/lib/membershipAdminModel";
+import { isFakeAccountEmail } from "../src/lib/membershipStats";
 import { strikeControl } from "../src/lib/playerLookupModel";
 import { planSubEnds, endRowFrom, isEndCandidate } from "../src/lib/stripeSubEnds";
 
@@ -122,7 +123,12 @@ is("a current member's duration runs to now", durationDays(M({ activationDate: "
 is("a past member's duration runs to Stripe's end, not to now", durationDays(ROWS[3], { endedAt: "2024-04-01T15:00:00Z" }, NOW), 31);
 is("  without Stripe's end, to MatchDay's cancel date", durationDays(ROWS[8], undefined, NOW), 152);
 is("@playmatchday.com is Staff", personTag("ryan@playmatchday.com"), "Staff");
-is("@matchday.com is Test", personTag("qa+1@MatchDay.com"), "Test");
+/* CHANGED 2026-11-16 (Ryan): @matchday.com accounts are fake players, not members. There is no Test
+ * tag; loadMemberRows drops them before any tab, search, count or CSV (membershipStats isFakeAccountEmail). */
+is("@matchday.com gets no tag (it never reaches the page)", personTag("qa+1@MatchDay.com"), null);
+yes("@matchday.com is a fake account", isFakeAccountEmail("qa+1@MatchDay.com"));
+yes("  CONTROL: @playmatchday.com is not (staff stay listed)", !isFakeAccountEmail("ryan@playmatchday.com"));
+yes("  CONTROL: an ordinary address is not", !isFakeAccountEmail("hudson@gmail.com") && !isFakeAccountEmail(null));
 is("CONTROL: a player is neither", personTag("kofi.m@example.com"), null);
 is("CONTROL: a lookalike domain is neither", personTag("x@notmatchday.com"), null);
 const paid = paidByMembership({

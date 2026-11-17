@@ -16,6 +16,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { selectAll } from "./supabasePagination";
 import { apiGet, type MatchdayEnv } from "./matchdayStageApi";
 import { CITY_SCOPES } from "./cityScope";
+import { isFakeAccountEmail } from "./membershipStats";
 import { getStripe } from "./stripePayments";
 import { paidByMembership, type MemberRow, type RowStripe } from "./membersPageModel";
 
@@ -72,6 +73,9 @@ export async function loadMemberRows(env: MatchdayEnv, sb: SupabaseClient, fresh
     rows = await walkStagingList(env);
     syncedAt = new Date().toISOString();
   }
+  // @matchday.com accounts are fake players with $0 memberships kept only for the gold badge; they
+  // are not members (Ryan, 2026-11-16). Dropped here, so no tab, search, count, CSV or panel sees them.
+  rows = rows.filter((r) => !isFakeAccountEmail(r.email));
   cache.set(env, { at: Date.now(), rows, syncedAt });
   return { rows, syncedAt, source: env === "production" ? "mirror" : "staging-api" };
 }

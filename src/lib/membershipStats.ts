@@ -7,6 +7,15 @@ import { cityFromAbbr } from "./cityMap";
  * members for a month. */
 export const INTERNAL_EMAIL_RX = /@matchday\.|@playmatchday\./i;
 
+/* FAKE ACCOUNTS ARE NOT MEMBERS (Ryan, 2026-11-16). @matchday.com accounts are fake players; they
+ * hold $0 memberships only so they show gold in the app, and must never appear as members anywhere:
+ * not listed, not counted, not in membership revenue. The memberships stay active in MatchDay and
+ * Stripe on purpose. Staff (@playmatchday.com) are real people and are NOT matched here; they stay
+ * listed and out of the paying count through INTERNAL_EMAIL_RX. The "@" before "matchday" is what
+ * keeps playmatchday.com out of this test. */
+export const FAKE_ACCOUNT_EMAIL_RX = /@matchday\./i;
+export const isFakeAccountEmail = (email: string | null | undefined): boolean => !!email && FAKE_ACCOUNT_EMAIL_RX.test(email);
+
 // Structural subset that all membership predicates need. FinMember
 // (read path) and MemberRow (import path before insert, no id yet)
 // both satisfy this — lets us compute snapshots from either side.

@@ -228,7 +228,7 @@ export default function MembersView() {
         <p className="mbr-fine">
           {list?.source === "mirror" ? `From our copy of MatchDay's member list, synced ${list.syncedAt ? `${dayCT(list.syncedAt)} ${new Date(list.syncedAt).toLocaleTimeString("en-US", { timeZone: "America/Chicago", hour: "numeric", minute: "2-digit" })} CT` : "at an unknown time"}. ` : list ? "Read live from the staging member list. " : ""}
           The list knows prices in whole dollars only; a member at the city plan&apos;s dollars is shown at the plan price, and the panel shows each member&apos;s exact amount.
-          {" "}Paid since start is every membership charge for this membership, tax included, less refunds and chargebacks. Staff marks @playmatchday.com accounts and Test marks @matchday.com accounts; neither counts as paying.
+          {" "}Paid since start is every membership charge for this membership, tax included, less refunds and chargebacks. Staff marks @playmatchday.com accounts, which do not count as paying. @matchday.com accounts are fake players and are left out entirely.
         </p>
       </div>
 

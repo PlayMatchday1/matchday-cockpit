@@ -18,7 +18,7 @@
 import { authenticateCapability } from "@/lib/capabilityAuth";
 import { includedLinks } from "@/lib/venueLinkFilter";
 import { assertScope } from "@/lib/cityConfinement";
-import { countActiveMembers } from "@/lib/membershipStats";
+import { countActiveMembers, isFakeAccountEmail } from "@/lib/membershipStats";
 import { makeServerClient } from "@/lib/supabaseServer";
 import { fetchLegacyMatchRegistrations, loadMembershipWindowsByUserId } from "@/lib/mdapiMatchesRead";
 import { classify, CHURN_DAYS, type SpotRow, type MonthKey, monthsFrom, buildMemberShare, MONTHS_SHORT } from "@/lib/membershipModel";
@@ -231,7 +231,7 @@ export async function GET(req: Request) {
     }
     /* TWO NUMBERS FROM ONE FETCH, and they are DIFFERENT QUESTIONS said out loud:
      *
-     *   activeMembers      — every row with status ACTIVE. 455 today. A denominator: it includes
+     *   activeMembers      — every row with status ACTIVE except @matchday.com fake accounts. A denominator: it includes
      *                        64 subscriptions priced at 0 and 40 @playmatchday.com staff accounts.
      *                        The chart line says so; it is not the headline.
      *   activeMembersPaid  — paying, external, activated. 387 today. THE headline, and the same
@@ -243,7 +243,8 @@ export async function GET(req: Request) {
      * month is recomputed nightly, so the tile was showing last night's recomputation while Home
      * showed this second — one number in name and two in practice, on top of the predicate gap.
      * The monthly BARS still read the snapshot series; those are history and should not move. */
-    const activeMembers = subs.filter((s) => s.status === "ACTIVE").length;
+    // @matchday.com accounts are fake players, not members, even in the wider set (Ryan, 2026-11-16).
+    const activeMembers = subs.filter((s) => s.status === "ACTIVE" && !isFakeAccountEmail(s.member_email)).length;
     const activeMembersPaid = countActiveMembers(subs, new Date());
     /* THE FIELD FILTER CANNOT REACH THIS NUMBER, and that is a property of the data, not a bug to
      * fix here: mdapi_subscriptions has city_identifier and NO field column. A membership is

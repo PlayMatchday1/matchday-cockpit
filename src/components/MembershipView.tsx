@@ -27,7 +27,7 @@ import {
 
 type Payload = {
   months: string[]; rows: SpotRow[];
-  /* activeMembers      — EVERY row with status ACTIVE (455). The wider set: includes comped and
+  /* activeMembers      — EVERY row with status ACTIVE except @matchday.com fake accounts. The wider set: includes comped and
    *                      staff. Drawn on the all-time chart line, never as a headline.
    * activeMembersPaid  — paying, external, activated (387). THE headline, and the identical
    *                      function the Home tile calls. See membership-parity-test.ts. */
@@ -353,7 +353,7 @@ function AllTime({ points, live }: { points: ActivePoint[]; live: number | null 
               accounts. A denominator, not a headline — it used to read "active live today", which
               is the same words as the KPI for a different population. */}
           {live != null && live !== last.value && (
-            <> · <b>{num(live)}</b> all ACTIVE subscriptions, comped and staff included</>
+            <> · <b>{num(live)}</b> all ACTIVE subscriptions, comped and staff included, fake accounts left out</>
           )}
           {" "}· click any point for its figure
         </div>

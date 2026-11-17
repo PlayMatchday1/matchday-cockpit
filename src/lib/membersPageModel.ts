@@ -250,14 +250,12 @@ export function durationLabel(days: number | null): string {
 }
 
 /* ═══ STAFF AND TEST ACCOUNTS ═══════════════════════════════════════════════════════════════════
- * Shown in every list with a tag, never hidden (Ryan, 2026-11-16): @playmatchday.com is Staff,
- * @matchday.com is Test. Both stay out of the paying count (membershipStats INTERNAL_EMAIL_RX). */
-export type PersonTag = "Staff" | "Test" | null;
+ * Staff (@playmatchday.com) are shown in every list with a tag and stay out of the paying count
+ * (membershipStats INTERNAL_EMAIL_RX). @matchday.com accounts are fake players, not members, and
+ * never reach this page: loadMemberRows drops them (Ryan, 2026-11-16), so there is no Test tag. */
+export type PersonTag = "Staff" | null;
 export function personTag(email: string | null | undefined): PersonTag {
-  const e = (email ?? "").trim();
-  if (/@playmatchday\./i.test(e)) return "Staff";
-  if (/@matchday\./i.test(e)) return "Test";
-  return null;
+  return /@playmatchday\./i.test((email ?? "").trim()) ? "Staff" : null;
 }
 
 /* ═══ PAID SINCE START ═══════════════════════════════════════════════════════════════════════════
