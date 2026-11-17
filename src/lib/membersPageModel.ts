@@ -298,7 +298,9 @@ export function rowView(r: MemberRow, s: RowStripe | undefined, paidCents: numbe
 /* ═══ SORTING — EVERY COLUMN, ACROSS EVERY PAGE ══════════════════════════════════════════════════
  * Done on the server over the whole tab (or the whole search), then paged. Empty values sort last
  * in either direction; ties fall back to the membership id so a page boundary never moves. */
-export const SORT_KEYS = ["member", "phone", "since", "duration", "price", "next", "paid", "strikes"] as const;
+export const SORT_KEYS = ["member", "city", "phone", "since", "duration", "price", "next", "paid", "strikes", "canceled", "reason", "comment"] as const;
+/** The tabs that show Cancel date, Cancel reason and Comment, with Phone dropped to make room (Ryan, 2026-11-16). */
+export const CANCEL_COL_TABS: readonly Tab[] = ["cancelling", "past"];
 export type SortKey = (typeof SORT_KEYS)[number];
 export type SortDir = "asc" | "desc";
 export type Sort = { key: SortKey; dir: SortDir };
@@ -306,10 +308,11 @@ export const isSortKey = (x: unknown): x is SortKey => SORT_KEYS.includes(x as S
 /** The order a tab opens in: Since, oldest first; Past opens on its most recent ends. */
 export const defaultSort = (tab: Tab): Sort => (tab === "past" ? { key: "next", dir: "desc" } : { key: "since", dir: "asc" });
 
-type Sortable = MemberRow & Pick<RowView, "name" | "days" | "next" | "paidCents">;
+type Sortable = MemberRow & Pick<RowView, "name" | "days" | "next" | "paidCents"> & { cityName?: string };
 export function sortValue(v: Sortable, k: SortKey): string | number | null {
   switch (k) {
     case "member": return v.name.toLowerCase();
+    case "city": return (v.cityName ?? v.city).toLowerCase();
     case "phone": { const d = (v.phone ?? "").replace(/\D/g, ""); return d || null; }
     case "since": { const t = Date.parse(v.activationDate ?? ""); return Number.isNaN(t) ? null : t; }
     case "duration": return v.days;
@@ -317,6 +320,9 @@ export function sortValue(v: Sortable, k: SortKey): string | number | null {
     case "next": { const t = v.next.at ? Date.parse(v.next.at) : NaN; return Number.isNaN(t) ? null : t; }
     case "paid": return v.paidCents;
     case "strikes": return v.strikePoints;
+    case "canceled": { const t = Date.parse(v.canceledAt ?? ""); return Number.isNaN(t) ? null : t; }
+    case "reason": return (v.cancelReason ?? "").trim().toLowerCase() || null;
+    case "comment": return (v.comment ?? "").trim().toLowerCase() || null;
   }
 }
 export function sortRows<T extends Sortable>(rows: readonly T[], sort: Sort): T[] {
@@ -403,16 +409,38 @@ export function searchMembers(rows: readonly MemberRow[], q: string, limit = Inf
 const rank = (r: MemberRow) => (isCurrent(r) ? 2e13 : 0) + (Date.parse(r.activationDate ?? "") || 0);
 
 /** "3 members in 2 cities · Austin selected" — frame 6's summary line. */
-export function searchSummary(hits: readonly MemberRow[], pickedCityName: string): string {
+export function searchSummary(hits: readonly MemberRow[], pickedCityName: string | null): string {
   const cities = new Set(hits.map((h) => h.city)).size;
-  return `${hits.length} member${hits.length === 1 ? "" : "s"} in ${cities} cit${cities === 1 ? "y" : "ies"} · ${pickedCityName} selected`;
+  return `${hits.length} member${hits.length === 1 ? "" : "s"} in ${cities} cit${cities === 1 ? "y" : "ies"}${pickedCityName ? ` · ${pickedCityName} selected` : ""}`;
+}
+
+/* ═══ THE CITY PILLS (Ryan, 2026-11-16) ═════════════════════════════════════════════════════════
+ * "All cities" first, then every city with Current members, biggest first. Each count IS that
+ * city's Current tab count (tabCounts over the same rows), so a pill and its tab cannot disagree.
+ * Cities come from the rows, not from CITY_SCOPES: NYC has a member and is not in that list.
+ * Rows reaching here already exclude @matchday.com (loadMemberRows). */
+export const ALL_CITIES = "ALL";
+export type CityPill = { identifier: string; name: string; count: number };
+/** A display name for any city identifier: the scope list's name, a few the list lacks, else the id. */
+const EXTRA_CITY_NAMES: Record<string, string> = { NYC: "New York" };
+export function memberCityName(id: string, scopeName: (id: string) => string | null): string {
+  return scopeName(id) ?? EXTRA_CITY_NAMES[id] ?? id;
+}
+export function cityPills(rows: readonly MemberRow[], now: number, nameOf: (id: string) => string): { all: number; cities: CityPill[] } {
+  const by = new Map<string, MemberRow[]>();
+  for (const r of rows) { const a = by.get(r.city); if (a) a.push(r); else by.set(r.city, [r]); }
+  const cities = [...by.entries()]
+    .map(([id, rs]) => ({ identifier: id, name: nameOf(id), count: tabCounts(rs, now).current }))
+    .filter((c) => c.count > 0)
+    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+  return { all: cities.reduce((n, c) => n + c.count, 0), cities };
 }
 
 /* ═══ ONE PAGE OF ONE TAB ═══════════════════════════════════════════════════════════════════════ */
 export const PAGE_SIZE = 50;
 export function tabRows(rows: readonly MemberRow[], city: string, tab: Tab, now: number): MemberRow[] {
   return rows
-    .filter((r) => r.city === city && inTab(r, tab, now))
+    .filter((r) => (city === ALL_CITIES || r.city === city) && inTab(r, tab, now))
     .sort((a, b) =>
       tab === "past"
         ? (Date.parse(b.canceledAt ?? "") || 0) - (Date.parse(a.canceledAt ?? "") || 0)

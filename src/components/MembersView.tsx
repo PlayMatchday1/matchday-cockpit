@@ -27,6 +27,7 @@ import {
   TABS, dayCT, dateCT, usd, trimPct, strikesLabel, scheduledEnd, endConfirmCopy, pageList, rangeLabel,
   membersStrikeControl, commentRefusal, planPriceRefusal, strikeFineRefusal, strikeFineTaxLine,
   factsFromVerdict, twoFacts, strikeRemoveFacts, finalCharge, finalChargeLine, STRIKE_BACKEND_FIX_LIVE, STRIKE_REMOVE_OFF_REASON, SEARCH_MIN, COMMENT_MAX,
+  ALL_CITIES, CANCEL_COL_TABS, type CityPill,
   type Tab, type Chip, type NextCell, type Fact, type Sort, type SortKey, type PersonTag,
 } from "@/lib/membersPageModel";
 
@@ -43,7 +44,7 @@ async function authFetch(path: string, init?: RequestInit): Promise<Response> {
 type ViewRow = {
   membershipId: number; userId: number; city: string; cityName: string; slug: string | null;
   name: string; email: string | null; phone: string | null; status: string; priceDollars: number | null;
-  activationDate: string | null; canceledAt: string | null; comment: string | null; suspendedTo: string | null;
+  activationDate: string | null; canceledAt: string | null; cancelReason: string | null; comment: string | null; suspendedTo: string | null;
   strikePoints: number; absentOwed: number; chip: Chip; next: NextCell; days: number | null;
   duration: string; listPrice: string | null; paidCents: number | null; hasComment: boolean;
   tag: PersonTag; custom: boolean;
@@ -53,8 +54,8 @@ type Settings = {
   payingCount: number; errors: string[];
 };
 type ListRes = {
-  mode: "list"; city: string; tab: Tab; counts: Record<Tab, number>; confinedTo: string | null;
-  cities: { identifier: string; name: string }[]; settings: Settings | null; syncedAt: string | null;
+  mode: "list"; city: string; cityName: string; tab: Tab; counts: Record<Tab, number>; confinedTo: string | null;
+  pills: { all: number; cities: CityPill[] }; payingCount: number; settings: Settings | null; syncedAt: string | null;
   source: string; page: number; pages: number; total: number; rows: ViewRow[]; sort: Sort;
 };
 type SearchRes = { mode: "search"; q: string; summary: string; rows: ViewRow[]; syncedAt: string | null; page: number; pages: number; total: number; sort: Sort | null };
@@ -79,7 +80,7 @@ export default function MembersView() {
   const canManage = canManagePlayers(appUser);      // courtesy only — the strikes route re-checks (MANAGE PLAYERS)
   const badge = envBadge(ENV);
 
-  const [city, setCity] = useState<string>("ATX");
+  const [city, setCity] = useState<string>(ALL_CITIES);   // remembered per viewer below; All cities by default
   const [tab, setTab] = useState<Tab>("current");
   const [page, setPage] = useState(1);
   const [sort, setSort] = useState<Sort | null>(null);        // null: the tab's own default order
@@ -105,8 +106,12 @@ export default function MembersView() {
       const j = await r.json();
       if (my !== reqRef.current) return;
       if (!r.ok) { setLoadErr(j.error ?? `HTTP ${r.status}`); return; }
-      setList(j as ListRes);
-      if ((j as ListRes).confinedTo && (j as ListRes).confinedTo !== city) setCity((j as ListRes).confinedTo as string);
+      const lr = j as ListRes;
+      setList(lr);
+      if (lr.confinedTo && lr.confinedTo !== city) setCity(lr.confinedTo);
+      // A remembered city with no Current members has no pill; fall back to All cities rather than
+      // show a selection nobody can see.
+      else if (!lr.confinedTo && city !== ALL_CITIES && !lr.pills.cities.some((c) => c.identifier === city)) pickCity(ALL_CITIES);
     } catch (e) { if (my === reqRef.current) setLoadErr(e instanceof Error ? e.message : String(e)); }
     finally { if (my === reqRef.current) setLoading(false); }
   }, [city, tab, page, sort]);
@@ -126,13 +131,14 @@ export default function MembersView() {
   // A new search text starts on its first page.
   useEffect(() => { setQPage(1); }, [q]);
 
-  const pickCity = (c: string) => {
+  function pickCity(c: string) {
     setCity(c); setPage(1); setSel(null);
     try { window.localStorage.setItem(CITY_KEY, c); } catch { /* storage blocked */ }
-  };
+  }
   const searchFresh = !!search && search.q === q.trim() && search.page === qPage;
   const searching = q.trim().length >= SEARCH_MIN;
-  const cityName = list?.cities.find((c) => c.identifier === city)?.name ?? city;
+  const isAll = city === ALL_CITIES;
+  const cityName = list?.city === city ? list.cityName : isAll ? "All cities" : city;
   const s = list?.settings ?? null;
 
   const downloadCsv = async () => {
@@ -142,7 +148,7 @@ export default function MembersView() {
     const blob = await r.blob();
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = `${searching ? "members-search" : `members-${city}-${tab}`}-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.download = `${searching ? "members-search" : `members-${isAll ? "all-cities" : city}-${tab}`}-${new Date().toISOString().slice(0, 10)}.csv`;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 2000);
   };
@@ -155,17 +161,30 @@ export default function MembersView() {
       <div className="mbr-main">
         <div className="mbr-head">
           <h1>Members</h1>
-          <select className="mbr-city" data-testid="members-city" value={city} disabled={!!list?.confinedTo}
-            onChange={(e) => pickCity(e.target.value)} aria-label="City">
-            {(list?.cities ?? [{ identifier: city, name: city }]).map((c) => <option key={c.identifier} value={c.identifier}>{c.name}</option>)}
-          </select>
           {badge && <span className="mbr-env" title="Every read and write on this page goes to this environment">{badge.label}</span>}
           <span className="mbr-sp" />
           <button className="mbr-btn" data-testid="members-csv" onClick={downloadCsv} disabled={!list || loading}>Download CSV</button>
         </div>
 
+        {/* CITY PILLS — each count is that city's Current tab count (cityPills). A confined account
+          * gets its own city only, and no All cities. Scrolls sideways at phone width. */}
+        <div className="mbr-pills" role="tablist" aria-label="City" data-testid="members-cities">
+          {list && !list.confinedTo && (
+            <button role="tab" aria-selected={isAll} className={`mbr-tab${isAll ? " on" : ""}`} data-testid="city-ALL" onClick={() => pickCity(ALL_CITIES)}>
+              All cities<span>{list.pills.all.toLocaleString()}</span>
+            </button>
+          )}
+          {(list?.pills.cities ?? []).map((c) => (
+            <button key={c.identifier} role="tab" aria-selected={city === c.identifier} className={`mbr-tab${city === c.identifier ? " on" : ""}`}
+              data-testid={`city-${c.identifier}`} onClick={() => pickCity(c.identifier)}>
+              {c.name}<span>{c.count.toLocaleString()}</span>
+            </button>
+          ))}
+          {!list && <span className="mbr-tab">Loading cities…</span>}
+        </div>
+
         <div className="mbr-settings" data-testid="members-settings">
-          <div className="mbr-set">
+          {!isAll && <><div className="mbr-set">
             <div className="mbr-k">MEMBER PRICE</div>
             <div className="mbr-v">{s?.planCents != null ? `${usd(s.planCents)}/mo` : "—"}
               {isAdmin && s?.planCents != null && <button className="mbr-link" data-testid="edit-plan" onClick={() => setDlg("plan")}>Edit</button>}
@@ -178,12 +197,13 @@ export default function MembersView() {
               {isAdmin && s?.fineCents != null && <button className="mbr-link" data-testid="edit-fine" onClick={() => setDlg("fine")}>Edit</button>}
             </div>
             <div className="mbr-sub" data-testid="fine-tax">{strikeFineTaxLine(s?.taxRatePct ?? null)}</div>
-          </div>
+          </div></>}
+          {isAll && <div className="mbr-sub">Member price and strike fine are set per city. Pick a city to see or edit them.</div>}
           <span className="mbr-sp" />
           <div className="mbr-set">
             <div className="mbr-k">MEMBERS</div>
-            <div className="mbr-v">{s ? s.payingCount : "—"}</div>
-            <div className="mbr-sub">paying this month</div>
+            <div className="mbr-v" data-testid="members-paying">{list && list.city === city ? list.payingCount.toLocaleString() : "—"}</div>
+            <div className="mbr-sub">paying this month{list && list.city === city ? ` · ${list.cityName}` : ""}</div>
           </div>
           {s?.errors?.length ? <div className="mbr-err" role="alert">Could not read {s.errors.join("; ")}</div> : null}
         </div>
@@ -217,15 +237,17 @@ export default function MembersView() {
           </div>
         ) : (
           <div className="mbr-card" data-testid="members-table">
-            {list && list.rows.length === 0 && <div className="mbr-empty" data-testid="members-empty">No members on this tab in {cityName}.</div>}
+            {list && list.rows.length === 0 && <div className="mbr-empty" data-testid="members-empty">No members on this tab in {isAll ? "any city" : cityName}.</div>}
             {list && list.rows.length > 0 && (
               <MembersTable rows={list.rows} sort={list.sort} sel={sel} onSel={setSel} rowTestId="member-row"
+                cityCol={list.city === ALL_CITIES} cancelCols={CANCEL_COL_TABS.includes(list.tab)}
                 onSort={(k) => { setSort(nextSort(list.sort, k)); setPage(1); }}
                 page={list.page} pages={list.pages} total={list.total} onPage={setPage} />
             )}
           </div>
         )}
         <p className="mbr-fine">
+          {isAll ? "All cities shows each price in whole dollars with no Custom price chip, because the city plan prices are only read for a picked city. " : ""}
           {list?.source === "mirror" ? `From our copy of MatchDay's member list, synced ${list.syncedAt ? `${dayCT(list.syncedAt)} ${new Date(list.syncedAt).toLocaleTimeString("en-US", { timeZone: "America/Chicago", hour: "numeric", minute: "2-digit" })} CT` : "at an unknown time"}. ` : list ? "Read live from the staging member list. " : ""}
           The list knows prices in whole dollars only; a member at the city plan&apos;s dollars is shown at the plan price, and the panel shows each member&apos;s exact amount.
           {" "}Paid since start is every membership charge for this membership, tax included, less refunds and chargebacks. Staff marks @playmatchday.com accounts, which do not count as paying. @matchday.com accounts are fake players and are left out entirely.
@@ -245,23 +267,68 @@ const sortQs = (s: Sort | null) => (s ? `&sort=${s.key}&dir=${s.dir}` : "");
 /** A click on the sorted column flips it; a click on another sorts it ascending. */
 const nextSort = (cur: Sort | null, key: SortKey): Sort => (cur?.key === key ? { key, dir: cur.dir === "asc" ? "desc" : "asc" } : { key, dir: "asc" });
 
-const COLS: { key: SortKey; label: string; cls: string }[] = [
-  { key: "member", label: "Member", cls: "c-m" }, { key: "phone", label: "Phone", cls: "c-p" },
-  { key: "since", label: "Since", cls: "c-s" }, { key: "duration", label: "Duration", cls: "c-d" },
-  { key: "price", label: "Price", cls: "c-r" }, { key: "next", label: "Next payment", cls: "c-n" },
-  { key: "paid", label: "Paid since start", cls: "c-y" }, { key: "strikes", label: "Strikes", cls: "c-k" },
-];
+type Col = { key: SortKey; label: string; cls: string; w: string };
+const COL: Record<SortKey, Col> = {
+  member: { key: "member", label: "Member", cls: "c-m", w: "minmax(180px,2.6fr)" },
+  city: { key: "city", label: "City", cls: "c-c", w: "minmax(80px,1fr)" },
+  phone: { key: "phone", label: "Phone", cls: "c-p", w: "minmax(100px,1.2fr)" },
+  since: { key: "since", label: "Since", cls: "c-s", w: "minmax(84px,1fr)" },
+  duration: { key: "duration", label: "Duration", cls: "c-d", w: "minmax(64px,.8fr)" },
+  price: { key: "price", label: "Price", cls: "c-r", w: "minmax(60px,.7fr)" },
+  next: { key: "next", label: "Next payment", cls: "c-n", w: "minmax(96px,1.2fr)" },
+  paid: { key: "paid", label: "Paid since start", cls: "c-y", w: "minmax(84px,1fr)" },
+  strikes: { key: "strikes", label: "Strikes", cls: "c-k", w: "minmax(52px,.6fr)" },
+  canceled: { key: "canceled", label: "Cancel date", cls: "c-x", w: "minmax(84px,1fr)" },
+  reason: { key: "reason", label: "Cancel reason", cls: "c-why", w: "minmax(96px,1.3fr)" },
+  comment: { key: "comment", label: "Comment", cls: "c-cm", w: "minmax(110px,1.6fr)" },
+};
+/** City only in All cities. On Cancelling and Past, the three cancel columns go on the end and Phone
+ *  goes (still in the panel and the CSV) so the rest are not squeezed (Ryan, 2026-11-16). */
+function columnsFor(cityCol: boolean, cancelCols: boolean): Col[] {
+  const keys: SortKey[] = ["member", ...(cityCol ? ["city" as const] : []), ...(cancelCols ? [] : ["phone" as const]),
+    "since", "duration", "price", "next", "paid", "strikes", ...(cancelCols ? ["canceled" as const, "reason" as const, "comment" as const] : [])];
+  return keys.map((k) => COL[k]);
+}
 
 /* ═══ THE TABLE — every tab and the search results alike ════════════════════════════════════════
  * Sorting and paging happen on the server over the whole tab or search; this draws one page. */
-function MembersTable({ rows, sort, sel, onSel, onSort, page, pages, total, onPage, showCity, pickedCity, rowTestId }: {
+function MembersTable({ rows, sort, sel, onSel, onSort, page, pages, total, onPage, showCity, pickedCity, rowTestId, cityCol = false, cancelCols = false }: {
   rows: ViewRow[]; sort: Sort | null; sel: ViewRow | null; onSel: (r: ViewRow) => void; onSort: (k: SortKey) => void;
   page: number; pages: number; total: number; onPage: (p: number) => void; showCity?: boolean; pickedCity?: string; rowTestId: string;
+  cityCol?: boolean; cancelCols?: boolean;
 }) {
+  const cols = columnsFor(cityCol, cancelCols);
+  const grid = { gridTemplateColumns: cols.map((c) => c.w).join(" ") };
+  const cell = (r: ViewRow, k: SortKey) => {
+    switch (k) {
+      case "member": return (
+        <span key={k} className="c-m">
+          <span className="mbr-nm"><b>{r.name}</b>
+            {r.tag && <span className={`mbr-chip ${r.tag === "Staff" ? "staff" : "test"}`} data-testid="person-tag">{r.tag}</span>}
+            {r.chip && <ChipView c={r.chip} />}
+            {r.custom && r.chip?.label !== "Custom price" && <span className="mbr-chip info">Custom price</span>}
+            {showCity && <span className={`mbr-chip ${r.city === pickedCity ? "city" : "info"}`} data-testid="search-city">{r.cityName}</span>}
+            {r.hasComment && !cancelCols && <span title="Has a comment">💬</span>}
+          </span>
+          <small>{r.email ?? "—"}</small>
+        </span>);
+      case "city": return <span key={k} className="c-c" data-testid="city-cell">{r.cityName}</span>;
+      case "phone": return <span key={k} className="c-p">{r.phone ?? "—"}</span>;
+      case "since": return <span key={k} className="c-s">{dateCT(r.activationDate)}</span>;
+      case "duration": return <span key={k} className="c-d">{r.duration}</span>;
+      case "price": return <span key={k} className="c-r">{r.listPrice ?? "—"}</span>;
+      case "next": return <span key={k} className={`c-n t-${r.next.tone}`}>{r.next.main}{r.next.sub && <small>{r.next.sub}</small>}</span>;
+      case "paid": return <span key={k} className={`c-y${r.paidCents ? "" : " dim"}`}>{r.paidCents != null ? usd(r.paidCents) : "—"}</span>;
+      case "strikes": return <span key={k} className={`c-k${r.strikePoints > 0 ? " hot" : " dim"}`}>{strikesLabel(r.strikePoints)}</span>;
+      case "canceled": return <span key={k} className={`c-x${r.canceledAt ? "" : " dim"}`} data-testid="cancel-date">{r.canceledAt ? dateCT(r.canceledAt) : "—"}</span>;
+      case "reason": return <span key={k} className={`c-why one${r.cancelReason?.trim() ? "" : " dim"}`} title={r.cancelReason?.trim() || undefined} data-testid="cancel-reason">{r.cancelReason?.trim() || "—"}</span>;
+      case "comment": return <span key={k} className={`c-cm one${r.comment?.trim() ? "" : " dim"}`} title={r.comment?.trim() || undefined} data-testid="cancel-comment">{r.comment?.trim() || "—"}</span>;
+    }
+  };
   return (
     <>
-      <div className="mbr-tr mbr-th" data-testid="members-head">
-        {COLS.map((c) => {
+      <div className="mbr-tr mbr-th" style={grid} data-testid="members-head">
+        {cols.map((c) => {
           const on = sort?.key === c.key;
           return (
             <button key={c.key} type="button" className={`mbr-sorth ${c.cls}${on ? " on" : ""}`} data-testid={`sort-${c.key}`}
@@ -272,24 +339,8 @@ function MembersTable({ rows, sort, sel, onSel, onSort, page, pages, total, onPa
         })}
       </div>
       {rows.map((r) => (
-        <button key={r.membershipId} className={`mbr-tr${sel?.membershipId === r.membershipId ? " sel" : ""}`} data-testid={rowTestId} onClick={() => onSel(r)}>
-          <span className="c-m">
-            <span className="mbr-nm"><b>{r.name}</b>
-              {r.tag && <span className={`mbr-chip ${r.tag === "Staff" ? "staff" : "test"}`} data-testid="person-tag">{r.tag}</span>}
-              {r.chip && <ChipView c={r.chip} />}
-              {r.custom && r.chip?.label !== "Custom price" && <span className="mbr-chip info">Custom price</span>}
-              {showCity && <span className={`mbr-chip ${r.city === pickedCity ? "city" : "info"}`} data-testid="search-city">{r.cityName}</span>}
-              {r.hasComment && <span title="Has a comment">💬</span>}
-            </span>
-            <small>{r.email ?? "—"}</small>
-          </span>
-          <span className="c-p">{r.phone ?? "—"}</span>
-          <span className="c-s">{dateCT(r.activationDate)}</span>
-          <span className="c-d">{r.duration}</span>
-          <span className="c-r">{r.listPrice ?? "—"}</span>
-          <span className={`c-n t-${r.next.tone}`}>{r.next.main}{r.next.sub && <small>{r.next.sub}</small>}</span>
-          <span className={`c-y${r.paidCents ? "" : " dim"}`}>{r.paidCents != null ? usd(r.paidCents) : "—"}</span>
-          <span className={`c-k${r.strikePoints > 0 ? " hot" : " dim"}`}>{strikesLabel(r.strikePoints)}</span>
+        <button key={r.membershipId} className={`mbr-tr${sel?.membershipId === r.membershipId ? " sel" : ""}`} style={grid} data-testid={rowTestId} onClick={() => onSel(r)}>
+          {cols.map((c) => cell(r, c.key))}
         </button>
       ))}
       <div className="mbr-foot" data-testid="members-pager">
@@ -694,7 +745,6 @@ const CSS = [
   ".mbr-head{display:flex;gap:10px;align-items:center}",
   ".mbr-head h1{font-size:22px;font-weight:700;margin:0}",
   ".mbr-sp{flex:1 1 auto}",
-  ".mbr-city{background:#fff;border:1px solid #e0e0db;border-radius:8px;padding:7px 10px;font-weight:600;font-size:13px;color:#0b2e22}",
   ".mbr-env{font-size:11px;font-weight:600;background:#fff4cf;color:#8a6a12;border-radius:10px;padding:3px 8px}",
   ".mbr-btn{background:#fff;border:1px solid #e0e0db;border-radius:8px;padding:8px 14px;font-weight:600;font-size:13px;color:#0b2e22;cursor:pointer}",
   ".mbr-btn:disabled{opacity:.45;cursor:not-allowed}",
@@ -713,6 +763,9 @@ const CSS = [
   ".mbr-sub{font-size:11px;color:#5d7a6f}",
   ".mbr-sub2{font-size:12px;color:#5d7a6f}",
   ".mbr-tabs{display:flex;gap:6px;align-items:center;flex-wrap:nowrap}",
+  ".mbr-pills{display:flex;gap:6px;align-items:center;flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;padding-bottom:2px}",
+  ".mbr-pills::-webkit-scrollbar{display:none}",
+  ".mbr-tr>span.one{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
   ".mbr-tab{flex:none;white-space:nowrap;display:flex;gap:6px;align-items:center;background:#fff;border:1px solid #e0e0db;border-radius:20px;padding:7px 12px;font-weight:600;font-size:13px;color:#0b2e22;cursor:pointer}",
   ".mbr-tab span{font-weight:500;font-size:12px;color:#5d7a6f}",
   ".mbr-tab.on{background:#063d2c;border-color:#063d2c;color:#fff}",

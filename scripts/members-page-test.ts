@@ -13,6 +13,7 @@ import {
   durationDays, durationLabel, personTag, paidByMembership, rowView, sortRows, defaultSort, pageList, rangeLabel, PAGE_SIZE, CSV_HEADERS,
   membersStrikeControl, gateStrikeRemove, strikeRemoveFacts, finalCharge, finalChargeLine, commentRefusal, twoFacts, factsFromVerdict, endConfirmCopy,
   STRIKE_BACKEND_FIX_LIVE, STRIKE_REMOVE_OFF_REASON, type MemberRow, type RowStripe,
+  ALL_CITIES, cityPills, memberCityName, CANCEL_COL_TABS, sortRows as sortAll,
 } from "../src/lib/membersPageModel";
 import { priceRefusal, endRefusal, centsFromDollars } from "../src/lib/membershipAdminModel";
 import { isFakeAccountEmail } from "../src/lib/membershipStats";
@@ -73,6 +74,27 @@ yes("a suspension in the past is not Suspended", !inTab(M({ suspendedTo: "2026-1
 yes("a comped member is Current", inTab(ROWS[7], "current", NOW));
 yes("Past is CANCELED only", inTab(ROWS[3], "past", NOW) && !inTab(ROWS[3], "current", NOW));
 is("a tab is one city", tabRows(ROWS, "HOU", "current", NOW).map((r) => r.membershipId), [3]);
+
+/* ADDED 2026-11-16 (Ryan): city pills. Each count is that city's Current tab count; All cities first. */
+const nm = (id: string) => memberCityName(id, (x) => ({ ATX: "Austin", HOU: "Houston" } as Record<string, string>)[x] ?? null);
+const pills = cityPills(ROWS, NOW, nm);
+for (const c of pills.cities) is(`  ${c.name}'s pill equals its Current tab`, c.count, tabRows(ROWS, c.identifier, "current", NOW).length);
+is("  All cities is the sum of the pills, and the All cities Current tab", pills.all, tabRows(ROWS, ALL_CITIES, "current", NOW).length);
+yes("  pills are biggest first", pills.cities.every((c, i, a) => i === 0 || a[i - 1].count >= c.count));
+const withNyc = cityPills([...ROWS, M({ membershipId: 90, userId: 90, city: "NYC" }), M({ membershipId: 91, userId: 91, city: "WAW", status: "CANCELED", canceledAt: "2026-01-01T00:00:00Z" })], NOW, nm);
+yes("  a city outside the scope list (NYC) gets a pill, named", withNyc.cities.some((c) => c.identifier === "NYC" && c.name === "New York" && c.count === 1));
+yes("  CONTROL: a city with no Current members gets none", !withNyc.cities.some((c) => c.identifier === "WAW") && withNyc.cities.length > 0);
+yes("All cities' tab spans cities", new Set(tabRows(ROWS, ALL_CITIES, "current", NOW).map((r) => r.city)).size > 1);
+/* ADDED 2026-11-16 (Ryan): cancel columns on Cancelling and Past only, each sortable. */
+is("cancel columns show on Cancelling and Past only", CANCEL_COL_TABS, ["cancelling", "past"]);
+const cx = [M({ membershipId: 81, canceledAt: "2026-10-02T00:00:00Z", cancelReason: "Too expensive", comment: "b" }),
+  M({ membershipId: 82, canceledAt: null, cancelReason: null, comment: null }),
+  M({ membershipId: 83, canceledAt: "2026-09-02T00:00:00Z", cancelReason: "Moved away", comment: "a" })]
+  .map((r) => ({ ...r, ...rowView(r, undefined, null, NOW, 6650) }));
+is("  Cancel date sorts, blanks last", sortAll(cx, { key: "canceled", dir: "asc" }).map((r) => r.membershipId), [83, 81, 82]);
+is("  Cancel reason sorts, blanks last", sortAll(cx, { key: "reason", dir: "asc" }).map((r) => r.membershipId), [83, 81, 82]);
+is("  Comment sorts, blanks last even descending", sortAll(cx, { key: "comment", dir: "desc" }).map((r) => r.membershipId), [81, 83, 82]);
+is("  City sorts by name", sortAll([{ ...cx[0], city: "HOU", cityName: "Houston" }, { ...cx[2], city: "ATX", cityName: "Austin" }], { key: "city", dir: "asc" }).map((r) => r.city), ["ATX", "HOU"]);
 // CHANGED 2026-11-16: the page size went from 25 to 50 (Ryan), so this case passes its old size of 25
 // explicitly; the 50 case below it is new.
 const pg = pageOf(Array.from({ length: 51 }, (_, i) => i), 3, 25);

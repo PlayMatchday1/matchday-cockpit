@@ -1,6 +1,7 @@
 // THE MEMBERS PAGE — list, search, CSV and city settings, all reads.
 //
 //   GET ?env=production|staging&city=ATX&tab=current&page=1      one page of one tab, with counts
+//   city=ALL                                                      every city together (not for a confined account)
 //   GET ?env=…&q=garcia&city=ATX                                  search: EVERY city, EVERY status
 //   GET ?env=…&city=ATX&tab=current&format=csv                    the current filter, every page
 //   …&sort=since|member|phone|duration|price|next|paid|strikes&dir=asc|desc   on every mode, every page
@@ -12,16 +13,22 @@
 // our mirror, read with a fixed query; the search text is never part of any query, SQL or HTTP). MatchDay's list endpoint pastes `email` into raw SQL (subscriptions.repository.ts:53-54
 // at backend 8965437), so the search text is never sent to it — not on production, not on staging.
 //
-// A CONFINED ACCOUNT sees its own city only: the picker is pinned, and search is narrowed to that
+// A CONFINED ACCOUNT sees its own city only: one pill, no "All cities", and search is narrowed to that
 // city. Frame 6 says "every city"; confinement wins over the design.
+//
+// CITY PILLS (Ryan, 2026-11-16): the list response carries `pills` (cityPills), each count the city's
+// Current tab count. A city is valid when it is in CITY_SCOPES or has rows in our copy (NYC is not in
+// CITY_SCOPES). With city=ALL there are no city settings to read: the member price and strike fine are
+// per city, and reading every city's would be eight MatchDay calls a load. So in All cities prices show
+// in whole dollars with no Custom price chip, and the MEMBERS card counts every city.
 import { authenticateCapability } from "@/lib/capabilityAuth";
 import { assertScope } from "@/lib/cityConfinement";
-import { resolveCityScope, cityNameFor, CITY_SCOPES } from "@/lib/cityScope";
+import { resolveCityScope, cityNameFor } from "@/lib/cityScope";
 import { makeServerClient } from "@/lib/supabaseServer";
 import { countActiveMembers } from "@/lib/membershipStats";
 import { loadMemberRows, loadAllRowStripe, loadPaidSinceStart, readCitySettings } from "@/lib/membersPageData";
 import {
-  TABS, tabCounts, tabRows, pageOf, searchMembers, searchSummary, membersCsv, rowView, sortRows, defaultSort, isSortKey,
+  ALL_CITIES, cityPills, memberCityName, TABS, tabCounts, tabRows, pageOf, searchMembers, searchSummary, membersCsv, rowView, sortRows, defaultSort, isSortKey,
   type Tab, type MemberRow, type RowStripe, type Sort,
 } from "@/lib/membersPageModel";
 
@@ -44,8 +51,7 @@ export async function GET(req: Request) {
   const askedCity = url.searchParams.get("city");
   const sc = assertScope(confined, askedCity, confined !== null);
   if (!sc.ok) return Response.json({ error: sc.error }, { status: sc.status });
-  const city = confined ?? resolveCityScope(askedCity)?.identifier ?? null;
-  if (!city) return Response.json({ error: "Pick a city." }, { status: 400 });
+  const asked = (askedCity ?? "").trim();
 
   const sb = makeServerClient();
   const now = Date.now();
@@ -55,7 +61,13 @@ export async function GET(req: Request) {
       // A refresh after an edit re-reads the rows and Stripe facts; no edit here changes what was paid.
       loadMemberRows(env, sb, fresh), loadAllRowStripe(sb, env, fresh), loadPaidSinceStart(sb, env),
     ]);
-    const settings = url.searchParams.get("settings") === "0" ? null : await readCitySettings(env, city);
+    const known = new Set(all.map((r) => r.city));
+    const city = confined ?? (asked === ALL_CITIES || !asked ? ALL_CITIES
+      : resolveCityScope(asked)?.identifier ?? (known.has(asked) ? asked : null));
+    if (!city) return Response.json({ error: "Pick a city." }, { status: 400 });
+    const isAll = city === ALL_CITIES;
+    const nameOf = (id: string) => memberCityName(id, cityNameFor);
+    const settings = url.searchParams.get("settings") === "0" || isAll ? null : await readCitySettings(env, city);
     const planCents = settings?.planCents ?? null;
 
     /* Every row of the tab (or the search) is viewed and sorted here, then paged, so a sort or a search
@@ -64,7 +76,7 @@ export async function GET(req: Request) {
       rows.map((r) => ({
         ...r,
         ...rowView(r, st.get(r.membershipId), paid ? paid.get(r.membershipId) ?? 0 : null, now, plan(r.city)),
-        cityName: cityNameFor(r.city) ?? r.city,
+        cityName: nameOf(r.city),
       }));
     const sk = url.searchParams.get("sort"), sd = url.searchParams.get("dir");
     const askedSort: Sort | null = isSortKey(sk) ? { key: sk, dir: sd === "desc" ? "desc" : "asc" } : null;
@@ -91,7 +103,7 @@ export async function GET(req: Request) {
       const pg = pageOf(ordered, Number(url.searchParams.get("page") ?? 1));
       return Response.json({
         mode: "search", env, source, syncedAt, q, city, sort: askedSort,
-        summary: searchSummary(hits, cityNameFor(city) ?? city),
+        summary: searchSummary(hits, isAll ? null : nameOf(city)),
         confinedTo: confined, page: pg.page, pages: pg.pages, total: pg.total, rows: pg.rows,
       });
     }
@@ -99,17 +111,19 @@ export async function GET(req: Request) {
     /* ── ONE TAB OF ONE CITY ──────────────────────────────────────────────────────────────── */
     const tabParam = url.searchParams.get("tab");
     const tab: Tab = isTab(tabParam) ? tabParam : "current";
-    const cityRows = all.filter((r) => r.city === city);
+    const cityRows = isAll ? (confined ? all.filter((r) => r.city === confined) : all) : all.filter((r) => r.city === city);
     const counts = tabCounts(cityRows, now);
     const sort = askedSort ?? defaultSort(tab);
     const ordered = sortRows(view(tabRows(all, city, tab, now), stripe, () => planCents), sort);
 
-    if (url.searchParams.get("format") === "csv") return csvOut(ordered, `members-${city}-${tab}`);
+    if (url.searchParams.get("format") === "csv") return csvOut(ordered, `members-${isAll ? "all-cities" : city}-${tab}`);
 
     const pg = pageOf(ordered, Number(url.searchParams.get("page") ?? 1));
     return Response.json({
       mode: "list", env, source, syncedAt, city, tab, counts, confinedTo: confined, sort,
-      cities: confined ? CITY_SCOPES.filter((c) => c.identifier === confined) : CITY_SCOPES,
+      cityName: isAll ? "All cities" : nameOf(city),
+      pills: cityPills(confined ? all.filter((r) => r.city === confined) : all, now, nameOf),
+      payingCount: countActiveMembers(cityMirrorShape(cityRows), new Date(now)),
       settings: settings && { ...settings, payingCount: countActiveMembers(cityMirrorShape(cityRows), new Date(now)) },
       page: pg.page, pages: pg.pages, total: pg.total, rows: pg.rows,
     });
