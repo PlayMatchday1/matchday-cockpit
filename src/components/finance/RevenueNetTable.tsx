@@ -123,13 +123,14 @@ export default function RevenueNetTable({ grain, groups, matchesOf, venuesOf, la
   if (groups.length === 0) return <div style={{ padding: 16, color: "#7b8b82" }}>No revenue for this selection.</div>;
   const field = grain === "field";
   const T = groups.reduce((a, g) => ({
-    dpp: a.dpp + g.dpp, membership: a.membership + g.membership,
+    dpp: a.dpp + g.dpp, membership: a.membership + g.membership, event: a.event + g.event, strike: a.strike + g.strike,
     net: a.net + g.net, matches: a.matches + (matchesOf(g) ?? 0), venues: a.venues + ((venuesOf && venuesOf(g)) ?? 0),
-  }), { dpp: 0, membership: 0, net: 0, matches: 0, venues: 0 });
+  }), { dpp: 0, membership: 0, event: 0, strike: 0, net: 0, matches: 0, venues: 0 });
   const mix = (mem: number, net: number) => (net > 0 ? `${((mem / net) * 100).toFixed(1)}%` : "—");
   const perVenue = (net: number, v: number | null) => (v ? money(Math.round(net / v)) : "—");
   const monthCols = field ? 5 : 6;
-  const netTitle = (dpp: number, mem: number) => `DPP ${money(dpp)} · Membership ${money(mem)} (both before refunds and disputes)`;
+  const netTitle = (dpp: number, mem: number, ev = 0, st = 0) =>
+    `DPP ${money(dpp)} · Membership ${money(mem)}${ev ? ` · Event ${money(ev)}` : ""}${st ? ` · Strike ${money(st)}` : ""} (before refunds and disputes)`;
   const rows = orderRows(groups, sort, (g, k) => selectedValue(g, k, { matchesOf, venuesOf, launchOf, pnl }));
   const th = (k: string, label: React.ReactNode, cls?: string, info?: React.ReactNode) =>
     <SortTh k={k} label={label} sort={sort} onSort={onSort} className={cls} info={info} testid={`nt-h-${k}`} />;
@@ -202,7 +203,7 @@ export default function RevenueNetTable({ grain, groups, matchesOf, venuesOf, la
                 {!field && <td className="num" data-testid="nt-venues">{v == null ? "—" : v}</td>}
                 <td className="num" data-testid="nt-matches">{m == null ? "—" : m.toLocaleString("en-US")}</td>
                 <td className="num net" data-net={dollars(g.net)} data-cents={g.net} data-dpp={g.dpp} data-mem={g.membership}
-                  title={netTitle(g.dpp, g.membership)}>{money(g.net)}</td>
+                  title={netTitle(g.dpp, g.membership, g.event, g.strike)}>{money(g.net)}</td>
                 {!field && <td className="num" data-testid="nt-avgvenue">{perVenue(g.net, v)}</td>}
                 <td className="num" data-testid="nt-mix">{un ? "—" : mix(g.membership, g.net)}</td>
                 {pnlCells(un ? null : pnl.of(g))}
@@ -215,7 +216,7 @@ export default function RevenueNetTable({ grain, groups, matchesOf, venuesOf, la
             <td className="num" />
             {!field && <td className="num">{T.venues}</td>}
             <td className="num">{T.matches.toLocaleString("en-US")}</td>
-            <td className="num net" data-net={dollars(T.net)} data-cents={T.net} title={netTitle(T.dpp, T.membership)}>{money(T.net)}</td>
+            <td className="num net" data-net={dollars(T.net)} data-cents={T.net} title={netTitle(T.dpp, T.membership, T.event, T.strike)}>{money(T.net)}</td>
             {!field && <td className="num">{perVenue(T.net, T.venues)}</td>}
             <td className="num">{mix(T.membership, T.net)}</td>
             {pnlCells(pnl.total)}

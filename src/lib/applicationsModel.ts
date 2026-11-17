@@ -57,7 +57,7 @@ export type Person = {
 
 export const CITY_NAMES: Readonly<Record<string, string>> = Object.freeze({
   ATX: "Austin", DFW: "Dallas", HTX: "Houston", SATX: "San Antonio",
-  ATL: "Atlanta", OKC: "Oklahoma City", STL: "St. Louis",
+  ATL: "Atlanta", OKC: "Oklahoma City", STL: "St. Louis", PHL: "Philadelphia",
 });
 
 const pick = (byLabel: Record<string, unknown>, ...labels: string[]): unknown => {

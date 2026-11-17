@@ -47,6 +47,7 @@ const CITY_DISPLAY = [
   "Atlanta",
   "St. Louis",
   "OKC",
+  "Philadelphia", // our own city, PHL (Ryan, 2026-11-16)
   "El Paso",
   "Deleted Account Revenue",
 ].filter((c) => !isCityHidden(c));

@@ -199,7 +199,7 @@ function aggregateRevenue<T extends { type: FinanceData["revenue"][number]["type
   let total = 0;
   for (const r of rows) {
     const v = pickField(r);
-    total += r.type === "DPP" ? v * factor : v;
+    total += r.type === "DPP" || r.type === "Event" ? v * factor : v; // EVENT IS A MATCH BOOKING (Ryan, 2026-11-16): typed Event since the backend's labels, counted where DPP is.
   }
   return total;
 }
@@ -252,7 +252,7 @@ export function netRevenueByCityFor(
 
   const byCity = new Map<string, number>();
   for (const r of rows) {
-    const isExtrap = factor !== 1 && r.type === "DPP";
+    const isExtrap = factor !== 1 && (r.type === "DPP" || r.type === "Event"); // EVENT IS A MATCH BOOKING (Ryan, 2026-11-16): typed Event since the backend's labels, counted where DPP is.
     const value = isExtrap ? r.net * factor : r.net;
     byCity.set(r.city, (byCity.get(r.city) ?? 0) + value);
   }
@@ -570,7 +570,7 @@ function revenueByType(
     const v = r.net;
     real.set(
       r.type,
-      (real.get(r.type) ?? 0) + (factor !== 1 && r.type === "DPP" ? v * factor : v),
+      (real.get(r.type) ?? 0) + (factor !== 1 && (r.type === "DPP" || r.type === "Event") ? v * factor : v), // EVENT IS A MATCH BOOKING (Ryan, 2026-11-16): typed Event since the backend's labels, counted where DPP is.
     );
   }
   const out = new Map<string, RevenueTypeAggregate>();
@@ -1281,6 +1281,7 @@ export const CITY_DISPLAY_ORDER = [
   "El Paso",
   "Houston",
   "OKC",
+  "Philadelphia", // our own city, PHL (Ryan, 2026-11-16)
   "San Antonio",
   "St. Louis",
 ] as const;

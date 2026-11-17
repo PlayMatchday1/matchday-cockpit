@@ -724,7 +724,8 @@ export async function fetchPartnerRows(
     .from("fin_txn_daily")
     .select("day, type, gross_cents, source")
     .eq("fin_venue_id", venueId)
-    .not("type", "in", '("DPP","Membership")')
+    // Event bookings are in the roster's match revenue already, like DPP (Ryan, 2026-11-16).
+    .not("type", "in", '("DPP","Membership","Event")')
     .order("day");
   if (revErr) throw new Error(`Revenue fetch failed: ${revErr.message}`);
   const extra: PartnerExtraRevRow[] = (rev ?? []).filter((r) => Number(r.gross_cents ?? 0) !== 0).map((r) => ({
@@ -1422,7 +1423,8 @@ export function periodOwed(
       if (r.payment_type === "DAILY PAID") qualifyingRevenue += Number(r.match_price_paid ?? 0) || 0;
     }
     for (const x of finRevRows) {
-      if (x.date >= periodStart && x.date <= periodEnd && x.type !== "DPP" && x.type !== "Membership") {
+      // Event bookings are in the roster above already, like DPP (Ryan, 2026-11-16).
+      if (x.date >= periodStart && x.date <= periodEnd && x.type !== "DPP" && x.type !== "Event" && x.type !== "Membership") {
         qualifyingRevenue += Number(x.gross ?? 0) || 0;
       }
     }
@@ -1960,7 +1962,7 @@ export function buildPartnerPayoutsByVenueMonth(
         if (!r.venue) return false;
         if (!r.venue.toLowerCase().includes(venueNameLower)) return false;
         if (r.source === "PROJECTION") return false;
-        if (r.type === "DPP" || r.type === "Membership") return false;
+        if (r.type === "DPP" || r.type === "Event" || r.type === "Membership") return false; // Event: counted like DPP (2026-11-16)
         return true;
       })
       .map((r) => ({

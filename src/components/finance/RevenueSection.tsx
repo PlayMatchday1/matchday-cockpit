@@ -457,6 +457,8 @@ export default function RevenueSection() {
     { key: "net", label: "Net revenue", pick: (t) => t.net, strong: true },
     { key: "dpp", label: "DPP (net)", pick: (t) => t.dpp },
     { key: "membership", label: "Membership (net)", pick: (t) => t.membership },
+    { key: "event", label: "Event (net)", pick: (t) => t.event },
+    { key: "strike", label: "Strike (net)", pick: (t) => t.strike },
     { key: "other", label: "Other (net)", pick: (t) => t.other },
     { key: "fees", label: "Stripe fees", pick: (t) => t.fees },
   ];
@@ -526,7 +528,8 @@ export default function RevenueSection() {
     const n2 = (v: number | null) => (v == null ? "" : v.toFixed(2));
     downloadCsv(`matchday-revenue-${grain}-${period.key}.csv`, [
       [city ? "City" : "Field", ...(city ? ["Venues"] : ["City"]), "Launched", "Period", "Matches (kicked off)",
-        "DPP (before refunds)", "Membership (before refunds)", "Net revenue", ...(city ? ["Avg revenue / venue"] : []), "Member mix", "Share",
+        "DPP (before refunds)", "Membership (before refunds)", "Event (before refunds)", "Strike (before refunds)", "Other (before refunds)",
+        "Refunds and disputes", "Net revenue", ...(city ? ["Avg revenue / venue"] : []), "Member mix", "Share",
         `Matches (${w})`, `Revenue / match (${w}, play revenue before tax, refunds and Stripe fees)`, `Field cost / match (${w})`,
         `Net / match (${w})`, `Cost note (${w})`],
       ...ordered.map((g) => {
@@ -537,7 +540,7 @@ export default function RevenueSection() {
         const note = !c ? "" : [c.costText, c.profitShare ? "Profit share" : null, c.coverage ? `averages cover ${c.coverage}` : null,
           c.provisionalMonths.length ? `provisional until ${c.provisionalMonths.join(" and ")} closes` : null].filter(Boolean).join("; ");
         return [g.label, ...(city ? [v ?? ""] : [g.city ?? ""]), l ? shortYm(l) : "", period.label, m ?? "",
-          d(g.dpp), d(g.membership), d(g.net), ...(city ? [v ? d(Math.round(g.net / v)) : ""] : []),
+          d(g.dpp), d(g.membership), d(g.event), d(g.strike), d(g.other), d(g.reversals), d(g.net), ...(city ? [v ? d(Math.round(g.net / v)) : ""] : []),
           g.net > 0 ? `${((g.membership / g.net) * 100).toFixed(1)}%` : "", total ? `${((g.net / total) * 100).toFixed(1)}%` : "",
           c ? c.matches : "", n2(c?.revPM ?? null), n2(c?.costPM ?? null), n2(c?.netPM ?? null), note];
       }),

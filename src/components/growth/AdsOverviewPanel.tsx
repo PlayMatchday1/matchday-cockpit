@@ -28,7 +28,7 @@ import { UNKNOWN_MARKET } from "@/lib/metaAdSpend";
 
 const CITY_LABEL: Record<string, string> = {
   ATL: "Atlanta", ATX: "Austin", DFW: "Dallas", HTX: "Houston",
-  OKC: "OKC", SATX: "San Antonio", STL: "St. Louis",
+  OKC: "OKC", SATX: "San Antonio", STL: "St. Louis", PHL: "Philadelphia",
 };
 
 const FLOOR = "2026-08-01";

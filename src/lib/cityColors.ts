@@ -26,6 +26,7 @@ export const CITY_COLORS: Record<string, string> = {
   STL: "#0d9488",   // teal
   ELP: "#ca8a04",   // mustard
   WAW: "#0369a1",   // steel blue — partner market, distinct from DFW's brighter blue
+  PHL: "#457ab0",   // slate blue — the colour Reviews already gives Philadelphia
   [UNKNOWN_CITY]: "#94a3b8", // slate gray — distinctly "not a city"
 };
 

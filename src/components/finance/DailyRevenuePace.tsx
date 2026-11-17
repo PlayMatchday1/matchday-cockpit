@@ -49,7 +49,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useFinancePeriod } from "@/lib/financePeriodContext";
 import type { Grain } from "@/lib/financePeriod";
 import { fmtMoney } from "@/components/growth/format";
-import { bucketOf, cityLabel, filterRows, isRevenueRow, taxCentsOf, type MemberShares, type PageFilter, type RollupRow } from "@/lib/revenueTxn";
+import { bucketOf, isPlayBucket, cityLabel, filterRows, isRevenueRow, taxCentsOf, type MemberShares, type PageFilter, type RollupRow } from "@/lib/revenueTxn";
 import { loadRollup, useAsync, useReaderId } from "@/lib/useRevenueTxn";
 import { InfoI } from "./RevenueInfo";
 import s from "./financeSection.module.css";
@@ -87,7 +87,9 @@ const mondayOf = (d: Date) => addDays(d, -((d.getDay() + 6) % 7));
 const shortDate = (d: Date) => `${MONTH_SHORT[d.getMonth()]} ${d.getDate()}`;
 
 const toRows = (rs: RollupRow[], venue: string | null): Row[] => rs.filter(isRevenueRow).map((r) => ({
-  date: r.period, city: cityLabel(r.city), venue, bucket: bucketOf(r.type), net: (r.gross_cents - taxCentsOf(r)) / 100,
+  // DPP here is match play: DPP and Event bookings (Ryan, 2026-11-16). Strike and Other are not charted.
+  date: r.period, city: cityLabel(r.city), venue, bucket: ((b) => (isPlayBucket(b) ? "dpp" : b === "membership" ? "membership" : "other"))(bucketOf(r.type)),
+  net: (r.gross_cents - taxCentsOf(r)) / 100,
 }));
 
 type Bucket = {

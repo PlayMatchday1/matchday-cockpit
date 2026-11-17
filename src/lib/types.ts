@@ -18,6 +18,7 @@ export const CITIES = [
   "Atlanta",
   "St. Louis",
   "OKC",
+  "Philadelphia", // our own city, PHL (Ryan, 2026-11-16)
   "El Paso",
 ] as const;
 export type City = (typeof CITIES)[number];
@@ -52,6 +53,7 @@ export const CITY_STATS: Record<
   "St. Louis": { venues: 2, matchesPerWeek: 7, health: "Building" },
   OKC: { venues: 1, matchesPerWeek: 4, health: "At risk" },
   "El Paso": { venues: 1, matchesPerWeek: 2, health: "Building" },
+  Philadelphia: { venues: 1, matchesPerWeek: 2, health: "Building" },
 };
 
 export type Goal = {

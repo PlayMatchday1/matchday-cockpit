@@ -11,7 +11,7 @@ import { createPortal } from "react-dom";
 
 export type PopKey =
   | "how" | "status" | "net" | "dpp" | "mem" | "dppTable" | "memTable" | "avg" | "rev" | "fields" | "gross" | "tax"
-  | "fees" | "failed" | "venmo" | "unassigned" | "other" | "pace" | "matchmoney" | "paceChart"
+  | "fees" | "failed" | "venmo" | "unassigned" | "other" | "event" | "strike" | "pace" | "matchmoney" | "paceChart"
   | "matchesMonth" | "matches4w" | "fieldCost4w" | "netTable" | "netSame" | "fieldCostDef";
 
 /* ONE OR TWO SHORT SENTENCES EACH, 140 characters at most, no worked calculations and no pointers
@@ -21,15 +21,17 @@ export const POP: Record<PopKey, React.ReactNode> = {
   how: (<><div className="h">How we count revenue</div>Days are Central time. Test matches and internal accounts are left out.</>),
   status: (<><div className="h">Updating and final</div>A month is Updating until Stripe has synced its last day, about 2 days later. Then it is Final.</>),
   net: (<><div className="h">Net revenue</div>What customers paid, minus refunds, disputes and sales tax. Before Stripe fees.</>),
-  dpp: (<><div className="h">DPP</div>Single match bookings and strike fees, after tax and refunds.</>),
+  dpp: (<><div className="h">DPP</div>Single match bookings, after tax and refunds. Event matches booked since Nov 16 are under Event.</>),
+  event: (<><div className="h">Event</div>Event, bracket and group match bookings and event team fees since Nov 16, after tax and refunds.</>),
+  strike: (<><div className="h">Strike</div>Strike fines, after tax and refunds.</>),
   mem: (<><div className="h">Membership</div>Monthly membership charges, after tax and refunds. Most bill on the 1st.</>),
   dppTable: (<><div className="h">DPP</div>Before refunds and disputes, which come off in Net revenue.</>),
   memTable: (<><div className="h">Membership</div>Before refunds and disputes, which come off in Net revenue.</>),
   matchesMonth: (<><div className="h">Matches</div>Matches that have kicked off in the selected period.</>),
   matches4w: (<><div className="h">Matches, last 4 weeks</div>Matches played in the last 4 completed weeks, a Soccer Central match on both pitches counting as two.</>),
   fieldCost4w: (<><div className="h">Field cost / match</div>The field&apos;s cost per match. For profit share it is computed from the partner&apos;s terms and can differ from the billed amount on Field Costs. Profit share costs for the current month can still change until the month closes.</>),
-  netTable: (<><div className="h">Net revenue</div>After refunds, disputes and sales tax. Hover a figure for its DPP and Membership.</>),
-  avg: (<><div className="h">Avg daily DPP</div>DPP from completed days divided by the number of completed days.</>),
+  netTable: (<><div className="h">Net revenue</div>After refunds, disputes and sales tax. Hover a figure for its DPP, Membership, Event and Strike.</>),
+  avg: (<><div className="h">Avg daily DPP</div>DPP and Event from completed days divided by the number of completed days.</>),
   rev: (<><div className="h">Refunds &amp; disputes</div>Money returned to customers, after the tax that came back with it. A dispute is a chargeback by the bank.</>),
   fields: (<><div className="h">Fields</div>Only fields that had revenue in the selected month and city.</>),
   gross: (<><div className="h">Gross collected</div>Every successful charge this month, including sales tax and hand-entered Venmo payments.</>),
@@ -38,9 +40,9 @@ export const POP: Record<PopKey, React.ReactNode> = {
   failed: (<><div className="h">Failed payments</div>Charges that looked successful but the bank reversed before they settled.</>),
   venmo: (<><div className="h">Venmo (manual)</div>Private rental payments received outside Stripe and entered by hand.</>),
   unassigned: (<><div className="h">Unassigned</div>Members with no city on file.</>),
-  other: (<><div className="h">Other</div>Private rentals and charges that are neither DPP nor membership, after tax and refunds.</>),
+  other: (<><div className="h">Other</div>Private rentals and charges that are not DPP, membership, event or strike, after tax and refunds.</>),
   pace: (<><div className="h">Pace to month end</div>Revenue so far plus the recent daily average, adjusted for how last month trended, times the days left.</>),
-  paceChart: (<><div className="h">Daily revenue pace</div>Each day&apos;s DPP and membership after sales tax, refunds and disputes, before Stripe fees. The same net basis as the tiles.</>),
+  paceChart: (<><div className="h">Daily revenue pace</div>Each day&apos;s DPP (with Event) and membership after sales tax, refunds and disputes, before Stripe fees. The same net basis as the tiles.</>),
   netSame: (<><div className="h">Revenue</div>Net revenue, after sales tax, refunds and disputes. Same as the Revenue page.</>),
   fieldCostDef: (<><div className="h">Field cost</div>The Field Costs rate × matches played, plus billed cancellations, plus profit-share payouts, in the month they were played.</>),
   matchmoney: (<><div className="h">DPP revenue per match</div>Each match&apos;s bookings less its refunds, after tax. Dated by kickoff.</>),

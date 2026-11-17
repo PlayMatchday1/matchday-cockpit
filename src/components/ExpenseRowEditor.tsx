@@ -22,6 +22,7 @@ const CITY_OPTIONS = [
   "Atlanta",
   "St. Louis",
   "OKC",
+  "Philadelphia", // our own city, PHL (Ryan, 2026-11-16)
   "El Paso",
 ].filter((c) => !isCityHidden(c));
 

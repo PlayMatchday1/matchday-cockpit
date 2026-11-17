@@ -19,6 +19,7 @@ export const CANONICAL_CITIES = [
   "Atlanta",
   "St. Louis",
   "OKC",
+  "Philadelphia", // our own city, PHL (Ryan, 2026-11-16)
   "El Paso",
 ] as const;
 export type CanonicalCity = (typeof CANONICAL_CITIES)[number];

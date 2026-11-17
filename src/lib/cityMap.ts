@@ -9,6 +9,7 @@ export const CSV_TO_COCKPIT_CITY: Record<string, string> = {
   Houston: "Houston",
   "San Antonio": "San Antonio",
   "St. Louis": "St. Louis",
+  Philadelphia: "Philadelphia",
   Atlanta: "Atlanta",
   "El Paso": "El Paso",
 };
@@ -35,6 +36,7 @@ export const CITY_ABBR_TO_COCKPIT: Record<string, string> = {
   OKC: "OKC",
   STL: "St. Louis",
   ELP: "El Paso", // forward-compat; 0 rows today
+  PHL: "Philadelphia", // our own city since 2026-11 (Ryan, 2026-11-16)
 };
 
 export function cityFromAbbr(raw: string | undefined | null): string | null {

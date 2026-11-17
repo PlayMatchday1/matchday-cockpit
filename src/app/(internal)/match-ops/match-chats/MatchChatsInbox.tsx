@@ -40,6 +40,7 @@ const BADGE: Record<string, { bg: string; fg: string }> = {
   SATX: { bg: "#fce4ee", fg: "#963a63" },
   STL: { bg: "#e3f0e6", fg: "#2e6b45" },
   ELP: { bg: "#f6efd8", fg: "#7a6410" },
+  PHL: { bg: "#e0eef8", fg: "#2f5f86" },
   [UNKNOWN_CITY]: { bg: "#e7ecea", fg: "#6d7b74" },
 };
 function badgeFor(code: string | null | undefined) {

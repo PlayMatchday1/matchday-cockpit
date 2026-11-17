@@ -31,7 +31,7 @@ import {
 } from "@/lib/expensesMonth";
 
 const CITY_DISPLAY = [
-  "Austin", "Houston", "San Antonio", "Dallas", "Atlanta", "St. Louis", "OKC", "El Paso", "Company-wide",
+  "Austin", "Houston", "San Antonio", "Dallas", "Atlanta", "St. Louis", "OKC", "Philadelphia", "El Paso", "Company-wide",
 ].filter((c) => !isCityHidden(c));
 const BASE_CATEGORIES = ["City Manager", "Equipment", "Marketing", "Misc"];
 const MONTHS_FULL = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];

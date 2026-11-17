@@ -84,9 +84,10 @@ export default function RevenueTop({ period, rows, error, dayRows, prevDay, toda
   // (the same reason Pace leaves it out of its rate). Today's rows come narrowed like the rest.
   const days = period.isCurrent ? period.elapsedDays - 1 : period.totalDays;
   const avgDpp = !t ? null
-    : !period.isCurrent ? t.dpp / days
+    // DPP here is match play: DPP plus Event bookings, so the split on 2026-11-16 moves nothing.
+    : !period.isCurrent ? (t.dpp + t.event) / days
     : days < 1 || !todayRows ? null
-    : (t.dpp - totalsOf(todayRows).dpp) / days;
+    : (t.dpp + t.event - (totalsOf(todayRows).dpp + totalsOf(todayRows).event)) / days;
 
   const pct = (v: number) => (t && t.gross ? `${((Math.abs(v) / t.gross) * 100).toFixed(1)}%` : "");
   const items: [string, number, number | null, string, Parameters<typeof InfoI>[0]["pop"] | null, string][] = t ? [
@@ -142,17 +143,23 @@ export default function RevenueTop({ period, rows, error, dayRows, prevDay, toda
               onClick={() => setOpen((o) => !o)}>{open ? "Hide line items" : "Show line items"}</button>
           </div>
           {/* THE TILES FILL THE CARD: a grid beside the calculation, as tall as it, numbers at full
-              size. DPP + Membership + Other = Net revenue (each after its own refunds and disputes). */}
+              size. DPP + Membership + Event + Strike + Other = Net revenue (each after its own refunds
+              and disputes; Ryan, 2026-11-16). */}
           <div className="tiles" style={(() => {
-            // COLUMNS FROM THE COUNT, so no hole is left: 3 → one row, 4 → 2 × 2, 5 → 3 + 2 with the
-            // last tile two columns wide.
-            const n = 3 + (t.other !== 0 ? 1 : 0) + (isCurMonth ? 1 : 0);
-            return { gridTemplateColumns: `repeat(${n === 4 ? 2 : 3}, minmax(0, 1fr))`, ["--last-span" as string]: n === 5 ? "span 2" : "auto" };
+            // COLUMNS FROM THE COUNT, so no hole is left: 4 → 2 × 2, otherwise rows of three with the
+            // last tile widened to fill its row.
+            const n = 5 + (t.other !== 0 ? 1 : 0) + (isCurMonth ? 1 : 0);
+            const cols = n === 4 ? 2 : 3;
+            return { gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`, ["--last-span" as string]: cols === 3 && n % 3 ? `span ${4 - (n % 3)}` : "auto" };
           })()}>
             <div className="tile"><div className="k">DPP <InfoI pop="dpp" label="What DPP is" /></div>
               <div className="v num" data-testid="mini-dpp" data-cents={t.dpp}>{money(t.dpp)}</div><div className="s">net</div></div>
             <div className="tile"><div className="k">Membership <InfoI pop="mem" label="What membership is" /></div>
               <div className="v num" data-testid="mini-mem" data-cents={t.membership}>{money(t.membership)}</div><div className="s">net</div></div>
+            <div className="tile"><div className="k">Event <InfoI pop="event" label="What event is" /></div>
+              <div className="v num" data-testid="mini-event" data-cents={t.event}>{money(t.event)}</div><div className="s">net</div></div>
+            <div className="tile"><div className="k">Strike <InfoI pop="strike" label="What strike is" /></div>
+              <div className="v num" data-testid="mini-strike" data-cents={t.strike}>{money(t.strike)}</div><div className="s">net · strike fines</div></div>
             {t.other !== 0 && (
               <div className="tile"><div className="k">Other <InfoI pop="other" label="What other is" /></div>
                 <div className="v num" data-testid="mini-other" data-cents={t.other}>{money(t.other)}</div><div className="s">net · rentals and other charges</div></div>

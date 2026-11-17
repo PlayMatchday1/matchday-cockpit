@@ -64,6 +64,7 @@ const CITY_COLORS: Record<string, string> = {
   OKC: "#f16464",
   "San Antonio": "#0fa4a0",
   "St. Louis": "#c74d94",
+  Philadelphia: "#457ab0",
 };
 // A palette for pitches — more fields than cities, so it cycles. Colour identifies a line against
 // its neighbours; the table beneath carries the names.

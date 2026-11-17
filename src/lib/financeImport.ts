@@ -196,6 +196,7 @@ const STRIPE_CITY_PREFIX: Record<string, string> = {
   // live 2026-11-16) and by membership rows. Unmapped, their money landed Unassigned (Ryan, 2026-11-16).
   NYC: "New York City",
   WAW: "Warsaw",
+  PHL: "Philadelphia", // our own city (Ryan, 2026-11-16); its matches carry PHL
 };
 
 const STRIPE_SPEC: ColumnSpec[] = [
@@ -365,7 +366,10 @@ export function looksLikeMembership(
 // of them. "Unclassified" is written to fin_revenue so those charges are visible
 // and reviewable, but no typed rollup (DPP / Membership / Strike / Private Rental)
 // includes it — the same "held out until resolved" treatment as unmapped cost.
-export type FinRevType = "DPP" | "Membership" | "Strike" | "Private Rental" | "Unclassified";
+/* "Event" (Ryan, 2026-11-16): bookings on EVENT, BRACKET and GROUP matches and special event team and
+ * captain division fees, ONLY when the payment carries metadata.revenueType "event" (labelled since
+ * 2026-11-16). Older event payments keep the rules they had: a booking with a match id is DPP. */
+export type FinRevType = "DPP" | "Membership" | "Strike" | "Private Rental" | "Event" | "Unclassified";
 
 // POSITIVE membership test — a subscription/membership charge names itself in its
 // type or description. This replaces the old default ("no cityIdentifier ⇒
@@ -405,11 +409,10 @@ export function classifyCharge(args: {
 }
 
 /* THE BACKEND'S OWN LABEL WINS (Ryan, 2026-11-16). metadata.revenueType is booking, membership, event
- * or strike (backend docs/stripe-metadata.md). An EVENT is a booking on an EVENT, BRACKET or GROUP
- * match, or a special event team or captain division fee: it goes to DPP, where match bookings of every
- * kind already land through matchId, so the label moves no existing money. A value not in this list, or
- * none (every payment before the label shipped), falls through to the positive rules below. */
-const REVENUE_TYPE: Record<string, FinRevType> = { booking: "DPP", event: "DPP", membership: "Membership", strike: "Strike" };
+ * or strike (backend docs/stripe-metadata.md). An event (a booking on an EVENT, BRACKET or GROUP match,
+ * or a special event team or captain division fee) is its own type, Event. A value not in this list,
+ * or none (every payment before the label shipped), falls through to the positive rules below. */
+const REVENUE_TYPE: Record<string, FinRevType> = { booking: "DPP", event: "Event", membership: "Membership", strike: "Strike" };
 export function typeFromRevenueType(v: string | null | undefined): FinRevType | null {
   return REVENUE_TYPE[(v ?? "").trim().toLowerCase()] ?? null;
 }

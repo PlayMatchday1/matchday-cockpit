@@ -34,7 +34,7 @@ export type RollupRow = {
   period: string;            // YYYY-MM-DD, a Central day or the first of a Central month
   kind: "charge" | "refund" | "failed" | "dispute" | "fee" | "manual";
   source: string;            // Stripe | Venmo
-  type: string;              // DPP | Membership | Private Rental | Strike | Unclassified
+  type: string;              // DPP | Membership | Event | Strike | Private Rental | Unclassified
   city: string | null;
   fin_venue_id: number | null;
   excluded: boolean;
@@ -54,10 +54,14 @@ export const UNASSIGNED_TAX_RATE = CITY_TAX_RATE.Austin; // 8.25%, see the heade
 export const cityLabel = (c: string | null | undefined): string =>
   c == null || c.trim() === "" || c === UNASSIGNED_STORED ? UNASSIGNED : c;
 
-export type Bucket = "dpp" | "membership" | "other";
-/** DPP includes strike fees (the mock's DPP definition: "single match bookings and strike fees"). */
+/* FIVE LINES (Ryan, 2026-11-16): DPP, Membership, Event, Strike and Other, each after its own refunds
+ * and disputes, adding up to net revenue. Strike fees used to sit inside DPP; they are their own line
+ * now. Event is the backend's revenueType "event", on payments since 2026-11-16 (financeImport). */
+export type Bucket = "dpp" | "membership" | "event" | "strike" | "other";
 export const bucketOf = (type: string): Bucket =>
-  type === "DPP" || type === "Strike" ? "dpp" : type === "Membership" ? "membership" : "other";
+  type === "DPP" ? "dpp" : type === "Membership" ? "membership" : type === "Event" ? "event" : type === "Strike" ? "strike" : "other";
+/** Match play: what the pace chart and Avg daily DPP count as DPP, so Event bookings never drop out. */
+export const isPlayBucket = (b: Bucket): boolean => b === "dpp" || b === "event";
 
 const REVERSAL = new Set(["refund", "failed", "dispute"]);
 const MONEY = new Set(["charge", "refund", "failed", "dispute", "manual"]);
@@ -113,8 +117,8 @@ export type Totals = {
   net: number;
   fees: number;           // NEGATIVE
   kept: number;
-  /** After their own refunds and disputes, net of tax. dpp + membership + other = net. */
-  dpp: number; membership: number; other: number;
+  /** After their own refunds and disputes, net of tax. dpp + membership + event + strike + other = net. */
+  dpp: number; membership: number; event: number; strike: number; other: number;
   /** All refunds, failed payments and disputes, net of tax (= refunds + failed + disputes). */
   reversals: number;
   missingRate: string[];
@@ -124,7 +128,7 @@ export const emptyTotals = (): Totals => ({
   charges: 0, chargesN: 0, venmo: 0, venmoN: 0, refunds: 0, refundsN: 0, failed: 0, failedN: 0,
   disputes: 0, disputesN: 0, refundsGross: 0, failedGross: 0, disputesGross: 0,
   tax: 0, gross: 0, net: 0, fees: 0, kept: 0,
-  dpp: 0, membership: 0, other: 0, reversals: 0, missingRate: [],
+  dpp: 0, membership: 0, event: 0, strike: 0, other: 0, reversals: 0, missingRate: [],
 });
 
 /** Every figure in the headline and the line items, in CENTS. */
@@ -160,13 +164,13 @@ export type GroupRow = {
   label: string;
   city: string | null;
   venueId: number | null;
-  dpp: number; membership: number; other: number; reversals: number; net: number;
+  dpp: number; membership: number; event: number; strike: number; other: number; reversals: number; net: number;
   /** What `other` is made of, by type, for the row's info. */
   otherByType: Record<string, number>;
 };
 
 function blankGroup(key: string, label: string, city: string | null, venueId: number | null): GroupRow {
-  return { key, label, city, venueId, dpp: 0, membership: 0, other: 0, reversals: 0, net: 0, otherByType: {} };
+  return { key, label, city, venueId, dpp: 0, membership: 0, event: 0, strike: 0, other: 0, reversals: 0, net: 0, otherByType: {} };
 }
 
 function addTo(g: GroupRow, r: RollupRow) {

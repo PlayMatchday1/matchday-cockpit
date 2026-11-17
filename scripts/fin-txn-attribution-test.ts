@@ -22,13 +22,17 @@ const is = (n: string, got: unknown, want: unknown) =>
 
 console.log("— type: the label wins, older payments keep the old rules —");
 is("booking is DPP", typeFromRevenueType("booking"), "DPP");
-is("event is DPP, where match bookings of every kind already land", typeFromRevenueType("event"), "DPP");
+is("event is its own type (Ryan, 2026-11-16)", typeFromRevenueType("event"), "Event");
 is("membership is Membership", typeFromRevenueType("membership"), "Membership");
 is("strike is Strike", typeFromRevenueType("Strike "), "Strike");
 is("an unknown label is no label", typeFromRevenueType("gift"), null);
 is("a labelled membership with a match id is still Membership", classifyCharge({ stripeType: null, description: null, hasMatchId: true, revenueType: "membership" }), "Membership");
-is("a labelled event team fee (no match id, type special_event_team) is DPP, not Unclassified",
-  classifyCharge({ stripeType: "special_event_team", description: "Team fee", hasMatchId: false, revenueType: "event" }), "DPP");
+is("a labelled event team fee (no match id, type special_event_team) is Event, not Unclassified",
+  classifyCharge({ stripeType: "special_event_team", description: "Team fee", hasMatchId: false, revenueType: "event" }), "Event");
+is("a labelled booking on an EVENT match (it has a match id) is Event, not DPP",
+  classifyCharge({ stripeType: "match", description: null, hasMatchId: true, revenueType: "event" }), "Event");
+is("CONTROL: an unlabelled booking on an EVENT match keeps the old rule, DPP",
+  classifyCharge({ stripeType: "match", description: null, hasMatchId: true }), "DPP");
 is("CONTROL: the same fee unlabelled stays Unclassified", classifyCharge({ stripeType: "special_event_team", description: "Team fee", hasMatchId: false }), "Unclassified");
 is("CONTROL: an unlabelled booking is DPP by match id", classifyCharge({ stripeType: "match", description: null, hasMatchId: true, revenueType: null }), "DPP");
 is("CONTROL: an unlabelled renewal is Membership by description", classifyCharge({ stripeType: null, description: "Subscription update", hasMatchId: false }), "Membership");
@@ -37,7 +41,8 @@ console.log("\n— the city list —");
 is("NYC is New York City", cityFromIdentifier("NYC"), "New York City");
 is("WAW is Warsaw", cityFromIdentifier("WAW"), "Warsaw");
 is("CONTROL: ATX is still Austin", cityFromIdentifier("ATX"), "Austin");
-is("CONTROL: an unknown code is Unassigned", cityFromIdentifier("PHL"), DELETED_ACCOUNT_CITY);
+is("PHL is Philadelphia, our own city (2026-11-16)", cityFromIdentifier("PHL"), "Philadelphia");
+is("CONTROL: an unknown code is Unassigned", cityFromIdentifier("SDG"), DELETED_ACCOUNT_CITY);
 
 console.log("\n— membership city: label, then the membership, then the email —");
 const maps = {
@@ -69,6 +74,14 @@ const r2 = run(bt({ revenueType: "membership", cityIdentifier: "HOU" }));
 is("a labelled renewal: the label's city", [r2?.type, r2?.city], ["Membership", "Houston"]);
 const r3 = run(bt({}, { id: "pi_ny" }));
 is("an expanded payment intent is read by its id", [r3?.city, r3?.payment_intent_id], ["New York City", "pi_ny"]);
+
+console.log("\n— the Revenue page's five lines add up to net —");
+const { totalsOf, bucketOf } = await import("../src/lib/revenueTxn");
+is("bucket per type", ["DPP", "Membership", "Event", "Strike", "Private Rental", "Unclassified"].map(bucketOf), ["dpp", "membership", "event", "strike", "other", "other"]);
+const row = (type: string, kind: "charge" | "refund", cents: number) => ({ period: "2026-11-17", kind, source: "Stripe", type, city: "Austin", fin_venue_id: null, excluded: false, n: 1, gross_cents: cents, fee_cents: 0, tax_cents: 0 });
+const T = totalsOf([row("DPP", "charge", 1000), row("Membership", "charge", 7199), row("Event", "charge", 2500), row("Event", "refund", -500), row("Strike", "charge", 2000), row("Private Rental", "charge", 30000)]);
+is("each line after its own refunds", [T.dpp, T.membership, T.event, T.strike, T.other], [1000, 7199, 2000, 2000, 30000]);
+is("DPP + Membership + Event + Strike + Other = net", T.dpp + T.membership + T.event + T.strike + T.other, T.net);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail || pass === 0) process.exit(1);

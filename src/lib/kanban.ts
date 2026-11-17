@@ -410,6 +410,7 @@ const CITY_DISPLAY: Record<string, string> = {
   STL: "St. Louis",
   ELP: "El Paso",
   WAW: "Warsaw",
+  PHL: "Philadelphia",
 };
 
 export function isKnownCity(city: string): boolean {

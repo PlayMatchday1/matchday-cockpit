@@ -37,6 +37,7 @@ const CITY_ORDER = [
   "El Paso",
   "Houston",
   "OKC",
+  "Philadelphia", // our own city, PHL (Ryan, 2026-11-16)
   "San Antonio",
   "St. Louis",
 ] as const;
