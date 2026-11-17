@@ -17,8 +17,9 @@
 // city. Frame 6 says "every city"; confinement wins over the design.
 //
 // CITY PILLS (Ryan, 2026-11-16): the list response carries `pills` (cityPills), each count the city's
-// Current tab count. A city is valid when it is in CITY_SCOPES or has rows in our copy (NYC is not in
-// CITY_SCOPES). With city=ALL there are no city settings to read: the member price and strike fine are
+// Current tab count. A city is valid when it is in CITY_SCOPES or is a MatchDay city in cityMap
+// (Philadelphia). NYC and WAW members are in no pill and not in All cities (Ryan, 2026-11-17); the
+// Warsaw operator, confined to WAW, still sees their own city as before. With city=ALL there are no city settings to read: the member price and strike fine are
 // per city, and reading every city's would be eight MatchDay calls a load. So in All cities prices show
 // in whole dollars with no Custom price chip, and the MEMBERS card counts every city.
 import { authenticateCapability } from "@/lib/capabilityAuth";
@@ -26,6 +27,7 @@ import { assertScope } from "@/lib/cityConfinement";
 import { resolveCityScope, cityNameFor } from "@/lib/cityScope";
 import { makeServerClient } from "@/lib/supabaseServer";
 import { countActiveMembers } from "@/lib/membershipStats";
+import { cityFromAbbr } from "@/lib/cityMap";
 import { loadMemberRows, loadAllRowStripe, loadPaidSinceStart, readCitySettings } from "@/lib/membersPageData";
 import {
   ALL_CITIES, cityPills, memberCityName, TABS, tabCounts, tabRows, pageOf, searchMembers, searchSummary, membersCsv, rowView, sortRows, defaultSort, isSortKey,
@@ -61,9 +63,10 @@ export async function GET(req: Request) {
       // A refresh after an edit re-reads the rows and Stripe facts; no edit here changes what was paid.
       loadMemberRows(env, sb, fresh), loadAllRowStripe(sb, env, fresh), loadPaidSinceStart(sb, env),
     ]);
-    const known = new Set(all.map((r) => r.city));
+    // MatchDay cities only, for the pills and All cities. Search still covers every row.
+    const mdRows = all.filter((r) => cityFromAbbr(r.city) != null);
     const city = confined ?? (asked === ALL_CITIES || !asked ? ALL_CITIES
-      : resolveCityScope(asked)?.identifier ?? (known.has(asked) ? asked : null));
+      : resolveCityScope(asked)?.identifier ?? (cityFromAbbr(asked) != null ? asked : null));
     if (!city) return Response.json({ error: "Pick a city." }, { status: 400 });
     const isAll = city === ALL_CITIES;
     const nameOf = (id: string) => memberCityName(id, cityNameFor);
@@ -111,10 +114,10 @@ export async function GET(req: Request) {
     /* ── ONE TAB OF ONE CITY ──────────────────────────────────────────────────────────────── */
     const tabParam = url.searchParams.get("tab");
     const tab: Tab = isTab(tabParam) ? tabParam : "current";
-    const cityRows = isAll ? (confined ? all.filter((r) => r.city === confined) : all) : all.filter((r) => r.city === city);
+    const cityRows = isAll ? (confined ? all.filter((r) => r.city === confined) : mdRows) : all.filter((r) => r.city === city);
     const counts = tabCounts(cityRows, now);
     const sort = askedSort ?? defaultSort(tab);
-    const ordered = sortRows(view(tabRows(all, city, tab, now), stripe, () => planCents), sort);
+    const ordered = sortRows(view(tabRows(isAll ? mdRows : all, city, tab, now), stripe, () => planCents), sort);
 
     if (url.searchParams.get("format") === "csv") return csvOut(ordered, `members-${isAll ? "all-cities" : city}-${tab}`);
 
@@ -122,7 +125,7 @@ export async function GET(req: Request) {
     return Response.json({
       mode: "list", env, source, syncedAt, city, tab, counts, confinedTo: confined, sort,
       cityName: isAll ? "All cities" : nameOf(city),
-      pills: cityPills(confined ? all.filter((r) => r.city === confined) : all, now, nameOf),
+      pills: cityPills(confined ? all.filter((r) => r.city === confined) : mdRows, now, nameOf),
       payingCount: countActiveMembers(cityMirrorShape(cityRows), new Date(now)),
       settings: settings && { ...settings, payingCount: countActiveMembers(cityMirrorShape(cityRows), new Date(now)) },
       page: pg.page, pages: pg.pages, total: pg.total, rows: pg.rows,

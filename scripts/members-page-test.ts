@@ -82,7 +82,9 @@ for (const c of pills.cities) is(`  ${c.name}'s pill equals its Current tab`, c.
 is("  All cities is the sum of the pills, and the All cities Current tab", pills.all, tabRows(ROWS, ALL_CITIES, "current", NOW).length);
 yes("  pills are biggest first", pills.cities.every((c, i, a) => i === 0 || a[i - 1].count >= c.count));
 const withNyc = cityPills([...ROWS, M({ membershipId: 90, userId: 90, city: "NYC" }), M({ membershipId: 91, userId: 91, city: "WAW", status: "CANCELED", canceledAt: "2026-01-01T00:00:00Z" })], NOW, nm);
-yes("  a city outside the scope list (NYC) gets a pill, named", withNyc.cities.some((c) => c.identifier === "NYC" && c.name === "New York" && c.count === 1));
+/* CHANGED 2026-11-17 (Ryan): NYC is not a MatchDay city. The route passes MatchDay rows only, so NYC
+ * gets no pill there; cityPills itself still names a city it is given, by its id when unmapped. */
+yes("  a city it is given gets a pill, an unmapped one named by its id", withNyc.cities.some((c) => c.identifier === "NYC" && c.name === "NYC" && c.count === 1));
 yes("  CONTROL: a city with no Current members gets none", !withNyc.cities.some((c) => c.identifier === "WAW") && withNyc.cities.length > 0);
 yes("All cities' tab spans cities", new Set(tabRows(ROWS, ALL_CITIES, "current", NOW).map((r) => r.city)).size > 1);
 /* ADDED 2026-11-16 (Ryan): cancel columns on Cancelling and Past only, each sortable. */

@@ -38,8 +38,9 @@ is("CONTROL: an unlabelled booking is DPP by match id", classifyCharge({ stripeT
 is("CONTROL: an unlabelled renewal is Membership by description", classifyCharge({ stripeType: null, description: "Subscription update", hasMatchId: false }), "Membership");
 
 console.log("\n— the city list —");
-is("NYC is New York City", cityFromIdentifier("NYC"), "New York City");
-is("WAW is Warsaw", cityFromIdentifier("WAW"), "Warsaw");
+/* CHANGED 2026-11-17 (Ryan): NYC and WAW are not MatchDay cities; their codes resolve to Unassigned. */
+is("NYC is not a MatchDay city: Unassigned", cityFromIdentifier("NYC"), DELETED_ACCOUNT_CITY);
+is("WAW is not a MatchDay city: Unassigned", cityFromIdentifier("WAW"), DELETED_ACCOUNT_CITY);
 is("CONTROL: ATX is still Austin", cityFromIdentifier("ATX"), "Austin");
 is("PHL is Philadelphia, our own city (2026-11-16)", cityFromIdentifier("PHL"), "Philadelphia");
 is("CONTROL: an unknown code is Unassigned", cityFromIdentifier("SDG"), DELETED_ACCOUNT_CITY);
@@ -48,12 +49,12 @@ console.log("\n— membership city: label, then the membership, then the email �
 const maps = {
   emailToCity: new Map([["pat@example.com", "Austin"]]),
   matchToCity: new Map([["17516", "Houston"]]),
-  piToMemberCity: new Map([["pi_mem", "San Antonio"], ["pi_ny", "New York City"]]),
+  piToMemberCity: new Map([["pi_mem", "San Antonio"], ["pi_phl", "Philadelphia"]]),
 };
 const mem = (o: Partial<Parameters<typeof allocateCity>[1]>): string => allocateCity(maps, { type: "Membership", cityIdentifier: null, matchId: null, email: null, paymentIntentId: null, ...o });
 is("the label wins over the membership and the email", mem({ cityIdentifier: "DFW", paymentIntentId: "pi_mem", email: "pat@example.com" }), "Dallas");
 is("no label: the membership wins over the email", mem({ paymentIntentId: "pi_mem", email: "pat@example.com" }), "San Antonio");
-is("a NYC membership lands in New York City", mem({ paymentIntentId: "pi_ny" }), "New York City");
+is("a Philadelphia membership lands in Philadelphia", mem({ paymentIntentId: "pi_phl" }), "Philadelphia");
 is("no label, no membership: the email guess", mem({ paymentIntentId: "pi_unknown", email: "pat@example.com" }), "Austin");
 is("nothing at all: Unassigned", mem({ paymentIntentId: "pi_unknown", email: "who@example.com" }), DELETED_ACCOUNT_CITY);
 is("a blank label is no label", mem({ cityIdentifier: "-", paymentIntentId: "pi_mem" }), "San Antonio");
@@ -72,8 +73,8 @@ const r1 = run(bt({}));
 is("an unlabelled renewal: Membership in its membership's city, not the email's", [r1?.type, r1?.city, r1?.payment_intent_id], ["Membership", "San Antonio", "pi_mem"]);
 const r2 = run(bt({ revenueType: "membership", cityIdentifier: "HOU" }));
 is("a labelled renewal: the label's city", [r2?.type, r2?.city], ["Membership", "Houston"]);
-const r3 = run(bt({}, { id: "pi_ny" }));
-is("an expanded payment intent is read by its id", [r3?.city, r3?.payment_intent_id], ["New York City", "pi_ny"]);
+const r3 = run(bt({}, { id: "pi_phl" }));
+is("an expanded payment intent is read by its id", [r3?.city, r3?.payment_intent_id], ["Philadelphia", "pi_phl"]);
 
 console.log("\n— the Revenue page's five lines add up to net —");
 const { totalsOf, bucketOf } = await import("../src/lib/revenueTxn");

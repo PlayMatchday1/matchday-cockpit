@@ -74,7 +74,7 @@ async function fieldToVenue(sb: SupabaseClient): Promise<Map<number, number>> {
  * hold memberships in two; the payment intent names the membership.
  *
  * stripeSync (fin_revenue's nightly job, read only by the ledger editor) keeps the email rule. It shares
- * cityFromIdentifier, so it learns NYC and WAW too. */
+ * cityFromIdentifier. NYC and WAW are not MatchDay cities and resolve to Unassigned (Ryan, 2026-11-17). */
 type CityMaps = { emailToCity: Map<string, string>; matchToCity: Map<string, string>; piToMemberCity: Map<string, string> };
 
 async function cityMaps(sb: SupabaseClient): Promise<CityMaps> {

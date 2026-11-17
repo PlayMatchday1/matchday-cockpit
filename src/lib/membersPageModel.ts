@@ -417,14 +417,14 @@ export function searchSummary(hits: readonly MemberRow[], pickedCityName: string
 /* ═══ THE CITY PILLS (Ryan, 2026-11-16) ═════════════════════════════════════════════════════════
  * "All cities" first, then every city with Current members, biggest first. Each count IS that
  * city's Current tab count (tabCounts over the same rows), so a pill and its tab cannot disagree.
- * Cities come from the rows, not from CITY_SCOPES: NYC has a member and is not in that list.
- * Rows reaching here already exclude @matchday.com (loadMemberRows). */
+ * Cities come from the rows the route passes: MatchDay cities only (cityMap), so NYC and WAW members
+ * have no pill and are not in All cities (Ryan, 2026-11-17). A confined account's own city is passed
+ * as it is. Rows reaching here already exclude @matchday.com (loadMemberRows). */
 export const ALL_CITIES = "ALL";
 export type CityPill = { identifier: string; name: string; count: number };
-/** A display name for any city identifier: the scope list's name, a few the list lacks, else the id. */
-const EXTRA_CITY_NAMES: Record<string, string> = { NYC: "New York" };
+/** A display name for any city identifier: the scope list's name, else the id. */
 export function memberCityName(id: string, scopeName: (id: string) => string | null): string {
-  return scopeName(id) ?? EXTRA_CITY_NAMES[id] ?? id;
+  return scopeName(id) ?? id;
 }
 export function cityPills(rows: readonly MemberRow[], now: number, nameOf: (id: string) => string): { all: number; cities: CityPill[] } {
   const by = new Map<string, MemberRow[]>();

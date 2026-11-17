@@ -192,10 +192,8 @@ const STRIPE_CITY_PREFIX: Record<string, string> = {
   STL: "St. Louis",
   OKC: "OKC",
   ELP: "El Paso",
-  // Both carried in cityIdentifier by the backend's payment labels (backend docs/stripe-metadata.md,
-  // live 2026-11-16) and by membership rows. Unmapped, their money landed Unassigned (Ryan, 2026-11-16).
-  NYC: "New York City",
-  WAW: "Warsaw",
+  // NOT NYC OR WAW (Ryan, 2026-11-17): they are separate, independent markets, not MatchDay cities.
+  // Their codes resolve to nothing here, so any of their money stays Unassigned.
   PHL: "Philadelphia", // our own city (Ryan, 2026-11-16); its matches carry PHL
 };
 
