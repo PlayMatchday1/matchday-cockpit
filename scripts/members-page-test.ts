@@ -269,6 +269,12 @@ yes("  with Paid since start and Duration, and no Owed", lines[0].includes("Paid
 yes("a cell starting with = is neutralised", lines[1].includes("'=HYPERLINK(1)"));
 yes("quotes and commas are escaped", lines[1].includes('said ""hi"", left"'));
 yes("the paid total is in dollars", lines[1].includes("$143.98"));
+/* ADDED 2026-11-16 (Ryan): Cancel reason and Comment go back on the end of the export. */
+is("  the last two columns are Cancel reason and Comment", CSV_HEADERS.slice(-2), ["Cancel reason", "Comment"]);
+const cc = M({ cancelReason: "Moved away", comment: "Called, said\nshe'll be back, maybe" });
+const ccLines = membersCsv([{ ...cc, ...rowView(cc, undefined, null, NOW, 6650) }]).trim().split("\r\n");
+yes("  the row ends with the reason and the comment, the comment quoted", ccLines.slice(1).join("\r\n").endsWith(`,Moved away,"Called, said\nshe'll be back, maybe"`));
+yes("  CONTROL: the row without them ends with two empty cells", lines[1].endsWith(",,"));
 
 console.log("\n— the nightly job also reads cancelling members (0272) —");
 yes("ACTIVE with a cancel date is a candidate", isEndCandidate({ status: "ACTIVE", canceled_at: "2026-10-31T21:00:00Z" }));
