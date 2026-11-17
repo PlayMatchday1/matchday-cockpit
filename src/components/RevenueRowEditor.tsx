@@ -201,7 +201,7 @@ export default function RevenueRowEditor({
               >
                 {CITY_OPTIONS.map((c) => (
                   <option key={c} value={c}>
-                    {c}
+                    {c === "Deleted Account Revenue" ? "Unassigned" : c /* label only; the stored value is unchanged */}
                   </option>
                 ))}
               </select>

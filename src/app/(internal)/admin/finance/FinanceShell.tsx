@@ -188,9 +188,10 @@ function FinanceShellInner({ children }: { children: React.ReactNode }) {
             Central job caught up, and nothing on screen said the number was waiting on anything.
 
             THE REVENUE PAGE READS fin_txn (2026-10-07), so there "Last synced" names the stripe-txn
-            sync and admins get Sync now, which fills fin_txn and reloads the page. Every other
-            Finance page still reads fin_revenue: it keeps the stripe-api label and no button, since
-            a Sync now there would fill a table that page does not read. */}
+            sync and admins get Sync now, which fills fin_txn and reloads the page. Cost and Cities
+            read fin_txn too. Cash flow, OpEx and the header read fin_txn_daily, which the stripe-txn
+            sync rebuilds; only the Revenue LEDGER still reads fin_revenue (corrected 2026-11-16). The
+            pages below keep the stripe-api label and no button until that label is reworked. */}
         <div className={ownHeader ? "mb-2" : "mb-6"}>
           {/* Cost and Cities read fin_txn too since 2026-10-10, so they name the same sync. */}
           {pathname === "/admin/finance/revenue" || pathname === "/admin/finance/cost" || pathname === "/admin/finance/cities"

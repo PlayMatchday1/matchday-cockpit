@@ -21,9 +21,12 @@ import {
   totalExpensesFor,
 } from "@/lib/financeStats";
 import { fieldCostsFor } from "@/lib/financeCosts";
+import { loadRollup, useAsync, useReaderId } from "@/lib/useRevenueTxn";
+import { totalsOf } from "@/lib/revenueTxn";
 import { isCurrentMonth, isCurrentQuarter, isFutureMonth } from "@/lib/quarters";
 
 const DELETED_ACCOUNT_CITY = "Deleted Account Revenue";
+const pad = (n: number) => String(n).padStart(2, "0");
 
 function fmt(n: number): string {
   const r = Math.round(n);
@@ -98,6 +101,18 @@ export default function FinanceMonthlyPL({
   const [mode, setMode] = useState<Mode>("mtd");
   const effectiveMode: Mode = isPastQuarter ? "mtd" : mode;
 
+  /* STRIPE FEES ON THE REVENUE PAGE'S BASIS (Ryan, 2026-11-16). The daily table behind this page
+   * carries the fee on money rows that count, so it left out Stripe's own fee rows (billing, dispute
+   * fees) and the fees on test and internal charges: October read $502.77 lower than Finance >
+   * Revenue. Those fees are read here from the same rollup the Revenue page reads (totalsOf().fees)
+   * and added on top. Nothing is extrapolated for them: they are actuals in either mode. */
+  const uid = useReaderId();
+  const qFrom = `${quarter.months[0].year}-${pad(quarter.months[0].monthIndex + 1)}-01`;
+  const qLast = quarter.months[2];
+  const qTo = `${qLast.year}-${pad(qLast.monthIndex + 1)}-${pad(qLast.daysInMonth)}`;
+  const feeRollup = useAsync(uid ? `fees|${uid}|${qFrom}|${qTo}` : null,
+    () => loadRollup(uid!, { from: qFrom, to: qTo, grain: "month", byVenue: false }));
+
   const rows = useMemo<Row[]>(() => {
     if (!data) return [];
 
@@ -116,14 +131,22 @@ export default function FinanceMonthlyPL({
       );
       return {
         kind: "data",
-        label: city,
+        label: city === DELETED_ACCOUNT_CITY ? "Unassigned" : city, // shown as the Revenue page shows it
         tone: "revenue",
         values: [...perMonth, sumAcross(perMonth)],
       };
     });
 
     const grossPerMonth = monthKeys.map((m) => grossRevenueFor(data, m, effectiveMode));
-    const feesPerMonth = monthKeys.map((m) => feesFor(data, m, effectiveMode));
+    // The Revenue page's fees minus the daily table's, per month: what the daily table leaves out.
+    const feesPerMonth = monthKeys.map((m, i) => {
+      const daily = feesFor(data, m, effectiveMode);
+      if (!feeRollup.data) return daily;
+      const qm = quarter.months[i];
+      const period = `${qm.year}-${pad(qm.monthIndex + 1)}-01`;
+      const pageFees = -totalsOf(feeRollup.data.filter((r) => r.period === period)).fees / 100;
+      return daily + (pageFees - feesFor(data, m, "mtd"));
+    });
     const netRevPerMonth = monthKeys.map((m) => netRevenueFor(data, m, effectiveMode));
 
     const matchPayPerMonth = monthKeys.map((m) => managerPayFor(data, m));
@@ -248,7 +271,7 @@ export default function FinanceMonthlyPL({
         values: [...endingCash, endingCash[endingCash.length - 1]],
       },
     ];
-  }, [data, effectiveMode, monthKeys]);
+  }, [data, effectiveMode, monthKeys, quarter, feeRollup.data]);
 
   // Per-column projection markers — used to (a) tag every cell in a fully-
   // projected month with " (proj)" and (b) tint that column's background.

@@ -83,6 +83,7 @@ const REVENUE_CITY_TO_CANONICAL: Record<string, string> = {
   OKC: "OKC",
   "St. Louis": "St. Louis",
   "El Paso": "El Paso",
+  Philadelphia: "Philadelphia", // our own city (Ryan, 2026-11-16); without it its revenue fell to Unknown city
 };
 
 export function normalizeDeclared(raw: string | null | undefined): string | null {

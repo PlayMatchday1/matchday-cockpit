@@ -178,15 +178,26 @@ async function fetchActiveFields(): Promise<{ mapped: number; unmapped: number }
 // (fake users carry total_amount and would inflate the count ~1/7). Month-to-
 // date. Two-step (this-month match ids → their player rows) because PostgREST
 // can't distinct-count across the embed.
+// MONTH TO DATE MEANS UP TO TODAY (Ryan, 2026-11-16): matches later this month were counted too,
+// so the tile included players who had only booked. @matchday.com accounts are fake players and
+// are left out by email as well as by flag. The match ids are paged (a busy month passes 1,000).
 async function fetchMonthlyPlayers(): Promise<number | null> {
   const start = monthStartISO();
-  const { data: idRows, error: e1 } = await supabase
-    .from("mdapi_matches")
-    .select("api_id")
-    .eq("is_cancelled", false)
-    .gte("start_date", start);
-  if (e1) return null;
-  const ids = (idRows ?? []).map((r) => (r as { api_id: number }).api_id);
+  let ids: number[];
+  try {
+    ids = (await pageAll<{ api_id: number }>((from, to) =>
+      supabase
+        .from("mdapi_matches")
+        .select("api_id")
+        .eq("is_cancelled", false)
+        .gte("start_date", start)
+        .lte("start_date", todayEndISO())
+        .order("api_id")
+        .range(from, to),
+    )).map((r) => r.api_id);
+  } catch {
+    return null;
+  }
   if (ids.length === 0) return 0;
   try {
     const rows = await pageAll<{ user_id: number | null }>((from, to) =>
@@ -195,7 +206,9 @@ async function fetchMonthlyPlayers(): Promise<number | null> {
         .select("user_id")
         .eq("user_is_fake_player", false)
         .eq("is_cancelled", false)
+        .or("user_email.is.null,user_email.not.ilike.*@matchday.com")
         .in("match_api_id", ids)
+        .order("api_id")
         .range(from, to),
     );
     const s = new Set<number>();

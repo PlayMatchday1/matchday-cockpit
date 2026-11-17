@@ -11,8 +11,9 @@
 //
 // The page used to read fin_revenue (tax-inclusive, UTC-dated, one row per day/city/type/venue) for
 // its headline and city view, and the roster for its field view — two bases on one page, stated
-// rather than reconciled. Both are gone from the money here. Every OTHER Finance page still reads
-// fin_revenue and is unchanged.
+// rather than reconciled. Both are gone from the money here. The other Finance pages read fin_txn or
+// its daily table fin_txn_daily too; only the Revenue ledger still reads fin_revenue (corrected
+// 2026-11-16).
 //
 // WHAT STILL COMES FROM THE ROSTER, AND WHY: match COUNTS (a count of matches is a roster fact, not
 // money), and the Match tab's rows, field cost and spot counts. The Match tab's DPP revenue per

@@ -447,7 +447,7 @@ export async function GET(req: Request) {
 /** fin_venues stores DISPLAY names ("Austin"); confinement uses codes ("ATX"). One mapping. */
 const CODE: Record<string, string> = {
   Austin: "ATX", Dallas: "DFW", Houston: "HOU", "San Antonio": "SATX",
-  Atlanta: "ATL", OKC: "OKC", "St. Louis": "STL", Warsaw: "WAW", Philadelphia: "PHL",
+  Atlanta: "ATL", OKC: "OKC", "St. Louis": "STL", Warsaw: "WAW", Philadelphia: "PHL", "El Paso": "ELP",
 };
 const cityCodeOf = (display: string | null): string | null => (display ? CODE[display] ?? display : null);
 

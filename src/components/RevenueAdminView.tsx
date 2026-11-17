@@ -81,6 +81,10 @@ function monthFromDate(date: string): string {
   return `${monthNames[idx]} ${m[1]}`;
 }
 
+/** The stored "Deleted Account Revenue" is shown as Unassigned, as on the Revenue page (Ryan, 2026-11-16).
+ *  Display only: the stored value is unchanged, so a saved row still writes what it always wrote. */
+const shownCity = (c: string) => (c === "Deleted Account Revenue" ? "Unassigned" : c);
+
 export default function RevenueAdminView() {
   const { data, loading } = useFinanceData();
   const { appUser } = useAuth();
@@ -298,6 +302,12 @@ export default function RevenueAdminView() {
       <div className="mb-6 text-sm">
       </div>
 
+      {/* LEGACY (Ryan, 2026-11-16): this ledger is fin_revenue, still written on the old rules (email
+          membership city, no Event type, net = gross minus Stripe fees). No report reads it. */}
+      <div role="note" data-testid="legacy-ledger-banner"
+        className="mb-4 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-900">
+        Legacy ledger, not report figures
+      </div>
       <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="font-display text-5xl uppercase leading-none tracking-tight text-deep-green md:text-6xl">
@@ -360,7 +370,7 @@ export default function RevenueAdminView() {
           >
             {cityOptions.map((c) => (
               <option key={c} value={c}>
-                {c}
+                {shownCity(c)}
               </option>
             ))}
           </select>
@@ -471,7 +481,7 @@ export default function RevenueAdminView() {
                     <td className="whitespace-nowrap px-3 py-2 font-mono tabular-nums text-deep-green">
                       {row.date}
                     </td>
-                    <td className="px-3 py-2 text-deep-green">{row.city}</td>
+                    <td className="px-3 py-2 text-deep-green">{shownCity(row.city)}</td>
                     <td className="px-3 py-2 text-deep-green/85">
                       {row.source}
                     </td>
@@ -571,7 +581,7 @@ export default function RevenueAdminView() {
             <div className="space-y-1 font-mono text-xs">
               <div>{deleteRow.date}</div>
               <div>
-                {deleteRow.city} · {deleteRow.source} · {deleteRow.type}
+                {shownCity(deleteRow.city)} · {deleteRow.source} · {deleteRow.type}
               </div>
               <div className="font-bold text-deep-green">
                 Net: {fmtMoney(deleteRow.net, true)}

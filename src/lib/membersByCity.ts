@@ -48,7 +48,7 @@
  */
 
 import { cityFromAbbr } from "./cityMap";
-import { PAID_MEMBER_EXCLUDES, isPaidExternalMember, memberLikeFromSubscription } from "./membershipStats";
+import { PAID_MEMBER_EXCLUDES, isPaidExternalMember, memberLikeFromSubscription, parseMemberDate } from "./membershipStats";
 import { BUSINESS_TZ } from "./businessHours";
 
 /* THE BILLING DAY. The 6th, as isChurning in membershipStats has always had it — but NOT imported
@@ -223,6 +223,10 @@ function collapseToPeople(rows: readonly SubscriptionRow[]): Person[] {
       memberLikeFromSubscription({ ...r, city_identifier: CITY_PROBE });
     if (!m) continue;
     if (!isPaidExternalMember(m)) continue;
+    // HOME'S ACTIVATION RULE (Ryan, 2026-11-16: one paying-member definition): a membership counts
+    // once it has activated, as countActiveMembers / isActiveAsOf require. Status is tested above.
+    const activated = parseMemberDate(m.activation_date);
+    if (!activated || activated.getTime() > Date.now()) continue;
     const userId = String(r.user_id ?? `membership:${r.activation_date}:${m.price_cents}`);
     const prev = byUser.get(userId);
     if (prev && prev.priceCents >= m.price_cents) continue;

@@ -208,7 +208,7 @@ export default function MembershipView() {
             words. */}
         <Kpi k="Avg price / member spot"
           v={kpis.avgPricePerMemberSpot == null ? "—" : money(kpis.avgPricePerMemberSpot)}
-          s={`${thisMonth?.month ?? ""} · gross membership revenue ÷ matches members played${partSuffix(part)}`} />
+          s={`${thisMonth?.month ?? ""} · net membership revenue ÷ matches members played${partSuffix(part)}`} />
         <Kpi k="MoM change in churned players" v={kpis.churnedMoMPct == null ? "—" : `${kpis.churnedMoMPct.toFixed(1)}%`}
           s={kpis.churnedNow > 0
             ? `${num(kpis.churnedNow)} players ${data?.churnDays ?? 90}+ days inactive, against ${num(kpis.churnedPrior)} the month before`

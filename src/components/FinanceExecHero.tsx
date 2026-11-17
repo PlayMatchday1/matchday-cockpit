@@ -53,9 +53,11 @@ export default function FinanceExecHero() {
   const monthLabelKey = currentMonthKey ?? quarter.months[0].key;
   const monthShort = monthLabelKey.split(" ")[0];
 
+  // A PAST QUARTER has no current month; its card is the quarter's own gross, summed over its three
+  // closed months. It used to read $0 under "Last completed month" (Ryan, 2026-11-16).
   const monthGrossMtd = currentMonthKey
     ? grossRevenueFor(data, currentMonthKey, "mtd", now)
-    : 0;
+    : quarter.months.reduce((s, m) => s + grossRevenueFor(data, m.key, "mtd", now), 0);
   const monthGrossPace = currentMonthKey
     ? grossRevenueFor(data, currentMonthKey, "projection", now)
     : 0;
@@ -86,7 +88,7 @@ export default function FinanceExecHero() {
           subtitle={
             showMtdCard
               ? `Pacing ${fmtMoney(monthGrossPace)} by month end`
-              : "Last completed month"
+              : "Gross collected, all three months"
           }
         />
         {showMtdCard && (
