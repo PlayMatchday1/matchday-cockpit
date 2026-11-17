@@ -52,6 +52,10 @@ const NODE_SUITES = [
   // manager can open. The suite tested the rooms and nothing tested the door.
   "scripts/pwa-launch-door-test.ts",
   "scripts/warsaw-city-test.ts",
+  // FINANCE ATTRIBUTION. The type and city every Stripe payment is reported under: the backend's
+  // revenueType and cityIdentifier labels first, then a membership charge's own membership, the email
+  // guess last (Ryan, 2026-11-16). A wrong rule moves money between cities in closed months, silently.
+  "scripts/fin-txn-attribution-test.ts",
   // WARSAW — the first city that is not in types.CITIES. Nothing had ever tested one, which is how
   // a half-registered city shipped: WAW was in CITY_SCOPES and nowhere else. Also holds the line
   // the other way — a partner market must never appear in CITIES or CITY_DISPLAY_ORDER.

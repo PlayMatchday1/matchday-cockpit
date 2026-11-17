@@ -57,17 +57,25 @@ async function fieldToVenue(sb: SupabaseClient): Promise<Map<number, number>> {
   return new Map((data ?? []).map((r) => [Number(r.mdapi_field_id), Number(r.fin_venue_id)]));
 }
 
-/* ── THE CITY, DECIDED THE WAY fin_revenue DECIDES IT ───────────────────────────────────────────
- * A copy of stripeSync.syncStripeCharges' allocation (src/lib/stripeSync.ts, "Build email→city"
- * and the per-type branch), so both tables put a charge in the same city:
+/* ── THE CITY ───────────────────────────────────────────────────────────────────────────────────
  *   Strike          cityIdentifier
- *   Membership      email → mdapi_subscriptions.city_identifier, else mdapi_users.preferable_city
+ *   Membership      cityIdentifier (labelled since 2026-11-16), else THE MEMBERSHIP IT PAID FOR:
+ *                   payment intent → stripe_member_invoices.md_membership_id →
+ *                   mdapi_subscriptions.city_identifier; else, only when neither exists, the old email
+ *                   guess (email → mdapi_subscriptions, else mdapi_users.preferable_city)
  *   DPP             cityIdentifier, else metadata.matchId → mdapi_matches.city_identifier
  *   everything else cityIdentifier, else the matchId join
  * Anything that resolves to nothing is DELETED_ACCOUNT_CITY, which the Revenue page shows as
- * "Unassigned". stripeSync is NOT imported or changed: it feeds fin_revenue's nightly job, which
- * stays as it is. If one changes, change both. */
-type CityMaps = { emailToCity: Map<string, string>; matchToCity: Map<string, string> };
+ * "Unassigned".
+ *
+ * WHY THE MEMBERSHIP, NOT THE EMAIL (Ryan, 2026-11-16). Measured over 90 days to 2026-11-16: of 1,161
+ * membership charges the email guess put 2 in the wrong city and left 37 Unassigned (3 of them NYC);
+ * 1,157 join to their membership by payment intent. An email maps a PERSON to a city, and a person can
+ * hold memberships in two; the payment intent names the membership.
+ *
+ * stripeSync (fin_revenue's nightly job, read only by the ledger editor) keeps the email rule. It shares
+ * cityFromIdentifier, so it learns NYC and WAW too. */
+type CityMaps = { emailToCity: Map<string, string>; matchToCity: Map<string, string>; piToMemberCity: Map<string, string> };
 
 async function cityMaps(sb: SupabaseClient): Promise<CityMaps> {
   const emailToCity = new Map<string, string>();
@@ -85,11 +93,36 @@ async function cityMaps(sb: SupabaseClient): Promise<CityMaps> {
   const matches = await selectAll<{ api_id: number | null; city_identifier: string | null }>(() =>
     sb.from("mdapi_matches").select("api_id, city_identifier").order("api_id"));
   for (const m of matches) { const c = cityFromAbbr(m.city_identifier); if (m.api_id != null && c) matchToCity.set(String(m.api_id), c); }
-  return { emailToCity, matchToCity };
+  return { emailToCity, matchToCity, piToMemberCity: new Map() };
 }
 
-export function allocateCity(maps: CityMaps, a: { type: string; cityIdentifier: string | null; matchId: string | null; email: string | null }): string {
+/** Payment intent → the city of the membership it paid for, for this run's candidate charges. Two reads
+ *  of our own copies, in batches of 200; nothing goes to Stripe or MatchDay. */
+async function memberCitiesByPaymentIntent(sb: SupabaseClient, pis: string[]): Promise<Map<string, string>> {
+  const piMid = new Map<string, number>();
+  for (let i = 0; i < pis.length; i += 200) {
+    const { data, error } = await sb.from("stripe_member_invoices").select("payment_intent_id,md_membership_id").in("payment_intent_id", pis.slice(i, i + 200));
+    if (error) throw new Error(`stripe_member_invoices read failed: ${error.message}`);
+    for (const d of data ?? []) if (d.md_membership_id != null) piMid.set(String(d.payment_intent_id), Number(d.md_membership_id));
+  }
+  const mids = [...new Set(piMid.values())];
+  const midCity = new Map<number, string>();
+  for (let i = 0; i < mids.length; i += 200) {
+    const { data, error } = await sb.from("mdapi_subscriptions").select("membership_id,city_identifier").in("membership_id", mids.slice(i, i + 200));
+    if (error) throw new Error(`mdapi_subscriptions read failed: ${error.message}`);
+    for (const d of data ?? []) midCity.set(Number(d.membership_id), cityFromIdentifier(d.city_identifier));
+  }
+  const out = new Map<string, string>();
+  for (const [pi, mid] of piMid) { const c = midCity.get(mid); if (c && c !== DELETED_ACCOUNT_CITY) out.set(pi, c); }
+  return out;
+}
+
+export function allocateCity(maps: CityMaps, a: { type: string; cityIdentifier: string | null; matchId: string | null; email: string | null; paymentIntentId?: string | null }): string {
   if (a.type === "Membership") {
+    const labelled = cityFromIdentifier(a.cityIdentifier);
+    if (labelled !== DELETED_ACCOUNT_CITY) return labelled;
+    const member = a.paymentIntentId ? maps.piToMemberCity.get(a.paymentIntentId) : undefined;
+    if (member) return member;
     const hit = a.email ? maps.emailToCity.get(a.email) : undefined;
     return hit && hit !== DELETED_ACCOUNT_CITY ? hit : DELETED_ACCOUNT_CITY;
   }
@@ -177,6 +210,16 @@ export async function syncFinTxn(
     return [c.customer];
   });
   const emails = await customerEmails(stripe, needEmail);
+
+  // The membership each candidate charge paid for. Candidates: charges with no match id (a booking
+  // never needs this), by payment intent.
+  const memberPis = [...new Set(all.flatMap((bt) => {
+    const c = bt.source as Stripe.Charge | null;
+    if (!c || typeof c !== "object" || c.object !== "charge" || c.metadata?.matchId || c.metadata?.userMatchId) return [];
+    const pi = typeof c.payment_intent === "string" ? c.payment_intent : c.payment_intent?.id;
+    return pi ? [pi] : [];
+  }))];
+  maps.piToMemberCity = await memberCitiesByPaymentIntent(sb, memberPis);
 
   const rows: (FinTxnRow & { fin_venue_id: number | null })[] = [];
   const unknown = new Map<string, { count: number; grossCents: number }>();

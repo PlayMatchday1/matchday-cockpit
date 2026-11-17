@@ -192,6 +192,10 @@ const STRIPE_CITY_PREFIX: Record<string, string> = {
   STL: "St. Louis",
   OKC: "OKC",
   ELP: "El Paso",
+  // Both carried in cityIdentifier by the backend's payment labels (backend docs/stripe-metadata.md,
+  // live 2026-11-16) and by membership rows. Unmapped, their money landed Unassigned (Ryan, 2026-11-16).
+  NYC: "New York City",
+  WAW: "Warsaw",
 };
 
 const STRIPE_SPEC: ColumnSpec[] = [
@@ -388,12 +392,26 @@ export function classifyCharge(args: {
   stripeType: string | null;
   description: string | null;
   hasMatchId: boolean;
+  /** metadata.revenueType, on every payment since the backend labelled them (2026-11-16, prod v413). */
+  revenueType?: string | null;
 }): FinRevType {
+  const byLabel = typeFromRevenueType(args.revenueType);
+  if (byLabel) return byLabel;
   if (isStrikeCharge(args.stripeType)) return "Strike";
   if (args.hasMatchId) return "DPP";
   if (isPrivateRentalCharge(args.stripeType, args.description)) return "Private Rental";
   if (isMembershipCharge(args.stripeType, args.description)) return "Membership";
   return "Unclassified";
+}
+
+/* THE BACKEND'S OWN LABEL WINS (Ryan, 2026-11-16). metadata.revenueType is booking, membership, event
+ * or strike (backend docs/stripe-metadata.md). An EVENT is a booking on an EVENT, BRACKET or GROUP
+ * match, or a special event team or captain division fee: it goes to DPP, where match bookings of every
+ * kind already land through matchId, so the label moves no existing money. A value not in this list, or
+ * none (every payment before the label shipped), falls through to the positive rules below. */
+const REVENUE_TYPE: Record<string, FinRevType> = { booking: "DPP", event: "DPP", membership: "Membership", strike: "Strike" };
+export function typeFromRevenueType(v: string | null | undefined): FinRevType | null {
+  return REVENUE_TYPE[(v ?? "").trim().toLowerCase()] ?? null;
 }
 
 export function cityFromIdentifier(code: string | null): string {

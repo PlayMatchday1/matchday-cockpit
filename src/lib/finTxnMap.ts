@@ -110,9 +110,9 @@ type Meta = Record<string, string | undefined>;
 export function mapBalanceTxn(
   bt: Stripe.BalanceTransaction,
   opts: {
-    classify: (a: { stripeType: string | null; description: string | null; hasMatchId: boolean }) => string;
-    /** The city, decided the way fin_revenue's stripeSync decides it (finTxnSync.allocateCity). */
-    cityOf: (a: { type: string; cityIdentifier: string | null; matchId: string | null; email: string | null }) => string;
+    classify: (a: { stripeType: string | null; description: string | null; hasMatchId: boolean; revenueType: string | null }) => string;
+    /** The city (finTxnSync.allocateCity). */
+    cityOf: (a: { type: string; cityIdentifier: string | null; matchId: string | null; email: string | null; paymentIntentId: string | null }) => string;
     /** The member's email when the charge itself carries none (an invoice charge: Stripe puts the
      *  email on the customer). Looked up by the sync before mapping. */
     customerEmail?: (customerId: string) => string | null;
@@ -140,7 +140,10 @@ export function mapBalanceTxn(
   // metadata.matchId, else userMatchId — stripeSync's rule (the same value on some charges).
   const matchId = (meta.matchId?.trim() || meta.userMatchId?.trim()) || null;
   const description = bt.description ?? charge?.description ?? null;
-  const type = opts.classify({ stripeType, description, hasMatchId: matchId != null });
+  const revenueType = typeof meta.revenueType === "string" && meta.revenueType.trim() ? meta.revenueType.trim() : null;
+  const type = opts.classify({ stripeType, description, hasMatchId: matchId != null, revenueType });
+  const paymentIntentId = charge?.payment_intent == null ? null
+    : typeof charge.payment_intent === "string" ? charge.payment_intent : charge.payment_intent.id;
   /* THE EMAIL, IN stripeSync.extractEmail's ORDER: billing_details → receipt_email →
    * metadata.email → the customer's. Membership charges are invoice charges and usually carry only
    * the customer. Used for the membership city. */
@@ -169,13 +172,13 @@ export function mapBalanceTxn(
     gross_cents: bt.amount,
     fee_cents: bt.fee ?? 0,
     net_cents: bt.net,
-    city: opts.cityOf({ type, cityIdentifier: meta.cityIdentifier?.trim() || null, matchId, email: email ? email.trim().toLowerCase() : null }),
+    city: opts.cityOf({ type, cityIdentifier: meta.cityIdentifier?.trim() || null, matchId, email: email ? email.trim().toLowerCase() : null, paymentIntentId }),
     type,
     field_id,
     fin_venue_id: field_id == null ? null : opts.venueOfField(field_id),
     balance_txn_id: bt.id,
     charge_id: charge?.id ?? reversedChargeId,
-    payment_intent_id: (charge?.payment_intent as string | null) ?? null,
+    payment_intent_id: paymentIntentId,
     customer_id: customerId,
     subscription_id: null,
     /* INVOICE AND SUBSCRIPTION COME FROM THE INVOICE, NOT THE CHARGE. The Stripe types do not put
