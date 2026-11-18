@@ -6,7 +6,7 @@ import "server-only"; // no-op under --conditions=react-server
 //   NODE_OPTIONS=--conditions=react-server npx tsx scripts/mdapi-gate-test.ts
 
 import {
-  mdapiFetch, withMdapiLane, currentLane, envOfUrl, labelOf, LANE_SIZE, BREAKER_STEPS_S, GLOBAL_LANES, __setGateDepsForTest,
+  mdapiFetch, withMdapiLane, currentLane, envOfUrl, labelOf, LANE_SIZE, LOCAL_CAP, BREAKER_STEPS_S, GLOBAL_LANES, __setGateDepsForTest,
   MdapiGateClosedError, MdapiGateBusyError, MdapiTimeoutError, type SlotStore, type MdapiLane,
 } from "../src/lib/mdapiGate";
 import { fetchMatchDayJson, getPacedClient } from "../src/lib/matchdayApi";
@@ -68,10 +68,33 @@ async function main() {
   {
     const s = fakeStore(); const ff = fakeFetch(40);
     const restore = __setGateDepsForTest({ store: s.store, fetch: ff.f, log: quiet, timeouts: T });
-    await Promise.all(Array.from({ length: 30 }, (_, i) => mdapiFetch(`${PROD}/admin/matches/${i}`)));
-    eq("30 parallel staff reads: never more than 6 in flight", ff.peak() <= LANE_SIZE.staff, true);
-    eq("...and the cap is reached, so the 6 is the gate and not a slow test (positive control)", ff.peak(), LANE_SIZE.staff);
-    eq("...every one of the 30 was sent, none dropped", ff.urls.length, 30);
+    const logs: string[] = [];
+    __setGateDepsForTest({ store: s.store, fetch: ff.f, log: (l) => logs.push(l), timeouts: T });
+    await Promise.all(Array.from({ length: 40 }, (_, i) => mdapiFetch(`${PROD}/admin/matches/${i}`)));
+    eq("40 parallel staff reads: never more than 16 in flight in one instance", ff.peak() <= LOCAL_CAP.staff, true);
+    eq("...and the cap is reached, so the 16 is the gate and not a slow test (positive control)", ff.peak(), LOCAL_CAP.staff);
+    eq("...every one of the 40 was sent, none dropped", ff.urls.length, 40);
+    eq("...and every wait was logged", logs.filter((l) => l.includes("waited")).length, 40 - LOCAL_CAP.staff);
+    restore();
+  }
+  {
+    // The widest fan-out any screen makes today never waits: zero added latency.
+    const s = fakeStore(); const ff = fakeFetch(40); const logs: string[] = [];
+    const restore = __setGateDepsForTest({ store: s.store, fetch: ff.f, log: (l) => logs.push(l), timeouts: T });
+    const t0 = Date.now();
+    await Promise.all(Array.from({ length: LOCAL_CAP.staff }, (_, i) => mdapiFetch(`${PROD}/admin/matches/${i}`)));
+    eq("16 parallel staff reads: all at once, no wait", [ff.peak(), logs.length], [LOCAL_CAP.staff, 0]);
+    eq("...one round of 40 ms, not two", Date.now() - t0 < 75, true);
+    restore();
+  }
+  {
+    // A queued read starts the moment a slot frees (a queue, not a poll).
+    const s = fakeStore(); const ff = fakeFetch(50);
+    const restore = __setGateDepsForTest({ store: s.store, fetch: ff.f, log: quiet, timeouts: T });
+    const t0 = Date.now();
+    await Promise.all(Array.from({ length: LOCAL_CAP.staff + 1 }, (_, i) => mdapiFetch(`${PROD}/admin/matches/${i}`)));
+    const ms = Date.now() - t0;
+    eq("17 reads of 50 ms: the 17th starts as the first ends (~100 ms, no polling gap)", ms >= 95 && ms < 140, true);
     eq("...and not one asked the slot store (zero added latency)", s.acquires(), 0);
     restore();
   }

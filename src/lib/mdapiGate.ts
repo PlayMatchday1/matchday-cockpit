@@ -16,7 +16,7 @@
 //   2. STAFF AND WRITES ARE PER INSTANCE (Ryan, 2026-11-18). Taking a Supabase slot costs ~40 ms
 //      from a production function (measured: p50 38-43 ms, p95 59-67 ms, iad1, 90 round trips), over
 //      the 20 ms a staff screen may pay. So a staff read or a write waits only for this instance's own
-//      cap (6 and 2), with no network call. Staff reads have a breaker of their own in this instance:
+//      cap (LOCAL_CAP: 16 and 4), with no network call. Staff reads have a breaker of their own in this instance:
 //      the third failure in a row stops staff reads here for 15 s, then 30, 60, 120 s. Writes are never
 //      stopped by a breaker. Revisit (Upstash, same region) only if staff traffic grows or an alert
 //      shows a staff-driven spike.
@@ -38,7 +38,14 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 export type MdapiLane = "write" | "staff" | "bulk";
 export type MdapiGateEnv = "production" | "staging" | "local" | "other";
 
+/** The GLOBAL slot table's lanes (0275). Only bulk is used globally (GLOBAL_LANES). */
 export const LANE_SIZE: Record<MdapiLane, number> = { write: 2, staff: 6, bulk: 1 };
+/** Each instance's own cap for the lanes that are not global. 16 staff = the widest fan-out any
+ *  existing screen makes (Promos' two walks of 8), so no screen ever waits on its own requests; it
+ *  bounds a runaway, it does not pace normal use. It was 6 for the first deploy and the desktop match
+ *  read went from ~300 to ~450 ms p50 on warm calls (Vercel metrics, 2026-11-18 18-19 UTC): instances
+ *  are shared across requests, so one Today read's six roster reads made other screens wait. */
+export const LOCAL_CAP: Record<MdapiLane, number> = { write: 4, staff: 16, bulk: 1 };
 export const TIMEOUT_MS: Record<MdapiLane, number> = { write: 30_000, staff: 15_000, bulk: 30_000 };
 /** How long a request waits for a free slot before giving up. */
 export const MAX_WAIT_MS: Record<MdapiLane, number> = { write: 10_000, staff: 10_000, bulk: 90_000 };
@@ -150,19 +157,38 @@ const realDeps: Deps = {
 let deps: Deps = realDeps;
 export function __setGateDepsForTest(d: Partial<Deps>): () => void {
   deps = { ...realDeps, ...d };
-  return () => { deps = realDeps; inflight.clear(); staffBreaker.clear(); for (const l of Object.keys(local) as MdapiLane[]) local[l] = 0; };
+  return () => { deps = realDeps; inflight.clear(); staffBreaker.clear(); for (const l of Object.keys(local) as MdapiLane[]) { local[l] = 0; waiters[l] = []; } };
 }
 
-/* ── THIS INSTANCE'S OWN CAP (used only when the slot store cannot be reached) ── */
+/* ── THIS INSTANCE'S OWN CAP (staff and writes; bulk only when there is no slot store) ──
+ * A FIFO queue, not a poll: a freed slot goes to the next waiter at once, so waiting costs exactly
+ * the time until a slot frees and nothing more. Any wait is logged — the cap is meant never to bind. */
 const local: Record<MdapiLane, number> = { write: 0, staff: 0, bulk: 0 };
+const waiters: Record<MdapiLane, (() => void)[]> = { write: [], staff: [], bulk: [] };
 async function localSlot(lane: MdapiLane, deadline: number, url: string): Promise<() => void> {
-  for (let wait = 25; local[lane] >= LANE_SIZE[lane]; wait = Math.min(wait * 2, 250)) {
-    if (deps.now() > deadline) throw new MdapiGateBusyError(lane, MAX_WAIT_MS[lane], url);
-    await deps.sleep(wait);
+  if (local[lane] >= LOCAL_CAP[lane]) {
+    const t0 = deps.now();
+    await new Promise<void>((resolve, reject) => {
+      const wake = () => { clearTimeout(timer); resolve(); };
+      const timer = setTimeout(() => {
+        const i = waiters[lane].indexOf(wake);
+        if (i >= 0) waiters[lane].splice(i, 1);
+        reject(new MdapiGateBusyError(lane, deps.now() - t0, url));
+      }, Math.max(0, deadline - deps.now()));
+      waiters[lane].push(wake);
+    });
+    deps.log(`[mdapi-gate] ${lane} request waited ${deps.now() - t0} ms for an instance slot (${labelOf(url)})`);
+  } else {
+    local[lane]++;
   }
-  local[lane]++;
   let done = false;
-  return () => { if (!done) { done = true; local[lane]--; } };
+  return () => {
+    if (done) return;
+    done = true;
+    // Hand the slot straight to the next waiter (the count stays the same), or give it back.
+    const next = waiters[lane].shift();
+    if (next) next(); else local[lane]--;
+  };
 }
 
 /** Counters for this instance, for the log line a cron writes at the end of a run. */
