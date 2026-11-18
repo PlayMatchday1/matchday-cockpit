@@ -295,6 +295,10 @@ is("authenticateAdmin guards the User access screen and the Fields mapping admin
     // backfill. is_admin because they read production MatchDay player records and Stripe customers
     // by email; no narrower flag means "may read Stripe customers". GET only; nothing is written.
     "admin/stripe-sub-ends/route.ts",
+    // +1 admin/mdapi-gate-probe (2026-11-18) — times the MatchDay gate's slot round trip from a
+    // production function. is_admin because it takes slots in the gate every staff screen shares;
+    // it sends nothing to MatchDay and reads no player data.
+    "admin/mdapi-gate-probe/route.ts",
     // +1 admin/staff-credits (2026-10-21) — Credits given by staff, READ-ONLY. is_admin because
     // Ryan made it admins only: it names which staff member gave which player money, and why.
     "admin/staff-credits/route.ts",
