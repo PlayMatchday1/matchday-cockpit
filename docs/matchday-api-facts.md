@@ -9451,3 +9451,33 @@ Read on production's database copy, 2026-11-16, no MatchDay API calls.
   13 requests, 364 rows, finished cleanly with no stop, so every ACTIVE page held ACTIVE rows only. ACTIVE
   narrows; it is PAST_DUE that returns the dump. The "PAST_DUE strict" note in the mdapiSubscriptionsSync
   header is stale. The nightly walk is unaffected because its rows carry their own status.
+
+## The MatchDay gate: what was measured building it (2026-11-18)
+
+Every request to the MatchDay API now goes through `mdapiFetch` (`src/lib/mdapiGate.ts`); the build
+guard is `scripts/mdapi-gate-guard-test.ts`. What was learned on the way, each with its evidence:
+
+- **A Supabase round trip from a production function costs ~35–43 ms.** `/api/admin/mdapi-gate-probe`
+  on production (`iad1`), 3 runs × 30 sequential calls, 2026-11-18 ~17:35 UTC: a plain one-row select
+  p50 34–41 ms (p95 49–66), `mdapi_gate_acquire` p50 38–43 ms (p95 59–67), release p50 36–43 ms, one
+  release outlier of 4.3 s. Minimum of 90 plain reads: 28 ms. So Supabase is not in the same region as
+  the functions (its region itself: UNKNOWN). This is why only the bulk lane takes a global slot.
+- **Night pass quarter 1 never completed.** `fin_sync_log`, source `mdapi-matches`, 08:12 UTC on
+  Nov 15, 16, 17 and 18: every row reads "Cut off … never completed (the function ended mid-step)".
+  Vercel `function_duration_ms` for `/api/sync/matches/full/1` over 7 days: p50 = p95 = 300,001 ms.
+  The window's first quarter (−14 to ~+4 days) held ~470 matches (`mdapi_matches` by `start_date`,
+  read 2026-11-18) at ~1.03 s per roster (`full-2`: 252 calls in 258 s, 2026-11-15). Replaced by five
+  slices of 7, 7, 7, 7 days and the rest (`src/lib/nightPass.ts`).
+- **Matches per day in the night-pass window** (`mdapi_matches`, 2026-11-18): ~20–33 a day from −14 to
+  about +12 days, then ~0–4 a day out to +60. 744 in the window.
+- **Most promo codes are created outside Clubhouse.** 87 codes in `mdapi_promocodes` have
+  `created_at` ≥ 2026-10-18; `change_log` holds 11 Clubhouse promo POSTs in the same period. So ~76
+  (2–3 a day) came from Retool or the app. A mirror refreshed once a day (10:50 UTC) would show them
+  up to 24 h late.
+- **Vercel's own metrics give per-route timing with no code:** `vercel metrics
+  vercel.function_invocation.function_duration_ms -a p50 --group-by route --filter "environment eq
+  'production'"`. `vercel.external_api_request.*` carried no rows for `playmatchday.herokuapp.com` or
+  Supabase (queried 2026-11-18), so outbound call timing is not available there.
+- **Load the API received from staff traffic** (`app_request_route_hourly`, kind `staff`, production,
+  Retool included): ~500–1,000 requests an hour on Nov 14–17, ~100–250 an hour after the warm cron came
+  out (Nov 17 ~23:00 UTC), with ~1,100–1,600 in the 08:00 UTC night-pass hour.
