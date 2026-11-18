@@ -35,7 +35,7 @@ import { canonicalVenueName } from "@/lib/venueResolver";
 import { MASTER_SCHEDULE_WEEK_START as WS, weekdayHeaders } from "@/lib/weekStart";
 import { CITY_SCOPES } from "@/lib/cityScope";
 import { CITY_CODE_TO_DISPLAY } from "@/lib/scheduleReconcile";
-import { CANCEL_LEGEND, cancelHover, isLowPlayerCancel } from "@/lib/cancelReasons";
+import { CANCEL_LEGEND_LOW, CANCEL_LEGEND_OTHER, cancelHover, cancelTag, isLowPlayerCancel } from "@/lib/cancelReasons";
 import { downloadCsv, plural } from "@/components/growth/format";
 import RefreshIcon from "@/components/RefreshIcon";
 import { buildCopyBody, copyConfirmLine, type SourceMatch } from "@/lib/copyMatch";
@@ -1348,7 +1348,8 @@ export default function VeoMasterSchedule() {
                 {monthCxCount > 0 && <i className="vms-mcxn">{monthCxCount}</i>}
               </label>
               <span className="vms-mcxkey" data-testid="month-cx-legend">
-                <i className="low" aria-hidden /><i aria-hidden />{CANCEL_LEGEND}
+                <i className="low" aria-hidden>LOW PLAYERS</i>{CANCEL_LEGEND_LOW}
+                <i className="oth" aria-hidden>WEATHER</i>{CANCEL_LEGEND_OTHER}
               </span>
               <span className="vms-mtitle" data-testid="month-title">{range ? rangeTitle(range.from, range.to) : ""}</span>
               <span className="vms-mstat" data-testid="month-count">
@@ -1921,18 +1922,24 @@ const CSS = `
 .vms-mpast .vms-mitem.vms-mveo{background:#EAF5EE;border-color:#CFE6DA}
 .vms-mpast .vms-mnum{color:#6d7b74}
 .vms-mtd{font-size:9px;letter-spacing:.7px;text-transform:uppercase;font-weight:800;color:#046B45;background:#e0f2e7;border-radius:999px;padding:1px 6px}
-/* CANCELLED — struck through with a red left edge, and no count colour to read. */
-.vms-mcx{background:#fdeae4;border-color:#f0bda9;box-shadow:inset 2px 0 0 #a8391a}
-.vms-mcx b,.vms-mcx span{color:#a8391a;text-decoration:line-through;text-decoration-thickness:1px}
-.vms-mcx .vms-mcnt,.vms-mcx .vms-mprice{color:#a8391a;opacity:.75}
-/* NOT ENOUGH PLAYERS, and only when we are sure: a solid darker red border and red text, so it jumps out. */
-.vms-mcx.vms-mcxlow{background:#fbd9cf;border:1.5px solid #b3261e;box-shadow:inset 3px 0 0 #b3261e}
-.vms-mcx.vms-mcxlow b,.vms-mcx.vms-mcxlow span{color:#b3261e;font-weight:800}
-.vms-mcx.vms-mcxlow .vms-mcnt,.vms-mcx.vms-mcxlow .vms-mprice{color:#b3261e;opacity:1}
-.vms-mcxkey{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;color:#6E8076}
-.vms-mcxkey i{display:inline-block;width:12px;height:10px;border-radius:3px;background:#fdeae4;border:1px solid #f0bda9;box-shadow:inset 2px 0 0 #a8391a}
-.vms-mcxkey i.low{background:#fbd9cf;border:1.5px solid #b3261e;box-shadow:inset 2px 0 0 #b3261e}
-.vms-mcxkey i:last-of-type{margin-right:3px}
+/* CANCELLED, TWO STYLES THAT SHARE NO COLOUR (Ryan, 2026-11-18). Low players: solid red, white text,
+   a LOW PLAYERS tag. Any other reason: gray, struck through, its reason as the tag. Scoped under
+   .vms-mlist so the Veo mint and the past-day gray never paint over either one. The ::after is a line
+   break, so the tag sits on its own line under the time, field and count. */
+.vms-mlist .vms-mitem.vms-mcx{flex-wrap:wrap;row-gap:2px;background:#ECEEED;border-color:#D3D8D5;box-shadow:none}
+.vms-mlist .vms-mitem.vms-mcx::after{content:"";order:5;flex-basis:100%;height:0}
+.vms-mlist .vms-mitem.vms-mcx b,.vms-mlist .vms-mitem.vms-mcx span{color:#6B7570;text-decoration:line-through;text-decoration-thickness:1px}
+.vms-mlist .vms-mitem.vms-mcx .vms-mcnt,.vms-mlist .vms-mitem.vms-mcx .vms-mprice,.vms-mlist .vms-mitem.vms-mcx svg{color:#6B7570;opacity:1}
+.vms-mcxtag{order:6;flex:0 0 auto;font-style:normal;font-size:8.5px;font-weight:900;letter-spacing:.06em;line-height:1.3;
+  white-space:nowrap;border-radius:3px;padding:0 4px;color:#fff;background:#6B7570}
+.vms-mlist .vms-mitem.vms-mcx.vms-mcxlow{background:#C62828;border-color:#A51F1F}
+.vms-mlist .vms-mitem.vms-mcx.vms-mcxlow b,.vms-mlist .vms-mitem.vms-mcx.vms-mcxlow span{color:#fff;text-decoration:none;font-weight:800}
+.vms-mlist .vms-mitem.vms-mcx.vms-mcxlow .vms-mcnt,.vms-mlist .vms-mitem.vms-mcx.vms-mcxlow .vms-mprice,.vms-mlist .vms-mitem.vms-mcx.vms-mcxlow svg{color:#fff}
+.vms-mitem.vms-mcxlow .vms-mcxtag{color:#C62828;background:#fff}
+.vms-mcxkey{display:inline-flex;align-items:center;flex-wrap:wrap;gap:5px;font-size:11px;font-weight:600;color:#6E8076}
+.vms-mcxkey i{font-style:normal;font-size:8.5px;font-weight:900;letter-spacing:.06em;line-height:1.3;border-radius:3px;padding:1px 4px}
+.vms-mcxkey i.low{color:#fff;background:#C62828}
+.vms-mcxkey i.oth{color:#fff;background:#6B7570;margin-left:6px}
 .vms-mcount u{text-decoration:none;color:#a8391a;font-weight:700}
 /* The cancelled toggle — same shape and same accent as Slate Review's. */
 .vms-mtoggle{display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:600;color:#3d5245;cursor:pointer;user-select:none}
@@ -2219,14 +2226,15 @@ span.vms-cam:focus-visible{outline:2px solid var(--mintInk);outline-offset:2px}
   .vms-aglow{color:#8a6300}
   .vms-agi>em.pr{flex:none;font-style:normal;font-size:11.5px;font-weight:700;
     font-variant-numeric:tabular-nums;white-space:nowrap;color:#046B45;width:44px;text-align:right}
-  .vms-agi.cx{background:#FDF6F4}
-  .vms-agi.cx>b,.vms-agi.cx>span,.vms-agi.cx>i,.vms-agi.cx>em{color:#b08278}
-  .vms-agi.cx>span{text-decoration:line-through}
-  .vms-agi.cx.cxlow{background:#fbd9cf;box-shadow:inset 3px 0 0 #b3261e;outline:1.5px solid #b3261e;outline-offset:-1.5px}
-  .vms-agi.cx.cxlow>b,.vms-agi.cx.cxlow>span,.vms-agi.cx.cxlow>i,.vms-agi.cx.cxlow>em{color:#b3261e;font-weight:800}
-  .vms-agi.cx.cxlow .cxtag{color:#fff;background:#b3261e}
+  .vms-agi.cx{background:#ECEEED}
+  .vms-agi.cx>b,.vms-agi.cx>span,.vms-agi.cx>i,.vms-agi.cx>em{color:#6B7570}
+  .vms-agi.cx>b,.vms-agi.cx>span{text-decoration:line-through}
+  .vms-agi.cx.cxlow{background:#C62828;box-shadow:none;outline:0}
+  .vms-agi.cx.cxlow>b,.vms-agi.cx.cxlow>span,.vms-agi.cx.cxlow>i,.vms-agi.cx.cxlow>em,.vms-agi.cx.cxlow>svg{color:#fff;font-weight:800;text-decoration:none}
+  .vms-agi.cx>em.cxtag{color:#fff;text-decoration:none}
+  .vms-agi.cx.cxlow .cxtag{color:#C62828;background:#fff}
   .vms-agi .cxtag{flex:none;font-style:normal;font-size:9.5px;font-weight:900;letter-spacing:.05em;
-    color:#a8391a;background:#fdeae4;border-radius:4px;padding:1px 5px}
+    color:#fff;background:#6B7570;border-radius:4px;padding:1px 5px}
 
   /* ── the sheet ── */
   .vms-scrim{display:block;position:fixed;inset:0;z-index:60;background:rgba(18,36,29,.42)}
@@ -2462,7 +2470,7 @@ function MonthAgenda({ weeks, allMatches, showCx, picked, onOpen }: {
                       agenda can grow a row because nothing sits beside it to be knocked out of
                       alignment — the same property that made this an agenda at all. */}
                   <span>{m.venue}</span>
-                  {m.cancelled && <em className="cxtag">CX</em>}
+                  {m.cancelled && <em className="cxtag">{cancelTag(m.cancel)}</em>}
                   <i className={tone ? `vms-ag${tone}` : undefined}>{countLabel(m)}</i>
                   {priceLabel(m.price) !== null && <em className="pr">{priceLabel(m.price)}</em>}
                 </button>
@@ -2656,6 +2664,7 @@ function MonthCell({ d, onOpen, selectedId, singleField, pick }: {
               {priceLabel(m.price) !== null && (
                 <em className="vms-mprice" data-testid="month-price">{priceLabel(m.price)}</em>
               )}
+              {m.cancelled && <em className="vms-mcxtag" data-testid="month-cx-tag">{cancelTag(m.cancel)}</em>}
             </button>
           );
         })}

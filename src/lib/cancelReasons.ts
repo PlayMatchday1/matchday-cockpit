@@ -90,17 +90,32 @@ export function surfaceOf(source: string): string {
   return "Match panel";
 }
 
-/* ── THE MASTER SCHEDULE'S CANCELLED TILE (Ryan, 2026-11-10) ────────────────────────────────────────
- * Bright red means we are SURE it was not enough players: a stored "Not enough players", or MatchDay's
- * own auto-cancel read by cancelReasonFor above. Everything else is the faded red, including a cancel
- * with no saved reason, an inferred Slate change, and a reason that could not be loaded. The hover
- * says the reason, "No reason saved" when nothing was saved and it was not an auto-cancel. */
+/* ── THE MASTER SCHEDULE'S CANCELLED TILE (Ryan, 2026-11-10; restyled 2026-11-18) ───────────────────
+ * Low players (solid red, LOW PLAYERS tag) only when we are SURE: a stored "Not enough players", or
+ * MatchDay's own auto-cancel read by cancelReasonFor above. The roster count never makes a cancel low
+ * players on its own. Everything else is the gray struck-through tile with its reason as the tag:
+ * NO REASON when staff saved none (an inferred Slate change included, since nothing was saved), and
+ * NOT LOADED when the reasons could not be read. The two styles share no colour (Ryan, 2026-11-18:
+ * the old faded red read as low players). */
 export type CancelShown = { reason: CancelReason; stored: boolean; note: string | null };
 
-/** null: the reason could not be loaded for this match (faded, and the hover says so). */
+/** null: the reason could not be loaded for this match (gray, and the hover says so). */
 export const isLowPlayerCancel = (c: CancelShown | null | undefined): boolean => c?.reason === "players";
 
-export const CANCEL_LEGEND = "Red = not enough players, faded = other cancel";
+/** The small tag on a cancelled tile. */
+const TAG_TEXT: Record<StaffReason, string> = {
+  players: "LOW PLAYERS", weather: "WEATHER", manager: "MANAGER", facility: "FIELD",
+  slate_change: "SLATE CHANGE", other: "OTHER",
+};
+export function cancelTag(c: CancelShown | null | undefined): string {
+  if (!c) return "NOT LOADED";
+  if (c.reason === "players") return TAG_TEXT.players;
+  if (c.stored && c.reason !== "unknown") return TAG_TEXT[c.reason];
+  return "NO REASON";
+}
+
+export const CANCEL_LEGEND_LOW = "Not enough players";
+export const CANCEL_LEGEND_OTHER = "Cancelled for another reason";
 
 export function cancelHover(c: CancelShown | null | undefined): string {
   if (!c) return "Cancelled: reason not loaded";
