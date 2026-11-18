@@ -129,6 +129,8 @@ const NODE_SUITES = [
   "scripts/ads-overview-test.ts",
   "scripts/mutation-tests.ts",
   "scripts/prod-guard-test.ts",
+  "scripts/mdapi-gate-test.ts",
+  "scripts/mdapi-gate-guard-test.ts",
   // LOCAL MODE. The Clubhouse pointed at a MatchDay backend on this machine still talks to the ONE
   // Supabase, which is production. Each guard behind MATCHDAY_LOCAL_API (write client, read/sync
   // client, sync routes, change_log) is proven on with zero requests, and off as identical to main.
@@ -527,7 +529,9 @@ function run(suite) {
     const isTs = suite.endsWith(".ts");
     const cmd = isTs ? "npx" : "node";
     const args = isTs ? ["tsx", suite] : [suite];
-    const env = { ...process.env, ...(isTs ? { NODE_OPTIONS: "--conditions=react-server" } : {}) };
+    // MDAPI_GATE_STORE=off: a guard never takes a slot in the production MatchDay gate (mdapiGate.ts).
+    // Guards mock fetch; the gate's own suite injects a fake slot store.
+    const env = { ...process.env, MDAPI_GATE_STORE: "off", ...(isTs ? { NODE_OPTIONS: "--conditions=react-server" } : {}) };
     const child = spawn(cmd, args, { env });
     let out = "";
     const grab = (b) => { out += b.toString(); };

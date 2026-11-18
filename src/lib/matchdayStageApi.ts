@@ -45,6 +45,8 @@ export type MatchdayEnv = "staging" | "production";
 // fourteen files and every [env] route narrow on, is unchanged.
 export type ClientEnv = MatchdayEnv | "local";
 import { localModeOn, LOCAL_MDAPI_HOST, LOCAL_MDAPI_BASE_URL } from "./localMode";
+// Every request below goes through the MatchDay gate (global slot, breaker for reads, timeout).
+import { mdapiFetch, currentLane, MdapiGateBusyError, MdapiGateClosedError, type MdapiLane, type MdapiResponse } from "./mdapiGate";
 
 // THE ALLOWLIST. Two hosts, each bound to a named environment. Compared on the
 // parsed URL host, exact-equality only.
@@ -440,22 +442,23 @@ function jwtExpMs(token: string): number | null {
 // One token cache per environment — staging and production never share a token.
 const cached: Partial<Record<ClientEnv, { token: string; expMs: number }>> = {};
 
-async function signIn(env: ClientEnv): Promise<{ token: string; expMs: number }> {
+async function signIn(env: ClientEnv, lane?: MdapiLane): Promise<{ token: string; expMs: number }> {
   const { email, password, baseUrl } = getCreds(env);
   const url = buildUrl(baseUrl, "/auth/signin");
   assertAllowedHost(env, url); // a misconfigured base can't even authenticate off-host
-  let res: Response;
+  let res: MdapiResponse;
   try {
-    res = await fetch(url, {
+    // A sign-in changes nothing, so it takes the lane of the read or write it is for, not "write".
+    res = await mdapiFetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email, password }),
       signal: AbortSignal.timeout(WRITE_TIMEOUT_MS),
-    });
+    }, { lane: lane ?? currentLane() });
   } catch (e) {
     throw new StageAuthError(`${env} sign-in network error: ${e instanceof Error ? e.message : String(e)}`);
   }
-  const text = await res.text();
+  const text = res.text;
   if (!res.ok) throw new StageAuthError(`${env} sign-in failed: HTTP ${res.status}. Body: ${JSON.stringify(text.slice(0, 200))}`);
   let json: Record<string, unknown>;
   try { json = JSON.parse(text); } catch { throw new StageAuthError(`${env} sign-in returned non-JSON: ${JSON.stringify(text.slice(0, 200))}`); }
@@ -466,10 +469,10 @@ async function signIn(env: ClientEnv): Promise<{ token: string; expMs: number }>
   return { token, expMs };
 }
 
-async function freshToken(env: ClientEnv): Promise<string> {
+async function freshToken(env: ClientEnv, lane?: MdapiLane): Promise<string> {
   const c = cached[env];
   if (c && c.expMs - Date.now() > REFRESH_SKEW_MS) return c.token;
-  const t = await signIn(env);
+  const t = await signIn(env, lane);
   cached[env] = t;
   return t.token;
 }
@@ -491,8 +494,9 @@ export async function apiGet<T = unknown>(env: ClientEnv, path: string, query?: 
   const url = buildUrl(base ?? baseUrl, path, query);
   assertAllowedHost(env, url);
   const token = await freshToken(env);
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(WRITE_TIMEOUT_MS) });
-  const text = await res.text();
+  // The gate's lane timeout applies (staff 15 s, bulk 30 s); the 30 s write timeout is for writes.
+  const res = await mdapiFetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  const text = res.text;
   if (!res.ok) throw new WriteFailedError(res.status, `GET ${url}: HTTP ${res.status}. Body: ${JSON.stringify(text.slice(0, 200))}`, text.slice(0, 200));
   return JSON.parse(text) as T;
 }
@@ -525,11 +529,11 @@ export async function apiWrite<T = unknown>(env: ClientEnv, method: "POST" | "PU
    * that needs it, and it reaches nothing but the endpoint deny check: the host guard, the field
    * deny-list, the authority guard and the production bolt are all untouched by it. */
   preflightWrite(env, method, url, body, unlock); // host -> field deny -> endpoint deny -> (prod bolt, already checked), all pre-network
-  const token = await freshToken(env);
+  const token = await freshToken(env, "write");
 
-  let res: Response;
+  let res: MdapiResponse;
   try {
-    res = await fetch(url, {
+    res = await mdapiFetch(url, {
       method,
       // Only declare a JSON content-type when there IS a body — the API rejects an
       // empty body sent with Content-Type: application/json (400). Bodyless writes
@@ -543,13 +547,17 @@ export async function apiWrite<T = unknown>(env: ClientEnv, method: "POST" | "PU
       signal: AbortSignal.timeout(WRITE_TIMEOUT_MS),
     });
   } catch (e) {
+    // The gate refused before sending (the write lane stayed full): nothing reached the API.
+    if (e instanceof MdapiGateBusyError || e instanceof MdapiGateClosedError) {
+      throw new WriteFailedError(0, `${method} ${url}: NOT SENT — ${e.message}. The write did not land.`, "");
+    }
     throw new AmbiguousWriteError(
       `${method} ${url}: network error/timeout — the write MAY OR MAY NOT have landed. ` +
       `Do NOT resend; verify by hand. (${e instanceof Error ? e.message : String(e)})`,
     );
   }
 
-  const text = await res.text();
+  const text = res.text;
   if (res.ok) {
     try { return (text ? JSON.parse(text) : (undefined as T)); }
     catch { return text as unknown as T; }

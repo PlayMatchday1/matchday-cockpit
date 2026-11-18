@@ -22,9 +22,13 @@
 //   - A 200-character body snippet is included in every thrown error
 //     so the actual upstream response is visible in Vercel logs.
 //   - Transient failures (502 / 503 / 504 / 429 / network errors /
-//     JSON parse failures) are retried up to 3 times with 1s/2s/4s
-//     exponential backoff. 429 honors the Retry-After header when
-//     present (delta-seconds or HTTP-date), capped at 30s.
+//     JSON parse failures) are retried ONCE, after 1-2 s (jittered). A
+//     timeout or a gate refusal is never retried. 429 honors the
+//     Retry-After header when present, capped at 30s. (Was 3 retries at
+//     1/2/4 s until the MatchDay gate, 2026-11-18: a struggling API got
+//     four requests for every one a page wanted.)
+//   - Every request goes through mdapiFetch (src/lib/mdapiGate.ts): the
+//     global slot, the shared breaker, the timeout, in-flight dedupe.
 //   - 401 triggers the optional refreshAuth hook (used by client.get
 //     to wipe cachedToken and re-sign-in) and one retry. Subsequent
 //     401s throw MatchdayApiAuthError.
@@ -46,6 +50,7 @@ const DEFAULT_BASE_URL = "https://playmatchday.herokuapp.com";
 // data into production mdapi_* tables. Refusing here makes every sync a no-op wherever it is
 // triggered from. The local backend is reached only through matchdayStageApi's "local" target.
 import { localModeOn, LocalModeRefusedError } from "./localMode";
+import { mdapiFetch, withMdapiLane, MdapiGateBusyError, MdapiGateClosedError, MdapiTimeoutError, type MdapiResponse } from "./mdapiGate";
 function refuseInLocalMode(what: string): void {
   if (localModeOn()) {
     throw new LocalModeRefusedError(
@@ -154,10 +159,10 @@ function snippet(text: string): string {
 }
 
 const RETRYABLE_STATUS = new Set([429, 502, 503, 504]);
-const MAX_RETRIES = 3;
-// Index aligns with the retry attempt that's about to run: BACKOFF_MS[0]
-// fires before attempt 1, BACKOFF_MS[1] before attempt 2, etc.
-const BACKOFF_MS = [1000, 2000, 4000];
+const MAX_RETRIES = 1;
+// Index aligns with the retry attempt that's about to run. Jittered by up to +100% so instances that
+// failed together do not come back together.
+const BACKOFF_MS = [1000];
 
 type FetchOpts = {
   // Hook called on 401 BEFORE the one-shot auth retry. Implementations
@@ -186,14 +191,19 @@ export async function fetchMatchDayJson<T = unknown>(
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     if (attempt > 0) {
       const backoff = BACKOFF_MS[Math.min(attempt - 1, BACKOFF_MS.length - 1)];
-      await sleep(backoff);
+      await sleep(backoff * (1 + Math.random()));
     }
 
-    let res: Response;
+    let res: MdapiResponse;
     try {
-      res = await fetch(url, init);
+      res = await mdapiFetch(url, init);
     } catch (e) {
-      // Network-level failure (DNS, ECONNRESET, fetch timeout). Retry.
+      // The gate refused (breaker open, lane full) or the API did not answer in time: no retry —
+      // a retry is exactly the extra load the gate exists to stop.
+      if (e instanceof MdapiGateClosedError || e instanceof MdapiGateBusyError || e instanceof MdapiTimeoutError) {
+        throw new MatchdayApiError(0, `${url}: ${e.message}`, null, url, "");
+      }
+      // Network-level failure (DNS, ECONNRESET). Retry within the budget.
       if (attempt < maxRetries) continue;
       const msg = e instanceof Error ? e.message : String(e);
       throw new MatchdayApiError(
@@ -226,7 +236,7 @@ export async function fetchMatchDayJson<T = unknown>(
     // Read body as text once. Subsequent decisions are made from this
     // string — we never call res.json() directly because the upstream
     // sometimes serves HTML/plain-text on 5xx.
-    const bodyText = await res.text();
+    const bodyText = res.text;
     const bodySnippet = snippet(bodyText);
 
     // 401 that survived the refresh attempt (or had no hook) is terminal.
@@ -421,8 +431,9 @@ export function _resetCachedToken(): void {
  *      without making a request — so a caller that catches per item (the per-match roster loop)
  *      still stops. The retry is the next scheduled run.
  * Single staff lookups (Player Lookup, Player Chats, roster search) keep getMatchdayApiClient.
- * One client per run: the pace and the stop are per client, not across processes, so schedules are
- * kept apart instead (vercel.json). */
+ * One client per run: the pace and the stop are per client. ACROSS processes, every paced request
+ * also takes the gate's single bulk slot (mdapiGate.ts, 2026-11-18), so two syncs that overlap share
+ * one request at a time between them instead of doubling the load. */
 export const PACE_MS = 1000;
 
 export interface PacedClient extends MatchdayApiClient {
@@ -466,7 +477,8 @@ export function getPacedClient(opts: {
       }
       calls++;
       try {
-        return await base.get<T>(path, query, { maxRetries: 0 });
+        // The bulk lane: one request at a time across all of Vercel, shared by every sync (mdapiGate.ts).
+        return await withMdapiLane("bulk", () => base.get<T>(path, query, { maxRetries: 0 }));
       } catch (e) {
         if (!opts.stopsOn || opts.stopsOn(e)) stoppedBy = e instanceof Error ? e : new Error(String(e));
         throw e;
