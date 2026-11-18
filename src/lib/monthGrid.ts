@@ -78,21 +78,17 @@ export function daySpots(ms: Pick<GridMatch, "players" | "fakePlayers" | "cancel
 }
 export const spotsLabel = (n: number) => `${n} spot${n === 1 ? "" : "s"}`;
 
-/* HOW FULL, AS A WORD. The only two states worth colouring:
- *   "full" — at or over capacity, anywhere in the month. Actionable in the useful direction: add
- *            a slot. This one is not time-sensitive, so it is not restricted to today.
- *   "low"  — below the match's own minimum, and ONLY on today's column. Measured on the real
- *            board: 143 of Austin's 165 September matches are below their minimum, so coloring
- *            every day would light 87% of the grid permanently with what is simply the normal
- *            state of a match that has not filled yet. Today is the one column where being short
- *            is something you can still do anything about.
- * A match with no minimum (min 0 — the tourney capacity) can never be "low". */
-export function fillTone(m: GridMatch, isToday: boolean): "full" | "low" | "" {
+/* HOW FULL, AS A PILL (Ryan, 2026-11-18). Real players over capacity, on every day:
+ *   "high" 75% or more, "mid" 40% to 74%, "low" under 40%.
+ * null when there is no count or no capacity to measure against; the pill then reads gray, the same
+ * as "low", because there is nothing to celebrate. Replaces the old fillTone (green only at capacity,
+ * amber only below the minimum on today). Cancelled tiles carry no pill. */
+export type FillBand = "high" | "mid" | "low";
+export function fillBand(m: Pick<GridMatch, "players" | "fakePlayers" | "capacity">): FillBand | null {
   const real = realCount(m);
-  if (real == null) return "";
-  if (m.capacity != null && m.capacity > 0 && real >= m.capacity) return "full";
-  if (isToday && (m.minPlayers ?? 0) > 0 && real < (m.minPlayers as number)) return "low";
-  return "";
+  if (real == null || m.capacity == null || m.capacity <= 0) return null;
+  const f = real / m.capacity;
+  return f >= 0.75 ? "high" : f >= 0.4 ? "mid" : "low";
 }
 
 /** "12/18", or "—" when the mirror carries no count. A real 0 renders "0/18", not "—". */

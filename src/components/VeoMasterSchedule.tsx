@@ -41,7 +41,7 @@ import RefreshIcon from "@/components/RefreshIcon";
 import { buildCopyBody, copyConfirmLine, type SourceMatch } from "@/lib/copyMatch";
 import {
   buildMonthGrid, applyFilters, fieldsAvailable, reconcileFields, fieldCountLabel,
-  defaultRange, rangeTitle, priceLabel, shiftRangeMonth, countLabel, fillTone, daySpots, spotsLabel,
+  defaultRange, rangeTitle, priceLabel, shiftRangeMonth, countLabel, fillBand, daySpots, spotsLabel,
   fieldCounts, busiestDay, isoDow, visibleSpan, inRangeMatches, fieldsByCity,
   type GridDay, type GridMatch,
 } from "@/lib/monthGrid";
@@ -1902,10 +1902,6 @@ const CSS = `
   .vms-mitem{flex-wrap:wrap;row-gap:1px}
   .vms-mitem::after{content:"";order:3;flex:0 0 100%;height:0}
 }
-.vms-mfull{color:#046B45}
-/* AMBER IS TODAY ONLY. 143 of Austin's 165 September matches are below their minimum; colouring
-   that everywhere would light 87% of the grid permanently and mean nothing. */
-.vms-mlow{color:#8a6300}
 /* PAST DAYS RECEDE. A day that has run has nothing left to decide. The numbers stay legible —
    this is a step back, not a hide. */
 /* A CAMERA-MARKED MATCH IN THE MONTH GRID. The week grid's on-state chip is --mintSoft on #8fd9b6
@@ -1921,6 +1917,20 @@ const CSS = `
 /* A PAST CAMERA MATCH KEEPS ITS MARK, dimmed with everything else on the day. */
 .vms-mpast .vms-mitem.vms-mveo{background:#EAF5EE;border-color:#CFE6DA}
 .vms-mpast .vms-mnum{color:#6d7b74}
+/* LIVE (NOT CANCELLED) TILES READ AS "ON" (Ryan, 2026-11-18): white, a 3px brand-green edge, dark
+   bold time and field, and a stronger border and shadow than a cancelled tile (which has none).
+   Scoped under .vms-mlist so it outranks the Veo mint and the past-day gray; a camera match keeps its
+   green camera mark, and a past day still recedes by opacity. */
+.vms-mlist .vms-mitem:not(.vms-mcx){background:#fff;border-color:#C9D6CE;box-shadow:inset 3px 0 0 var(--mint),0 1px 3px rgba(0,42,28,.16)}
+.vms-mlist .vms-mitem:not(.vms-mcx):hover{background:#F1FBF6;border-color:#8fd9b6}
+.vms-mlist .vms-mitem.vms-msel:not(.vms-mcx){border-color:#35c77f;box-shadow:inset 3px 0 0 var(--mint),0 0 0 1px #35c77f}
+.vms-mlist .vms-mitem:not(.vms-mcx) b{color:#0d1f18;font-weight:800}
+.vms-mlist .vms-mitem:not(.vms-mcx) span{color:#0d1f18;font-weight:700}
+/* THE FILL PILL (monthGrid.fillBand). */
+.vms-pill{border-radius:999px;padding:0 6px;font-size:10px;line-height:1.55}
+.vms-pill-high{color:#046B45;background:#D3F4E3}
+.vms-pill-mid{color:#8A5A08;background:#FFEFC7}
+.vms-pill-low{color:#4F5E56;background:#E9EDEA}
 .vms-mtd{font-size:9px;letter-spacing:.7px;text-transform:uppercase;font-weight:800;color:#046B45;background:#e0f2e7;border-radius:999px;padding:1px 6px}
 /* CANCELLED, TWO STYLES THAT SHARE NO COLOUR (Ryan, 2026-11-18). Low players: solid red, white text,
    a LOW PLAYERS tag. Any other reason: gray, struck through, its reason as the tag. Scoped under
@@ -2222,10 +2232,12 @@ span.vms-cam:focus-visible{outline:2px solid var(--mintInk);outline-offset:2px}
     white-space:normal;overflow-wrap:anywhere;line-height:1.3}
   .vms-agi>i{flex:none;font-style:normal;font-size:11.5px;font-weight:800;
     font-variant-numeric:tabular-nums;white-space:nowrap;color:#12241d}
-  .vms-agfull{color:#046B45}
-  .vms-aglow{color:#8a6300}
   .vms-agi>em.pr{flex:none;font-style:normal;font-size:11.5px;font-weight:700;
     font-variant-numeric:tabular-nums;white-space:nowrap;color:#046B45;width:44px;text-align:right}
+  /* LIVE ROWS: the same green edge as the month tiles, dark bold time and field, the fill pill. */
+  .vms-agi:not(.cx),.vms-agi.vms-agveo:not(.cx){background:#fff;box-shadow:inset 3px 0 0 var(--mint)}
+  .vms-agi:not(.cx)>b,.vms-agi:not(.cx)>span{color:#0d1f18;font-weight:800}
+  .vms-agi>i.vms-pill{font-size:11px;padding:1px 7px}
   .vms-agi.cx{background:#ECEEED}
   .vms-agi.cx>b,.vms-agi.cx>span,.vms-agi.cx>i,.vms-agi.cx>em{color:#6B7570}
   .vms-agi.cx>b,.vms-agi.cx>span{text-decoration:line-through}
@@ -2454,13 +2466,12 @@ function MonthAgenda({ weeks, allMatches, showCx, picked, onOpen }: {
               </span>
             </div>
             {d.matches.map((m) => {
-              // AMBER ONLY ON TODAY, and fillTone is where that lives — never re-tested here.
-              const tone = fillTone(m, d.isToday);
+              const band = m.cancelled ? null : (fillBand(m) ?? "low");
               return (
                 /* THE CAMERA MARK, for the same reason the grid above carries one: Month is the
                    landing view now, and on a phone this agenda IS Month. Same glyph, same tokens. */
                 <button type="button" key={m.apiId} className={"vms-agi" + (m.cancelled ? " cx" : "") + (m.cancelled && isLowPlayerCancel(m.cancel) ? " cxlow" : "") + (m.veo ? " vms-agveo" : "")}
-                  data-testid="mob-match" data-id={m.apiId} data-tone={tone || "none"} data-veo={m.veo ? "1" : "0"}
+                  data-testid="mob-match" data-id={m.apiId} data-fill={band ?? "none"} data-veo={m.veo ? "1" : "0"}
                   data-cancelled={m.cancelled ? "1" : "0"} title={m.cancelled ? cancelHover(m.cancel) : undefined} onClick={() => onOpen(m.apiId)}>
                   {m.veo && <CamIcon />}
                   <b>{m.time}</b>
@@ -2471,7 +2482,7 @@ function MonthAgenda({ weeks, allMatches, showCx, picked, onOpen }: {
                       alignment — the same property that made this an agenda at all. */}
                   <span>{m.venue}</span>
                   {m.cancelled && <em className="cxtag">{cancelTag(m.cancel)}</em>}
-                  <i className={tone ? `vms-ag${tone}` : undefined}>{countLabel(m)}</i>
+                  <i className={band ? `vms-pill vms-pill-${band}` : undefined}>{countLabel(m)}</i>
                   {priceLabel(m.price) !== null && <em className="pr">{priceLabel(m.price)}</em>}
                 </button>
               );
@@ -2622,12 +2633,11 @@ function MonthCell({ d, onOpen, selectedId, singleField, pick }: {
       </div>
       <div className="vms-mlist">
         {shown.map((m) => {
-          /* AMBER IS TODAY-ONLY, and fillTone is where that rule lives — never re-tested here.
-             Green (at capacity) applies on any day. */
-          const tone = fillTone(m, d.isToday);
+          /* THE FILL PILL, live tiles only (monthGrid.fillBand): green 75%+, amber 40-74%, gray under 40%. */
+          const band = m.cancelled ? null : (fillBand(m) ?? "low");
           return (
             <button type="button" key={m.apiId} data-testid="month-match" data-id={m.apiId}
-              data-cancelled={m.cancelled ? "1" : "0"} data-tone={tone || "none"}
+              data-cancelled={m.cancelled ? "1" : "0"} data-fill={band ?? "none"}
               /* THE CAMERA MARK, WHICH THIS GRID DID NOT SHOW AT ALL until Month became the default
                  view (2026-09-10). GridMatch.veo was already populated and nothing rendered it, so
                  the page would have opened on the one view where the camera marks are invisible.
@@ -2656,7 +2666,7 @@ function MonthCell({ d, onOpen, selectedId, singleField, pick }: {
                   the field is a constant and the NAME is what distinguishes one entry from another. */}
               <span>{singleField ? m.name : m.venue}</span>
               {/* REAL PLAYERS. countLabel subtracts the fakes; see monthGrid.realCount. */}
-              <i className={"vms-mcnt" + (tone ? ` vms-m${tone}` : "")} data-testid="month-count-cell">
+              <i className={"vms-mcnt" + (band ? ` vms-pill vms-pill-${band}` : "")} data-testid="month-count-cell">
                 {countLabel(m)}
               </i>
               {/* NULL RENDERS NOTHING — no element, no placeholder, no gap. priceLabel returns
