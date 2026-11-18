@@ -249,6 +249,11 @@ async function main() {
     const q = Array.from({ length: MATCH_SLICES }, (_, i) => windowSlice(win, i + 1));
     is("the first quarter starts the window, the last ends it", [q[0].fromDate, q[MATCH_SLICES - 1].toDate], [win.fromDate, win.toDate]);
     yes("each quarter starts on the day the one before it ends (one day of overlap, no gap)", q.every((s, i) => i === 0 || s.fromDate === q[i - 1].toDate), JSON.stringify(q));
+    // DENSITY SLICES (2026-11-18): quarter 1 held ~470 rosters and never finished in 300 s. Every slice
+    // but the last spans at most 7 days plus the overlap day; the last takes the sparse rest.
+    const span = (x: { fromDate: string; toDate: string }) => (Date.parse(x.toDate) - Date.parse(x.fromDate)) / 86_400_000 + 1;
+    is("slices 1..4 span 8 days each (7 + the overlap day), the last the rest", q.map(span), [8, 8, 8, 8, span(q[4])]);
+    yes("...and there are five", q.length === 5, String(q.length));
   }
 
   console.log("\n— Download players, from our copy —");

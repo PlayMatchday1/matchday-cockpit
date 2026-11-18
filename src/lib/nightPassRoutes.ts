@@ -1,12 +1,13 @@
 // The night pass's full match and review refreshes — the handlers behind the literal cron routes
-// /api/sync/matches/full/{1..4} and /api/sync/reviews/full/{1,2} (literal folders, not [slice], so
+// /api/sync/matches/full/{1..5} and /api/sync/reviews/full/{1,2} (literal folders, not [slice], so
 // every scheduled path resolves to a file: scripts/cron-verb-test.ts). Schedule: lib/nightPass.ts.
 
-// MATCHES — /api/sync/matches/full/{1..4} — the night pass's FULL match refresh, one quarter of the
+// MATCHES — /api/sync/matches/full/{1..5} — the night pass's FULL match refresh, one slice of the
 // window per call: the match list AND every roster in it (lib/nightPass.ts has the schedule).
 //
-// WHY QUARTERS. ~560 rosters at one request a second is ~10 minutes; a function gets 300 s. A quarter
-// is ~140 requests, ~3 minutes. The quarters overlap by one day (windowSlice).
+// WHY SLICES. ~750 rosters at one request a second is ~13 minutes; a function gets 300 s. A 7-day slice
+// is ~180–200 requests, ~3.5 minutes (quarters were not: the first held ~470 and never finished).
+// The slices overlap by one day (windowSlice).
 //
 // Each quarter is its own mdapi-matches run with run_mode 'full-<n>', so its tombstone guards compare it
 // only with the same quarter's previous night (mdapiMatchesSync.ts, tombstoneMissing). Rosters are

@@ -7,6 +7,7 @@ import { timingSafeEqual } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { runMatchRisk } from "@/lib/appPushMatch";
 import { sweepReceipts } from "@/lib/appPush";
+import { withMdapiLane } from "@/lib/mdapiGate";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -22,7 +23,10 @@ export async function POST(req: Request) {
   if (!url || !key) return Response.json({ error: "Supabase env not configured" }, { status: 500 });
   const sb = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
   const out: Record<string, unknown> = {};
-  try { out.matchRisk = await runMatchRisk(sb, "production"); } catch (e) { out.matchRisk = { error: e instanceof Error ? e.message : String(e) }; }
+  // The bulk lane (mdapiGate.ts): a cron's reads take the one global slot, shared with every sync, and
+  // stop while the shared breaker is open. Counts are still read live: the push fires at the hour
+  // before auto-cancel, and the mirror lags.
+  try { out.matchRisk = await withMdapiLane("bulk", () => runMatchRisk(sb, "production")); } catch (e) { out.matchRisk = { error: e instanceof Error ? e.message : String(e) }; }
   try { out.receipts = await sweepReceipts(sb); } catch (e) { out.receipts = { error: e instanceof Error ? e.message : String(e) }; }
   console.log(`[app-push:cron] ${JSON.stringify(out).slice(0, 500)}`);
   return Response.json(out);

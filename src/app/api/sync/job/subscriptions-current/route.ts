@@ -7,6 +7,7 @@
 
 import { cronClient, syncJob } from "@/lib/syncJob";
 import { syncMdapiSubscriptions } from "@/lib/mdapiSubscriptionsSync";
+import { inNightPassHour, NIGHT_PASS_SKIP } from "@/lib/nightPass";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -15,6 +16,9 @@ export const maxDuration = 300;
 export async function POST(req: Request) {
   const c = cronClient(req);
   if (c instanceof Response) return c;
+  /* THE NIGHT PASS (2026-11-18): its 08:02/08:17/08:32/08:47 UTC runs would share the one bulk slot
+   * (mdapiGate.ts) with the full pass. Members move again at 09:02. */
+  if (inNightPassHour()) return Response.json({ ok: true, skipped: true, reason: NIGHT_PASS_SKIP });
   const job = syncJob(c.supabase, "cron", maxDuration * 1000);
   const subs = await job.step("mdapi-subscriptions-current", (sb) => syncMdapiSubscriptions(sb, { mode: "current" }),
     (r) => ({ rows_imported: r.upserted, api_calls: r.apiCalls, run_mode: "current" }));

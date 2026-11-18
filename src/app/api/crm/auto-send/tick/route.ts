@@ -2,6 +2,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { runAutoSendTick } from "@/lib/aiDraftAutoRun";
+import { withMdapiLane } from "@/lib/mdapiGate";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -17,7 +18,11 @@ export async function POST(req: Request) {
   if (!url || !key) return Response.json({ error: "Supabase env not configured" }, { status: 500 });
   const sb = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
   try {
-    const out = await runAutoSendTick(sb);
+    // The bulk lane (mdapiGate.ts): the tick's player reads take the one global slot (one at a time
+    // across Vercel, behind every sync). Its writes (credit, guest code) keep the write lane. The draft
+    // context stays a live read: the mirror does not carry credits or strikes, so reading it would
+    // change what a draft says.
+    const out = await withMdapiLane("bulk", () => runAutoSendTick(sb));
     console.log(`[auto-send:tick] ${JSON.stringify(out).slice(0, 300)}`);
     return Response.json(out);
   } catch (e) {

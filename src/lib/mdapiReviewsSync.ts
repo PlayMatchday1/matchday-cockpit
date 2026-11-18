@@ -70,7 +70,12 @@ export async function syncMdapiReviews(
   const startedAt = Date.now();
   const client = opts.client ?? getPacedClient();
   const fromPage = opts.fromPage ?? 1;
-  const toPage = opts.toPage ?? Number.POSITIVE_INFINITY;
+  // A cap, not a plan (MatchDay gate, 2026-11-18): no loop that reads the production API is unbounded. One call reads at most 200 pages (~270 s
+  // paced); the night's second half is ~142 today. Past it the call fails loudly (the run is marked
+  // failed, the watchdog sees it) — that is the day to add a third half, not to read on.
+  const MAX_PAGES_PER_CALL = 200;
+  const toPage = Math.min(opts.toPage ?? Number.POSITIVE_INFINITY, fromPage + MAX_PAGES_PER_CALL - 1);
+  const capped = opts.toPage == null || opts.toPage > toPage;
 
   // --- Fetch the page range ---
   const all: ApiReviewRow[] = [];
@@ -98,6 +103,9 @@ export async function syncMdapiReviews(
     if (rows.length === 0) break;
     if (rows.length < PAGE_LIMIT) break;
     if (totalItems != null && (page - 1) * PAGE_LIMIT + rows.length >= totalItems) break;
+    if (page === toPage && capped) {
+      throw withLogPatch(new Error(`mdapi_reviews: page cap ${MAX_PAGES_PER_CALL} per call reached at page ${page} with more to read; refusing to read further (add a night-pass half). Nothing written.`), { api_calls: client.calls });
+    }
   }
 
   // --- Map to DB rows ---

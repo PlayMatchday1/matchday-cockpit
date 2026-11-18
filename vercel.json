@@ -102,15 +102,19 @@
     },
     {
       "path": "/api/sync/matches/full/2",
-      "schedule": "19 8 * * *"
+      "schedule": "17 8 * * *"
     },
     {
       "path": "/api/sync/matches/full/3",
-      "schedule": "26 8 * * *"
+      "schedule": "22 8 * * *"
     },
     {
       "path": "/api/sync/matches/full/4",
-      "schedule": "40 8 * * *"
+      "schedule": "27 8 * * *"
+    },
+    {
+      "path": "/api/sync/matches/full/5",
+      "schedule": "32 8 * * *"
     },
     {
       "path": "/api/sync/reviews/full/1",

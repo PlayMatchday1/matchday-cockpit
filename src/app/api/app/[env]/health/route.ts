@@ -16,6 +16,7 @@
 // ACCESS: Match Ops, through the app's read check. A city-confined account reads only its own city,
 // filtered on the server before anything is counted; the request cannot name another.
 
+import { withMdapiLane } from "@/lib/mdapiGate";
 import { authenticateApp, readRefusal } from "@/lib/appAuth";
 import { isEnv } from "@/lib/appLive";
 import { todayBusinessDate } from "@/lib/goalPace";
@@ -55,12 +56,13 @@ async function getRoute(req: Request, ctx: { params: Promise<{ env: string }> })
     const before = await Promise.all(periods.slice(0, -1).map((x) => cachedPeriod(auth.supabase, env, x.from, x.to, scope, x.current)));
     const missing = periods.slice(0, -1).filter((_, i) => before[i] == null);
     if (missing.length) {
-      after(async () => {
+      // The bulk lane (mdapiGate.ts): background reads nobody is waiting on take the one global slot.
+      after(() => withMdapiLane("bulk", async () => {
         for (const x of missing) {
           try { await loadPeriod(auth.supabase, env, x.from, x.to, null, x.current); }
           catch (e) { console.warn(`[app-health] trend fill stopped at ${x.from}: ${e instanceof Error ? e.message.split(" Body:")[0] : String(e)}`); return; }
         }
-      });
+      }));
     }
     const loaded: (LoadedPeriod | null)[] = [...before, shown];
     const now = shown, prev = loaded.length > 1 ? loaded[loaded.length - 2] : null;

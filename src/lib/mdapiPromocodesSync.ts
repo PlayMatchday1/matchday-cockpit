@@ -90,7 +90,10 @@ export async function syncMdapiPromocodes(
   // === Fetch all pages ===
   const all: ApiPromocode[] = [];
   let pages = 0;
+  // A cap, not a plan (MatchDay gate, 2026-11-18): no loop that reads the production API is unbounded. 10 pages of 1000 is ~4x the codes today.
+  const MAX_PAGES = 10;
   for (let page = 1; ; page++) {
+    if (page > MAX_PAGES) throw new Error(`mdapi_promocodes: page cap ${MAX_PAGES} reached; refusing to read further (raise it after checking). Nothing written.`);
     let res: ApiPage;
     try {
       res = await client.get<ApiPage>("/admin/promocodes", {

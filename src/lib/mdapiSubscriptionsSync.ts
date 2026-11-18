@@ -260,10 +260,17 @@ export async function syncMdapiSubscriptions(
   };
   const syncedAt = new Date().toISOString();
 
+  const MAX_PAGES_PER_LOOP = 50;
   walk: for (const cityAbbr of cityAbbrs) {
     for (const status of statuses) {
       const loopKey = `${cityAbbr}/${status}`;
       for (let page = 1; ; page++) {
+        // A cap, not a plan (MatchDay gate, 2026-11-18): no loop that reads the production API is unbounded. 50 pages of 100 per city and status is
+        // ~10x the largest today; past it the walk stops as failed rather than read on.
+        if (page > MAX_PAGES_PER_LOOP) {
+          stoppedBy = `${loopKey}: page cap ${MAX_PAGES_PER_LOOP} reached; refusing to read further (raise it after checking)`;
+          break walk;
+        }
         let res: ApiPage;
         try {
           res = await client.get<ApiPage>("/admin/subscriptions", {

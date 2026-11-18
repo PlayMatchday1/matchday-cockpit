@@ -35,6 +35,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { getPacedClient, MatchdayApiError, type PacedClient } from "./matchdayApi";
 import { syncLogWritable, withLogPatch, type LogPatch, type TriggeredBy } from "./syncLogging";
 
+const MAX_LIST_PAGES = 20;
 const PAGE_LIMIT = 100;
 const UPSERT_BATCH = 500;
 
@@ -422,6 +423,9 @@ export async function syncMdapiMatches(
   const matches: ApiMatch[] = [];
   let pages = 0;
   for (let page = 1; ; page++) {
+    // A cap, not a plan (MatchDay gate, 2026-11-18): no loop that reads the production API is unbounded. 20 pages of 100 is ~2.5x the matches in the
+    // whole −14..+60 window today. Past it the run fails (and a failed run tombstones nothing).
+    if (page > MAX_LIST_PAGES) throw failed(new Error(`mdapi_matches: list page cap ${MAX_LIST_PAGES} reached; refusing to read further (raise it after checking)`));
     const query: Record<string, string | number> = {
       page,
       limit: PAGE_LIMIT,
