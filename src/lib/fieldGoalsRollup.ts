@@ -2,7 +2,7 @@ import "server-only"; // no-op under --conditions=react-server
 // FIELD GOALS, THE YEAR'S ROLLUP (Ryan, 2026-11-02): spots and matches per row (a venue, or a field
 // with no venue) per month, and the month totals, from every 2026 match. The same for every account;
 // the route filters it to the caller's city afterwards. Cached ten minutes per business day and kept
-// warm by /api/app/cron/warm, so the Field Goals page and the staff app's Goals read it, not the year.
+// filled on first read (the warm cron that pre-filled it was removed 2026-11-17, its route deleted 2026-11-18), so the Field Goals page and the staff app's Goals read it, not the year.
 // Moved here unchanged from src/app/api/growth/field-goals/route.ts.
 
 import type { SupabaseClient } from "@supabase/supabase-js";

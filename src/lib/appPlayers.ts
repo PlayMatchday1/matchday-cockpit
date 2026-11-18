@@ -45,7 +45,7 @@ export const stepOf = (p: Period, by: number): Period =>
   periodOf(p.kind, p.kind === "day" ? addDays(p.from, by) : p.kind === "week" ? addDays(p.from, 7 * by) : addMonths(p.from, by));
 
 /* CACHE LIFE (2026-11-02), as Health: current 5 minutes (stale-while-revalidate, kept warm by
- * /api/app/cron/warm), ended in the last 2 days 1 hour, older 7 days. `to` is the last day covered. */
+ * the warm cron, removed 2026-11-17; route deleted 2026-11-18), ended in the last 2 days 1 hour, older 7 days. `to` is the last day covered. */
 const cached = <T,>(key: string[], current: boolean, fn: () => Promise<T>, to?: string) =>
   unstable_cache(fn, ["app-players-v2", ...key], { revalidate: to ? ttlFor(to, current, todayBusinessDate(new Date())) : current ? 300 : 6 * 3600, tags: ["app-players"] })();
 const monthEnd = (ym: string) => addDays(addMonths(`${ym}-01`, 1), -1);

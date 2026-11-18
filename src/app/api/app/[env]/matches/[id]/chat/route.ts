@@ -39,6 +39,7 @@
 // EVERY WRITE IS READ BACK. The response carries the document as it is in Firestore after the write,
 // in the same shape the list gives, and the app shows the message only once a read holds it.
 
+import { unstable_cache, revalidateTag } from "next/cache";
 import { localModeRefusal } from "@/lib/localMode";
 import { authenticateApp, readRefusal } from "@/lib/appAuth";
 import { can } from "@/lib/capabilities";
@@ -83,13 +84,31 @@ export async function chatMatch(env: "staging" | "production", id: string) {
   };
 }
 
+/* THE HEADER MAY BE A MINUTE OLD (Ryan, 2026-11-18, the MatchDay gate). The app polls this route every
+ * 2.5 s while a chat is open, and every poll read the match live: ~24 reads a minute per open chat. A
+ * poll, and the typing indicator, now use a copy up to CHAT_MATCH_MAX_AGE_MS old, shared by every
+ * instance. Sending a message (and anything else that writes) reads the match live first. */
+const CHAT_MATCH_MAX_AGE_MS = 60_000;
+async function chatMatchCached(env: "staging" | "production", id: string) {
+  const tag = `app-chat-match:${env}:${id}`;
+  const read = () => unstable_cache(async () => ({ m: await chatMatch(env, id), at: Date.now() }),
+    ["app-chat-match-v1", env, id], { revalidate: CHAT_MATCH_MAX_AGE_MS / 1000, tags: [tag] })();
+  let c = await read();
+  // The data cache serves a stale copy however old while it refreshes; older than the limit is read again first.
+  if (Date.now() - c.at > CHAT_MATCH_MAX_AGE_MS) {
+    revalidateTag(tag, { expire: 0 });
+    c = await read();
+  }
+  return c.m;
+}
+
 function apiFailure(err: unknown): Response {
   if (err instanceof StageConfigError || err instanceof StageHostGuardError) return Response.json({ error: err.message }, { status: 503 });
   console.error("[app:match-chat] live match read failed", err);
   return Response.json({ error: "The match could not be read from MatchDay." }, { status: 502 });
 }
 
-async function gate(req: Request, ctx: Ctx) {
+async function gate(req: Request, ctx: Ctx, opts: { live: boolean } = { live: true }) {
   const auth = await authenticateApp(req);
   if (!auth.ok) return { refused: Response.json({ error: auth.error }, { status: auth.status }) } as const;
   const refusedRead = readRefusal(auth);
@@ -100,7 +119,7 @@ async function gate(req: Request, ctx: Ctx) {
   if (!isValidChatId(id)) return { refused: Response.json({ error: "match id must be numeric" }, { status: 400 }) } as const;
   let match: Awaited<ReturnType<typeof chatMatch>>;
   try {
-    match = await chatMatch(env, id);
+    match = opts.live ? await chatMatch(env, id) : await chatMatchCached(env, id);
   } catch (err) {
     return { refused: apiFailure(err) } as const;
   }
@@ -119,7 +138,7 @@ export async function chatGate(req: Request, ctx: Ctx) { return gate(req, ctx); 
 
 async function getRoute(req: Request, ctx: Ctx) {
   { const local = localModeRefusal("Match chat"); if (local) return local; }
-  const g = await gate(req, ctx);
+  const g = await gate(req, ctx, { live: false });
   if ("refused" in g) return g.refused;
   const url = new URL(req.url);
   if (url.searchParams.get("typing") === "1") {
@@ -160,7 +179,9 @@ type Body = { op?: unknown; body?: unknown; replyTo?: unknown; docId?: unknown; 
 
 async function postRoute(req: Request, ctx: Ctx) {
   { const local = localModeRefusal("Match chat"); if (local) return local; }
-  const g = await gate(req, ctx);
+  // Only the typing indicator may use the cached match; every other op is a write and reads it live.
+  const op = await req.clone().json().then((x: Body) => x?.op, () => null);
+  const g = await gate(req, ctx, { live: op !== "typing" });
   if ("refused" in g) return g.refused;
   if (!g.canSend) {
     return Response.json({ error: "You don't have permission to send messages.", reason: "no_send_permission" }, { status: 403 });

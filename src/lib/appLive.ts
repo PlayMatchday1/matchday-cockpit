@@ -13,6 +13,8 @@ import { RUNG_KEYS, spotsLeftNow, type Ladder } from "./fakeLadder";
 import { hasCameraEmoji } from "./veo";
 import { perTeamCapacity } from "./checkinModel";
 import { checkinOpen, mapLimit, summarizeCheckin, type CheckinSummary, type Mark } from "./appModel";
+import { unstable_cache, revalidateTag } from "next/cache";
+import { todayTag } from "./appTodayCache";
 
 export const isEnv = (x: string): x is MatchdayEnv => x === "staging" || x === "production";
 const PAGE_LIMIT = 100;
@@ -119,8 +121,36 @@ export function todayRow(m: ReturnType<typeof trimMatch> & { venueMaxPlayers?: n
  * in flight. Matches not yet open, and cancelled ones, cost nothing. A roster read that fails leaves
  * that match's summary null rather than failing the list.
  */
+/* FINISHED MATCHES' ROSTERS MAY BE A FEW MINUTES OLD (Ryan, 2026-11-18, the MatchDay gate). Today
+ * read one roster per started match on every live read, and by evening that is every match of the
+ * day, every 20 seconds, per city scope. A match more than ROSTER_SETTLED_AFTER_END_MIN past its end
+ * has its roster's player ids cached for FINISHED_ROSTER_MAX_AGE_MS, shared by every instance, tagged
+ * with Today's tag so any staff app write expires it. Check-in in progress, about to kick off, or
+ * under way stays a live read. The MARKS are never cached: they come from Supabase on every read, so
+ * a manager's late tap still shows at once. Production only (staging has no marks). */
+export const ROSTER_SETTLED_AFTER_END_MIN = 15;
+export const FINISHED_ROSTER_MAX_AGE_MS = 5 * 60_000;
+export const rosterSettled = (endDateUtc: string | null | undefined, nowMs: number): boolean => {
+  const end = endDateUtc ? Date.parse(endDateUtc) : NaN;
+  return Number.isFinite(end) && nowMs > end + ROSTER_SETTLED_AFTER_END_MIN * 60_000;
+};
+const settledTag = (env: string, id: number) => `app-roster-settled:${env}:${id}`;
+
+async function rosterIds(env: MatchdayEnv, m: { id: number; endDateUtc?: string | null }, nowMs: number): Promise<number[]> {
+  if (env !== "production" || !rosterSettled(m.endDateUtc, nowMs)) return realIds(await fetchPlayersLive(env, m.id));
+  const read = () => unstable_cache(async () => ({ ids: realIds(await fetchPlayersLive(env, m.id)), at: Date.now() }),
+    ["app-roster-settled-v1", env, String(m.id)], { revalidate: FINISHED_ROSTER_MAX_AGE_MS / 1000, tags: [todayTag(env), settledTag(env, m.id)] })();
+  let c = await read();
+  // The data cache serves a stale copy however old while it refreshes; older than the limit is read again first.
+  if (Date.now() - c.at > FINISHED_ROSTER_MAX_AGE_MS) {
+    revalidateTag(settledTag(env, m.id), { expire: 0 });
+    c = await read();
+  }
+  return c.ids;
+}
+
 export async function summariesLive(
-  env: MatchdayEnv, sb: SupabaseClient, matches: { id: number; startDateUtc: string; isCancelled: boolean }[], nowMs: number,
+  env: MatchdayEnv, sb: SupabaseClient, matches: { id: number; startDateUtc: string; endDateUtc?: string | null; isCancelled: boolean }[], nowMs: number,
 ): Promise<Map<number, CheckinSummary | null>> {
   const open = matches.filter((m) => !m.isCancelled && checkinOpen(Date.parse(m.startDateUtc), nowMs));
   const out = new Map<number, CheckinSummary | null>();
@@ -128,7 +158,7 @@ export async function summariesLive(
   if (!marks) return out; // staging: no marks exist, so no summary is honest
   await mapLimit(open, 6, async (m) => {
     try {
-      const ids = realIds(await fetchPlayersLive(env, m.id));
+      const ids = await rosterIds(env, m, nowMs);
       out.set(m.id, summarizeCheckin(ids, marks.get(m.id) ?? [], Date.parse(m.startDateUtc)));
     } catch { out.set(m.id, null); }
   });

@@ -38,9 +38,6 @@ const BACKOFF_MIN = [15, 30, 60, 120];
 let queue: Promise<unknown> = Promise.resolve();
 let lastEndMs = 0;
 const backoff = new Map<MatchdayEnv, { until: number; failures: number; error: string }>();
-let requestsMade = 0;
-/** Requests this server instance has sent for Health (for the warm route's log line). */
-export const healthRequestsMade = () => requestsMade;
 
 export class HealthBackoffError extends Error {
   constructor(env: MatchdayEnv, b: { until: number; error: string }) {
@@ -64,7 +61,6 @@ function paced<T>(env: MatchdayEnv, f: () => Promise<T>): Promise<T> {
     if (b) throw new HealthBackoffError(env, b);
     const gap = lastEndMs + HEALTH_PACE_MS - Date.now();
     if (gap > 0) await sleep(gap);
-    requestsMade++;
     try {
       const r = await f();
       backoff.delete(env);

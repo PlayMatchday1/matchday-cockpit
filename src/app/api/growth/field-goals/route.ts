@@ -53,7 +53,7 @@ export async function GET(req: Request) {
     const yesterday = businessYesterday(now);
 
     // ── every match the year counts, through the one filter ────────────────────────────────────
-    /* THE YEAR'S ROLLUP, precomputed (src/lib/fieldGoalsRollup.ts, warmed by /api/app/cron/warm):
+    /* THE YEAR'S ROLLUP, precomputed (src/lib/fieldGoalsRollup.ts; the warm cron that pre-filled it was removed 2026-11-17 and its route deleted 2026-11-18, so the first read after expiry fills it):
      * spots and matches per row per month. This route reads it and adds the stored half. */
     const rollup = await fieldGoalsRollup(auth.supabase, year, yesterday);
     const acc = new Map(rollup.rows.map((r) => [r.key, r]));
