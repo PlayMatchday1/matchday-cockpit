@@ -58,7 +58,11 @@ export function rentalPaymentInfo(
       weekStartDate: m.periodKey,
       weekEndDate: m.closesYmd,
       qualifyingRevenue: m.totals.grossCents / 100,
-      owedAmount: computed,
+      /* A PAID month carries the shown figure here too. The list's divergence check compares
+       * owedAmount with calculatedAmount, and on a rental month a paid_amount that differs from the
+       * formula is a recorded decision (Parmer August: $2,520 paid, formula $1,700), not figures
+       * that moved after payment. The partner page has no such flag for rental months either. */
+      owedAmount: status === "paid" ? shown : computed,
       matches: m.totals.matches,
       managerPay: m.totals.matchManagerCents / 100,
       status,
