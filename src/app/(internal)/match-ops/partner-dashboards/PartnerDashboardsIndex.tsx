@@ -19,7 +19,7 @@ import { createPortal } from "react-dom";
 import { supabase } from "@/lib/supabase";
 import { generateSlug } from "@/lib/partnerSlug";
 import type { PartnerStats, PartnerPaymentInfo, PartnerPaymentCadence, PartnerRevenueModel } from "@/lib/partnerStats";
-import { deriveOwed, derivePeriodRows, stateLine, headerLine, todayYmd, money, dfull, partitionPayments, isDiverged, divergenceTooltip, type PartnerOwed, type PeriodRow } from "@/lib/partnerDashboardView";
+import { deriveOwed, derivePeriodRows, stateLine, headerLine, todayYmd, money, dfull, partitionPayments, isDiverged, type PartnerOwed, type PeriodRow } from "@/lib/partnerDashboardView";
 import type { PartnerDashboardData } from "@/lib/partnerDashboardData";
 import PartnerDashboardV14 from "@/app/partners/[slug]/PartnerDashboardV14";
 import PartnerMonthlyView from "@/app/partners/[slug]/PartnerMonthlyView";
@@ -362,7 +362,6 @@ function PaymentsCard({ partner, today, busy, onMark }: {
         <span style={{ ...rp, color: PAY.forest }}>{r.label}</span>
         <span style={{ ...ra, color: PAY.forest }}>{money(r.payment ?? 0)}</span>
         <span style={{ fontSize: 11.5, fontWeight: 800, color: PAY.muted }}>{r.paidOn ? `paid ${dfull(r.paidOn)}` : "settled"}</span>
-        {diverged && <span data-testid="pay-flag-pill" title={divergenceTooltip(r)} style={{ ...coralPill, cursor: "help" }}>Figures changed after payment</span>}
         <span style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
           {/* A pre-system opening settlement predates the payment system; the API
               rejects marking/unmarking it, so it carries a label, not a dead button. */}
