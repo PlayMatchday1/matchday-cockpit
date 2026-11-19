@@ -1,6 +1,6 @@
-// GET /api/disputes: every Stripe dispute (US account) from the last year, matched to members, with the
+// GET /api/admin/disputes: every Stripe dispute (US account) from the last year, matched to members, with the
 // page's top cards. Admins only. Read only; cached in disputesServer (3 minutes, one read in flight).
-// The list carries no IP, device or email: those appear only in /api/disputes/[id].
+// The list carries no IP, device or email: those appear only in /api/admin/disputes/[id].
 import { authenticateAdmin } from "@/lib/adminAuth";
 import { listDisputes, DisputesReadError } from "@/lib/disputesServer";
 import { StripeConfigError } from "@/lib/stripePayments";

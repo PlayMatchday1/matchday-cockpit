@@ -308,6 +308,12 @@ is("authenticateAdmin guards the User access screen and the Fields mapping admin
     // +1 admin/credits/rebuild (2026-11-10) — overwrite one stored month of the credits report with a fresh rebuild,
     // logged to change_log. is_admin because the report it rewrites is admins only.
     "admin/credits/rebuild/route.ts",
+    // +4 admin/disputes (2026-11-18) — Match Ops › Disputes: the Stripe dispute list, its badge count, one dispute's
+    // evidence (carries the saved IP and device) and the Copy evidence log. Admins only, Ryan's call for now.
+    "admin/disputes/route.ts",
+    "admin/disputes/count/route.ts",
+    "admin/disputes/[id]/route.ts",
+    "admin/disputes/[id]/copy/route.ts",
     "admin/users/all-tabs-preset/route.ts", "admin/users/auth-status/route.ts", "admin/users/city-manager-preset/route.ts", "admin/users/city-manager/route.ts", "admin/users/delete/route.ts",
     "admin/users/match-permissions/route.ts", "admin/users/permissions/route.ts",
     "admin/users/resend-invite/route.ts",

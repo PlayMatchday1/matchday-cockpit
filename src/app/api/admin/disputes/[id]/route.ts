@@ -1,4 +1,4 @@
-// GET /api/disputes/[id]: one dispute with its evidence. Admins only. The ONLY route that carries the
+// GET /api/admin/disputes/[id]: one dispute with its evidence. Admins only. The ONLY route that carries the
 // saved IP address and user agent (for the detail panel and the copied packet). Every call is a VIEW row
 // in change_log (who, which dispute; never the evidence). Evidence is read for this dispute alone.
 import { authenticateAdmin } from "@/lib/adminAuth";

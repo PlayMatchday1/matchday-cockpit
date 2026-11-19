@@ -109,6 +109,9 @@ const KNOWN_REFUSED: Record<string, string> = {
   "/api/partner-dashboards/actionable":
     "The other nav badge counter (usePartnerDashboardsCount), same shape and same reason: Partner "
     + "Dashboards is outside the confined rail.",
+  "/api/admin/disputes/count":
+    "The Disputes nav badge counter (useDisputesCount), same shape and same reason as the two above: "
+    + "Disputes is admins only and outside the confined rail. The hook does not even fetch for a non-admin.",
   "/api/push/subscribe":
     "Push registration. It has NO city dimension at all — it is a per-user device subscription — "
     + "so refusing it is a side effect of the allowlist rather than a boundary decision, and a "

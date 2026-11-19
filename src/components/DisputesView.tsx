@@ -67,7 +67,7 @@ export default function DisputesView() {
   const load = useCallback(async (fresh = false) => {
     setListErr(null);
     try {
-      const r = await authFetch(`/api/disputes${fresh ? "?fresh=1" : ""}`);
+      const r = await authFetch(`/api/admin/disputes${fresh ? "?fresh=1" : ""}`);
       const j = await r.json();
       if (!r.ok) throw new Error(j.error ?? `HTTP ${r.status}`);
       setList(j as ListResp);
@@ -94,7 +94,7 @@ export default function DisputesView() {
     setLoadingDetail(true); setDetailErr(null); setCopyState(null);
     (async () => {
       try {
-        const r = await authFetch(`/api/disputes/${encodeURIComponent(selected)}`);
+        const r = await authFetch(`/api/admin/disputes/${encodeURIComponent(selected)}`);
         const j = await r.json();
         if (!r.ok) throw new Error(j.error ?? `HTTP ${r.status}`);
         if (!gone) setDetails((d) => ({ ...d, [selected]: j as Detail }));
@@ -118,7 +118,7 @@ export default function DisputesView() {
     }
     setCopyState("Copied. Paste each section into its field in Stripe.");
     try {
-      const r = await authFetch(`/api/disputes/${encodeURIComponent(detail.row.id)}/copy`, { method: "POST" });
+      const r = await authFetch(`/api/admin/disputes/${encodeURIComponent(detail.row.id)}/copy`, { method: "POST" });
       if (!r.ok) setCopyState("Copied, but the copy was NOT recorded in the change log.");
     } catch { setCopyState("Copied, but the copy was NOT recorded in the change log."); }
   };

@@ -1,4 +1,4 @@
-// POST /api/disputes/[id]/copy: records that someone copied the evidence packet. Writes one change_log
+// POST /api/admin/disputes/[id]/copy: records that someone copied the evidence packet. Writes one change_log
 // row (who, which dispute) and nothing else: no Stripe write, and the packet itself is never sent here.
 import { authenticateAdmin } from "@/lib/adminAuth";
 import { logDisputeEvent } from "@/lib/disputesServer";

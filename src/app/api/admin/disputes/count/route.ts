@@ -1,4 +1,4 @@
-// GET /api/disputes/count: the rail badge, disputes needing a response. Admins only. Served from the
+// GET /api/admin/disputes/count: the rail badge, disputes needing a response. Admins only. Served from the
 // same cached list as the page (disputesServer), so a badge poll is not a Stripe read most of the time.
 import { authenticateAdmin } from "@/lib/adminAuth";
 import { listDisputes } from "@/lib/disputesServer";

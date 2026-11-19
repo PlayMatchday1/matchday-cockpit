@@ -24,7 +24,7 @@ export function useDisputesCount(): number {
       const token = data.session?.access_token;
       if (!token) return;
       const json = await sharedFetch("disputes:count", async () => {
-        const res = await fetch("/api/disputes/count", { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" });
+        const res = await fetch("/api/admin/disputes/count", { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" });
         if (!res.ok) throw new Error(String(res.status));
         return (await res.json()) as { count?: number };
       }, force);
