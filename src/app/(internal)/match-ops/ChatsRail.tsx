@@ -19,6 +19,7 @@ import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/useAuth";
 import { useCrmAwaitingCount } from "@/lib/useCrmAwaitingCount";
 import { useManagerPayAttnCount } from "@/lib/useManagerPayAttnCount";
+import { useDisputesCount } from "@/lib/useDisputesCount";
 import { usePartnerDashboardsCount } from "@/lib/usePartnerDashboardsCount";
 import { visibleSections, tabForPath, type RailItem } from "./sections";
 import SectionSwitch from "./SectionSwitch";
@@ -44,6 +45,7 @@ export default function ChatsRail({
   const awaiting = useCrmAwaitingCount();
   const managerPayAttn = useManagerPayAttnCount();
   const partnerCount = usePartnerDashboardsCount();
+  const disputesCount = useDisputesCount();
 
   // Phase 24 — only the CURRENT tab's items, derived from the route (no tab state).
   const items: RailItem[] = itemsProp ?? visibleSections(appUser, tabForPath(pathname));
@@ -51,8 +53,8 @@ export default function ChatsRail({
   // the city tier's three items would otherwise get one heading over the whole list, which labels
   // nothing and reads as a section that has no sibling.
   const showGroups = new Set(items.map((i) => i.group)).size > 1;
-  const badgeCount = (kind?: "awaiting" | "manager-pay" | "partner-dashboards") =>
-    kind === "awaiting" ? awaiting : kind === "manager-pay" ? managerPayAttn : kind === "partner-dashboards" ? partnerCount : undefined;
+  const badgeCount = (kind?: "awaiting" | "manager-pay" | "partner-dashboards" | "disputes") =>
+    kind === "awaiting" ? awaiting : kind === "manager-pay" ? managerPayAttn : kind === "partner-dashboards" ? partnerCount : kind === "disputes" ? disputesCount : undefined;
 
   let lastGroup: string | undefined;
 
@@ -128,7 +130,7 @@ export default function ChatsRail({
               {!collapsed && typeof count === "number" && count > 0 && (
                 <span
                   className="ml-auto rounded-full px-[7px] py-[1px] text-[11px] font-bold tabular-nums"
-                  style={active ? { background: "#e0f2e7", color: "#12704a" } : { background: "rgba(0,0,0,.045)", color: "#8d9c94" }}
+                  style={it.badge === "disputes" ? { background: "#fbe4e2", color: "#b42318" } : active ? { background: "#e0f2e7", color: "#12704a" } : { background: "rgba(0,0,0,.045)", color: "#8d9c94" }}
                 >
                   {count}
                 </span>

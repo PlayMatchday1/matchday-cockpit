@@ -9481,3 +9481,23 @@ guard is `scripts/mdapi-gate-guard-test.ts`. What was learned on the way, each w
 - **Load the API received from staff traffic** (`app_request_route_hourly`, kind `staff`, production,
   Retool included): ~500–1,000 requests an hour on Nov 14–17, ~100–250 an hour after the warm cron came
   out (Nov 17 ~23:00 UTC), with ~1,100–1,600 in the 08:00 UTC night-pass hour.
+
+## Disputes page (2026-11-18)
+
+- **`GET /admin/membership-evidence` is on production backend source.** `heroku-prod/master` `c5137210`,
+  `apps/api/src/core/subscriptions/admin-membership-evidence.controller.ts:18-20` (`@Roles(UserType.ADMIN)`,
+  `JwtAuthGuard`, `RolesGuard`). Exactly one of `userId`, `stripeSubscriptionId` (`^sub_`), `stripeCustomerId`
+  (`^cus_`) (`dto/membership-evidence.dto.ts`); 404 `MEMBERSHIP_EVIDENCE_USER_NOT_FOUND`, 409
+  `MEMBERSHIP_EVIDENCE_AMBIGUOUS`. Lists newest first, capped at 50 (`membership-evidence.service.ts:22`).
+  Cancel confirmations hold `endsAt` / `lastChargeDate` as Central calendar dates (`@db.Date`, sliced ISO).
+- **The backend does not encode a 25-day notice rule.** A cancel's outcome is read off the live Stripe
+  schedule (`membership-billing.ts` `cancelOutcomeOf`: `NO_MORE_CHARGES` when no renewal is due, else
+  `ONE_LAST_CHARGE` on the next charge date). "Cancel at least 25 days before the next charge" is the policy
+  wording Ryan gave (2026-11-18); the Disputes page uses it for the packet and for "charged in error" on
+  cancels that have no confirmation row (`src/lib/disputesModel.ts` `chargedInError`).
+- **There is no Stripe gate.** `mdapiGate` covers the MatchDay API only. The Disputes reads carry their own:
+  one list read in flight per instance, pages one after another, `maxNetworkRetries: 0`, 3-minute cache,
+  failures cached 60 s (`src/lib/disputesServer.ts`).
+- **change_log takes non-write rows from this page.** `method` `VIEW` / `COPY`, `source` `Disputes`,
+  `endpoint` `stripe:disputes/{id}`, `outcome` `landed`, body `{disputeId, action}` only (no IP, no evidence).
+  `method` is free text in 0113; only `outcome` is CHECKed.

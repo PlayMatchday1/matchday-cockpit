@@ -46,7 +46,7 @@ export type RailItem = {
   href: string;
   desc: string; // one-line, used by the mobile sheet
   icon: React.ReactNode;
-  badge?: "awaiting" | "manager-pay" | "partner-dashboards"; // which shared count feeds this item's badge
+  badge?: "awaiting" | "manager-pay" | "partner-dashboards" | "disputes"; // which shared count feeds this item's badge
   /** An optional `data-testid` for the item's LABEL. The Link itself always stays `rail-item`. */
   testId?: string;
 };
@@ -74,6 +74,9 @@ export const MATCH_OPS_SECTIONS: MatchOpsSection[] = [
   { key: "veo", section: "daily", group: "Operations", label: "Veo", href: "/match-ops/veo", desc: "One day of camera matches — which films landed, which missed", access: "matchops", icon: <I><rect x="2.5" y="6.5" width="12" height="11" rx="2.5" /><path d="m14.5 11 6-3.5v9L14.5 13z" /></I> },
   { key: "player-lookup", section: "daily", group: "Operations", label: "Player Lookup", href: "/match-ops/player-lookup", desc: "One player — account, membership, matches; add or remove them", access: "matchops", icon: <I><circle cx="11" cy="8" r="3.6" /><path d="M4 20a7 7 0 0 1 12.2-4.6" /><circle cx="17.5" cy="16.5" r="3.2" /><path d="M19.8 18.8 22 21" /></I> },
   { key: "members", section: "daily", group: "Operations", label: "Members", href: "/match-ops/members", desc: "Every member by city — price, strikes, comment, end or re-price", access: "membership", icon: <I><circle cx="12" cy="8" r="3.6" /><path d="M5 20a7 7 0 0 1 14 0" /><path d="M16.5 4.5l1.5 1.5 3-3" /></I> },
+  // DISPUTES (2026-11-18): Stripe chargebacks with the evidence we hold. Admins only for now: the route
+  // gate is authenticateAdmin, and the detail carries the saved IP address and device for the evidence.
+  { key: "disputes", section: "daily", group: "Operations", label: "Disputes", href: "/match-ops/disputes", desc: "Stripe chargebacks — the evidence we hold, and the packet to answer them", access: "admin", icon: <I><path d="M12 3 4 6v6c0 4.5 3.4 8.2 8 9 4.6-.8 8-4.5 8-9V6z" /><path d="M12 8v5M12 16.5v.01" /></I>, badge: "disputes" },
   { key: "promos", section: "daily", group: "Operations", label: "Promo Codes", href: "/match-ops/promos", desc: "Discount codes — live and past; create a new one", access: "matchops", icon: <I><path d="M8.5 3.5h7l5 5v7l-5 5h-7l-5-5v-7z" /><circle cx="12" cy="12" r="2.4" /></I> },
   // OFFERS: popup deals in the app. Moved from Growth (2026-10-31); /growth/offers 308s here. Match Ops
   // access, decided on the server by offersGate (src/lib/offersServer.ts), so the link and the routes agree.

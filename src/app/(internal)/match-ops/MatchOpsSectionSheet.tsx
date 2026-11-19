@@ -15,6 +15,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "@/lib/useAuth";
 import { useCrmAwaitingCount } from "@/lib/useCrmAwaitingCount";
 import { useManagerPayAttnCount } from "@/lib/useManagerPayAttnCount";
+import { useDisputesCount } from "@/lib/useDisputesCount";
 import { usePartnerDashboardsCount } from "@/lib/usePartnerDashboardsCount";
 import { visibleSections, tabForPath, type RailItem } from "./sections";
 import SectionSwitch from "./SectionSwitch";
@@ -28,13 +29,14 @@ export default function MatchOpsSectionSheet({ open, onClose, items: itemsProp, 
   const awaiting = useCrmAwaitingCount();
   const managerPayAttn = useManagerPayAttnCount();
   const partnerCount = usePartnerDashboardsCount();
+  const disputesCount = useDisputesCount();
 
   // Phase 24 — only the CURRENT tab's items. The tab is derived from the route; there is no
   // tab state to fall out of sync with where the operator actually is.
   const items: RailItem[] = useMemo(() => itemsProp ?? visibleSections(appUser, tabForPath(pathname)), [itemsProp, appUser, pathname]);
   const isActive = (href: string) => pathname === href || pathname.startsWith(href + "/");
-  const countFor = (badge?: "awaiting" | "manager-pay" | "partner-dashboards") => {
-    const n = badge === "awaiting" ? awaiting : badge === "manager-pay" ? managerPayAttn : badge === "partner-dashboards" ? partnerCount : 0;
+  const countFor = (badge?: "awaiting" | "manager-pay" | "partner-dashboards" | "disputes") => {
+    const n = badge === "awaiting" ? awaiting : badge === "manager-pay" ? managerPayAttn : badge === "partner-dashboards" ? partnerCount : badge === "disputes" ? disputesCount : 0;
     return n > 0 ? n : null;
   };
   const nav = (href: string) => { onClose(); if (!isActive(href)) router.push(href); };

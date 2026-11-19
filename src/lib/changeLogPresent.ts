@@ -305,6 +305,11 @@ export function describe(e: LogEntry, en: Enrich): Described {
     if (flips.length) return { kind: "other", what: `Changed ${who}'s permissions`, sub: flips.join(" · "), player: null, link: null };
     if (find("phone_last4")) return { kind: "other", what: `Set ${who}'s phone`, sub: `ends ${str(find("phone_last4")!.after)}`, player: null, link: null };
   }
+  // Disputes page (2026-11-18): a view or an evidence copy, not a write. Who and which dispute only.
+  if (e.source === "Disputes" && endpoint.startsWith("stripe:disputes/")) {
+    const id = endpoint.slice("stripe:disputes/".length);
+    return { kind: "other", what: `${e.method === "COPY" ? "Copied the evidence for" : "Viewed"} dispute ${id}`, sub: null, player: null, link: { href: `/match-ops/disputes?d=${encodeURIComponent(id)}`, label: "Open in Disputes ›" } };
+  }
   if (endpoint === "/api/app/view-as") return { kind: "other", what: e.method === "DELETE" ? "Stopped viewing the app as someone else" : "Viewed the app as someone else", sub: ch[0] ? str(ch[0].after) : null, player: null, link: null };
 
   // Offers & pushes
