@@ -18,6 +18,7 @@ import { authenticateCapability } from "@/lib/capabilityAuth";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
 import type { Change } from "@/lib/changeLogModel";
 import { buildRentalDashboard } from "@/lib/partnerRentalDashboard";
+import { rentalLedgerOf, rentalPaymentInfo } from "@/lib/partnerRentalAsPayment";
 import {
   fetchAllEnabledPartnerDashboards,
   computePartnerStats,
@@ -84,6 +85,11 @@ export async function GET(req: Request) {
   const supabase = auth.supabase;
 
   const partners = await fetchAllPartners(supabase);
+  /* THE REAL DEAL, NOT THE LIST ROW'S DEFAULTS. fetchAllPartners forces every partner onto the
+   * legacy revenue-share path, which put Parmer (RENTAL_FLOOR_PROFIT_SHARE) on 50% of revenue from
+   * the stale revenue_share_pct column. The list now reads the same record Mark paid reads: the
+   * real payout columns for an enabled partner, the list row for a disabled one. */
+  const realById = new Map((await fetchAllEnabledPartnerDashboards(supabase)).map((r) => [r.id, r]));
 
   // venue city + launch date for every venue in one pass
   const venueIds = [...new Set(partners.map((p) => p.venueId))];
@@ -95,12 +101,22 @@ export async function GET(req: Request) {
   const now = new Date();
   const out = [];
   for (const p of partners) {
+    const deal = realById.get(p.id) ?? p;
     const { rows, extra, venueName, matches, memberSpotRateCents } = await fetchPartnerRows(supabase, p.venueId);
     const records = await fetchPartnerWeeklyPayments(supabase, p.id);
     const stats = computePartnerStats(rows, extra);
-    /* THE PARTNER PAGE'S OWN BUILDER, with the match list and the clock. Without them a per-match-
-     * fee period billed nothing here (Crossbar Aug/Sep, $0, dropped from the list). */
-    const payment = partnerPaymentFor(p, { rows, extra, matches, memberSpotRateCents }, records, now);
+    /* THE PARTNER PAGE'S OWN BUILDERS. A rental partner's months come from buildRentalDashboard
+     * with its cancellation decisions and ledger, exactly as /partners/<slug> and Mark paid build
+     * them; every other partner keeps partnerPaymentFor with the match list and the clock (without
+     * them a per-match-fee period billed nothing here: Crossbar Aug/Sep, $0, dropped from the list). */
+    const rentalParams = rentalParamsOf(deal);
+    const payment = rentalParams
+      ? rentalPaymentInfo(deal, buildRentalDashboard(rows, rentalParams, {
+        partnerName: deal.partnerName, venue: venueName, spotPriceCents: deal.spotPriceCents,
+        payoutModel: deal.payoutModel, nowMs: now.getTime(), ledger: rentalLedgerOf(records),
+        rentalOverrides: await fetchRentalOverrides(supabase, deal.id),
+      }), records)
+      : partnerPaymentFor(deal, { rows, extra, matches, memberSpotRateCents }, records, now);
     const meta = venueMeta.get(p.venueId);
     out.push({
       id: p.id,
@@ -110,8 +126,8 @@ export async function GET(req: Request) {
       city: meta?.city ?? null,
       launchDate: meta?.launch ?? null,
       cadence: p.paymentCadence,
-      revenueModel: p.revenueModel,
-      revenueSharePct: p.revenueSharePct,
+      revenueModel: deal.revenueModel,
+      revenueSharePct: deal.revenueSharePct,
       enabled: p.enabled,
       createdAt: p.createdAt,
       stats,
