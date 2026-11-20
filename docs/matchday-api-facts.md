@@ -9523,6 +9523,13 @@ NEW_USERS too, so they are refused as well.
   any match, switch or not.
 - The failed validate calls are not logged anywhere the Clubhouse reads. Which code each player typed:
   UNKNOWN.
+- **Decided 2026-11-19 (Ryan): the switch controls only the automatic offer.** Backend commit 0e45c51c
+  (branch `fix/ffm-switch-not-codes`, `~/Code/backend-ffm-codes`, fast-forward from production b231b436)
+  drops the clause; a typed new-user code on a switched-off match then goes through the same device gate
+  (`applyFirstMatchPromocodeGate`) as on any match. FIRST-MATCH-AUTO still cannot be typed
+  (`promocodes.service.ts:86`). Whether it is deployed: check `heroku releases -a playmatchday` for
+  `Deploy 0e45c51c`; until then production still refuses. The Clubhouse switch wording is back to
+  "New players get this match free".
 
 **Player finder Refresh did not rebuild.** `refresh_player_finder_views()` hit the role statement
 timeout on every call during the day: Vercel production log, `GET /api/players/finder`
