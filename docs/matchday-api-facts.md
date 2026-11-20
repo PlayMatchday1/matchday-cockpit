@@ -9536,6 +9536,6 @@ timeout on every call during the day: Vercel production log, `GET /api/players/f
 "[finder] manual rebuild failed: canceling statement due to statement timeout" (16:13 to 18:51 Central,
 Nov 19), and the same from `POST /api/sync/matches`. The set's `refreshed_at` stayed at 08:33:41Z (the
 night pass). The route then reported `rebuilt: false`, which the page printed as "the set was already
-current". The fix is 0276 (function-level `statement_timeout = '120s'`, the 0098 pattern; NOT APPLIED as of this entry, verify against the live database), and the route
+current". The fix is 0276 (function-level `statement_timeout = '120s'`, the 0098 pattern; APPLIED 2026-11-20, live `refreshed_at` 02:49:30Z, then a production Refresh at 02:52Z read "Synced the source (162 rows) and rebuilt the set" and the count moved 38,782 to 38,784), and the route
 now returns `rebuildFailed`. The route uses the service-role client for every account, admin or
 confined, so a confined account gets the same rebuild.
