@@ -1476,7 +1476,11 @@ export default function MatchPanel({ matchId, env = DRAWER_ENV, onDirtyChange, o
               <Toggle id="mp-first-free" on={cur[FIRST_MATCH_FREE_KEY] === true} dirty={isDirty(FIRST_MATCH_FREE_KEY)}
                 disabled={!isAdmin} onToggle={(v) => setField(FIRST_MATCH_FREE_KEY, v)}
                 title="Free first match"
-                sub={isAdmin ? "New players get this match free" : "New players get this match free \u00b7 admins only"} />
+                /* OFF ALSO REFUSES CODES. The backend refuses every new-player promo code on a match
+                   with this off (matches.service.ts validatePromocode, production 2026-11-19), so a
+                   first-match or referral code fails there too. Three Warsaw players hit it on 21516
+                   with nothing on this screen saying so. */
+                sub={`New players get this match free. Off also blocks first-match codes${isAdmin ? "" : " \u00b7 admins only"}`} />
             )}
           </Section>
 

@@ -27,9 +27,11 @@ import { assertScope } from "@/lib/cityConfinement";
 import { cityNameFor, resolveCityScope } from "@/lib/cityScope";
 
 export const runtime = "nodejs";
-/* Refresh does source-sync (0.6s measured) + rebuild (3.1s measured) + the page reads. 60s is
- * generous; the read-only path is milliseconds. */
-export const maxDuration = 60;
+/* Refresh does source-sync (0.6s measured) + rebuild + the page reads. The rebuild was 3.1s when
+ * measured at 0147 and had outgrown the role statement timeout by 2026-11-19, so 0276 gives it
+ * 120s of its own. This must stay above that, or the function is killed while the rebuild it
+ * started is still running. The read-only path is milliseconds. */
+export const maxDuration = 150;
 
 /* THE SET IS BUILT FROM TWO MIRRORS AND FRESHNESS MUST CONSIDER BOTH.
  *
@@ -404,6 +406,7 @@ export async function GET(req: Request) {
      * call (pg_safeupdate, an UPDATE with no WHERE) and the only reason anyone noticed was that
      * banner, so the read staying up is what makes the failure visible rather than fatal. */
     let rebuilt = false;
+    let rebuildFailed = false;
     let sourceSynced: { ran: boolean; rows?: number; error?: string } | null = null;
     if (url.searchParams.get("rebuild") === "1") {
       /* SYNC THE SOURCE, THEN REBUILD. Rebuilding alone re-derived the set from a mirror that was
@@ -440,9 +443,15 @@ export async function GET(req: Request) {
       // one to gate on. Rebuild stays gated — ~3s and a brief exclusive lock on both matviews.
       const post = await freshnessOf(supabase);
       if (post.stale) {
+        /* A FAILED REBUILD IS SAID, NOT READ AS "ALREADY CURRENT". On 2026-11-19 the rebuild hit
+         * the statement timeout on every click (fixed by 0276) and the page answered "the set was
+         * already current" beside a banner calling the same set 14 hours old. The cause stays in
+         * the log, as with the sync above; the payload carries only that it failed. */
         const { error: refreshErr } = await supabase.rpc("refresh_player_finder_views");
-        if (refreshErr) console.warn("[finder] manual rebuild failed:", refreshErr.message);
-        else rebuilt = true;
+        if (refreshErr) {
+          console.warn("[finder] manual rebuild failed:", refreshErr.message);
+          rebuildFailed = true;
+        } else rebuilt = true;
       }
     }
 
@@ -478,7 +487,7 @@ export async function GET(req: Request) {
       /* BOTH MIRROR STAMPS travel, not just the newer one, so the banner can NAME which source is
        * behind instead of saying "stale" and leaving the operator to guess. */
       freshness: {
-        refreshedAt: syncedAt, sourceSyncedAt, stale, rebuilt,
+        refreshedAt: syncedAt, sourceSyncedAt, stale, rebuilt, rebuildFailed,
         matchesSyncedAt: fresh.matchesSyncedAt, usersSyncedAt: fresh.usersSyncedAt,
         sourceSynced,
       },

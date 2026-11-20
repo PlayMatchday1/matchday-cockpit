@@ -58,6 +58,8 @@ type Payload = {
    * view never could: confidently wrong. */
   freshness?: {
     refreshedAt: string | null; sourceSyncedAt: string | null; stale: boolean; rebuilt?: boolean;
+    // Refresh asked for a rebuild and the database refused it (a timeout, on 2026-11-19).
+    rebuildFailed?: boolean;
     // BOTH mirror stamps, so the banner can name WHICH source is behind rather than say "stale".
     matchesSyncedAt?: string | null; usersSyncedAt?: string | null;
     // What Refresh did to the source mirror. null when this was an ordinary read.
@@ -605,8 +607,8 @@ export default function PlayerFinder({ onOpen }: { onOpen?: (id: number) => void
             <>
               <b>These counts are out of date.</b> The source synced{" "}
               {fmtWhen(data.freshness.sourceSyncedAt)} but this set was last rebuilt{" "}
-              {fmtWhen(data.freshness.refreshedAt)} — anything since is missing. It rebuilds on the
-              next sync.
+              {fmtWhen(data.freshness.refreshedAt)}, so anything since is missing. Refresh rebuilds
+              it now.
             </>
           ) : (
             /* ONE LINE, NOT A PARAGRAPH. What stood here was "Mirrored data · set rebuilt X. A
@@ -627,14 +629,26 @@ export default function PlayerFinder({ onOpen }: { onOpen?: (id: number) => void
               success regardless. `ran: false` is the rate limit, not a failure — it means the
               mirror was synced within the last minute and there was nothing to fetch. */}
           {data?.freshness?.sourceSynced?.error ? (
-            <b className="pf-sync-bad"> · Could not sync the source — this page is NOT current.</b>
+            <b className="pf-sync-bad"> · Could not sync the source. This page is NOT current.</b>
+          ) : data?.freshness?.sourceSynced && data.freshness.rebuildFailed ? (
+            /* A FAILED REBUILD IS NOT "ALREADY CURRENT". That line was printed on every click of
+               2026-11-19 while the rebuild was timing out, beside a banner calling the set 14 hours
+               old. "Already current" is now said only when the server found nothing to rebuild. */
+            <b className="pf-sync-bad" data-testid="finder-rebuild-failed">
+              {" "}· {data.freshness.sourceSynced.ran
+                ? `Synced the source (${data.freshness.sourceSynced.rows?.toLocaleString()} rows) but could not rebuild the set.`
+                : "Could not rebuild the set."} These counts are NOT current.
+            </b>
           ) : data?.freshness?.sourceSynced?.ran ? (
             <span className="pf-sync-ok">
               {" "}· Synced the source ({data.freshness.sourceSynced.rows?.toLocaleString()} rows)
               {data.freshness.rebuilt ? " and rebuilt the set." : "; the set was already current."}
             </span>
           ) : data?.freshness?.sourceSynced ? (
-            <span className="pf-sync-ok"> · Source was synced under a minute ago; nothing to fetch.</span>
+            <span className="pf-sync-ok">
+              {" "}· Source was synced under a minute ago; nothing to fetch
+              {data.freshness.rebuilt ? ". Rebuilt the set." : "."}
+            </span>
           ) : null}
           {/* REFRESH SYNCS THE SOURCE, THEN REBUILDS. Rebuilding alone re-derived the set from a
               mirror that was itself behind, so pressing this after a new signup showed nothing and

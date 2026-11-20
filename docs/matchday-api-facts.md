@@ -9501,3 +9501,34 @@ guard is `scripts/mdapi-gate-guard-test.ts`. What was learned on the way, each w
 - **change_log takes non-write rows from this page.** `method` `VIEW` / `COPY`, `source` `Disputes`,
   `endpoint` `stripe:disputes/{id}`, `outcome` `landed`, body `{disputeId, action}` only (no IP, no evidence).
   `method` is free text in 0113; only `outcome` is CHECKed.
+
+## Free first match OFF refuses every new-player code, and the player finder rebuild timed out (2026-11-19)
+
+**First-match codes on a match with the switch off.** Production backend `heroku-prod/master` b231b436,
+`apps/api/src/core/matches/matches.service.ts:441-445` `validatePromocode`: a promo with
+`targetUserType NEW_USERS` is refused on any match with `firstMatchFreeEnabled === false`
+(`INVALID_PROMOCODE`, a `PreconditionResourceFailedException`), whatever its own field, date and use rules say. Added in c1ea1dce
+(2026-11-03, the 1.89 port), with the comment "so there is no way around it". Before Nov 5 the switch
+did not exist. The join path calls the same function (`:517`, `:986`). Referral codes `<id>ref` are
+NEW_USERS too, so they are refused as well.
+- Warsaw 21514 to 21517 (Nov 16 to 19) were switched off by an admin at 21:32 to 21:33 UTC Nov 11
+  (`change_log`, 4 PUTs `{"firstMatchFreeEnabled":false}`, all `landed`). 21555 to 21558 (Nov 23 to 26)
+  are on (`mdapi_matches.raw`).
+- On 21516: player 98004 had a WAITING 39 zł checkout (10:18Z Nov 16), then was added by staff as `FREE`
+  with no promo (22:53Z). Player 98007 had two WAITING checkouts, then PAID 39 zł (11:24 to 11:28Z).
+  Neither had a prior match, and neither shares a phone number with another account in the mirror.
+- **A NEW_USERS code is valid only until the player's first match STARTS** (`promocodes.service.ts:167-171`:
+  no match, or `now < userMatches[0].match.startDateUtc`), plus no PAID account on the same phone
+  (`:187-191`). Player 97012 had played 21411 (Nov 9, PAID) before trying 21516, so his code fails on
+  any match, switch or not.
+- The failed validate calls are not logged anywhere the Clubhouse reads. Which code each player typed:
+  UNKNOWN.
+
+**Player finder Refresh did not rebuild.** `refresh_player_finder_views()` hit the role statement
+timeout on every call during the day: Vercel production log, `GET /api/players/finder`
+"[finder] manual rebuild failed: canceling statement due to statement timeout" (16:13 to 18:51 Central,
+Nov 19), and the same from `POST /api/sync/matches`. The set's `refreshed_at` stayed at 08:33:41Z (the
+night pass). The route then reported `rebuilt: false`, which the page printed as "the set was already
+current". The fix is 0276 (function-level `statement_timeout = '120s'`, the 0098 pattern; NOT APPLIED as of this entry, verify against the live database), and the route
+now returns `rebuildFailed`. The route uses the service-role client for every account, admin or
+confined, so a confined account gets the same rebuild.
