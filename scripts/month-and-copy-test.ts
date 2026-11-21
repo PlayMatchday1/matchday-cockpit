@@ -18,7 +18,7 @@ import {
   dayMatchCounts, type GridMatch,
 } from "../src/lib/monthGrid";
 import { MASTER_SCHEDULE_WEEK_START, WEEK_START, weekEndOnOrAfter, weekStartOnOrBefore } from "../src/lib/weekStart";
-import { EDITABLE_KEYS } from "../src/lib/matchEditModel";
+import { EDITABLE_KEYS, FIRST_MATCH_FREE_KEY, firstMatchFreeOnCreate } from "../src/lib/matchEditModel";
 
 let pass = 0; const fails: string[] = [];
 const ok = (m: string) => { pass++; console.log(`  ✓ ${m}`); };
@@ -418,6 +418,33 @@ console.log("\nTHE PRICE IS CENTS, AND NULL IS NOT ZERO");
   const cell = grid.flat().find((d) => d.iso === "2026-09-08");
   is("  the grid preserves the price through bucketing", cell?.matches[0]?.price, 1500);
   is("  control: the match was actually placed", cell?.matches.length, 1);
+}
+
+/* ── A COPY KEEPS THE FREE FIRST MATCH SWITCH (Ryan, 2026-11-21) ─────────────────────────────
+ * A switched-off field must stay off when its matches are copied. The copy carries the source's
+ * value only when the source has a real boolean, and the create route's rule lets a non-admin send
+ * `false` only as a copy of a match that is off. */
+{
+  console.log("\nthe free first match switch on a copy");
+  const base = { id: 7, name: "n", startDate: "2026-11-24T19:00:00.000Z", endDate: "2026-11-24T20:30:00.000Z", fieldId: 2, maxPlayerCount: 20 };
+  is("  an OFF source copies OFF", buildCopyBody({ ...base, [FIRST_MATCH_FREE_KEY]: false })[FIRST_MATCH_FREE_KEY], false);
+  is("  control: an ON source copies ON", buildCopyBody({ ...base, [FIRST_MATCH_FREE_KEY]: true })[FIRST_MATCH_FREE_KEY], true);
+  is("  a source without the key sends no key (never null)", FIRST_MATCH_FREE_KEY in buildCopyBody(base), false);
+  is("  a non-boolean is not carried", FIRST_MATCH_FREE_KEY in buildCopyBody({ ...base, [FIRST_MATCH_FREE_KEY]: null }), false);
+  is("  it is not reported as dropped", droppedByCopy({ ...base, [FIRST_MATCH_FREE_KEY]: false }).includes(FIRST_MATCH_FREE_KEY), false);
+  is("  …and COPY_FIELDS is unchanged (it is not an editable key)", COPY_FIELDS.includes(FIRST_MATCH_FREE_KEY), false);
+
+  console.log("\nthe create route's rule (firstMatchFreeOnCreate)");
+  is("  no key: fine", firstMatchFreeOnCreate(undefined, false, null).ok, true);
+  is("  admin, off, no source: fine", firstMatchFreeOnCreate(false, true, null).ok, true);
+  is("  non-admin, on: fine (the backend default)", firstMatchFreeOnCreate(true, false, null).ok, true);
+  is("  non-admin, off, copy of an OFF match: fine", firstMatchFreeOnCreate(false, false, false).ok, true);
+  const r1 = firstMatchFreeOnCreate(false, false, true);
+  is("  non-admin, off, copy of an ON match: refused 403", r1.ok ? null : r1.status, 403);
+  const r2 = firstMatchFreeOnCreate(false, false, null);
+  is("  non-admin, off, no readable source: refused 403", r2.ok ? null : r2.status, 403);
+  const r3 = firstMatchFreeOnCreate("false", true, null);
+  is("  a string is refused 400, admin or not", r3.ok ? null : r3.status, 400);
 }
 
 console.log(`\nmonth-and-copy: ${pass} passed, ${fails.length} failed`);

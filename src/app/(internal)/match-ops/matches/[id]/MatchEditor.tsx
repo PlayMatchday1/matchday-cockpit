@@ -19,7 +19,7 @@ import CreditTextBox from "@/components/CreditTextBox";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
-import { EDITABLE_KEYS, MONEY_KEYS as MONEY, TOGGLE_KEYS as TOGGLE, NULLABLE_NUM, fieldChanged, diffKeys, pick } from "@/lib/matchEditModel";
+import { EDITABLE_KEYS, FIRST_MATCH_FREE_KEY, MONEY_KEYS as MONEY, TOGGLE_KEYS as TOGGLE, NULLABLE_NUM, fieldChanged, diffKeys, hasFirstMatchFree, pick } from "@/lib/matchEditModel";
 /* THE SAME MODEL MATCH PANEL USES. Two surfaces can open the same match and both write managerId;
  * giving each its own picker rule and its own confirmation wording is the two-paths-one-question
  * shape that put $1,815 and $2,006 on two screens for four months. One model, one answer. */
@@ -285,7 +285,9 @@ export default function MatchEditor({ id, mode = "edit", sourceId, fieldId: from
     const ed: Data = {};
     for (const k of EDITABLE_KEYS) ed[k] = m[k] ?? (TOGGLE.has(k) ? false : null);
     setLoaded(ed); setState(JSON.parse(JSON.stringify(ed)));
-    setMeta({ id: m.id, startDate: m.startDate, endDate: m.endDate, isCancelled: m.isCancelled, teams: m.teams, fieldTitle: m.fieldTitle, cityName: m.cityName, occupancy: m.occupancy, maxPlayerCount: m.maxPlayerCount });
+    setMeta({ id: m.id, startDate: m.startDate, endDate: m.endDate, isCancelled: m.isCancelled, teams: m.teams, fieldTitle: m.fieldTitle, cityName: m.cityName, occupancy: m.occupancy, maxPlayerCount: m.maxPlayerCount,
+      // The free first match switch, read-only here; a Copy match carries it (matchEditModel.ts firstMatchFreeOnCreate).
+      ...(hasFirstMatchFree(m) ? { [FIRST_MATCH_FREE_KEY]: m[FIRST_MATCH_FREE_KEY] } : {}) });
     // THE INVERTED-PAIR GUARD. A match whose end is on or before its start is reachable — the
     // server does not validate it — so both inputs are HELD and the reason is shown. Editing a
     // broken pair would rewrite it from a duration that is negative.
@@ -366,9 +368,12 @@ export default function MatchEditor({ id, mode = "edit", sourceId, fieldId: from
             }
             return next;
           });
+          /* THE FREE FIRST MATCH SWITCH travelled with the create (step one); a copy that did not keep it is said. */
+          const ffmLost = hasFirstMatchFree(src) && json.match?.[FIRST_MATCH_FREE_KEY] !== src[FIRST_MATCH_FREE_KEY];
           setMsg({ kind: "warn", text:
             `Match ${id} was created. These are the copied settings from match ${sourceId}, NOT SAVED YET — ` +
-            `press Save to apply them.` });
+            `press Save to apply them.` +
+            (ffmLost ? ` Its free first match is ${json.match?.[FIRST_MATCH_FREE_KEY] ? "on" : "off"} but match ${sourceId}'s is ${src[FIRST_MATCH_FREE_KEY] ? "on" : "off"}: change it in the match panel.` : "") });
         } else {
           // STEP ONE LANDED AND STEP TWO COULD NOT EVEN READ THE SOURCE. Say which half landed.
           setMsg({ kind: "warn", text:
@@ -816,9 +821,12 @@ export default function MatchEditor({ id, mode = "edit", sourceId, fieldId: from
         maxPlayerCount: Number(meta?.maxPlayerCount ?? 0),
         teamNumbers: Array.isArray(meta?.teams) ? (meta!.teams as Data[]).length : 2,
         isFreeMember: state?.isFreeMember === true,
+        // THE FREE FIRST MATCH SWITCH IS KEPT, only when the source carries it (meta, from the source read).
+        ...(hasFirstMatchFree(meta) ? { [FIRST_MATCH_FREE_KEY]: meta![FIRST_MATCH_FREE_KEY] } : {}),
       },
       allowDuplicate,
       source: "Copy match",
+      copiedFrom: Number(sourceId),
     };
     const res = await authFetch(`/api/matchday/${FULL_EDITOR_ENV}/matches/create`, {
       method: "POST", body: JSON.stringify(body),

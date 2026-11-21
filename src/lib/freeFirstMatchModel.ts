@@ -50,8 +50,27 @@ export const TURN_OFF_SHARE = 0.4;
 /** "↑ from X%" when the range is this many points above the baseline, on a baseline of MIN matches. */
 export const UP_POINTS = 15;
 export const UP_MIN_BASELINE = 5;
-/** "Same as paid" when the free rate is within this many points of the paid-before rate. */
-export const SAME_POINTS = 2;
+/* ── BETTER, WORSE OR THE SAME (Ryan, 2026-11-21) ───────────────────────────────────────────────
+ * Free players are called better or worse than paid first-timers only when the two 95% ranges do
+ * not overlap; otherwise they are the same as paid. The range is Wilson's score interval (z = 1.96),
+ * which stays inside 0–100% and behaves on small groups and rates near 0, where the plain
+ * p ± 1.96·√(p(1−p)/n) does not. */
+export const Z95 = 1.96;
+export function wilson(hits: number, n: number): { lo: number; hi: number } | null {
+  if (n <= 0) return null;
+  const p = hits / n, z2 = Z95 * Z95;
+  const centre = (p + z2 / (2 * n)) / (1 + z2 / n);
+  const half = (Z95 * Math.sqrt((p * (1 - p)) / n + z2 / (4 * n * n))) / (1 + z2 / n);
+  return { lo: Math.max(0, centre - half), hi: Math.min(1, centre + half) };
+}
+export type Compare = "better" | "worse" | "same";
+/** Free vs paid on the 7-day rate: better / worse only when the 95% ranges do not overlap. null = no range. */
+export function compareRates(free: Rate, paid: Rate): Compare | null {
+  if (!free.range || !paid.range) return null;
+  if (free.range.lo > paid.range.hi) return "better";
+  if (free.range.hi < paid.range.lo) return "worse";
+  return "same";
+}
 /** Under this many judged players a column shows "N judged" / "too early". */
 export const JUDGED_MIN = 100;
 /** Regular players coming back: windows of this many days. */
@@ -160,7 +179,7 @@ export type Base = {
 
 /* ── THE VIEW (what the page draws) ──────────────────────────────────────────────────────────── */
 
-export type Rate = { players: number; judged: number; hits: number; pct: number | null };
+export type Rate = { players: number; judged: number; hits: number; pct: number | null; range?: { lo: number; hi: number } | null };
 export type Column = {
   from: string; to: string; players: number;
   paid7: Rate; paid14: Rate;
@@ -184,7 +203,7 @@ export type View = {
   cities: { code: string; name: string }[];
   verdict: { label: "Working" | "Mixed" | "Not working" | "Too early"; tone: "good" | "warn" | "bad" | "muted"; text: string };
   newPerDay: { after: number; before: number; afterPlayers: number; beforePlayers: number; changePct: number | null };
-  came7: { free: Rate; paid: Rate; code: Rate; diffPts: number | null };
+  came7: { free: Rate; paid: Rate; code: Rate; diffPts: number | null; compare: Compare | null };
   paidBack: { cents: number; spenders: number; players: number; paidMatches: number };
   lost: { cents: number; spots: number; matches: number; perWeekCents: number; noMaxMatches: number };
   refill: { leaves: number; refilled: number };
@@ -215,7 +234,7 @@ export function rateOf(ps: readonly FirstTimer[], w: number, today: string): Rat
     judged++;
     if (p.paidDays.some((d) => d <= w)) hits++;
   }
-  return { players: ps.length, judged, hits, pct: pctOf(hits, judged) };
+  return { players: ps.length, judged, hits, pct: pctOf(hits, judged), range: wilson(hits, judged) };
 }
 
 export function column(ps: readonly FirstTimer[], from: string, to: string, today: string): Column {
@@ -278,6 +297,7 @@ export function summarize(base: Base, opts: { from?: string; to?: string; city?:
   // 2. Came back and paid in 7 days.
   const free7 = rateOf(freeA, 7, today), paid7 = rateOf(paidB, 7, today), code7 = rateOf(codeB, 7, today);
   const diffPts = free7.pct != null && paid7.pct != null ? Math.round(free7.pct * 100) - Math.round(paid7.pct * 100) : null;
+  const compare = compareRates(free7, paid7);
 
   // 3. Paid back so far.
   const pb = paidBackOf(freeA, to);
@@ -401,27 +421,33 @@ export function summarize(base: Base, opts: { from?: string; to?: string; city?:
   return {
     generatedAt: base.generatedAt, mirrorSyncedAt: base.mirrorSyncedAt, today,
     range: { from, to, days }, before: { from: bFrom, to: bTo }, city, cities: base.cities,
-    verdict: verdictOf(newPerDay.changePct, free7, diffPts, lost.cents, suggestedOff),
-    newPerDay, came7: { free: free7, paid: paid7, code: code7, diffPts },
+    verdict: verdictOf(newPerDay.changePct, free7, paid7, compare, lost.cents, suggestedOff),
+    newPerDay, came7: { free: free7, paid: paid7, code: code7, diffPts, compare },
     paidBack: { ...pb, players: freeA.length },
     lost, refill: { leaves, refilled }, fields: rows, suggestedOff,
     cohorts, paidShift, firm14, watch,
   };
 }
 
-/** The one-line verdict, written from the numbers. */
-export function verdictOf(changePct: number | null, free7: Rate, diffPts: number | null, lostCents: number, suggestedOff: number): View["verdict"] {
-  if (changePct == null || free7.judged < 30 || diffPts == null) {
+const pc = (x: number) => `${Math.round(x * 100)}%`;
+/** "25% (20–30%)": a rate with its 95% range, for the hover text. */
+export const rateWithRange = (r: Rate): string => (r.pct == null ? "—" : `${pc(r.pct)}${r.range ? ` (${pc(r.range.lo)}–${pc(r.range.hi)})` : ""}`);
+
+/** The one-line verdict, written from the numbers. Free vs paid is called better or worse only when
+ *  the 95% ranges do not overlap (compareRates); "Working" whenever first-timers are up and free
+ *  players are not worse (Ryan, 2026-11-21). */
+export function verdictOf(changePct: number | null, free7: Rate, paid7: Rate, compare: Compare | null, lostCents: number, suggestedOff: number): View["verdict"] {
+  if (changePct == null || free7.judged < 30 || compare == null || free7.pct == null || paid7.pct == null) {
     return { label: "Too early", tone: "muted", text: "Not enough free players have had 7 days yet to judge whether they come back." };
   }
   const growth = Math.round(changePct * 100);
   const more = growth > 0 ? `More new players (+${growth}% a day)` : growth < 0 ? `Fewer new players (${growth}% a day)` : "The same number of new players a day";
-  const back = Math.abs(diffPts) <= SAME_POINTS ? "who come back and pay as often as paid first-timers did"
-    : diffPts > 0 ? `who come back and pay more often than paid first-timers did (${diffPts} pts more)`
-    : `who come back and pay less often than paid first-timers did (${-diffPts} pts less)`;
+  const back = compare === "same" ? "who come back and pay as often as paid first-timers did"
+    : compare === "better" ? `who come back and pay more often than paid first-timers did (${pc(free7.pct)} vs ${pc(paid7.pct)})`
+    : `who come back and pay less often than paid first-timers did (${pc(free7.pct)} vs ${pc(paid7.pct)})`;
   const cost = lostCents > 0
     ? ` The cost is free spots on sold-out matches${suggestedOff > 0 ? `: turn it off on the ${suggestedOff === 1 ? "field" : `${suggestedOff} fields`} that sell out.` : "."}`
     : " No free spot has been given on a sold-out match.";
-  const label = growth >= 10 && diffPts >= -SAME_POINTS ? "Working" : growth <= 0 ? "Not working" : "Mixed";
+  const label = changePct > 0 && compare !== "worse" ? "Working" : changePct <= 0 ? "Not working" : "Mixed";
   return { label, tone: label === "Working" ? "good" : label === "Mixed" ? "warn" : "bad", text: `${more} ${back}.${cost}` };
 }

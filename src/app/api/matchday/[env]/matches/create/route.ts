@@ -20,7 +20,7 @@ import { randomUUID } from "node:crypto";
 import { authenticateCapability } from "@/lib/capabilityAuth";
 import { apiGet, apiWrite, type MatchdayEnv } from "@/lib/matchdayStageApi";
 import { insertMatchMirror } from "@/lib/mirrorWriteThrough";
-import { EDITABLE_KEYS } from "@/lib/matchEditModel";
+import { EDITABLE_KEYS, FIRST_MATCH_FREE_KEY, firstMatchFreeOnCreate, hasFirstMatchFree } from "@/lib/matchEditModel";
 import { trimNameIn } from "@/lib/matchName";
 import { supabaseLogStore } from "@/lib/changeLog";
 import { NO_EDIT_MATCHES } from "@/lib/matchEditAccess";
@@ -73,6 +73,12 @@ const CREATE_FIELDS = [
   ...EDITABLE_KEYS.filter((k) => !(CREATE_REQUIRED as readonly string[]).includes(k)),
 ] as const;
 
+/* THE FREE FIRST MATCH SWITCH, CARRIED BY A COPY (Ryan, 2026-11-21). Not an editable key, so it is
+ * not in CREATE_FIELDS; a create may carry it on its own rule (matchEditModel.ts
+ * firstMatchFreeOnCreate): any boolean from an admin, `true` (the backend default) from anyone, and
+ * `false` from a non-admin only when `copiedFrom` names a match that is off, read live. */
+const CREATE_KEYS: readonly string[] = [...CREATE_FIELDS, FIRST_MATCH_FREE_KEY];
+
 const MATCH_TYPES = new Set(["EVENT", "REGULAR", "BRACKET", "GROUP"]);
 
 type Body = {
@@ -81,6 +87,8 @@ type Body = {
   allowDuplicate?: boolean;
   source?: string;
   saveId?: string;
+  /** The match this is a copy of. Read live only to check a non-admin's `firstMatchFreeEnabled: false`. */
+  copiedFrom?: number;
 };
 
 export async function POST(req: Request, ctx: { params: Promise<{ env: string }> }) {
@@ -119,7 +127,8 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string }>
   if (missing.length) {
     return Response.json({ error: `missing required field(s): ${missing.join(", ")}`, field: missing[0] }, { status: 400 });
   }
-  const extra = Object.keys(match).filter((k) => !(CREATE_FIELDS as readonly string[]).includes(k));
+  // CREATE_FIELDS, plus the one key a copy may carry on its own rule (CREATE_KEYS above).
+  const extra = Object.keys(match).filter((k) => !(CREATE_FIELDS as readonly string[]).includes(k) && k !== FIRST_MATCH_FREE_KEY);
   if (extra.length) {
     // The endpoint itself refuses these by name; refusing here too means the failure is ours and
     // legible rather than a 400 from somebody else's validator.
@@ -176,6 +185,18 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string }>
       }
     }
 
+    // ── THE FREE FIRST MATCH SWITCH: admin, or a copy of a match that is off ─────────────────────
+    if (FIRST_MATCH_FREE_KEY in match) {
+      let sourceValue: boolean | null = null;
+      const from = Number(body?.copiedFrom);
+      if (match[FIRST_MATCH_FREE_KEY] === false && !auth.isAdmin && Number.isInteger(from) && from > 0) {
+        const src = await apiGet<Record<string, unknown>>(env, `/admin/matches/${from}`).catch(() => null);
+        sourceValue = hasFirstMatchFree(src) ? (src![FIRST_MATCH_FREE_KEY] as boolean) : null;
+      }
+      const ok = firstMatchFreeOnCreate(match[FIRST_MATCH_FREE_KEY], auth.isAdmin, sourceValue);
+      if (!ok.ok) return Response.json({ error: ok.error, field: FIRST_MATCH_FREE_KEY }, { status: ok.status });
+    }
+
     // ── THE DUPLICATE GUARD ───────────────────────────────────────────────────────────────────
     // Asked of the API, not of our mirror: the mirror can be minutes behind, and a duplicate made
     // sixty seconds ago is exactly the one this is for. The window is the calendar DAY of the
@@ -216,7 +237,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string }>
     /* ONLY WHAT WAS SUPPLIED. An absent optional stays absent rather than going over as an
      * explicit undefined — the diff IS the request body, here as everywhere. */
     const payload: Record<string, unknown> = {};
-    for (const k of CREATE_FIELDS) if (k in match) payload[k] = match[k];
+    for (const k of CREATE_KEYS) if (k in match) payload[k] = match[k];
     trimNameIn(payload);   // " One Touch" is never created, and never copied onward (matchName.ts)
     /* A RUNG THE CALLER DID NOT SEND GETS THE DEFAULT, never the API's. Both create paths send
      * all five (copyMatch.ts, MatchEditor create mode), so this only fires for a caller that does
@@ -236,10 +257,15 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string }>
     const newId = Number((wrote as Record<string, unknown>)?.id ?? (wrote as Record<string, unknown>)?.matchId ?? 0);
 
     let outcome: "LANDED" | "FAILED" | "UNKNOWN" = "UNKNOWN";
+    let firstMatchFreeNotApplied = false;
     if (Number.isFinite(newId) && newId > 0) {
       try {
         created = await apiGet<Record<string, unknown>>(env, `/admin/matches/${newId}`);
         outcome = created && Number(created.id) === newId ? "LANDED" : "UNKNOWN";
+        /* THE SWITCH IS READ BACK, not assumed: the match landing does not prove the setting did. */
+        if (outcome === "LANDED" && FIRST_MATCH_FREE_KEY in payload && created?.[FIRST_MATCH_FREE_KEY] !== payload[FIRST_MATCH_FREE_KEY]) {
+          firstMatchFreeNotApplied = true;
+        }
       } catch {
         // The write may well have landed; the read-back is what failed. Never retried, never
         // assumed — UNKNOWN is the honest answer and the caller is told to verify by hand.
@@ -272,7 +298,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string }>
         // A CREATE HAS NO "BEFORE" — the resource did not exist. Each field is recorded with a
         // null before rather than a fabricated one, because a log that invents a prior value is
         // worse than a log that admits there was none.
-        changes: CREATE_FIELDS.map((k) => ({
+        changes: CREATE_KEYS.filter((k) => k !== FIRST_MATCH_FREE_KEY || k in payload).map((k) => ({
           key: k as string, field: k as string, before: null, after: payload[k] ?? null,
         })),
       });
@@ -303,6 +329,8 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string }>
       saveId,
       mirrored: mirror.inserted,
       mirrorReason: mirror.reason ?? null,
+      /** True when the copy carried the free first match switch and the new match reads back otherwise. */
+      firstMatchFreeNotApplied,
     }, { status: outcome === "LANDED" ? 200 : 502 });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

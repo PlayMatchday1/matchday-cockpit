@@ -19,7 +19,7 @@ import s from "./freeFirstMatch.module.css";
 import { Btn, O, Toggle } from "@/components/offers/offersUi";
 import { useAuth, canEditMatches } from "@/lib/useAuth";
 import { addDays } from "@/lib/weekBuckets";
-import { LAUNCH_DAY, type FieldRow, type Rate, type View } from "@/lib/freeFirstMatchModel";
+import { LAUNCH_DAY, rateWithRange, type FieldRow, type Rate, type View } from "@/lib/freeFirstMatchModel";
 import { GAP_MS, matchesToChange, runFieldSwitch, type SwitchStep } from "@/lib/ffmFieldSwitch";
 
 const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -200,13 +200,22 @@ export default function FreeFirstMatchView({ authHeaders, preset, city, onCities
   const vPill = v.verdict.tone === "good" ? s.pWhiteGreen : v.verdict.tone === "warn" ? s.pWhiteAmber : s.pWhite;
   const ch = v.newPerDay.changePct;
   const diff = v.came7.diffPts;
+  const cmp = v.came7.compare;
   const daysWord = `${v.range.days} days`;
+  /* THE 95% RANGES, ON HOVER (Ryan, 2026-11-21). Better or worse is called only when they do not overlap. */
+  const rangeTip = `Came back and paid in 7 days, with 95% ranges:\n` +
+    `Free since ${dayLabel(v.range.from)}: ${rateWithRange(v.came7.free)}, ${n(v.came7.free.judged)} judged\n` +
+    `Paid first-timers before: ${rateWithRange(v.came7.paid)}, ${n(v.came7.paid.judged)} judged\n` +
+    `Code users before: ${rateWithRange(v.came7.code)}, ${n(v.came7.code.judged)} judged\n` +
+    (cmp == null ? "Not enough players to compare yet."
+      : cmp === "same" ? "The free and paid ranges overlap, so the difference could be chance: same as paid."
+      : "The free and paid ranges do not overlap.");
 
   return (
     <div className={s.root} style={{ opacity: loading ? 0.6 : 1, transition: "opacity .15s" }} data-testid="ffm-root">
       {error && <div className={s.note}>Could not refresh: {error}</div>}
 
-      <div className={`${s.verdict} ${vTone}`} data-testid="ffm-verdict">
+      <div className={`${s.verdict} ${vTone}`} data-testid="ffm-verdict" title={rangeTip}>
         <span className={`${s.pill} ${vPill}`}>{v.verdict.label}</span>
         <span>{v.verdict.text}</span>
       </div>
@@ -220,11 +229,11 @@ export default function FreeFirstMatchView({ authHeaders, preset, city, onCities
         </div>
         <div className={s.tile}>
           <div className={s.tLabel}>Came back and paid in 7 days</div>
-          <div className={s.tValue} data-testid="ffm-came7">{pct(v.came7.free.pct)}</div>
+          <div className={s.tValue} data-testid="ffm-came7" title={rangeTip}>{pct(v.came7.free.pct)}</div>
           <div className={s.tFoot}>Paid first-timers before: {pct(v.came7.paid.pct)}. Code users: {pct(v.came7.code.pct)}.</div>
-          {diff != null && (
-            <span className={`${s.pill} ${Math.abs(diff) <= 2 ? s.pGreen : diff > 0 ? s.pGreen : s.pAmber}`}>
-              {Math.abs(diff) <= 2 ? "Same as paid" : diff > 0 ? `${diff} pts above paid` : `${-diff} pts below paid`}
+          {cmp != null && diff != null && (
+            <span className={`${s.pill} ${cmp === "worse" ? s.pAmber : s.pGreen}`} title={rangeTip} style={{ cursor: "help" }} data-testid="ffm-came7-compare">
+              {cmp === "same" ? "Same as paid" : cmp === "better" ? `${Math.abs(diff)} pts above paid` : `${Math.abs(diff)} pts below paid`}
             </span>
           )}
           {v.came7.free.judged < v.came7.free.players && <span className={s.tFoot}>{n(v.came7.free.judged)} of {n(v.came7.free.players)} free players have had 7 days</span>}

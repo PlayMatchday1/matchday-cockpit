@@ -32,7 +32,7 @@
  * capacity keeps whatever it carried, because there is no default to compute.
  */
 
-import { EDITABLE_KEYS } from "./matchEditModel";
+import { EDITABLE_KEYS, FIRST_MATCH_FREE_KEY, hasFirstMatchFree } from "./matchEditModel";
 import { defaultLadder } from "./fakeLadder";
 
 /** The 9 the API itself demands — measured on staging by omitting them. */
@@ -168,12 +168,17 @@ export function buildCopyBody(src: SourceMatch, target?: CopyTarget): Record<str
   /* THE TEAM COUNT. Not a field on the match — the length of its teams array. 2 is the floor
    * because the API rejects a create without it and every match has at least two sides. */
   out.teamNumbers = Array.isArray(src.teams) && src.teams.length > 0 ? src.teams.length : 2;
+  /* THE FREE FIRST MATCH SWITCH IS KEPT (Ryan, 2026-11-21): a switched-off field stays off when its
+   * matches are copied. Only when the source carries a real boolean. It is not in COPY_FIELDS because
+   * it is not an editable key (matchEditModel.ts); the create route takes it on its own rule,
+   * firstMatchFreeOnCreate, with the caller naming the source in `copiedFrom`. */
+  if (hasFirstMatchFree(src)) out[FIRST_MATCH_FREE_KEY] = src[FIRST_MATCH_FREE_KEY];
   return out;
 }
 
 /** Fields present on the source that the create route will NOT take — reported, not silently cut. */
 export function droppedByCopy(src: SourceMatch): string[] {
-  const allowed = new Set<string>([...COPY_FIELDS]);
+  const allowed = new Set<string>([...COPY_FIELDS, FIRST_MATCH_FREE_KEY]);
   return Object.keys(src).filter((k) => !allowed.has(k)).sort();
 }
 

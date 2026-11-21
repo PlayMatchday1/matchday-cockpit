@@ -41,6 +41,27 @@ export function hasFirstMatchFree(m: Record<string, unknown> | null | undefined)
   return !!m && typeof m[FIRST_MATCH_FREE_KEY] === "boolean";
 }
 
+/* ── A COPY KEEPS THE SWITCH (Ryan, 2026-11-21) ───────────────────────────────────────────────
+ * A switched-off field must stay off when its matches are copied, so both Clubhouse copy paths
+ * (copyMatch.ts buildCopyBody, MatchEditor's Copy match) carry the source's value, and the create
+ * route takes it. Turning the free match OFF stays admin-only (the PUT route, the field switch):
+ * a non-admin create may carry `false` ONLY as a copy of a match that is off, which the route checks
+ * on the live source named by `copiedFrom`. `true` is the backend default (schema @default(true)) and
+ * is never a change. Production backend createMatch applies the same rule to the API account, which
+ * is admin, so it is this function that enforces it for a Clubhouse user. */
+export function firstMatchFreeOnCreate(
+  value: unknown, isAdmin: boolean, sourceValue: boolean | null,
+): { ok: true } | { ok: false; status: number; error: string } {
+  if (value === undefined) return { ok: true };
+  if (typeof value !== "boolean") return { ok: false, status: 400, error: `${FIRST_MATCH_FREE_KEY} must be true or false` };
+  if (isAdmin || value === true) return { ok: true };
+  if (sourceValue === false) return { ok: true };
+  return {
+    ok: false, status: 403,
+    error: "Only an admin can create a match with the free first match off, unless it is a copy of a match that is already off.",
+  };
+}
+
 export const MONEY_KEYS = new Set<string>(["registrationPrice", "additionalSpotPrice"]);
 export const TOGGLE_KEYS = new Set<string>(["autoCanceled", "isFreeMember", "isAutoBump"]);
 export const NULLABLE_NUM = new Set<string>(["managerId", "secondManagerId", "maxPlayerCount"]);

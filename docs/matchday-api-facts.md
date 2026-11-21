@@ -9570,7 +9570,30 @@ Read with the service role on 2026-11-21 (one-off scratch probes, not committed)
   history: all 308 players dropped for earlier history had an own played spot before Oct 6).
   Lost on sold-out matches, every free first-timer spot incl. codes: $2,106 / 207 spots on Nov 5–20 vs the
   backend's $2,056 / 202 for Nov 5 to the run time.
-- **Matches copied in the Clubhouse do NOT carry `firstMatchFreeEnabled`.** `src/lib/copyMatch.ts` builds the
-  create body from the required fields plus `EDITABLE_KEYS`, which deliberately leave the key out
-  (`src/lib/matchEditModel.ts:30-37`), so a Master Schedule copy takes the backend default (on). A copy made
-  elsewhere (Retool, the staff app) was not checked.
+- **Matches copied in the Clubhouse did NOT carry `firstMatchFreeEnabled` until 2026-11-21** (fixed the same day,
+  see "Copies keep the free first match switch" below).
+
+## Copies keep the free first match switch (2026-11-21)
+
+Ryan: a switched-off field must stay off when its matches are copied.
+
+- **Clubhouse, fixed.** Master Schedule's copy (`src/lib/copyMatch.ts` `buildCopyBody`) and the match editor's Copy
+  match (`MatchEditor.tsx`, create mode from `sourceId`) now send the source's `firstMatchFreeEnabled` when the source
+  carries a boolean, with `copiedFrom: <source id>`. The create route (`/api/matchday/{env}/matches/create`) accepts the
+  key on its own rule, `firstMatchFreeOnCreate` (`src/lib/matchEditModel.ts`): any boolean from an admin, `true` (the
+  default) from anyone, `false` from a non-admin only when the live source (`GET /admin/matches/{copiedFrom}`) is off.
+  The route reads the new match back and returns `firstMatchFreeNotApplied` when it differs; Master Schedule prints it on
+  the row, the editor in its step-two message. Guard: `scripts/month-and-copy-test.ts` (13 new assertions).
+  NOT YET EXERCISED by a real copy on staging or production.
+- **The backend's own copies already keep it.** Production backend `heroku-prod/master` 0e45c51c (code read):
+  `POST /admin/matches/:matchId/copy` (`createCopyMatchByMatchId`) and `POST /admin/matches/copy-by-week` /
+  `clone-by-week` (`createCopyMatchesByWeek`) spread the source row (`...matchData`) into the create, and the source is
+  read with Prisma `include` (`matches.repository.ts` `getMatchForCopyById`, `getAllRegularMatchesByDateRange`), which
+  loads every scalar column, `first_match_free_enabled` included. Only `id`, `teams` (rebuilt), `starRating*` and, for
+  the week copy, the dates are replaced. Both copy REGULAR matches only; the week copy skips cancelled matches. No
+  admin check on the switch in these paths (they copy, they do not change it).
+- **Retool's copy is the backend's.** `retool-export-prod.json` (exported 2026-08-07) calls
+  `{{serverApiUrl}}/admin/matches/{{ matches.selectedRow.data.id }}/copy` and `/admin/matches/copy-by-week` and
+  builds no body of its own, so a Retool copy keeps the switch. A Retool app changed after Aug 7 was not checked.
+- `POST /admin/matches/batches` is not a copy: it creates what the body says, and the switch on it is admin-only
+  against the API account (`matches.service.ts:356-359`).

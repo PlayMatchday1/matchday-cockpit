@@ -849,6 +849,9 @@ export default function VeoMasterSchedule() {
             body: JSON.stringify({
               match: buildCopyBody(copySrc, { iso, hhmm }),
               source: "Master Schedule · copy to dates",
+              /* The source, so the create route can check a non-admin's copy of a match whose free first
+               * match is off (copyMatch.ts carries the switch; matchEditModel.ts firstMatchFreeOnCreate). */
+              copiedFrom: Number(copySrc.id),
               /* allowDuplicate STAYS. A day that already holds the fixture is SHOWN, not refused —
                * the preview row lands in the same cell two rows under the existing match, so the
                * collision is visible at pick time, before anything is written, which is a better
@@ -858,6 +861,10 @@ export default function VeoMasterSchedule() {
           });
           const j = await res.json();
           if (res.ok && j.outcome === "LANDED" && j.id) {
+            /* THE FREE FIRST MATCH SWITCH IS READ BACK by the route; a copy that did not keep it is said. */
+            const ffmNote = j.firstMatchFreeNotApplied === true
+              ? "the match was created, but its free first match setting did not carry — check it in the match panel"
+              : null;
             /* THE VEO FLAG IS CLUBHOUSE-SIDE — a second write, and its failure is now REPORTED.
              * It was best-effort with .catch(() => {}), so a confined operator copying a camera
              * match got the match, silently lost the flag, and read LANDED. /api/veo/intent is
@@ -896,9 +903,10 @@ export default function VeoMasterSchedule() {
                   if (!vr.ok) veoNote = "the match was created, but the Veo camera flag did not carry — set it on the new match";
                 } catch { veoNote = "the match was created, but the Veo camera flag did not carry — set it on the new match"; }
               }
-              out.push({ iso, hhmm, outcome: "LANDED", id: Number(j.id), ...(veoNote ? { error: veoNote } : {}) });
+              const note = [veoNote, ffmNote].filter(Boolean).join("; ");
+              out.push({ iso, hhmm, outcome: "LANDED", id: Number(j.id), ...(note ? { error: note } : {}) });
             } else {
-              out.push({ iso, hhmm, outcome: "LANDED", id: Number(j.id) });
+              out.push({ iso, hhmm, outcome: "LANDED", id: Number(j.id), ...(ffmNote ? { error: ffmNote } : {}) });
             }
           } else if (j.outcome === "UNKNOWN") {
             out.push({ iso, hhmm, outcome: "UNKNOWN", error: j.error ?? "the route could not read back what it wrote" });
