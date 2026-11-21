@@ -31,6 +31,9 @@ const E2E = process.argv.includes("--e2e");
 // on screen, which is exactly the case a suite has to cover.
 const NODE_SUITES = [
   "scripts/ffm-soldout-test.ts",
+  // The Free First Match field switch: a loop of production match writes. Diff only, paced, no retry,
+  // the first match that does not land stops it.
+  "scripts/ffm-field-switch-test.ts",
   // The city boundary's decision table — including the one rule that disagrees with the
   // city-manager tier on purpose (confinement beats is_admin).
   "scripts/city-confinement-test.ts",

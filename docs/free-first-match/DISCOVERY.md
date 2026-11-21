@@ -326,3 +326,24 @@ Ryan's answers to the Phase 1 questions, and what they became.
 `scripts/_ffm_build_probe.mts` (untracked) runs the build with the service role and prints the page's
 claimed count beside a direct count of standing FIRST-MATCH-AUTO bookings on live matches dated
 Nov 5 … today. The two numbers as returned on 2026-11-05 are in the Phase 2 report.
+
+## Redesign, 2026-11-21 (Figma 9TgSk4sYqq4nNoTH73wRRs frame 21615:72)
+
+"Is giving the first match away worth it?" Range (Since launch = Nov 5 to yesterday, Last 14 / 7 days) and city
+pickers; a verdict line written from the numbers; four tiles (new first-timers a day vs the same number of days
+before Nov 5; came back and paid in 7 days, free vs paid first-timers before and code users; paid back so far in
+actual card dollars; lost on sold-out matches, every free first-timer spot incl. codes); how cost is counted;
+fields that sell out with each field's Free Match switch; free vs paid vs code first-timers; a watch list (late
+cancels, returning players' rating, regulars coming back). The free spots given total, the 7/14/30 window, the
+activation headline, by-city table and free match log are gone.
+
+Rules and evidence: the header of `src/lib/freeFirstMatchModel.ts` and the 2026-11-21 section of
+`docs/matchday-api-facts.md`. Decisions (Ryan, 2026-11-21): Same as paid within 2 points; ↑ from X% at 15
+points over the Aug 24 – Nov 4 rate on 5+ matches; Turn off? at 40% sold out; tags under 100 judged; the rating
+is all returning players; the field switch writes each upcoming match's own `firstMatchFreeEnabled` through the
+Match panel's route (`src/lib/ffmFieldSwitch.ts`), admins only, one every 2 seconds, nothing retried. No note
+under a switched-off field (Ryan: matches are created by copying, and the copy keeps the setting; see the facts
+doc for the Clubhouse copy path, which does not).
+
+Deploy check: `buildFreeFirstMatch` with the service role, then `summarize(base, {from, to, city})`, printed
+beside the backend analysis.

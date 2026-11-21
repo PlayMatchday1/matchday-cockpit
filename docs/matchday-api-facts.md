@@ -9539,3 +9539,38 @@ night pass). The route then reported `rebuilt: false`, which the page printed as
 current". The fix is 0276 (function-level `statement_timeout = '120s'`, the 0098 pattern; APPLIED 2026-11-20, live `refreshed_at` 02:49:30Z, then a production Refresh at 02:52Z read "Synced the source (162 rows) and rebuilt the set" and the count moved 38,782 to 38,784), and the route
 now returns `rebuildFailed`. The route uses the service-role client for every account, admin or
 confined, so a confined account gets the same rebuild.
+
+## Free First Match redesign: what the mirror can and cannot give (2026-11-21)
+
+Read with the service role on 2026-11-21 (one-off scratch probes, not committed); the page's numbers come from
+`src/lib/freeFirstMatchBuild.ts` + `summarize` in `src/lib/freeFirstMatchModel.ts`.
+
+- **Left rows stay in `mdapi_match_players`.** Of 14,086 rows created since Nov 1, 492 carry `canceled_at`
+  (all 492 also `is_cancelled`). A late cancel is therefore countable from the mirror.
+- **`cancelled_before_24h` does NOT mean what its name says.** Over 333 player rows left since Nov 8, against
+  `raw.startDateUtc − canceled_at`: flag true and ≥24h before = 76, flag false and <24h = 190, but **flag true and
+  <24h = 56** and flag null = 1. Never use the flag for "left within 24 hours"; compute it from `canceled_at` and
+  the match's `raw.startDateUtc` (TRUE UTC).
+- **Refunds are a boolean only.** The booking's `raw` keys are `amount, refunded, canceledAt, isCancelled,
+  totalAmount, creditAmount, cancelledBefore24Hours`; no refund amount. The backend analysis reads partial
+  amounts from its `refunds` table; the Clubhouse counts a refunded booking as fully refunded, so "Paid back" /
+  "Spent" read slightly low where a refund was partial.
+- **`mdapi_users` carries no account type.** `raw->>type` is null on every row read (2,000 sampled; the raw keys
+  have no `type`/`role`). ADMIN-type accounts cannot be excluded from the mirror; the backend analysis excluded 2
+  such accounts. `growth_internal_account` covers fake, @matchday.com and staff email (0208).
+- **A review joins to its booking by api_id** (already recorded above): 4,468 reviews from Oct 6 on joined to an
+  own played spot, so "returning players' rating" is computable.
+- **Reconciliation with the backend analysis** (`ffm_retention_readonly.sql`, run 2026-11-21 22:20Z), on the
+  backend's own window Nov 5–18 vs Oct 22–Nov 4: free first-timers 419 = 419; judged at 7 days 305 = 305; came
+  back and paid in 7 days 24.9% vs backend 25%; paid first-timers before 27.4% (74/270) vs 27%. New first-timers
+  565 vs 578 after (−2%) and **380 vs 401 before (−5%)**, so +49% vs +44%. 7 of the 21 missing before-window
+  players are re-registrations: the Clubhouse merges a deleted account into its successor
+  (`growth_person_link`), the backend counts per account. The other ~14 are UNKNOWN (not soft-deleted rows: the
+  only deleted rows in that window are 29 fake fills; not deleted matches: all 19 were cancelled; not profile
+  history: all 308 players dropped for earlier history had an own played spot before Oct 6).
+  Lost on sold-out matches, every free first-timer spot incl. codes: $2,106 / 207 spots on Nov 5–20 vs the
+  backend's $2,056 / 202 for Nov 5 to the run time.
+- **Matches copied in the Clubhouse do NOT carry `firstMatchFreeEnabled`.** `src/lib/copyMatch.ts` builds the
+  create body from the required fields plus `EDITABLE_KEYS`, which deliberately leave the key out
+  (`src/lib/matchEditModel.ts:30-37`), so a Master Schedule copy takes the backend default (on). A copy made
+  elsewhere (Retool, the staff app) was not checked.
