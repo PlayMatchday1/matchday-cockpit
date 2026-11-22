@@ -174,6 +174,13 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string; ma
       occupancy: num((match._count as Record<string, unknown> | undefined)?.players),
       // NOT dropped silently. A 20-deep repeat from one player is a payment failure and the panel
       // says so; only the noise is removed, never the signal that it happened.
+      /* SPOTS HIDDEN ROWS STILL HOLD, in MatchDay's own terms (backend ACTIVE_SPOT_WHERE: not cancelled,
+       * and PAID / FREE or reserved for a checkout in progress). A refunded PAID row or a reserved
+       * WAITING row is hidden from the list but still holds its bib, so a size change must not deal
+       * that bib to someone (an admin move onto a held spot swaps the two). Ids and spots only. */
+      heldSpots: hiddenRows
+        .filter((p) => { const r = p as RosterShape & { isReserved?: boolean }; return r.isCancelled !== true && (r.paidStatus === "PAID" || r.paidStatus === "FREE" || r.isReserved === true); })
+        .map((p) => ({ umId: p.id, team: p.team ?? null, playerNumber: p.playerNumber ?? null })),
       hidden: {
         total: hiddenRows.length,
         cancelled: hiddenRows.filter((p) => (p as RosterShape).isCancelled === true || (p as RosterShape).canceledAt != null).length,

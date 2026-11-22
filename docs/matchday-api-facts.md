@@ -9635,8 +9635,15 @@ Ryan: a switched-off field must stay off when its matches are copied.
   above the new floor(maxPlayerCount / teams) (`user-matches.repository.ts:457-468`), however few players the team
   has. The staff app's size op now moves each real player above the new size to the lowest bib on their own team that
   no PAID, FREE or reserved row holds (`appMatchV2.ts bibFixMoves`), after the fake removals and before the size write.
-  Read from code; not yet run on a real match. NOT FIXED: the desktop match panel's size Save, and the staff app's
-  3-team picker (growing 2 to 3 lowers the per-team size and moves nobody); both were not checked against a live match.
+  Read from code; not yet run on a real match.
+- **The desktop match panel's Save, the same rule (2026-11-21; the staff app's picker is the entry below).** A team count change sent alone
+  is checked against the OLD player count over the NEW team count: `{teamNumbers: 3}` over 22 is floor(22 / 3) = 7 a
+  team, refused while anyone stands on bib 8 or up (`matches.service.ts:1766-1775` computes the new team size from
+  `dto.maxPlayerCount ?? match.maxPlayerCount`). The desktop Save now sends the team count and the size fields in ONE
+  `PUT /admin/matches/{id}`, and when the team size shrinks it runs the staged removals, then each real player above
+  the new size to a free bib on their own team, then that shape write, then the staged moves
+  (`lib/sizeShrinkSave.ts`, `appMatchV2.ts bibFixMoves`). The desktop roster GET now returns `heldSpots`: hidden rows
+  MatchDay still counts as holding a bib (not cancelled, and PAID / FREE or reserved). Not yet run on a real match.
 - **The app's roster read-back carries `userType`** (PLAYER | ADDITIONAL_SPOT | GUEST, from
   `GET /admin/matches/{id}/players`, the same field the check-in route reads). The staff app names a GUEST or
   ADDITIONAL_SPOT row "<host>'s guest".

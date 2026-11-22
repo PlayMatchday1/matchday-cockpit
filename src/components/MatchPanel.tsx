@@ -55,7 +55,8 @@ import { TEAM_SIZES,
 } from "@/lib/rosterEditModel";
 import { TEMPLATE_LABELS, buildTemplateBody, smsSegments, unfilledTokens } from "@/lib/matchNotify";
 import { defaultLadder } from "@/lib/fakeLadder";
-import { overflowFakes, SIZE_MAX, SIZE_MIN } from "@/lib/appMatchV2";
+import { bibFixMoves, overflowFakes, SIZE_MAX, SIZE_MIN } from "@/lib/appMatchV2";
+import { shrinkSaveOrder } from "@/lib/sizeShrinkSave";
 
 // Only these two `type` values are exposed. The known enum also has BRACKET and GROUP and the full
 // set is UNKNOWN (no spec in repo). A match whose current type is NOT one of these renders as
@@ -112,7 +113,7 @@ type Manager = { id: number; name: string };
 type FieldRow = { id: number; title: string; city: string | null };
 type TeamRow = { id: number; teamNumber: number; name: string; locked: boolean };
 type PlayerRow = { umId: number; playerId: number; team: number; playerNumber: number | null; name: string; phone: string | null; fake: boolean; promoCode?: string | null; email?: string | null; member?: boolean; paid?: number; charged?: number; credit?: number; paidStatus?: string | null };
-type RosterState = { name: string; teams: TeamRow[]; players: PlayerRow[]; shape: { teamN: number; perTeam: number }; maxPlayerCount: number | null; occupancy: number | null; hidden?: { total: number; cancelled: number; unpaid: number; refunded: number }; promo?: { spots: number; codes: string[] }; membershipError?: string | null };
+type RosterState = { name: string; teams: TeamRow[]; players: PlayerRow[]; shape: { teamN: number; perTeam: number }; maxPlayerCount: number | null; occupancy: number | null; hidden?: { total: number; cancelled: number; unpaid: number; refunded: number }; promo?: { spots: number; codes: string[] }; membershipError?: string | null; heldSpots?: { umId: number; team: number | null; playerNumber: number | null }[] };
 type MatchData = Record<string, unknown> & {
   type?: string; startDate?: string; endDate?: string; teams?: unknown[];
   occupancy?: number | null; realOccupancy?: number | null; cityName?: string | null; fieldTitle?: string | null;
@@ -1068,7 +1069,13 @@ export default function MatchPanel({ matchId, env = DRAWER_ENV, onDirtyChange, o
     // CAPTURE THE MATCH DIFF FIRST. The roster batch below re-reads the match, and a re-read
     // reseeds `cur` from the server — which would silently discard the staged field edits before
     // they were ever sent. Taking the diff up front means what Save promised is what Save sends.
-    const changes = pick(cur, changed);
+    const allChanges = pick(cur, changed);
+    /* A SMALLER TEAM SIZE REORDERS THE SAVE (lib/sizeShrinkSave.ts says why and how): removals,
+     * then real players off bibs above the new size, then the shape carrying the size, then the
+     * staged moves. Otherwise the order below is savePlan's, unchanged. */
+    const order = shrinkSaveOrder(pendingN > 0 ? savePlan(pending, origin) : [], allChanges,
+      roster?.teams.length ?? committedTeamCount, orig.maxPlayerCount);
+    const changes = order.changesLeft;
 
     // ── ROSTER FIRST, IN ORDER, ONE AT A TIME ────────────────────────────────────────────────────
     // Team count leads because a move to team 3 is invalid while the match still has two teams.
@@ -1076,23 +1083,56 @@ export default function MatchPanel({ matchId, env = DRAWER_ENV, onDirtyChange, o
     // a revert is another write that can also fail, and a failed revert on a half-applied batch
     // leaves nobody able to say what is true. What landed stays; what did not stays PENDING, on
     // screen, for a deliberate retry. Writes never retry on their own.
-    if (pendingN > 0) {
+    if (pendingN > 0 || order.shrinks) {
       const saveId = crypto.randomUUID();
       const plan = savePlan(pending, origin);
       const results: typeof writeResults = [];
-      let stopped = false;
-      for (const w of plan) {
-        const res = await runRosterWrite(w, saveId);
-        results.push({ label: w.label, ...res });
-        setWriteResults([...results]);
-        if (res.verdict !== "LANDED") { stopped = true; break; }
-        rosterLanded++;
-        setPending((p) => clearApplied(p, w));   // forget an intention that is now reality
+      let stopped = false, total = plan.length;
+      const runAll = async (list: PlannedWrite[]) => {
+        for (const w of list) {
+          const res = await runRosterWrite(w, saveId);
+          results.push({ label: w.label, ...res });
+          setWriteResults([...results]);
+          if (res.verdict !== "LANDED") { stopped = true; return; }
+          rosterLanded++;
+          setPending((p) => clearApplied(p, w));   // forget an intention that is now reality
+        }
+      };
+      if (!order.shrinks) await runAll(order.rest);
+      else {
+        await runAll(order.removes);
+        if (!stopped && order.capAfter != null) {
+          // A FRESH READ, after the removals, so every bib a removed fake held is free.
+          const fresh = await loadRoster();
+          if (!fresh) {
+            results.push({ label: "Re-read the roster before moving anyone off a high bib", verdict: "UNKNOWN", detail: "the re-read failed" });
+            setWriteResults([...results]); stopped = true;
+          } else {
+            const staged = new Set(Object.keys(normalizePending(pending, origin).moves).map(Number));
+            const rows = fresh.players.filter((p) => p.team != null && p.team <= order.teamsAfter && !staged.has(p.umId))
+              .map((p) => ({ userMatchId: p.umId, team: p.team, bib: p.playerNumber, fake: p.fake }));
+            const held = [...fresh.players, ...(fresh.heldSpots ?? [])].map((p) => ({ userMatchId: p.umId, team: p.team, bib: p.playerNumber }));
+            const fixes = bibFixMoves(rows, held, [], order.capAfter);
+            if (fixes == null) {
+              results.push({ label: `Move real players onto bibs 1 to ${order.capAfter}`, verdict: "NOT APPLIED",
+                detail: `a team has more players than ${order.capAfter} a side once the staged removals are done, so nothing else was sent` });
+              setWriteResults([...results]); stopped = true;
+            } else {
+              const byUm = new Map(fresh.players.map((p) => [p.umId, p]));
+              const fixWrites: PlannedWrite[] = fixes.map((f) => ({ kind: "move", umId: f.userMatchId, team: f.team, playerNumber: f.playerNumber,
+                label: `Move ${byUm.get(f.userMatchId)?.name ?? `user-match ${f.userMatchId}`} from bib ${f.fromBib} to bib ${f.playerNumber} (above ${order.capAfter} a side)` }));
+              total += fixWrites.length;
+              await runAll(fixWrites);
+            }
+          }
+        }
+        if (!stopped && order.shape) await runAll([order.shape]);
+        if (!stopped) await runAll(order.rest);
       }
       if (stopped) {
         const landed = results.filter((r) => r.verdict === "LANDED").length;
         setToast(
-          `Stopped after ${results.length} of ${plan.length} write(s). ${landed} LANDED and ${landed === 1 ? "is" : "are"} not undone: ` +
+          `Stopped after ${results.length} of ${total} write(s). ${landed} LANDED and ${landed === 1 ? "is" : "are"} not undone: ` +
           `a revert is another write that can also fail. The rest are still pending below; nothing was retried.`);
         setSaving(false);
         return;   // the staged MATCH FIELDS are not sent either — stop means stop
@@ -1101,6 +1141,28 @@ export default function MatchPanel({ matchId, env = DRAWER_ENV, onDirtyChange, o
       // Only re-read the match here when there is nothing staged to send: `load()` reseeds `cur`,
       // and the PUT below does its own re-read anyway.
       if (changed.length === 0) await load();
+    }
+
+    /* EVERY SIZE FIELD RODE ON THE SHAPE and nothing else is staged: no PUT is left to send, but the
+     * fakes still follow the new capacity, as after a size PUT. */
+    if (changed.length > 0 && Object.keys(changes).length === 0) {
+      const headers = await authHeaders();
+      let fakesLine = "";
+      if (headers) {
+        try {
+          const fr = await fetch(`/api/matchday/${env}/matches/${matchId}/fakes`, {
+            method: "POST", headers, body: JSON.stringify({ followSpotsLeft: true, matchName: orig.name ?? null, source: "Match panel · team size" }),
+          });
+          const fj = await fr.json().catch(() => null);
+          fakesLine = !fr.ok || (fj?.outcome !== "landed")
+            ? ` \u00b7 FAKES NOT BROUGHT TO SPOTS LEFT: ${fj?.error ?? fj?.outcome ?? fr.status}.`
+            : fj.noop ? "" : ` \u00b7 Fakes ${fj.fakesBefore} to ${fj.fakesAfter} (spots left ${fj.spotsLeft}), re-read confirmed.`;
+        } catch (e) { fakesLine = ` \u00b7 FAKES UNKNOWN: ${e instanceof Error ? e.message : String(e)}. Reload before acting.`; }
+      }
+      await load(); await loadRoster();
+      setToast(`All ${rosterLanded} roster write(s) LANDED (each confirmed by a re-read); the spots went with the team count.` + fakesLine);
+      setSaving(false);
+      return;
     }
 
     if (changed.length === 0) {
@@ -1158,7 +1220,7 @@ export default function MatchPanel({ matchId, env = DRAWER_ENV, onDirtyChange, o
        * after a size or format total that LANDED; a refusal or a failure is said, never retried. */
       let fakesLine = "";
       const SIZE_KEYS = ["maxPlayerCount", "maxTeamSize2Team", "maxTeamSize4Team"];
-      if (sentKeys.some((k) => SIZE_KEYS.includes(k)) && !notApplied.some((k) => SIZE_KEYS.includes(k))) {
+      if ((sentKeys.some((k) => SIZE_KEYS.includes(k)) || order.folded.length > 0) && !notApplied.some((k) => SIZE_KEYS.includes(k))) {
         try {
           const fr = await fetch(`/api/matchday/${env}/matches/${matchId}/fakes`, {
             method: "POST", headers, body: JSON.stringify({ followSpotsLeft: true, matchName: orig.name ?? null, source: "Match panel · team size" }),

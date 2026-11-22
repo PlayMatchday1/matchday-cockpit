@@ -2,6 +2,8 @@
  * add's money is worded, and how a search term is read (src/lib/appMatchV2.ts). Ryan, 2026-10-30.
  * Pure rules, asserted offline; every refusal has a presence control beside it. */
 import { readFileSync } from "node:fs";
+import { shrinkSaveOrder } from "../src/lib/sizeShrinkSave";
+import type { PlannedWrite } from "../src/lib/rosterEditModel";
 import { bibFixMoves, detailsMatch, overflowFakes, reduceSizes, moneyLine, phoneLast4, pickerCapacityWrites, searchTerm, sizeBounds, sizeRefusal, sizeWrites, teamChangeSizes, teamsPath } from "../src/lib/appMatchV2";
 
 let pass = 0, fail = 0;
@@ -141,6 +143,36 @@ console.log("\na smaller size moves real players off the bibs it removes (2026-1
   else bad("picker: the opening goes back once when the team count does not land");
   if (/realOnRemoved\.length > 0\) \{\s*return Response\.json/.test(blk)) ok("picker: a real player on a removed team refuses before any write");
   else bad("picker: a real player on a removed team refuses before any write");
+}
+
+console.log("\nthe match panel's Save when a team gets smaller (2026-11-21)");
+{
+  const shape3: PlannedWrite = { kind: "shape", label: "Set 3 teams", fields: { teamNumbers: 3 } };
+  const mv: PlannedWrite = { kind: "move", label: "Move A", umId: 5, team: 3, playerNumber: 1 };
+  const rm: PlannedWrite = { kind: "remove", label: "Remove fake", umId: 7 };
+  const ren: PlannedWrite = { kind: "teams", label: "Rename", teamId: 1, fields: { name: "Whites" } };
+  /* SPOTS PER TEAM 12 to 10 on 2 teams: removals, then the bib fixes, then the moves, then the PUT. */
+  const a = shrinkSaveOrder([mv, rm], { maxPlayerCount: 20 }, 2, 24);
+  is("12 to 10 a side shrinks, to 10", [a.shrinks, a.capAfter], [true, 10]);
+  is("…the removals run first", a.removes.map((w) => w.kind), ["remove"]);
+  is("…no team count change, so nothing is folded and the PUT keeps the spots", [a.folded, a.changesLeft], [[], { maxPlayerCount: 20 }]);
+  /* TEAMS 2 to 3 at 3 x 8 over 2 x 11: smaller, and the spots ride on the shape. */
+  const b = shrinkSaveOrder([shape3, mv, rm, ren], { maxPlayerCount: 24, name: "x" }, 2, 22);
+  is("2 x 11 to 3 x 8 shrinks to 8", [b.shrinks, b.capAfter, b.teamsAfter], [true, 8, 3]);
+  is("…the shape carries the spots, in one write", b.shape && b.shape.kind === "shape" ? b.shape.fields : null, { teamNumbers: 3, maxPlayerCount: 24 });
+  is("…and the PUT keeps only what is left", b.changesLeft, { name: "x" });
+  is("…the staged moves and renames come after the shape, in savePlan's order", b.rest.map((w) => w.kind), ["move", "teams"]);
+  /* TEAMS 2 to 3 at 3 x 11: the team size holds, but the shape alone over 22 would read 7 a team. */
+  const c = shrinkSaveOrder([shape3, mv], { maxPlayerCount: 33 }, 2, 22);
+  is("2 x 11 to 3 x 11 does not shrink", c.shrinks, false);
+  is("…but the spots still ride on the shape", c.rest.map((w) => (w.kind === "shape" ? w.fields : w.kind)), [{ teamNumbers: 3, maxPlayerCount: 33 }, "move"]);
+  is("…and nothing is left for the PUT", c.changesLeft, {});
+  /* Control: a bigger size changes nothing about the order. */
+  const d = shrinkSaveOrder([mv, rm], { maxPlayerCount: 24 }, 2, 20);
+  is("control: 10 to 12 a side keeps savePlan's order and the PUT", [d.shrinks, d.rest.map((w) => w.kind), d.changesLeft], [false, ["move", "remove"], { maxPlayerCount: 24 }]);
+  /* 2 to 3 with no spots change shrinks too: 22 over 3 is 7 a team. */
+  const e = shrinkSaveOrder([shape3], {}, 2, 22);
+  is("2 to 3 with the spots left at 22 is 7 a team, so it shrinks", [e.shrinks, e.capAfter], [true, 7]);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
