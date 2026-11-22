@@ -1,13 +1,13 @@
-/* FREE FIRST MATCH — redesign 2026-11-21 (Figma 9TgSk4sYqq4nNoTH73wRRs frame 21615:72). The page
-   frame, title and tooltip come from SectionFrame / playerActivity.module.css and the switch and
-   buttons from the Offers UI; this file carries what the frame adds: the header pickers, the verdict
-   strip, the four tiles, the explainer, the field table's cells, the cohort panels and the watch list. */
+/* FREE FIRST MATCH — simple v2, 2026-11-22 (Figma 9TgSk4sYqq4nNoTH73wRRs frames 21624:72 and 21630:84; the
+   comparison section of 21615:72). The page frame and title come from SectionFrame and the switch and buttons
+   from the Offers UI; this file carries what the frames add: the header pickers, the three tiles, the field
+   table, the comparison panels, the info boxes and the list sheet. */
 
 .root {
-  --ffm-ink: #13241d; --ffm-mut: #5e6b66; --ffm-line: #e3e3db; --ffm-panel: #f3f3ef;
+  --ffm-ink: #13241d; --ffm-mut: #5e6b66; --ffm-line: #e3e3db; --ffm-panel: #f3f3ef; --ffm-i: #b9bdb5;
   --ffm-mint: #e8f8ef; --ffm-green: #1b7a4e; --ffm-red: #b83a2e;
-  --ffm-amber-bg: #fff7e6; --ffm-amber-line: #f1dfb8; --ffm-amber: #8a5a12;
-  display: flex; flex-direction: column; gap: 20px; color: var(--ffm-ink); min-width: 0;
+  --ffm-amber-bg: #fff7e6; --ffm-amber: #8a5a12; --ffm-dot: #b7791f;
+  display: flex; flex-direction: column; gap: 28px; color: var(--ffm-ink); min-width: 0;
 }
 
 /* ── HEADER PICKERS (right of the title) ───────────────────────────────────────────────────── */
@@ -16,77 +16,84 @@
 .pick {
   appearance: none; -webkit-appearance: none; cursor: pointer;
   background: #fff; border: 1px solid #e3e3db; border-radius: 999px; padding: 8px 30px 8px 14px;
-  font: inherit; font-size: 12px; font-weight: 600; color: #13241d;
+  font: inherit; font-size: 13px; font-weight: 600; color: #13241d;
 }
 .pick:focus-visible { outline: 2px solid #35c77f; outline-offset: 1px; }
 .pickWrap::after { content: "▾"; position: absolute; right: 13px; top: 50%; transform: translateY(-50%); font-size: 10px; color: #13241d; pointer-events: none; }
 
-/* ── PILLS ─────────────────────────────────────────────────────────────────────────────────── */
-.pill { display: inline-block; padding: 4px 9px; border-radius: 999px; font-size: 11px; font-weight: 600; white-space: nowrap; line-height: normal; }
-.pGreen { background: var(--ffm-mint); color: var(--ffm-green); }
-.pWhiteGreen { background: #fff; color: var(--ffm-green); }
-.pGrey { background: var(--ffm-panel); color: var(--ffm-mut); }
-.pWhite { background: #fff; color: var(--ffm-mut); }
-.pAmber { background: var(--ffm-amber-bg); color: var(--ffm-amber); }
-.pWhiteAmber { background: #fff; color: var(--ffm-amber); }
-.pRed { background: #fbe4e1; color: var(--ffm-red); }
-
-/* ── VERDICT ───────────────────────────────────────────────────────────────────────────────── */
-.verdict { display: flex; gap: 12px; align-items: center; padding: 14px 18px; border-radius: 12px; font-size: 13px; font-weight: 600; }
-.vGood { background: var(--ffm-mint); }
-.vWarn { background: var(--ffm-amber-bg); }
-.vBad { background: #fbe4e1; }
-.vMuted { background: var(--ffm-panel); }
+/* ── THE "i" ───────────────────────────────────────────────────────────────────────────────── */
+.iBtn {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  min-width: 18px; height: 16px; padding: 0 5px; border: 1px solid var(--ffm-i); border-radius: 999px; background: transparent;
+  font: inherit; font-size: 11px; font-weight: 700; line-height: 1; color: var(--ffm-mut); cursor: pointer;
+}
+.iBtn:hover { border-color: var(--ffm-mut); color: var(--ffm-ink); }
+.iBtn:focus-visible { outline: 2px solid #35c77f; outline-offset: 1px; }
 
 /* ── TILES ─────────────────────────────────────────────────────────────────────────────────── */
-.tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
-@media (max-width: 1000px) { .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 560px) { .tiles { grid-template-columns: minmax(0, 1fr); } }
+.tiles3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; align-items: start; }
+@media (max-width: 900px) { .tiles3 { grid-template-columns: minmax(0, 1fr); } }
 .tile {
   background: #fff; border: 1px solid var(--ffm-line); border-radius: 14px; padding: 22px 24px;
-  display: flex; flex-direction: column; align-items: flex-start; gap: 6px; min-width: 0;
+  display: flex; flex-direction: column; align-items: flex-start; gap: 10px; min-width: 0;
 }
-.tileAmber { background: var(--ffm-amber-bg); border-color: var(--ffm-amber-line); }
-.tLabel { font-size: 12px; font-weight: 600; color: var(--ffm-mut); }
-.tValue { font-size: 30px; font-weight: 700; line-height: 1.2; font-variant-numeric: tabular-nums; }
-.tValueAmber { color: var(--ffm-amber); }
-.tFoot { font-size: 12px; color: var(--ffm-mut); }
-.tLine { display: flex; gap: 8px; align-items: baseline; font-size: 13px; color: var(--ffm-mut); }
-.tLine b { color: var(--ffm-ink); }
-
-.explain { background: var(--ffm-panel); border-radius: 10px; padding: 10px 16px; font-size: 12px; color: var(--ffm-mut); }
+.tHead { display: flex; gap: 6px; align-items: center; }
+.tLabel { font-size: 13px; font-weight: 600; color: var(--ffm-mut); }
+.tBig { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.tValue { font-size: 38px; font-weight: 700; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.tGood { font-size: 15px; font-weight: 600; color: var(--ffm-green); }
+.tBad { font-size: 15px; font-weight: 600; color: var(--ffm-red); }
+.tMuted { font-size: 15px; font-weight: 600; color: var(--ffm-mut); }
+.tCall { border: 0; background: transparent; padding: 0; font-family: inherit; cursor: pointer; text-align: left; }
+.tCall:hover { text-decoration: underline; }
+.tSmall { font-size: 11px; color: var(--ffm-mut); }
+.seg { display: inline-flex; gap: 2px; padding: 3px; border-radius: 999px; background: var(--ffm-panel); }
+.seg button {
+  border: 0; background: transparent; border-radius: 999px; padding: 4px 10px; cursor: pointer;
+  font: inherit; font-size: 11px; color: var(--ffm-mut);
+}
+.seg button[aria-pressed="true"] { background: #fff; color: var(--ffm-ink); font-weight: 600; box-shadow: 0 1px 2px rgba(0, 0, 0, .06); }
+.mLine { display: flex; align-items: center; width: 100%; font-size: 15px; }
+.mLine span { flex: 1 1 auto; }
+.mLine b { font-size: 20px; font-weight: 700; color: inherit; }
+.mLine b.tGood { color: var(--ffm-green); }
+.mLine b.tBad { color: var(--ffm-red); }
 
 /* ── SECTIONS ──────────────────────────────────────────────────────────────────────────────── */
-.section { background: #fff; border: 1px solid var(--ffm-line); border-radius: 14px; padding: 22px 24px; display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.section { background: #fff; border: 1px solid var(--ffm-line); border-radius: 14px; padding: 20px 24px 12px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 @media (max-width: 560px) { .section, .tile { padding: 18px 16px; } }
-.secHead { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-.secTitle { font-size: 16px; font-weight: 700; }
+.secHead { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.secTitleRow { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.secTitle { font-size: 17px; font-weight: 700; }
 .secSub { margin-top: 3px; font-size: 12px; color: var(--ffm-mut); }
+.colHint { font-size: 12px; font-weight: 600; color: var(--ffm-mut); }
 .grow { flex: 1 1 auto; }
+.note { font-size: 12px; color: var(--ffm-mut); }
+.fresh { font-size: 11.5px; color: var(--ffm-mut); }
 
 /* ── THE FIELD TABLE ───────────────────────────────────────────────────────────────────────── */
 .tableWrap { overflow-x: auto; }
-.fields { width: 100%; min-width: 880px; border-collapse: collapse; font-size: 13px; }
+.fields { width: 100%; min-width: 600px; border-collapse: collapse; font-size: 15px; }
 .fields th {
-  text-align: left; padding: 2px 6px 8px; font-size: 11px; font-weight: 600; color: var(--ffm-mut);
+  text-align: left; padding: 4px 8px 10px; font-size: 11px; font-weight: 600; color: var(--ffm-mut);
   text-transform: uppercase; border-bottom: 1px solid var(--ffm-line); white-space: nowrap;
 }
-.fields td { padding: 11px 6px; border-bottom: 1px solid var(--ffm-line); vertical-align: middle; }
+.fields td { padding: 14px 8px; border-bottom: 1px solid var(--ffm-line); vertical-align: middle; }
+.fCell { display: inline-flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .fName { font-weight: 600; }
-.fCity { color: var(--ffm-mut); }
-.up { font-weight: 600; color: var(--ffm-amber); white-space: nowrap; }
+.dot { display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--ffm-dot); }
 .lost { font-weight: 600; color: var(--ffm-red); }
 .zero { font-weight: 600; color: var(--ffm-mut); }
-.back { color: var(--ffm-green); }
-.sw { display: flex; gap: 8px; align-items: center; white-space: nowrap; }
-.swOn { font-size: 12px; font-weight: 600; color: var(--ffm-green); }
-.swOff { font-size: 12px; font-weight: 600; color: var(--ffm-mut); }
-.noMax { margin-left: 6px; font-size: 10.5px; font-weight: 600; color: var(--ffm-red); white-space: nowrap; cursor: help; }
-.more { align-self: flex-start; border: 0; background: transparent; padding: 0; cursor: pointer; font: inherit; font-size: 12px; font-weight: 600; color: var(--ffm-green); }
+.sw { display: flex; gap: 8px; align-items: center; justify-content: flex-end; white-space: nowrap; }
+.swOn { font-size: 13px; font-weight: 600; color: var(--ffm-green); }
+.swOff { font-size: 13px; font-weight: 600; color: var(--ffm-mut); }
+.noMax { font-size: 10.5px; font-weight: 600; color: var(--ffm-red); white-space: nowrap; cursor: help; }
+.legend { display: flex; gap: 8px; align-items: center; padding-top: 0; font-size: 12px; color: var(--ffm-mut); flex-wrap: wrap; }
+.more { border: 0; background: transparent; padding: 0; cursor: pointer; font: inherit; font-size: 12px; font-weight: 600; color: var(--ffm-green); }
 .more:hover { text-decoration: underline; }
 
 /* ── FREE VS PAID ──────────────────────────────────────────────────────────────────────────── */
-.cols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.cols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; padding-bottom: 10px; }
 @media (max-width: 900px) { .cols { grid-template-columns: minmax(0, 1fr); } }
 .col { background: var(--ffm-panel); border-radius: 12px; padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .colFree { background: var(--ffm-mint); }
@@ -95,22 +102,37 @@
 .stat { display: flex; gap: 8px; align-items: center; font-size: 13px; }
 .stat > span:first-child { flex: 1 1 auto; min-width: 0; }
 .stat b { font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; }
-.note { font-size: 12px; color: var(--ffm-mut); }
+.pill { display: inline-block; padding: 4px 9px; border-radius: 999px; font-size: 11px; font-weight: 600; white-space: nowrap; line-height: normal; }
+.pWhite { background: #fff; color: var(--ffm-mut); }
 
-/* ── WATCH LIST ────────────────────────────────────────────────────────────────────────────── */
-.watch { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
-@media (max-width: 900px) { .watch { grid-template-columns: minmax(0, 1fr); } }
-.wCard { background: var(--ffm-panel); border-radius: 10px; padding: 14px 16px; display: flex; flex-direction: column; gap: 4px; }
-.wLabel { font-size: 12px; font-weight: 600; color: var(--ffm-mut); }
-.wValue { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
-.wText { font-size: 12px; color: var(--ffm-mut); }
+/* ── THE INFO BOX (Figma 21630:84) ─────────────────────────────────────────────────────────── */
+.box {
+  position: fixed; z-index: 60; max-width: calc(100vw - 32px); max-height: calc(100vh - 120px); overflow-y: auto;
+  background: #fff; border: 1px solid var(--ffm-line); border-radius: 12px; box-shadow: 0 8px 24px rgba(0, 0, 0, .12);
+  padding: 18px 20px; display: flex; flex-direction: column; gap: 12px; color: var(--ffm-ink);
+}
+.boxTitle { font-size: 14px; font-weight: 700; }
+.boxTable { width: 100%; border-collapse: collapse; font-size: 12px; }
+.boxTable th { text-align: right; padding: 7px 0 7px 10px; font-weight: 600; color: var(--ffm-mut); text-transform: uppercase; border-bottom: 1px solid var(--ffm-line); white-space: nowrap; }
+.boxTable td { text-align: right; padding: 7px 0 7px 10px; border-bottom: 1px solid var(--ffm-line); font-variant-numeric: tabular-nums; vertical-align: top; }
+.boxTable th:first-child, .boxTable td:first-child { text-align: left; padding-left: 0; }
+.boxTot td { font-weight: 700; }
+.boxNote { font-size: 12px; color: var(--ffm-mut); }
+.boxLinks { display: flex; gap: 16px; flex-wrap: wrap; }
+.boxLinks button { border: 0; background: transparent; padding: 0; cursor: pointer; font: inherit; font-size: 12px; font-weight: 600; color: var(--ffm-green); }
+.boxLinks button:hover { text-decoration: underline; }
 
-.fresh { font-size: 11.5px; color: var(--ffm-mut); }
+/* ── THE LIST SHEET ("See the players / matches") ──────────────────────────────────────────── */
+.scrim { position: fixed; inset: 0; z-index: 70; background: rgba(7, 42, 32, .18); display: flex; align-items: center; justify-content: center; padding: 16px; }
+.sheet {
+  width: min(1000px, 100%); max-height: calc(100vh - 32px); display: flex; flex-direction: column;
+  background: #fff; border: 1px solid var(--ffm-line); border-radius: 12px; box-shadow: 0 12px 40px rgba(7, 42, 32, .18); overflow: hidden;
+}
+.sheetHead { display: flex; gap: 8px; align-items: flex-start; padding: 18px 20px 12px; border-bottom: 1px solid var(--ffm-line); flex-wrap: wrap; }
+.sheetBody { overflow: auto; padding: 0 20px 16px; }
+.sheetBody th { position: sticky; top: 0; background: #fff; }
 
 /* ── THE SWITCH DIALOG ─────────────────────────────────────────────────────────────────────── */
 .steps { margin-top: 10px; max-height: 260px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; }
 .step { display: flex; justify-content: space-between; gap: 10px; }
 .stepNote { font-size: 11.5px; color: var(--ffm-red); }
-
-/* Title tooltip content */
-.tipTitle { display: block; font-weight: 800; margin-bottom: 2px; }

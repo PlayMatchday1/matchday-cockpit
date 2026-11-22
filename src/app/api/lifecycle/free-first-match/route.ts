@@ -1,5 +1,7 @@
 /* GET /api/lifecycle/free-first-match?from=YYYY-MM-DD&to=YYYY-MM-DD&city=ATX — the Free First Match
- * page. READ ONLY.
+ * page. READ ONLY. With `list=new|came|paidback|lost|field|cohorts` (and `arg`: the window for came, the
+ * field key for field) it returns the rows behind that info box instead, from the same base and the same
+ * selection, so the list adds up to the number on the page (freeFirstMatchModel.ts listFor).
  *
  * The BASE (every first-timer, match, leave, rating and play the page can need) is built once from the
  * mirror (freeFirstMatchBuild.ts) and kept warm for five minutes; each request is then a pure
@@ -11,7 +13,7 @@
 
 import { authenticateCapability } from "@/lib/capabilityAuth";
 import { buildFreeFirstMatch } from "@/lib/freeFirstMatchBuild";
-import { summarize, type Base } from "@/lib/freeFirstMatchModel";
+import { listFor, summarize, type Base, type ListKind } from "@/lib/freeFirstMatchModel";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -21,6 +23,7 @@ let cache: { at: number; base: Base } | null = null;
 let building: Promise<Base> | null = null;
 const CACHE_MS = 5 * 60 * 1000;
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
+const LISTS = new Set<ListKind>(["new", "came", "paidback", "lost", "field", "cohorts"]);
 
 export async function GET(req: Request) {
   const auth = await authenticateCapability(req, "lifecycle");
@@ -35,6 +38,11 @@ export async function GET(req: Request) {
     else {
       if (!building) building = buildFreeFirstMatch(auth.supabase).then((b) => { cache = { at: Date.now(), base: b }; return b; }).finally(() => { building = null; });
       base = await building;
+    }
+    const list = q.get("list");
+    if (list) {
+      if (!LISTS.has(list as ListKind)) return Response.json({ error: `unknown list ${JSON.stringify(list)}` }, { status: 400 });
+      return Response.json(listFor(base, { from, to, city }, list as ListKind, q.get("arg") ?? undefined));
     }
     return Response.json(summarize(base, { from, to, city }));
   } catch (e) {

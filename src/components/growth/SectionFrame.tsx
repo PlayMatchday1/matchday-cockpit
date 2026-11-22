@@ -102,7 +102,8 @@ function Head({ title, subtitle, titleTestId, titleAccessory }: {
         <h1 className={styles.title} data-testid={titleTestId ?? "growth-title"}>{title}</h1>
         {titleAccessory}
       </div>
-      <p className={styles.subtitle} data-testid="growth-subtitle">{subtitle}</p>
+      {/* An empty subtitle draws nothing (Free First Match has none); every other page passes one. */}
+      {subtitle ? <p className={styles.subtitle} data-testid="growth-subtitle">{subtitle}</p> : null}
     </div>
   );
 }

@@ -5,8 +5,8 @@
  * range and city is then `summarize(base, …)` (freeFirstMatchModel.ts), with no further reads.
  *
  * Rows are read from mdapi_match_players directly, not growth_participation: the counting rules
- * (own spot, PAID or FREE, not refunded) and the money (total_amount, refunded) and the leaves
- * (canceled_at) are all on the booking row, and the view drops left rows and carries no user_type. The
+ * (own spot, PAID or FREE, not refunded, not left) and the money (total_amount, refunded) are on the
+ * booking row, and the view carries no user_type. The
  * view's exclusions are applied here instead: fake bookings, WAITING, deleted rows, cancelled or
  * deleted matches, growth_internal_account, and a re-registered player's accounts as one person. */
 
@@ -16,15 +16,14 @@ import { addDays, chicagoYmd, chicagoToday, wallClockYmd } from "./weekBuckets";
 import { normalizeMatchCity } from "./growthAnalytics";
 import { canonicalVenueName } from "./venueResolver";
 import {
-  BASELINE_FROM, EXCLUDED_CITIES, FIRST_MATCH_AUTO_CODE, FIRST_MATCH_AUTO_PROD_ID, FREE_GROUPS, LAUNCH_DAY, REGULAR_DAYS,
+  BASELINE_FROM, EXCLUDED_CITIES, FIRST_MATCH_AUTO_CODE, FIRST_MATCH_AUTO_PROD_ID, FREE_GROUPS, LAUNCH_DAY,
   daysBetween, isPaidBooking, isReferralCode,
-  type Base, type BaseMatch, type FirstTimer, type Group, type Leave, type Play, type Rating, type SubLite,
+  type Base, type BaseMatch, type FirstTimer, type Group, type SubLite,
 } from "./freeFirstMatchModel";
 
 type Row = Record<string, unknown>;
 const num = (v: unknown): number => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
 const chunks = <T,>(xs: T[], n: number): T[][] => { const out: T[][] = []; for (let i = 0; i < xs.length; i += n) out.push(xs.slice(i, i + n)); return out; };
-const DAY_MS = 86400000;
 
 type Sb = SupabaseClient;
 
@@ -60,7 +59,9 @@ export async function buildFreeFirstMatch(sb: SupabaseClient): Promise<Base> {
   // How far back the bookings are read: the longest "before" window (as many days before launch as the
   // range since launch can have), and the regulars' prior window before that.
   const sinceLaunch = Math.max(1, daysBetween(LAUNCH_DAY, today));
-  let rowsFrom = addDays(LAUNCH_DAY, -Math.max(sinceLaunch, REGULAR_DAYS) * 2 - 1);
+  // Unchanged from the 2026-11-21 page (it then also fed a 14-day regulars window), so who counts as a
+  // first-timer does not move.
+  let rowsFrom = addDays(LAUNCH_DAY, -Math.max(sinceLaunch, 14) * 2 - 1);
   if (rowsFrom < "2026-08-07") rowsFrom = "2026-08-07";
   const matchesFrom = rowsFrom < BASELINE_FROM ? rowsFrom : BASELINE_FROM;
 
@@ -162,8 +163,10 @@ export async function buildFreeFirstMatch(sb: SupabaseClient): Promise<Base> {
   const started = (b: B) => b.match.startMs <= nowMs;
   /** A played match: own spot, PAID or FREE, not left, not refunded, on a live match that has started. */
   const played = (b: B) => b.userType === "PLAYER" && (b.paidStatus === "PAID" || b.paidStatus === "FREE") && b.leftMs == null && !b.refunded && started(b);
-  /** Card dollars actually kept: a PAID booking on a started dollar match, refunded counts as nothing. */
-  const netCents = (b: B) => (b.paidStatus === "PAID" && started(b) && b.match.priceCents != null && !b.refunded ? b.total : 0);
+  /** Card dollars charged: a PAID booking on a started dollar match. A refunded one is refunded in full
+   *  (the mirror's `refunded` is a boolean), so its net is 0. */
+  const chargedCents = (b: B) => (b.paidStatus === "PAID" && started(b) && b.match.priceCents != null ? b.total : 0);
+  const refundCents = (b: B) => (b.refunded ? chargedCents(b) : 0);
 
   const byPerson = new Map<number, B[]>();
   for (const b of rows) (byPerson.get(b.person) ?? byPerson.set(b.person, []).get(b.person)!).push(b);
@@ -225,12 +228,13 @@ export async function buildFreeFirstMatch(sb: SupabaseClient): Promise<Base> {
     }
     paidDays.sort((a, b) => a - b);
     let firstCents = 0;
-    const spend: [number, number][] = [];
+    const spend: [number, number, number][] = [];
     for (const b of bs) {
-      const c = netCents(b);
+      const c = chargedCents(b);
       if (c <= 0) continue;
-      if (b.match.id === m.id) firstCents += c;
-      else if (b.match.day >= m.day) spend.push([daysBetween(m.day, b.match.day), c]);
+      const r = refundCents(b);
+      if (b.match.id === m.id) firstCents += c - r;
+      else if (b.match.day >= m.day) spend.push([daysBetween(m.day, b.match.day), c, r]);
     }
     people.push({
       id: pid, day: m.day, matchId: m.id, city: m.city, fieldKey: m.fieldKey, group,
@@ -239,38 +243,10 @@ export async function buildFreeFirstMatch(sb: SupabaseClient): Promise<Base> {
     });
   }
 
-  // ── 9. LEAVES: own spots left before kickoff; late = within 24 hours; refilled = a real booking after ──
-  const byMatch = new Map<number, B[]>();
-  for (const b of rows) (byMatch.get(b.match.id) ?? byMatch.set(b.match.id, []).get(b.match.id)!).push(b);
-  const leaves: Leave[] = [];
-  for (const b of rows) {
-    if (b.userType !== "PLAYER" || b.leftMs == null || !Number.isFinite(b.leftMs)) continue;
-    const m = b.match;
-    if (b.leftMs >= m.startMs) continue;
-    const fp = firstPlay.get(b.person);
-    const leftAt = b.leftMs;
-    leaves.push({
-      matchId: m.id, day: m.day, city: m.city,
-      late: m.startMs - leftAt < DAY_MS,
-      firstTimer: fp == null || fp >= m.day,
-      refilled: (byMatch.get(m.id) ?? []).some((o) => o.api !== b.api && o.createdMs > leftAt && o.createdMs < m.startMs && (o.paidStatus === "PAID" || o.paidStatus === "FREE")),
-    });
-  }
-
-  // ── 10. PLAYS (regular players coming back) ───────────────────────────────────────────────────
-  const plays: Play[] = rows.filter(played).map((b) => ({ person: b.person, day: b.match.day, city: b.match.city }));
-
-  // ── 11. RATINGS: a review is a roster row with a rating (mdapi_reviews.api_id = the booking's api_id) ──
-  const ownById = new Map<number, B>();
-  for (const b of rows) if (played(b)) ownById.set(b.api, b);
-  const reviews = await selectAll<Row>(() =>
-    sb.from("mdapi_reviews").select("api_id, star_rating").gte("start_date", `${rowsFrom}T00:00:00`).not("star_rating", "is", null).order("api_id"));
-  const ratings: Rating[] = [];
-  for (const r of reviews) {
-    const b = ownById.get(num(r.api_id));
-    if (!b) continue;
-    const fp = firstPlay.get(b.person);
-    ratings.push({ day: b.match.day, city: b.match.city, stars: num(r.star_rating), returning: fp != null && fp < b.match.day, matchId: b.match.id });
+  // ── 9. NAMES, for the lists behind the info boxes. A deleted account reads "Deleted Account". ──
+  const names: Record<number, string> = {};
+  for (const r of await inChunks(sb, "mdapi_users", "id, first_name, last_name", "id", people.map((p) => p.id), "id", 300, 4)) {
+    names[num(r.id)] = `${String(r.first_name ?? "").trim()} ${String(r.last_name ?? "").trim()}`.trim() || `Player ${num(r.id)}`;
   }
 
   const cityCodes = [...new Set([...matches.values()].map((m) => m.city))].filter((c) => c && !EXCLUDED_CITIES.has(c));
@@ -281,7 +257,7 @@ export async function buildFreeFirstMatch(sb: SupabaseClient): Promise<Base> {
 
   return {
     generatedAt: new Date().toISOString(), today, nowMs, mirrorSyncedAt: (newest.data?.[0]?.synced_at as string | undefined) ?? null,
-    cities, people, leaves, ratings, plays,
+    cities, people, names,
     matches: [...matches.values()].map(({ freeMember: _f, ...m }) => { void _f; return m; }),
   };
 }

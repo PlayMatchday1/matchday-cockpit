@@ -1,11 +1,12 @@
 "use client";
 
-/* FREE FIRST MATCH — is giving the first match away worth it (app 1.89, live since 2026-11-05). Redesign
- * 2026-11-21, Figma 9TgSk4sYqq4nNoTH73wRRs frame 21615:72. No period bar and needsGrowthData false: the
- * page owns its range and city pickers (in the title row) and reads only /api/lifecycle/free-first-match. */
+/* FREE FIRST MATCH — is giving the first match away worth it (app 1.89, live since 2026-11-05). Simple v2,
+ * 2026-11-22 (Figma 9TgSk4sYqq4nNoTH73wRRs frame 21624:72): the title with the range and city pills, nothing
+ * else in the header. No period bar and needsGrowthData false: the page reads only
+ * /api/lifecycle/free-first-match. */
 
 import { useState } from "react";
-import FreeFirstMatchView, { FreeFirstMatchControls, FreeFirstMatchInfo, type Preset } from "@/components/growth/FreeFirstMatchView";
+import FreeFirstMatchView, { FreeFirstMatchControls, type Preset } from "@/components/growth/FreeFirstMatchView";
 import SectionFrame from "@/components/growth/SectionFrame";
 import { useGrowth } from "@/components/growth/GrowthDataProvider";
 
@@ -17,14 +18,11 @@ export default function LifecycleFreeFirstMatchPage() {
   return (
     <SectionFrame
       title="Free First Match"
-      subtitle="Is giving the first match away worth it? Live since Nov 5. Compared with the same number of days before."
+      subtitle=""
       period={false}
       needsGrowthData={false}
       titleTestId="ffm-title"
-      titleAccessory={<>
-        <FreeFirstMatchInfo />
-        <FreeFirstMatchControls preset={preset} setPreset={setPreset} city={city} setCity={setCity} cities={cities} />
-      </>}
+      titleAccessory={<FreeFirstMatchControls preset={preset} setPreset={setPreset} city={city} setCity={setCity} cities={cities} />}
     >
       <FreeFirstMatchView authHeaders={g.authHeaders} preset={preset} city={city} onCities={setCities} />
     </SectionFrame>

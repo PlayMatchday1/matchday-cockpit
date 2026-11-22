@@ -347,3 +347,19 @@ doc for the Clubhouse copy path, which does not).
 
 Deploy check: `buildFreeFirstMatch` with the service role, then `summarize(base, {from, to, city})`, printed
 beside the backend analysis.
+
+## Simple v2, 2026-11-22 (Figma 9TgSk4sYqq4nNoTH73wRRs frames 21624:72, 21630:84; comparison from 21615:72)
+
+Header: title, range pill (Since Nov 5 / Last 14 / Last 7 days) and city pill only. Three tiles: New players (range
+total, % vs the same number of days before), Come back and pay (7 / 14 / 30 day switch, default 7; "too early" under
+30 free players with the window; better / worse only when the Wilson 95% ranges do not overlap), Money so far (Paid
+back +$, Lost on sold-out −$). One table, Fields that sell out (sells out %, lost $, the Free Match switch, amber dot
+at 40%+ in the range, top 5 then Show all). The free-vs-paid comparison with 7 / 14 / 30 day rates and 14 / 30 day
+spend, "N judged" / "too early" under 100. An "i" on every tile, the table, each field row and the comparison opens a
+box with the numbers behind the figure, "See the players" / "See the matches" (GET ?list=…) and Download CSV
+(built in the browser from the same list). Removed: subtitle, verdict banner, the "How we count cost" line, Free on
+full / Paid back columns, Turn off? tags, the watch list (and with it the review, leave and play reads).
+
+The boxes add up by construction: `summarize` and `listFor` read one `select(base, opts)`; scripts/ffm-soldout-test.ts
+asserts every box against its list, and on 2026-11-22 every box on the production mirror added up (default range,
+Nov 5–18, Austin; all 25 field rows).
