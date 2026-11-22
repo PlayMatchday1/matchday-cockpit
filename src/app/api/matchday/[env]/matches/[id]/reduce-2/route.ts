@@ -15,6 +15,10 @@
  * ours, and nobody has established that it is safe. So the writes go:
  *
  *   1. REMOVES, the fakes that are not staying, one at a time.  STOPS AT THE FIRST FAILURE.
+ *   1b. OPEN THE NUMBERS, only when a move needs a number above the team size the match has now:
+ *      the player count goes to teams x that number, teams unchanged.  STOPS IF IT DOES NOT LAND.
+ *      (2026-11-21, Austin 21076: since backend ad5155a0 a move above floor(maxPlayerCount / teams)
+ *      is refused 403 PLAYER_NUMBER_ALREADY_TAKEN, so 4 x 7 to 2 x 12 died on its first move.)
  *   2. MOVES, one row at a time: real players off the doomed teams into the spots step 1 just
  *      freed, then the staying fakes that were on a doomed team.  ALSO STOPS AT A FAILURE.
  *   3. THE SHAPE, last, and only if everything above landed.
@@ -160,7 +164,9 @@ const planPayload = (id: string, m: ApiMatch, teamCount: number,
   fieldFormat: Number.isFinite(fieldTotal) && fieldTotal > 0 ? { total: fieldTotal, perSide: fieldTotal % 2 === 0 ? fieldTotal / 2 : null } : null,
   shownBefore: plan.shownBefore, capBefore: plan.capBefore, shownAfter: plan.shownAfter,
   moveCount: plan.moves.length, removeCount: plan.removes.length,
-  writeCount: plan.moves.length + plan.removes.length + 1,
+  /* The spot count the moves need first, or null (see 1b in POST). */
+  opening: plan.opening,
+  writeCount: plan.moves.length + plan.removes.length + 1 + (plan.opening ? 1 : 0),
   moves: plan.moves.map((mv) => ({
     name: mv.fake ? "Fake player" : mv.name, fake: mv.fake, fromTeam: mv.fromTeam, toTeam: mv.toTeam, playerNumber: mv.playerNumber,
     reason: mv.reason,
@@ -216,7 +222,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
   const saveId = randomUUID();
   const source = "Match panel · reduce to 2 teams";
   const store = supabaseLogStore();
-  const results: { kind: "plan" | "move" | "remove" | "shape"; label: string; verdict: string; detail?: string }[] = [];
+  const results: { kind: "plan" | "move" | "remove" | "open" | "restore" | "shape"; label: string; verdict: string; detail?: string }[] = [];
 
   /* 0. THE BEFORE-MAP, AHEAD OF EVERY WRITE
    * Its own row, because the first real write here is a REMOVAL and a map recorded after the first
@@ -310,6 +316,57 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
     removesLanded += 1;
   }
 
+  /* 1b. OPEN THE NUMBERS THE MOVES NEED
+   * MatchDay checks every move against the team size the match has NOW, floor(maxPlayerCount /
+   * teams) (backend match-slots.ts isValidSpot, live since ad5155a0 on 2026-11-15). On a full 4 x 7
+   * match teams 1 and 2 have no free number at or below 7, so every move to #8 and up was refused
+   * with 403 PLAYER_NUMBER_ALREADY_TAKEN, which reads as a collision and is not one. The shape cannot
+   * go first (that is the write that lets the API seat people), so the player count goes up first,
+   * teams unchanged, to exactly teams x the highest number a move needs. Raising is always within
+   * the bookings, so MatchDay cannot refuse it for MAX_PLAYER_COUNT_BELOW_BOOKED.
+   *
+   * THE COST, SAID PLAINLY: for the seconds the moves take, the app shows those extra spots as open.
+   * The shape write at the end brings the count down to the 2-team total. If a move fails in between,
+   * the old count is written back (one attempt, logged), and the response says whether it landed. */
+  const capBack = plan.capBefore;
+  let opened = false;
+  if (plan.opening) {
+    const openBody = { maxPlayerCount: plan.opening.maxPlayerCount };
+    const want = plan.opening.maxPlayerCount;
+    const ow = await recordWrite(
+      {
+        env, source, actorName: auth.email, actorEmail: auth.email, saveId,
+        matchId: Number(id), matchName: String(m.name ?? ""),
+        method: "PUT", path: `/admin/matches/${id}`, body: openBody, keys: [], label: (k) => k,
+        changes: [{
+          key: "reduce2:open", field: "Spots, opened for the moves",
+          before: `${capBack} (${plan.opening.teamCapNow} a team on ${teamCount} teams)`,
+          after: `${want} (${plan.opening.highest} a team on ${teamCount} teams, until the shape)`,
+        }],
+        applied: (_b, a) => Number((a as { match?: Record<string, unknown> }).match?.maxPlayerCount) === want,
+      },
+      {
+        readResource: async () => ({ match: await apiGet(env, `/admin/matches/${id}`) }),
+        write: () => apiWrite(env, "PUT", `/admin/matches/${id}`, openBody, actor),
+        now: () => new Date().toISOString(),
+      },
+      store,
+    );
+    const ov = ow.error ? "FAILED" : ow.outcome === "landed" ? "LANDED" : "NOT APPLIED";
+    results.push({
+      kind: "open", label: `Spots ${capBack} to ${want} so the moves can use numbers up to ${plan.opening.highest}`,
+      verdict: ov, detail: ow.error?.message ?? (ow.logged ? undefined : "the change-log write did not record"),
+    });
+    if (ov !== "LANDED") {
+      return Response.json({
+        ok: false, stoppedAt: "open", results, movesLanded: 0, removesLanded,
+        message: `STOPPED: the spot count would not go up to ${want}, which the moves need. NOBODY HAS MOVED and the shape was not written. ` +
+          `This match is still a ${teamCount}-team match and every real player is standing where they were. ${removesLanded} fake(s) did come out. Nothing retried.`,
+      }, { status: 502 });
+    }
+    opened = true;
+  }
+
   /* 2. THE MOVES, ONE AT A TIME, STOPPING AT THE FIRST FAILURE
    * Every destination below is a spot that is empty right now: either nobody was standing on it, or
    * a fake was and step 1 has already been read back as having removed them. That is why there is
@@ -363,10 +420,39 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
       for (const rest of plan.moves.slice(plan.moves.indexOf(mv))) {
         stranded.push(`${rest.fake ? "Fake player" : rest.name} (still on ${rest.fromTeam == null ? "no team" : `team ${rest.fromTeam}`})`);
       }
+      /* THE SPOTS OPENED IN 1b GO BACK, once. A different write from the opening, not a retry of it.
+       * MatchDay refuses it (MAX_PLAYER_COUNT_BELOW_BOOKED) when a row that did move now stands on a
+       * number above the old team size, and then the count stays where it is and the message says so. */
+      let spotsLine = "";
+      if (opened) {
+        const backBody = { maxPlayerCount: capBack };
+        const bw = await recordWrite(
+          {
+            env, source, actorName: auth.email, actorEmail: auth.email, saveId,
+            matchId: Number(id), matchName: String(m.name ?? ""),
+            method: "PUT", path: `/admin/matches/${id}`, body: backBody, keys: [], label: (k) => k,
+            changes: [{ key: "reduce2:restore", field: "Spots, put back after a stop", before: String(plan.opening!.maxPlayerCount), after: String(capBack) }],
+            applied: (_b, a) => Number((a as { match?: Record<string, unknown> }).match?.maxPlayerCount) === capBack,
+          },
+          {
+            readResource: async () => ({ match: await apiGet(env, `/admin/matches/${id}`) }),
+            write: () => apiWrite(env, "PUT", `/admin/matches/${id}`, backBody, actor),
+            now: () => new Date().toISOString(),
+          },
+          store,
+        );
+        const bv = bw.error ? "FAILED" : bw.outcome === "landed" ? "LANDED" : "NOT APPLIED";
+        results.push({ kind: "restore", label: `Spots back to ${capBack}`, verdict: bv, detail: bw.error?.message });
+        spotsLine = bv === "LANDED"
+          ? `The spot count is back to ${capBack}. `
+          : `THE SPOT COUNT IS STILL ${plan.opening!.maxPlayerCount}, not ${capBack}: putting it back did not land (${bv}), usually because a player who moved now stands on a number above the old team size. ` +
+            `Set the teams to 2 by hand, or move those players back and set the spots to ${capBack}. `;
+      }
       return Response.json({
         ok: false, stoppedAt: "move", results,
         movesAttempted: movesLanded + 1, movesLanded, removesLanded, stranded,
         message: `STOPPED at ${who}. The match is still a ${teamCount}-team match and the shape has not been touched. ` +
+          spotsLine +
           `All ${removesLanded} fake(s) came out and ${movesLanded} row(s) moved before this one. ` +
           `Still on their old team: ${stranded.join("; ")}. Nothing retried. Move them by hand or run it again once you know why.`,
       }, { status: 502 });

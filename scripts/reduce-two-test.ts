@@ -15,7 +15,7 @@
 import { readFileSync } from "node:fs";
 import {
   buildReducePlan, reduceRefusal, capacityRefusal, capacityRefusalWhy, fakePolicyFor, defaultPerTeam, perTeamError,
-  livePlayers, isFakeRow, REDUCE_PER_TEAM, REDUCE_MIN_PER_TEAM, REDUCE_MAX_PER_TEAM, type ReducePlayer,
+  livePlayers, isFakeRow, openingFor, teamCapOf, REDUCE_PER_TEAM, REDUCE_MIN_PER_TEAM, REDUCE_MAX_PER_TEAM, type ReducePlayer,
 } from "../src/lib/reduceTwoTeams";
 import { teamCountWrites } from "../src/lib/rosterEditModel";
 
@@ -281,6 +281,59 @@ console.log("\nthe lifecycle refusals, mirroring convertRefusal");
   is("…and reduceTwoTeams.ts constructs no Date at all", /new Date\(/.test(src), false);
 }
 
+console.log("\nAUSTIN 21076 (2026-11-21): 4 x 7, teams 1 and 2 full, reduce to 2 x 12");
+{
+  /* PRODUCTION'S RULE, MODELLED. Since backend ad5155a0 (2026-11-15) a move is refused 403
+   * PLAYER_NUMBER_ALREADY_TAKEN when its number is above floor(maxPlayerCount / teams), or the spot is
+   * held (match-slots.ts isValidSpot + SpotSet). 21076's first move, team 3 #2 to team 1 #8, died on
+   * exactly that. The simulator below applies the route's writes in the route's order against that
+   * rule; the control proves it refuses what production refused. */
+  SEQ = 0;
+  const roster = [
+    ...[1, 2, 3, 4, 5, 6, 7].map((n) => p(1, n)),
+    ...[1, 2, 3, 4, 5, 6, 7].map((n) => p(2, n)),
+    p(3, 1), p(3, 2), p(3, 6),
+    p(4, 1), p(4, 2), p(4, 3), p(4, 4), p(4, 5), p(4, 6), p(4, 7),
+  ];
+  const plan = buildReducePlan({ maxPlayerCount: 28, maxTeamSize2Team: 24, teamCount: 4 }, roster, 12);
+  type Sim = { max: number; teams: number; rows: Map<number, { team: number | null; n: number | null }> };
+  const fresh = (): Sim => ({ max: 28, teams: 4, rows: new Map(roster.map((r) => [r.userMatchId, { team: r.team, n: r.playerNumber }])) });
+  const move = (sim: Sim, um: number, team: number, n: number): string | null => {
+    const cap = teamCapOf(sim.max, sim.teams);
+    if (team > sim.teams || n < 1 || (cap != null && n > cap)) return "403 PLAYER_NUMBER_ALREADY_TAKEN (above the team size)";
+    for (const [id, r] of sim.rows) if (id !== um && r.team === team && r.n === n) return "403 (held)";
+    sim.rows.set(um, { team, n });
+    return null;
+  };
+  const run = (withOpening: boolean) => {
+    const sim = fresh();
+    if (withOpening && plan.opening) sim.max = plan.opening.maxPlayerCount;
+    for (const mv of plan.moves) { const e = move(sim, mv.userMatchId, mv.toTeam, mv.playerNumber); if (e) return { sim, stopped: `${mv.toTeam}:${mv.playerNumber} ${e}` }; }
+    sim.teams = 2; sim.max = plan.total;
+    return { sim, stopped: null as string | null };
+  };
+  is("10 real players move off teams 3 and 4", plan.realMoveCount, 10);
+  is("the team size now is 7", teamCapOf(28, 4), 7);
+  /* POSITIVE CONTROL: the old order (no opening) is refused on the first move, as production was. */
+  const old = run(false);
+  yes("control: without the opening the first move is refused, as on production", old.stopped != null && /above the team size/.test(old.stopped), String(old.stopped));
+  is("the plan opens the numbers first", plan.opening, { teamCapNow: 7, highest: 12, maxPlayerCount: 48 });
+  const fixed = run(true);
+  is("with the opening every move lands", fixed.stopped, null);
+  const rows = [...fixed.sim.rows.values()];
+  is("…and everyone ends on team 1 or 2", rows.filter((r) => r.team !== 1 && r.team !== 2).length, 0);
+  is("…nobody above #12, so the shape write cannot be refused for it", rows.filter((r) => (r.n ?? 0) > 12).length, 0);
+  is("…12 v 12", [rows.filter((r) => r.team === 1).length, rows.filter((r) => r.team === 2).length], [12, 12]);
+  is("no opening when every move fits the size the match already has", openingFor(36, 4, [{ playerNumber: 9 }]), null);
+  is("no opening on a match with no player limit", openingFor(0, 4, [{ playerNumber: 30 }]), null);
+  is("the opening is teams x the highest number a move needs, not more", openingFor(28, 4, [{ playerNumber: 8 }, { playerNumber: 10 }]), { teamCapNow: 7, highest: 10, maxPlayerCount: 40 });
+  const route = readFileSync("src/app/api/matchday/[env]/matches/[id]/reduce-2/route.ts", "utf8");
+  const iOpen = route.indexOf('key: "reduce2:open"'), iMove = route.indexOf('write: () => apiWrite(env, "POST", "/admin/user-matches"');
+  const iRemove = route.indexOf('apiWrite(env, "DELETE", `/admin/matches/user-matches/');
+  yes("in the route the opening is written after the removals and before the first move", iRemove > 0 && iRemove < iOpen && iOpen < iMove, `${iRemove}/${iOpen}/${iMove}`);
+  yes("…and a stop after it puts the old count back, once", /key: "reduce2:restore"/.test(route) && /if \(opened\)/.test(route));
+}
+
 console.log("\nthe write order, which is the reverse of convert-4's");
 {
   SEQ = 0;
@@ -295,7 +348,8 @@ console.log("\nthe write order, which is the reverse of convert-4's");
   const route = readFileSync("src/app/api/matchday/[env]/matches/[id]/reduce-2/route.ts", "utf8");
   const iMove = route.indexOf('apiWrite(env, "POST", "/admin/user-matches"');
   const iRemove = route.indexOf('apiWrite(env, "DELETE", `/admin/matches/user-matches/');
-  const iShape = route.indexOf('apiWrite(env, "PUT", `/admin/matches/${id}`');
+  // Selector path (2026-11-21): the shape's own PUT, by its body, now that the opening write is a PUT too.
+  const iShape = route.indexOf('apiWrite(env, "PUT", `/admin/matches/${id}`, shapeBody');
   yes("the route writes a move, a removal and the shape", iMove > 0 && iRemove > 0 && iShape > 0, `${iMove}/${iRemove}/${iShape}`);
   /* REMOVES BEFORE MOVES — the fix. A mover can only be dealt a spot a fake is vacating if the
    * fake is already off the match, and this is the assertion that keeps it that way. */

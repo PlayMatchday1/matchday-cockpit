@@ -9597,3 +9597,36 @@ Ryan: a switched-off field must stay off when its matches are copied.
   builds no body of its own, so a Retool copy keeps the switch. A Retool app changed after Aug 7 was not checked.
 - `POST /admin/matches/batches` is not a copy: it creates what the body says, and the switch on it is admin-only
   against the API account (`matches.service.ts:356-359`).
+
+## Reduce to 2 teams failed on Austin 21076: the move is checked against the team size the match has NOW (2026-11-21)
+
+- **The failure.** change_log, save `f8099d5c-bdb4-4a46-b319-a6e04584ae3b`, 2026-11-22T00:09:07Z, match 21076
+  "WestLake - Field 3", 4 teams x 7 (28 spots), reduce to 2 x 12. The before-map landed, then the first move
+  `POST /admin/user-matches {"userMatchId":364403,"team":1,"playerNumber":8}` came back
+  `HTTP 403 {"message":"Player number already taken","errorCode":"PLAYER_NUMBER_ALREADY_TAKEN"}`. Team 1 #8 was empty:
+  team 1 held #1 to #7 and nobody else stood on #8.
+- **Why: since backend `ad5155a0` (2026-11-15, "Team capacity: no booking path can put a team over its cap"), on
+  `heroku-prod/master`, every move is checked against floor(maxPlayerCount / teams).** `changeUserMatchPosition`
+  (`matches.service.ts:2026`) calls `moveSpots`, which throws PLAYER_NUMBER_ALREADY_TAKEN when `isValidSpot` fails
+  (`user-matches.repository.ts:359`); `isValidSpot` is false when `playerNumber > cap`
+  (`slots/match-slots.ts:103-107`), cap = `teamCapacity(maxPlayerCount, teams.length)` = floor(28 / 4) = 7. The same
+  error code now means two things: the spot is held, or the number is above the current team size.
+- **Reduce now opens the numbers first** (`reduce-2/route.ts` step 1b, `reduceTwoTeams.ts openingFor`): after the fake
+  removals and before the first move, `PUT /admin/matches/{id} {maxPlayerCount: teams x highest number a move needs}`
+  (21076: 48), read back. Raising is within the bookings, so `setMaxPlayerCountWithinBookings`
+  (`user-matches.repository.ts:457-477`) does not refuse it. The shape write then sets the 2-team total. A stop during
+  the moves writes the old count back once. NOT YET RUN ON A REAL MATCH after the fix.
+- **An admin move onto a HELD spot now SWAPS the two rows** (`matches.service.ts:2039-2049`, one transaction under the
+  match's spot lock). The 2026-08 line "a move onto an occupied spot is REJECTED" (above) is stale for
+  `POST /admin/user-matches`. Read from code, not probed.
+- **The backend has its own 4 to 2 migration** inside `PUT teamNumbers: 2` (`migrateMatchFrom4TeamsTo2`,
+  `matches.service.ts:1820`): it removes fakes on teams 1 and 2 up to the number of movers plus every fake on 3 and 4,
+  then fills team 1's free numbers before team 2's. Reduce still does not rely on it; with every row moved first it
+  has nobody to move.
+- **"The same player on two teams" on 21076 was a player and their guest.** mdapi_match_players: 364403 is Pushpit
+  Kaushik's `PLAYER` row (team 3 #2), 364404 his `GUEST` row (team 1 #1), same user_id, created 3 ms apart. Same for
+  omar reyes (364435 PLAYER team 2, 364436 GUEST team 4) and yordi padilla (364540/364541). A guest carries the host's
+  user, so it prints the host's name; the staff app's sub-line already says "· guest". The 364403 and 364436 rows both
+  have updated_at 2026-11-21T21:12:12.67Z, the same instant, which fits the 2 to 4 auto-bump (`convertTo4Teams`, team 1
+  past the cap to team 3, team 2 to team 4) splitting a host from their guest. That last part is INFERENCE from the
+  timestamps and the code, not observed.

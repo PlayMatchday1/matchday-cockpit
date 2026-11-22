@@ -148,6 +148,29 @@ export type ReducePlan = {
    *  CAN RAISE: see the proof beside the spot map below for why a mover can no longer be blocked. */
   shortfall: number;
   shapeError: string | null;
+  /** THE NUMBERS THE MOVES NEED, OPENED FIRST (2026-11-21). MatchDay refuses a move to a number above
+   *  the team size the match has NOW, floor(maxPlayerCount / teams), with 403
+   *  PLAYER_NUMBER_ALREADY_TAKEN (backend ad5155a0, 2026-11-15, match-slots.ts isValidSpot). Reducing
+   *  4 x 7 to 2 x 12 moves players onto #8 to #12, which do not exist until the shape lands, and the
+   *  shape cannot land first. So when a move needs a higher number, the match's player count is raised
+   *  first, teams unchanged, to exactly teams x the highest number a move needs. Null when no move
+   *  needs it. */
+  opening: { teamCapNow: number; highest: number; maxPlayerCount: number } | null;
+};
+
+/** MatchDay's own team size: floor(maxPlayerCount / teams), no limit when the count is 0 or absent.
+ *  The same arithmetic as the backend's teamCapacity (match-slots.ts). */
+export const teamCapOf = (maxPlayerCount: unknown, teamCount: number): number | null => {
+  const max = Number(maxPlayerCount) || 0;
+  return max <= 0 || teamCount <= 0 ? null : Math.floor(max / teamCount);
+};
+
+/** The opening write a set of moves needs on a match of this shape, or null. Pure. */
+export const openingFor = (maxPlayerCount: unknown, teamCount: number, moves: { playerNumber: number }[]): ReducePlan["opening"] => {
+  const cap = teamCapOf(maxPlayerCount, teamCount);
+  const highest = moves.reduce((h, m) => Math.max(h, m.playerNumber), 0);
+  if (cap == null || highest <= cap) return null;
+  return { teamCapNow: cap, highest, maxPlayerCount: teamCount * highest };
 };
 
 /** Live rows. Cancelled rows are neither moved nor counted; fakes are counted separately because
@@ -215,7 +238,7 @@ export function buildReducePlan(
   if (base.shortfall > 0) {
     return {
       ...base, moves: [], removes: [], stayerCount: 0, realMoveCount: 0, fakeMoveCount: 0, fakeKeepCount: 0,
-      fakePolicy: { ...fakePolicy, keep: 0 }, shownAfter: reals.length,
+      fakePolicy: { ...fakePolicy, keep: 0 }, shownAfter: reals.length, opening: null,
     };
   }
 
@@ -338,6 +361,7 @@ export function buildReducePlan(
     ...base, moves, removes, stayerCount: stayers.length,
     realMoveCount: movers.length, fakeMoveCount: fakeMovers.length,
     fakeKeepCount: fakes.length - removes.length, fakePolicy,
+    opening: openingFor(match.maxPlayerCount, match.teamCount, moves),
   };
 }
 
