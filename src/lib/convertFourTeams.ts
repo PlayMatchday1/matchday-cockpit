@@ -30,6 +30,7 @@
  */
 
 import { teamCountWrites, teamShapeError, teamSizes } from "./rosterEditModel";
+import { teamCapOf } from "./reduceTwoTeams";
 
 export type ConvertPlayer = {
   userMatchId: number;
@@ -75,6 +76,23 @@ export type ConvertPlan = {
   playerCount: number;
   keptCount: number;
   shapeError: string | null;
+  /** THE NUMBERS THE PLAYERS STAND ON, OPENED FIRST (2026-11-21), the same rule as Reduce to 2's
+   *  opening (reduceTwoTeams openingFor). MatchDay refuses a player count that puts a booked player
+   *  above floor(maxPlayerCount / teams) (MAX_PLAYER_COUNT_BELOW_BOOKED, backend ad5155a0), and it
+   *  refuses a move above it (PLAYER_NUMBER_ALREADY_TAKEN). 2 x 11 to 4 x 6 has players on #7 to #11
+   *  of teams 1 and 2 until the deal moves them, so the shape write cannot set 24 spots while they
+   *  stand there. When the highest number held or dealt is above the chosen size, the shape write
+   *  goes out with maxPlayerCount = 4 x that number instead, and the chosen total is written once the
+   *  deal has landed. Null when nobody stands above the chosen size. */
+  opening: { highest: number; maxPlayerCount: number } | null;
+};
+
+/** The opening a conversion needs, or null. Pure. `held` are the numbers live players stand on now. */
+export const convertOpeningFor = (spotsAfter: number, held: (number | null)[], moves: { playerNumber: number }[]): ConvertPlan["opening"] => {
+  const cap = teamCapOf(spotsAfter, 4);
+  const highest = Math.max(0, ...held.map((n) => Number(n) || 0), ...moves.map((m) => m.playerNumber));
+  if (cap == null || highest <= cap) return null;
+  return { highest, maxPlayerCount: 4 * highest };
 };
 
 /** Live, real people. Cancelled rows and fake padding are neither dealt nor counted. */
@@ -197,6 +215,7 @@ export function buildConvertPlan(
     keptCount: live.filter((p) => p.team === 3 || p.team === 4).length,
     // teamShapeError still blocks a total that would show a fractional team size in the app.
     shapeError: teamShapeError(spotsAfter, 4),
+    opening: convertOpeningFor(spotsAfter, live.map((p) => p.playerNumber), moves),
   };
 }
 

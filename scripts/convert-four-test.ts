@@ -11,7 +11,7 @@
 
 import { readFileSync } from "node:fs";
 import {
-  dealFourTeams, buildConvertPlan, convertRefusal, convertSummary, bySignup, dealtPlayers,
+  dealFourTeams, buildConvertPlan, convertRefusal, convertSummary, bySignup, dealtPlayers, convertOpeningFor,
   type ConvertPlayer,
 } from "../src/lib/convertFourTeams";
 
@@ -179,8 +179,10 @@ console.log("\nthe write path: order, logging, and one mover");
 
   // EVERY WRITE LOGGED. write-routes-logged-test caught a bare apiWrite here in the first draft.
   is("every apiWrite sits inside a recordWrite", (route.match(/recordWrite\(/g) ?? []).length >= 3, true);
-  // CONTROL: the route really does write — three apiWrite call sites: the fake removal, the shape and the move.
-  is("control: the route does make writes at all", (route.match(/apiWrite\(env,/g) ?? []).length, 3);
+  // CONTROL: the route really does write — four apiWrite call sites: the fake removal, the shape, the move,
+  // and (CHANGED 2026-11-21, was 3) the chosen spots after an opened deal.
+  is("control: the route does make writes at all", (route.match(/apiWrite\(env,/g) ?? []).length, 4);
+  is("…and every one of the four sits inside a recordWrite", (route.match(/write: \(\) => apiWrite\(env,/g) ?? []).length, 4);
   if (/applied: \(_b, a\) => \(a as \{ team: number \| null \}\)\.team === mv\.toTeam/.test(route))
     ok("a move's verdict is a read-back of that player's team");
   else bad("a move's verdict is a read-back", "'DID NOT THROW' IS NOT 'LANDED'");
@@ -208,6 +210,30 @@ console.log("\nthe write path: order, logging, and one mover");
   else bad("the control is called Convert to 4 teams");
   if (!/>\s*Bump/.test(view) && !/"Bump"/.test(view)) ok("…and nothing in the panel calls it a bump");
   else bad("something calls it a bump", "IT DOES NOT REPRODUCE AUTO-BUMP AND MUST NOT CLAIM TO");
+}
+
+console.log("\nTHE OPENING (2026-11-21): MatchDay's team cap, floor(spots / teams), with players still above the chosen size");
+{
+  /* 2 x 11, full, to 4 x 6. Until the deal moves them, players stand on #7 to #11 of teams 1 and 2,
+   * and MatchDay refuses 24 spots in 4 teams (6 a team) while they do: MAX_PLAYER_COUNT_BELOW_BOOKED
+   * (backend ad5155a0, setMaxPlayerCountWithinBookings). So the shape opens to 4 x 11 = 44 first. */
+  const full = [...Array.from({ length: 11 }, (_, i) => p(i + 1, 1, i + 1, i)), ...Array.from({ length: 11 }, (_, i) => p(i + 21, 2, i + 1, i + 20))];
+  const plan = buildConvertPlan({ maxPlayerCount: 22, teamCount: 2 }, full, 6);
+  is("2 x 11 to 4 x 6 is offered and plans 24 spots", [plan.sizeRefusal, plan.spotsAfter], [null, 24]);
+  is("…and opens to 4 x 11 first, because #11 is held", plan.opening, { highest: 11, maxPlayerCount: 44 });
+  is("…the deal itself never numbers above 6", plan.moves.every((m) => m.playerNumber <= 6), true);
+  /* THE CONTROL: the same roster at a size that holds every current number opens nothing. */
+  const plan11 = buildConvertPlan({ maxPlayerCount: 22, teamCount: 2 }, full, 11);
+  is("control: 2 x 11 to 4 x 11 needs no opening", plan11.opening, null);
+  is("convertOpeningFor reads held numbers and dealt numbers alike", [convertOpeningFor(24, [3, 9], []), convertOpeningFor(24, [3], [{ playerNumber: 7 }]), convertOpeningFor(24, [6], [])],
+    [{ highest: 9, maxPlayerCount: 36 }, { highest: 7, maxPlayerCount: 28 }, null]);
+  const route = readFileSync("src/app/api/matchday/[env]/matches/[id]/convert-4/route.ts", "utf8");
+  if (/const shapeCaps = plan\.opening \? \{ \.\.\.plan\.shape, maxPlayerCount: plan\.opening\.maxPlayerCount \} : plan\.shape;/.test(route)
+    && /const shapeBody = \{ \.\.\.shapeCaps, teamNumbers: 4,/.test(route)) ok("the shape write carries the opened count, and only when the plan opens");
+  else bad("the shape write carries the opened count, and only when the plan opens");
+  const iMoves = route.indexOf("for (const mv of plan.moves)"), iCap = route.indexOf("apiWrite(env, \"PUT\", `/admin/matches/${id}`, capBody"), iFakes = route.indexOf("followSpotsLeft: true");
+  if (iMoves > 0 && iMoves < iCap && iCap < iFakes) ok("the chosen spots are written after the deal and before the fakes follow");
+  else bad("the chosen spots are written after the deal and before the fakes follow", `${iMoves}/${iCap}/${iFakes}`);
 }
 
 console.log(`\nconvert-four: ${pass} passed, ${fails.length} failed`);

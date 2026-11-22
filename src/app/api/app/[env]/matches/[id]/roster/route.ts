@@ -41,6 +41,7 @@ import { rosterRowIsFake } from "@/lib/gamedayModel";
 import { bibFixMoves, moneyLine, overflowFakes, pickerCapacityWrites, sizeRefusal, sizeWrites, teamChangeSizes, teamsPath } from "@/lib/appMatchV2";
 import { fakesFollowingSpotsLeft } from "@/lib/fakeLadder";
 import { teamShapeError } from "@/lib/rosterEditModel";
+import { teamCapOf } from "@/lib/reduceTwoTeams";
 import { POST as desktopRosterPost } from "@/app/api/matchday/[env]/roster/[matchId]/route";
 import { PUT as desktopMatchPut } from "@/app/api/matchday/[env]/matches/[id]/route";
 import { POST as desktopFakesPost } from "@/app/api/matchday/[env]/matches/[id]/fakes/route";
@@ -144,7 +145,14 @@ async function getRoute(req: Request, ctx: { params: Promise<{ env: string; id: 
     for (const n of offer.sizes) {
       let spots = target * n, why: string | null = null;
       if (path === "picker") {
-        why = teamShapeError(spots, target);
+        /* THE POST'S OWN REFUSALS (MatchDay's team cap, 2026-11-21), so the sheet never offers a size the
+         * POST will refuse: a real player on a team being removed, or a team with no bib for a mover. */
+        const staying = before.players.filter((p) => (p.team ?? 0) <= target);
+        const realOnRemoved = before.players.filter((p) => (p.team ?? 0) > target && !p.fake).length;
+        const over = overflowFakes(staying, n);
+        why = teamShapeError(spots, target)
+          ?? (realOnRemoved > 0 ? `${realOnRemoved} real player${realOnRemoved === 1 ? " is" : "s are"} on a team being removed. Move them first.` : null)
+          ?? (over == null || bibFixMoves(staying, before.held, over, n) == null ? `A team's players do not fit ${n} a side.` : null);
       } else {
         const get = path === "reduce-2" ? reduceGet : convertGet;
         const res = await get(new Request(`${origin}/api/matchday/${env}/matches/${id}/${path}?perTeam=${n}`, { headers }), params);
@@ -262,8 +270,57 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
       let targetFakes: number | null = null;
       if (path === "picker") {
         const w = perTeam != null ? sizeWrites(before.match, target, perTeam) : pickerCapacityWrites(before.match, before.teamCount, target);
-        let ok = await roster("shape", `Set ${target} teams`, { kind: "shape", fields: { teamNumbers: target } });
-        if (ok && Object.keys(w).length > 0) ok = await matchPut("capacity", `Spots ${before.capacity} to ${w.maxPlayerCount ?? before.capacity}`, w);
+        /* THE PICKER UNDER MATCHDAY'S TEAM CAP (2026-11-21). Since backend ad5155a0 MatchDay refuses a
+         * team count or player count that leaves a booked or reserved row above floor(maxPlayerCount /
+         * teams) (MAX_PLAYER_COUNT_BELOW_BOOKED), and removes a team with anyone on it only going 4 to 2
+         * (TEAM_HAS_PLAYERS, matches.service.ts updateMatchTeams). Built on the size op's own pieces
+         * (overflowFakes, bibFixMoves, `held`) and Reduce to 2's opening:
+         *   1. a REAL player on a team being removed refuses before any write (the picker moves nobody
+         *      across teams); fakes there come off;
+         *   2. fakes the new size has no room for come off, and real players above it move down on their
+         *      own team (bibFixMoves), as the size op does;
+         *   3. when the team count write would still leave someone above floor(spots / teams), the spots
+         *      are raised first, teams unchanged, to max(current, target) x the highest bib held;
+         *   4. the team count; if it does not land after an opening, the old spots go back once;
+         *   5. the chosen spots; then the fakes follow, as before. */
+        const finalCap = w.maxPlayerCount ?? before.capacity;
+        const finalPer = teamCapOf(finalCap, target) ?? Number.MAX_SAFE_INTEGER;
+        const onRemoved = before.players.filter((p) => (p.team ?? 0) > target);
+        const realOnRemoved = onRemoved.filter((p) => !p.fake);
+        if (realOnRemoved.length > 0) {
+          return Response.json({ error: `MatchDay will not remove ${before.teamCount - target === 1 ? `team ${before.teamCount}` : "those teams"} while ${realOnRemoved.length} real player${realOnRemoved.length === 1 ? " stands" : "s stand"} on it. Move them onto teams 1 to ${target} first.` }, { status: 400 });
+        }
+        const staying = before.players.filter((p) => (p.team ?? 0) <= target);
+        const over = overflowFakes(staying, finalPer);
+        if (over == null) return Response.json({ error: `A team's real players do not fit ${finalPer} a side.` }, { status: 400 });
+        const drop = [...onRemoved.map((p) => p.userMatchId!).filter((u) => u != null), ...over];
+        const fixes = bibFixMoves(staying, before.held, drop, finalPer);
+        if (fixes == null) return Response.json({ error: `A team has no free bib at or below ${finalPer} for a player above it.` }, { status: 400 });
+        /* The highest bib anyone holds once the removals and the bib fixes have landed. */
+        const moved = new Map(fixes.map((f) => [f.userMatchId, f.playerNumber]));
+        const highest = Math.max(0, ...before.held
+          .filter((h) => h.userMatchId == null || !drop.includes(h.userMatchId))
+          .map((h) => (h.userMatchId != null && moved.has(h.userMatchId) ? moved.get(h.userMatchId)! : (h.bib ?? 0))));
+        const capAtTeams = teamCapOf(before.capacity, target);
+        const openTo = capAtTeams != null && highest > capAtTeams ? Math.max(before.teamCount, target) * highest : null;
+        let ok = true;
+        for (const um of drop) {
+          const p = before.players.find((x) => x.userMatchId === um);
+          ok = await roster("remove", `Remove a fake player from ${teamName(p?.team ?? 0)}`, { kind: "remove", userMatchId: um });
+          if (!ok) break;
+        }
+        for (const f of ok ? fixes : []) {
+          ok = await roster("move", `${nameOf(f.userMatchId)} from bib ${f.fromBib} to bib ${f.playerNumber} on ${teamName(f.team)}`, { kind: "move", userMatchId: f.userMatchId, team: f.team, playerNumber: f.playerNumber });
+          if (!ok) break;
+        }
+        if (ok && openTo != null) ok = await matchPut("opening", `Spots ${before.capacity} to ${openTo} first, so bib ${highest} exists with ${target} teams`, { maxPlayerCount: openTo });
+        if (ok) {
+          ok = await roster("shape", `Set ${target} teams`, { kind: "shape", fields: { teamNumbers: target } });
+          // THE OPENING GOES BACK ONCE when the team count did not land, as Reduce to 2 does on a stop.
+          if (!ok && openTo != null) await matchPut("restore", `Spots back to ${before.capacity} (the team count did not land)`, { maxPlayerCount: before.capacity });
+        }
+        const wFinal = openTo != null ? { ...w, maxPlayerCount: finalCap } : w;
+        if (ok && Object.keys(wFinal).length > 0) ok = await matchPut("capacity", `Spots ${openTo ?? before.capacity} to ${finalCap}`, wFinal);
         if (expectCap == null) expectCap = w.maxPlayerCount ?? before.capacity;
         // THE FAKES FOLLOW THE NEW CAPACITY, as after a size write.
         if (ok) targetFakes = await followSpotsLeft();

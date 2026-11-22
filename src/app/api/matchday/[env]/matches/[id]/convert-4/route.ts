@@ -223,7 +223,11 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
    * it must exist BEFORE the first move, and this is the write that happens first. */
   let shapeOk = false;
   /* NO RUNG ABOVE THE NEW CAPACITY (fakeLadder.ts ladderClampPatch) — rides on the shape write. */
-  const shapeBody = { ...plan.shape, teamNumbers: 4, ...ladderClampPatch(m as Record<string, unknown>, plan.shape as Record<string, unknown>) };
+  /* OPENED WHEN THE DEAL NEEDS IT (2026-11-21, plan.opening, convertOpeningFor): while players still
+   * stand above the chosen size on teams 1 and 2, MatchDay refuses 4 x perTeam, so the shape goes
+   * out at 4 x the highest number held or dealt and the chosen total follows the deal (step 2b). */
+  const shapeCaps = plan.opening ? { ...plan.shape, maxPlayerCount: plan.opening.maxPlayerCount } : plan.shape;
+  const shapeBody = { ...shapeCaps, teamNumbers: 4, ...ladderClampPatch(m as Record<string, unknown>, shapeCaps as Record<string, unknown>) };
   const shapeWrite = await recordWrite(
     {
       env, source, actorName: auth.email, actorEmail: auth.email,
@@ -234,7 +238,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
       changes: [{
         key: "convert4:shape", field: "Convert to 4 teams",
         before: `${teamCount} teams, ${plan.spotsBefore} spots · positions: ${JSON.stringify(plan.beforeMap)}`,
-        after: `4 teams, ${plan.spotsAfter} spots · ${plan.moves.length} move(s) to follow`,
+        after: `4 teams, ${shapeCaps.maxPlayerCount} spots${plan.opening ? ` (opened for #${plan.opening.highest}; ${plan.spotsAfter} after the deal)` : ""} · ${plan.moves.length} move(s) to follow`,
       }],
       applied: (_b, a) => ((a as { match?: Record<string, unknown> }).match?.teams as unknown[] | undefined)?.length === 4,
     },
@@ -328,6 +332,50 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
   const landed = results.filter((r) => r.kind === "move" && r.verdict === "LANDED").length;
   const failed = results.filter((r) => r.kind === "move" && r.verdict !== "LANDED").length;
 
+  /* ── 2b. THE CHOSEN TOTAL, WHEN THE SHAPE WAS OPENED ──────────────────────────────────────
+   * Once, after every move, whether or not each landed: an opened match left at 4 x the highest
+   * number would sell spots nobody chose. MatchDay refuses it (MAX_PLAYER_COUNT_BELOW_BOOKED) while
+   * anyone still stands above the chosen size, and then the verdict says so. Sent as the diff
+   * against a fresh read, with the ladder clamp. */
+  let capVerdict: string | null = null;
+  if (plan.opening) {
+    const nowMatch = await apiGet<Record<string, unknown>>(env, `/admin/matches/${id}`);
+    const want = { ...plan.shape, ...ladderClampPatch(nowMatch, plan.shape as Record<string, unknown>) } as Record<string, number>;
+    const capBody = Object.fromEntries(Object.entries(want).filter(([k, v]) => Number(nowMatch[k]) !== v));
+    if (Object.keys(capBody).length > 0) {
+      const capWrite = await recordWrite(
+        {
+          env, source, actorName: auth.email, actorEmail: auth.email,
+          saveId, matchId: Number(id), matchName: String(m.name ?? ""),
+          method: "PUT", path: `/admin/matches/${id}`, body: capBody, keys: [], label: (k) => k,
+          changes: [{
+            key: "convert4:capacity", field: "Spots",
+            before: `${Number(nowMatch.maxPlayerCount) || 0} (opened)`, after: `${plan.spotsAfter} (4 teams of ${plan.perTeam})`,
+          }],
+          applied: (_b, a) => Number((a as { match?: Record<string, unknown> }).match?.maxPlayerCount) === plan.spotsAfter,
+        },
+        {
+          readResource: async () => ({ match: await apiGet(env, `/admin/matches/${id}`) }),
+          write: () => apiWrite(env, "PUT", `/admin/matches/${id}`, capBody, actor),
+          now: () => new Date().toISOString(),
+        },
+        supabaseLogStore(),
+      );
+      capVerdict = capWrite.error ? "FAILED" : capWrite.outcome === "landed" ? "LANDED" : "NOT APPLIED";
+      results.push({
+        kind: "shape", label: `Spots ${Number(nowMatch.maxPlayerCount) || 0} to ${plan.spotsAfter}, after the deal`,
+        verdict: capVerdict, detail: capWrite.error?.message,
+      });
+      if (capVerdict === "LANDED") {
+        try {
+          const afterCap = await apiGet<Record<string, unknown>>(env, `/admin/matches/${id}`);
+          const r = await refreshMatchMirror(auth.supabase, env, Number(id), ["maxPlayerCount", "maxTeamSize4Team", "maxTeamSize2Team"], afterCap, "landed");
+          mirrored = r.refreshed; mirrorReason = r.reason ?? null;
+        } catch (e) { mirrorReason = e instanceof Error ? e.message : String(e); }
+      }
+    } else capVerdict = "LANDED";
+  }
+
   /* ── 3. THE FAKES FOLLOW THE STORED SPOTS LEFT ────────────────────────────────────────────
    * The fakes route, in process with this caller's own bearer, works the count out itself
    * (followSpotsLeft) from the match as it now stands: 4 x perTeam spots, the rung in force kept.
@@ -357,7 +405,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
   });
 
   return Response.json({
-    ok: failed === 0,
+    ok: failed === 0 && (capVerdict == null || capVerdict === "LANDED"),
     results,
     perTeam: plan.perTeam, spotsAfter: plan.spotsAfter,
     removesLanded, movesAttempted: plan.moves.length, movesLanded: landed, movesFailed: failed,
@@ -368,6 +416,8 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
       // A PARTIAL SAYS WHO, BY NAME. "Some moves failed" is not something anyone can act on.
       : `PARTIAL — the shape is 4 teams of ${plan.perTeam} and ${landed} of ${plan.moves.length} move(s) landed. Still on their old team: ${stranded.join("; ")}. Do not press again; move them by hand or re-run and check.`)
       + (fakesOk ? ` ${fakes.after ?? fakes.target ?? 0} fake(s) on for the spots left (${fakes.spotsLeft ?? "?"}), re-read confirmed.`
-        : ` BUT THE FAKES WERE NOT BROUGHT TO THE SPOTS LEFT: ${fakes.error ?? fakes.outcome}. Set them by hand.`),
+        : ` BUT THE FAKES WERE NOT BROUGHT TO THE SPOTS LEFT: ${fakes.error ?? fakes.outcome}. Set them by hand.`)
+      + (capVerdict != null && capVerdict !== "LANDED"
+        ? ` AND THE SPOTS WERE NOT SET TO ${plan.spotsAfter} (${capVerdict}): the match still has the opened count. Set the spots by hand.` : ""),
   });
 }

@@ -9640,3 +9640,17 @@ Ryan: a switched-off field must stay off when its matches are copied.
 - **The app's roster read-back carries `userType`** (PLAYER | ADDITIONAL_SPOT | GUEST, from
   `GET /admin/matches/{id}/players`, the same field the check-in route reads). The staff app names a GUEST or
   ADDITIONAL_SPOT row "<host>'s guest".
+- **Convert to 4 and the 3-team picker had the same hole, on the other write** (2026-11-21, read from backend code,
+  NOT YET RUN ON A REAL MATCH). Growing writes the team count with the new player count while players still stand on
+  their old numbers, and `setMaxPlayerCountWithinBookings` (`user-matches.repository.ts:457-477`) refuses
+  `MAX_PLAYER_COUNT_BELOW_BOOKED` when any booked player is above floor(maxPlayerCount / teams). 2 x 11 full to 4 x 6
+  has players on #7 to #11 until the deal. Convert to 4 now writes the shape at 4 x the highest number held or dealt
+  (`convertFourTeams.ts convertOpeningFor`), deals, then writes the chosen total once (diff against a fresh read),
+  before the fakes follow. The staff app's picker (2 to 3, 3 to 4, 4 to 3) is built on the size op's pieces: a REAL
+  player on a team being removed refuses before any write (`updateMatchTeams` refuses `TEAM_HAS_PLAYERS` except 4 to 2,
+  `matches.service.ts:1890-1896`; the picker moves nobody across teams), fakes there and fakes the new size has no room
+  for come off (`overflowFakes`), real players above the new size move down on their own team (`bibFixMoves`), the
+  spots are raised first when the team count write would still leave someone above floor(spots / teams)
+  (max(current, target) x the highest bib held), then the team count (the old spots go back once if it does not land),
+  then the chosen spots, then the fakes follow. This closes the "3-team picker" item in the bullet above. The desktop
+  match panel's size Save is still not fixed.

@@ -1,6 +1,7 @@
 /* STAFF APP MATCH v2: which desktop path a team count takes, what the size stepper offers, how an
  * add's money is worded, and how a search term is read (src/lib/appMatchV2.ts). Ryan, 2026-10-30.
  * Pure rules, asserted offline; every refusal has a presence control beside it. */
+import { readFileSync } from "node:fs";
 import { bibFixMoves, detailsMatch, overflowFakes, reduceSizes, moneyLine, phoneLast4, pickerCapacityWrites, searchTerm, sizeBounds, sizeRefusal, sizeWrites, teamChangeSizes, teamsPath } from "../src/lib/appMatchV2";
 
 let pass = 0, fail = 0;
@@ -122,6 +123,24 @@ console.log("\na smaller size moves real players off the bibs it removes (2026-1
   is("a bib a removed fake held is free", bibFixMoves(withFake, withFake, [7], 9).map((m) => m.playerNumber), [7, 8]);
   is("…and with that fake staying at 8 a side there is one free bib for two movers, so null", bibFixMoves(withFake, withFake, [], 8), null);
   is("presence control: removing it makes room", bibFixMoves(withFake, withFake, [7], 8)?.map((m) => m.playerNumber), [7, 8]);
+}
+
+/* THE PICKER'S WRITE ORDER (2026-11-21). The picker lives in the route, behind the HTTP boundary, so
+ * its order is read from source, on the pairings: removals, bib fixes, the opening, the team count,
+ * the chosen spots. A positive control first: the block must be found at all. */
+{
+  const route = readFileSync("src/app/api/app/[env]/matches/[id]/roster/route.ts", "utf8");
+  const a = route.indexOf('if (path === "picker") {', route.indexOf('op === "teams"'));
+  const blk = a > 0 ? route.slice(a, route.indexOf("        if (expectCap == null)", a)) : "";
+  if (a > 0 && blk.length > 200) ok("control: the picker block is found"); else bad("control: the picker block is found", String(blk.length));
+  const at = (k: string) => blk.indexOf(k);
+  const order = ["for (const um of drop)", "for (const f of ok ? fixes : [])", 'matchPut("opening"', 'roster("shape"', 'matchPut("capacity"'].map(at);
+  if (order.every((x) => x > 0) && order.every((x, i) => i === 0 || order[i - 1] < x)) ok("picker: removals, bib fixes, opening, team count, chosen spots, in that order");
+  else bad("picker: removals, bib fixes, opening, team count, chosen spots, in that order", JSON.stringify(order));
+  if (/if \(!ok && openTo != null\) await matchPut\("restore"/.test(blk)) ok("picker: the opening goes back once when the team count does not land");
+  else bad("picker: the opening goes back once when the team count does not land");
+  if (/realOnRemoved\.length > 0\) \{\s*return Response\.json/.test(blk)) ok("picker: a real player on a removed team refuses before any write");
+  else bad("picker: a real player on a removed team refuses before any write");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
