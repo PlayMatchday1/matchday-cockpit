@@ -76,6 +76,37 @@ export function overflowFakes(players: readonly { userMatchId: number | null; te
   }
   return out;
 }
+/* A SMALLER SIZE MOVES REAL PLAYERS OFF BIBS IT REMOVES (2026-11-21). Since backend ad5155a0
+ * (2026-11-15) MatchDay refuses a player count that leaves a booked row on a bib above the new team
+ * size: MAX_PLAYER_COUNT_BELOW_BOOKED (user-matches.repository.ts setMaxPlayerCountWithinBookings).
+ * sizeRefusal counts players per team, so a team of 9 with someone on bib 11 passed it and then the
+ * write to 10 a side was refused. Each real row above the new size moves to the lowest bib on ITS OWN
+ * team that nobody holds, before the size write. `held` is every spot MatchDay counts as taken
+ * (booked rows AND rows reserved for a checkout in progress), so a mover is never sent onto a spot a
+ * hidden row holds, where the admin move would swap them. Fakes being removed are not holding. Null
+ * when a team has no room, which sizeRefusal and overflowFakes already make impossible. */
+export function bibFixMoves(
+  players: readonly { userMatchId: number | null; team: number | null; bib: number | null; fake: boolean }[],
+  held: readonly { userMatchId: number | null; team: number | null; bib: number | null }[],
+  removing: readonly number[],
+  perTeam: number,
+): { userMatchId: number; team: number; playerNumber: number; fromBib: number }[] | null {
+  const gone = new Set(removing);
+  const out: { userMatchId: number; team: number; playerNumber: number; fromBib: number }[] = [];
+  const movers = players
+    .filter((p) => !p.fake && p.userMatchId != null && p.team != null && p.bib != null && p.bib > perTeam && !gone.has(p.userMatchId))
+    .sort((a, b) => (a.team! - b.team!) || (a.bib! - b.bib!));
+  const taken = new Set(held.filter((h) => h.userMatchId == null || !gone.has(h.userMatchId)).filter((h) => h.team != null && h.bib != null).map((h) => `${h.team}:${h.bib}`));
+  for (const m of movers) {
+    let n = 1;
+    while (n <= perTeam && taken.has(`${m.team}:${n}`)) n++;
+    if (n > perTeam) return null;
+    taken.add(`${m.team}:${n}`);
+    out.push({ userMatchId: m.userMatchId!, team: m.team!, playerNumber: n, fromBib: m.bib! });
+  }
+  return out;
+}
+
 /** The size write: the desktop's own teamCountWrites, diffed against the match. */
 export function sizeWrites(match: Record<string, unknown>, teamCount: number, perTeam: number): Record<string, number> {
   const rungKey = teamCount === 2 ? "maxTeamSize2Team" : teamCount === 4 ? "maxTeamSize4Team" : null;

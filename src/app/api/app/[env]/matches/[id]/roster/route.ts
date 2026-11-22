@@ -38,7 +38,7 @@ import { countedPlayers, fetchPlayersLive, isEnv } from "@/lib/appLive";
 import { apiGet, StageConfigError, StageHostGuardError, type MatchdayEnv } from "@/lib/matchdayStageApi";
 import { CONFINED_CITY_ERROR } from "@/lib/cityConfinement";
 import { rosterRowIsFake } from "@/lib/gamedayModel";
-import { moneyLine, overflowFakes, pickerCapacityWrites, sizeRefusal, sizeWrites, teamChangeSizes, teamsPath } from "@/lib/appMatchV2";
+import { bibFixMoves, moneyLine, overflowFakes, pickerCapacityWrites, sizeRefusal, sizeWrites, teamChangeSizes, teamsPath } from "@/lib/appMatchV2";
 import { fakesFollowingSpotsLeft } from "@/lib/fakeLadder";
 import { teamShapeError } from "@/lib/rosterEditModel";
 import { POST as desktopRosterPost } from "@/app/api/matchday/[env]/roster/[matchId]/route";
@@ -72,12 +72,23 @@ async function readLive(env: MatchdayEnv, id: string) {
       userMatchId: int(r.id), playerId: int(r.userId), team: int(r.team), bib: int(r.playerNumber),
       name: [r.user?.firstName, r.user?.lastName].filter(Boolean).join(" ").trim() || `Player ${r.userId}`,
       fake: rosterRowIsFake(p),
+      // PLAYER | ADDITIONAL_SPOT | GUEST: the app names a guest spot for its host from this.
+      userType: typeof r.userType === "string" ? r.userType : null,
       paidStatus: typeof r.paidStatus === "string" ? r.paidStatus : null,
       amount: Number(r.amount) || 0, totalAmount: Number(r.totalAmount) || 0, creditAmount: Number(r.creditAmount) || 0,
     };
   });
   const capacity = Number(match.maxPlayerCount) || 0;
-  return { match, teams, players, capacity, teamCount: teams.length };
+  /* EVERY SPOT MATCHDAY COUNTS AS TAKEN: not cancelled, and PAID / FREE or reserved for a checkout in
+   * progress (the backend's ACTIVE_SPOT_WHERE, slots/match-slots.ts). Wider than the roster the app
+   * draws, which hides a reserved WAITING row; used only to pick a bib nobody holds. */
+  const held = raw
+    .filter((p) => {
+      const r = p as Row;
+      return r.isCancelled !== true && (r.paidStatus === "PAID" || r.paidStatus === "FREE" || r.isReserved === true);
+    })
+    .map((p) => { const r = p as Row; return { userMatchId: int(r.id), team: int(r.team), bib: int(r.playerNumber) }; });
+  return { match, teams, players, capacity, teamCount: teams.length, held };
 }
 type Live = Awaited<ReturnType<typeof readLive>>;
 const realFills = (l: Live) => l.teams.map((t) => l.players.filter((p) => p.team === t.teamNumber && !p.fake).length);
@@ -292,11 +303,19 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
       if (Object.keys(w).length === 0) return Response.json({ error: "Nothing to change." }, { status: 400 });
       const drop = overflowFakes(before.players, perTeam);
       if (drop == null) return Response.json({ error: `A team's real players do not fit ${perTeam} a side.` }, { status: 400 });
-      // FAKES FIRST, then the size, then the fake count spots left implies at the new capacity.
+      // Real players above the new size move down on their own team first (bibFixMoves says why).
+      const fixes = bibFixMoves(before.players, before.held, drop, perTeam);
+      if (fixes == null) return Response.json({ error: `A team has no free bib at or below ${perTeam} for a player above it.` }, { status: 400 });
+      // FAKES FIRST, then the real players off bibs the size removes, then the size, then the fake
+      // count spots left implies at the new capacity.
       let ok = true;
       for (const um of drop) {
         const p = before.players.find((x) => x.userMatchId === um);
         ok = await roster("remove", `Remove a fake player from ${teamName(p?.team ?? 0)}`, { kind: "remove", userMatchId: um });
+        if (!ok) break;
+      }
+      for (const f of ok ? fixes : []) {
+        ok = await roster("move", `${nameOf(f.userMatchId)} from bib ${f.fromBib} to bib ${f.playerNumber} on ${teamName(f.team)}`, { kind: "move", userMatchId: f.userMatchId, team: f.team, playerNumber: f.playerNumber });
         if (!ok) break;
       }
       const cap = before.teamCount * perTeam;
@@ -306,6 +325,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
       if (ok) targetFakes = await followSpotsLeft();
       check = (after) => {
         if (after.capacity !== cap) disagreements.push(`Spots read back as ${after.capacity}, not ${cap}.`);
+        for (const p of after.players) if (!p.fake && (p.bib ?? 0) > perTeam) disagreements.push(`${p.name} reads back on bib ${p.bib}, above ${perTeam} a side.`);
         const fakes = after.players.filter((p) => p.fake).length;
         if (targetFakes != null && steps.every((s) => s.outcome === "landed") && fakes !== targetFakes) disagreements.push(`The roster holds ${fakes} fake players, not ${targetFakes}.`);
       };

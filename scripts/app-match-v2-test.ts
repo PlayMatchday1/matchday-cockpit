@@ -1,7 +1,7 @@
 /* STAFF APP MATCH v2: which desktop path a team count takes, what the size stepper offers, how an
  * add's money is worded, and how a search term is read (src/lib/appMatchV2.ts). Ryan, 2026-10-30.
  * Pure rules, asserted offline; every refusal has a presence control beside it. */
-import { detailsMatch, overflowFakes, reduceSizes, moneyLine, phoneLast4, pickerCapacityWrites, searchTerm, sizeBounds, sizeRefusal, sizeWrites, teamChangeSizes, teamsPath } from "../src/lib/appMatchV2";
+import { bibFixMoves, detailsMatch, overflowFakes, reduceSizes, moneyLine, phoneLast4, pickerCapacityWrites, searchTerm, sizeBounds, sizeRefusal, sizeWrites, teamChangeSizes, teamsPath } from "../src/lib/appMatchV2";
 
 let pass = 0, fail = 0;
 const ok = (m: string) => { pass++; console.log(`  ok  ${m}`); };
@@ -100,6 +100,28 @@ console.log("\nAdjust payload: the match's people, for every account");
   is("no coordinates, zip, address or credit anywhere", ["lat", "lng", "Lat", "Lng", "ZipCode", "zipCode", "address", "creditAmount", "coordinates"].filter((k) => flat.includes(`${k}"`)), []);
   is("no manager stays null", detailsMatch({ id: 2, manager: null, secondManager: undefined }).manager, null);
   is("no second manager stays null", detailsMatch({ id: 2, manager: null }).secondManager, null);
+}
+
+console.log("\na smaller size moves real players off the bibs it removes (2026-11-21)");
+{
+  /* MatchDay refuses 2 x 12 to 2 x 10 while a booked row stands on bib 11 or 12, even on a team of 9
+   * (MAX_PLAYER_COUNT_BELOW_BOOKED). sizeRefusal passes that team, which is why the moves are needed. */
+  const team1 = [...[1, 2, 3, 4, 5, 6, 7].map((b) => P(b, 1, b, false)), P(8, 1, 11, false), P(9, 1, 12, false)];
+  const team2 = [...[1, 2, 3, 4].map((b) => P(20 + b, 2, b, false)), P(30, 2, 10, true)];
+  const all = [...team1, ...team2];
+  is("control: sizeRefusal lets a team of 9 go to 10 a side", sizeRefusal(2, 10, [9, 4], 13), null);
+  is("the two real players on 11 and 12 move to bibs 8 and 9 of their own team", bibFixMoves(all, all, [], 10),
+    [{ userMatchId: 8, team: 1, playerNumber: 8, fromBib: 11 }, { userMatchId: 9, team: 1, playerNumber: 9, fromBib: 12 }]);
+  is("a fake on a high bib never moves (overflowFakes removes it)", bibFixMoves(all, all, [], 10).some((m) => m.userMatchId === 30), false);
+  is("presence control: a size every bib fits moves nobody", bibFixMoves(all, all, [], 12), []);
+  /* A row MatchDay holds that the roster hides (a checkout in progress on team 1 bib 8) is skipped. */
+  const hidden = [...all, { userMatchId: 99, team: 1, bib: 8 }];
+  is("a bib held by a hidden reserved row is not dealt", bibFixMoves(all, hidden, [], 10).map((m) => m.playerNumber), [9, 10]);
+  /* A fake being removed frees its bib. */
+  const withFake = [...team1.filter((p) => p.userMatchId !== 7), P(7, 1, 7, true)];
+  is("a bib a removed fake held is free", bibFixMoves(withFake, withFake, [7], 9).map((m) => m.playerNumber), [7, 8]);
+  is("…and with that fake staying at 8 a side there is one free bib for two movers, so null", bibFixMoves(withFake, withFake, [], 8), null);
+  is("presence control: removing it makes room", bibFixMoves(withFake, withFake, [7], 8)?.map((m) => m.playerNumber), [7, 8]);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

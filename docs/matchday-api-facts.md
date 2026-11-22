@@ -9630,3 +9630,13 @@ Ryan: a switched-off field must stay off when its matches are copied.
   have updated_at 2026-11-21T21:12:12.67Z, the same instant, which fits the 2 to 4 auto-bump (`convertTo4Teams`, team 1
   past the cap to team 3, team 2 to team 4) splitting a host from their guest. That last part is INFERENCE from the
   timestamps and the code, not observed.
+- **Lowering a team size hits the same rule (staff app size control, fixed 2026-11-21).** `PUT maxPlayerCount`
+  smaller is refused `MAX_PLAYER_COUNT_BELOW_BOOKED` when any booked or reserved row on teams 1 to N stands on a bib
+  above the new floor(maxPlayerCount / teams) (`user-matches.repository.ts:457-468`), however few players the team
+  has. The staff app's size op now moves each real player above the new size to the lowest bib on their own team that
+  no PAID, FREE or reserved row holds (`appMatchV2.ts bibFixMoves`), after the fake removals and before the size write.
+  Read from code; not yet run on a real match. NOT FIXED: the desktop match panel's size Save, and the staff app's
+  3-team picker (growing 2 to 3 lowers the per-team size and moves nobody); both were not checked against a live match.
+- **The app's roster read-back carries `userType`** (PLAYER | ADDITIONAL_SPOT | GUEST, from
+  `GET /admin/matches/{id}/players`, the same field the check-in route reads). The staff app names a GUEST or
+  ADDITIONAL_SPOT row "<host>'s guest".
