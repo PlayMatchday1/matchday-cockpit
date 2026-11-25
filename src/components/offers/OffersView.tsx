@@ -3,16 +3,17 @@
 // MATCH OPS › OFFERS (Figma 20571:44; backend feature/offers on the LOCAL backend, Match Ops access).
 //
 // The list, then the editor in its place (Figma 20825:45): + New offer or a row hides the list and shows the
-// offer full width, ← Back to offers brings the list back. A launched offer's results card (saw, used,
-// discount given, came back at full price, and the one line comparing the players who got it with the ones
-// held back) sits at the top of the editor's form column. The editor is src/components/offers/OfferPanel.tsx;
+// offer full width, ← Back to offers brings the list back. A launched offer's results card (saw, spots used,
+// players who used it, given away, went on to pay, and the one line comparing the players who got it with the
+// ones held back) sits at the top of the editor's form column. Each list row says the same usage in two lines
+// (resultsLines); what each figure counts is in offersModel.ts beside playersUsed. The editor is src/components/offers/OfferPanel.tsx;
 // every rule and every string is in src/lib/offersModel.ts.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/useAuth";
 import {
-  STATE_LABEL, audienceText, extraBookingsLine, usedOfLimit, chicagoWallNow, campaignsAfter, comparisonLine, dealText, matchTitle, matchWhere, money, namedMatchIds, progressText, resultsLines, scopeFieldsLine, usesText, wallLabel,
+  STATE_LABEL, USAGE_NOTE, audienceText, extraBookingsLine, playersUsed, usedOfLimit, chicagoWallNow, campaignsAfter, comparisonLine, dealText, matchTitle, matchWhere, money, namedMatchIds, progressText, resultsLines, scopeFieldsLine, usesText, wallLabel,
   withCovers, mergeMatches, refreshedLine, type Form, type ListChange, type Campaign, type City, type FieldOpt, type MatchOpt,
 } from "@/lib/offersModel";
 import OfferPanel, { type MatchRead } from "./OfferPanel";
@@ -194,7 +195,7 @@ export default function OffersView() {
               );
             })}
             <div className="px-4 py-3 text-[12px] leading-[17px]" style={{ color: O.muted }}>
-              Shows on app open. One popup per open, never right after another popup. Used = booked with the offer. Came back = booked again at full price within 30 days.
+              Shows on app open. One popup per open, never right after another popup. {USAGE_NOTE}
             </div>
           </div>
         </div>
@@ -234,6 +235,7 @@ function Stat({ value, label, testId }: { value: string; label: string; testId: 
 
 function ResultsCard({ c, nowWall, pushes, onLanded }: { c: Campaign; nowWall: string; pushes: boolean; onLanded: (o: WriteOutcome, selectId?: number, change?: ListChange) => void }) {
   const r = c.results;
+  const players = playersUsed(c);
   const extra = extraBookingsLine(r);
   return (
     <div data-testid="offers-results" className="flex flex-col gap-3.5 rounded-[12px] border p-4" style={{ background: O.surface, borderColor: O.line }}>
@@ -241,12 +243,14 @@ function ResultsCard({ c, nowWall, pushes, onLanded }: { c: Campaign; nowWall: s
         <div className="text-[16px] font-bold" style={{ color: O.ink }}>{c.name} · results so far</div>
         <div data-testid="offers-progress" className="whitespace-nowrap text-[12px]" style={{ color: O.muted }}>{progressText(c, nowWall)}</div>
       </div>
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
         <Stat testId="offers-stat-saw" value={r.saw.toLocaleString("en-US")} label="Saw it" />
-        <Stat testId="offers-stat-used" value={r.used.toLocaleString("en-US")} label={["Uses", usedOfLimit(r)].filter(Boolean).join(" · ")} />
-        <Stat testId="offers-stat-discount" value={money(r.discountGiven)} label="Discount given" />
-        <Stat testId="offers-stat-came-back" value={r.cameBackAtFullPrice.toLocaleString("en-US")} label="Came back at full price" />
+        <Stat testId="offers-stat-used" value={r.used.toLocaleString("en-US")} label={["Spots used", usedOfLimit(r)].filter(Boolean).join(" · ")} />
+        <Stat testId="offers-stat-players" value={players === null ? "…" : players.toLocaleString("en-US")} label={players === null ? "Players (Refresh to see)" : "Players who used it"} />
+        <Stat testId="offers-stat-discount" value={money(r.discountGiven)} label="Given away" />
+        <Stat testId="offers-stat-came-back" value={r.cameBackAtFullPrice.toLocaleString("en-US")} label="Went on to pay" />
       </div>
+      <div data-testid="offers-usage-note" className="px-0.5 text-[12px] leading-[17px]" style={{ color: O.muted }}>{USAGE_NOTE}</div>
       <div data-testid="offers-comparison" className="rounded-[8px] px-3 py-[9px] text-[13px] font-medium" style={{ background: O.mint, color: O.ok }}>{comparisonLine(r)}</div>
       {extra && <div data-testid="offers-extra" className="px-3 text-[13px] font-medium" style={{ color: O.ink }}>{extra}</div>}
       {pushes && c.push?.enabled && <PushResultsRow campaignId={c.id} />}

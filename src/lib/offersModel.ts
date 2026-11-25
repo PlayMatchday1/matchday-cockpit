@@ -60,6 +60,9 @@ export type Campaign = Copy & {
   headlineAccent?: string | null; buttonFieldId?: number | null;
   createdByStaffEmail: string | null; launchedByStaffEmail: string | null; launchedAt: string | null; updatedAt?: string;
   results: Results;
+  // The offer's funnel as the page read carries it (offer-funnel.service): used is distinct players with a use that
+  // still stands, null for an announcement. Absent on GET /:id, so a campaign written since the last read has none.
+  funnel?: { used: number | null } | null;
   // popupEnabled false is a push-only offer (backend 08145ea): no popup on app open, the discount still applies at
   // checkout, "Show again" is off (POPUP_OFF). Absent on a backend from before it, which is the same as true.
   popupEnabled?: boolean;
@@ -1049,14 +1052,38 @@ export function campaignsAfter(list: Campaign[], change: ListChange): Campaign[]
 // ── THE LIST AND THE RESULTS ─────────────────────────────────────────────────────────────────────
 export const STATE_LABEL: Record<CampaignState, string> = { DRAFT: "Draft", SCHEDULED: "Scheduled", LIVE: "Live", PAUSED: "Paused", ENDED: "Ended" };
 
+// USAGE, AS THE BACKEND COUNTS IT (offer-campaigns.service resultsFor and offer-funnel.service, production 0e45c51):
+//   spots   results.used: bookings made with the offer that still stand. A cancelled booking or a cancelled match
+//           gives the use back (offer_redemptions.released_at), so it drops out.
+//   players funnel.used: distinct players with at least one such booking. Null for an announcement; absent on a
+//           campaign written since the last page read (GET /:id carries none), so then 0 when nothing is used and
+//           unknown until Refresh otherwise.
+//   given   results.discountGiven, cents: the discount on those spots; for a free match, the spot's normal price.
+//   paid    results.cameBackAtFullPrice: players who used it and then booked again within 30 days with no offer
+//           and no promo code.
+// r.used counts USES, not players: Tomball 2026-11-10 had 12 uses by 7 players; Starting 11 at Tomball had 61 uses
+// by 13 players on 2026-11-25.
+export function playersUsed(c: Campaign): number | null {
+  const p = c.funnel?.used;
+  if (typeof p === "number") return p;
+  return c.results.used === 0 ? 0 : null;
+}
+export const USAGE_NOTE = "Spots used: bookings made with the offer that still stand (a cancelled booking or match gives the spot back). Given away: the discount on those spots; for a free match, its normal price. Went on to pay: players who used it, then booked again within 30 days with no offer or promo code.";
+const countOf = (n: number, one: string, many: string) => `${n.toLocaleString("en-US")} ${n === 1 ? one : many}`;
+export function spotsUsedText(r: Results): string {
+  return usedOfLimit(r) ?? countOf(r.used, "spot used", "spots used");
+}
+
 export function resultsLines(c: Campaign): [string, string] {
   if (c.state === "DRAFT") return ["Not launched", ""];
   if (c.state === "SCHEDULED") return [`Starts ${wallDate(c.startsLocal)}`, ""];
   const r = c.results;
-  // r.used counts USES (every redemption not given back), not players: Tomball 2026-11-10 had 12 uses by 7 players. The
-  // Offer results table's Used is players (offersFunnel.ts), so this line says uses.
-  const usedPart = typeof r.usesTaken === "number" && typeof r.maxRedemptions === "number" ? usedOfLimit(r)! : `${r.used.toLocaleString("en-US")} ${r.used === 1 ? "use" : "uses"}`;
-  return [`${r.saw.toLocaleString("en-US")} saw · ${usedPart}`, `${money(r.discountGiven)} off · ${r.cameBackAtFullPrice.toLocaleString("en-US")} came back`];
+  if (isAnnouncement(c)) return [`${r.saw.toLocaleString("en-US")} saw`, "No discount"];
+  const players = playersUsed(c);
+  return [
+    `${spotsUsedText(r)}${players === null || r.used === 0 ? "" : ` by ${countOf(players, "player", "players")}`}`,
+    `${money(r.discountGiven)} given away · ${r.cameBackAtFullPrice.toLocaleString("en-US")} went on to pay`,
+  ];
 }
 
 // "10 of 10 used" from usesTaken and the limit, when a limit is set (null otherwise).
