@@ -42,6 +42,7 @@ import { useNetRevenue } from "@/lib/useNetRevenue";
 import { loadVenueLaunches, useAsync } from "@/lib/useRevenueTxn";
 import { addMonths, dateOfYm, nextSort, shortYm, sortBy, ymOfDate, type SortState } from "@/lib/revenueRange";
 import { downloadCsv, fmtInt, fmtMoney, fmtPct } from "@/components/growth/format";
+import { daysOld, fieldLaunch, launchLabel, launchSource, type FieldLaunch } from "@/lib/fieldLaunch";
 import s from "./financeSection.module.css";
 import FinancePageBar from "./FinancePageBar";
 import { InfoI, RV2_CSS } from "./RevenueInfo";
@@ -62,6 +63,9 @@ const ZERO: Cell = { revenue: 0, cost: null };
 type Row = {
   key: string; label: string; city: string | null; pinned: boolean;
   launch: string | null;
+  /** Field view only: the Launched and Days old columns (fieldLaunch.ts). Not the `launch` month
+   *  above, which stays the first played match and blanks the months before it. */
+  fieldLaunch: FieldLaunch | null;
   cur: Cell;
   /** Prior months' cells, oldest last (index 0 = the month just before the period). */
   prior: (Cell | null)[];
@@ -141,6 +145,9 @@ export default function CostSection() {
     const d = ids.map((id) => launches.data?.[String(id)]).filter((x): x is string => !!x).sort();
     return d.length ? d[0].slice(0, 7) : null;
   }, [launches.data]);
+  const fieldLaunchOf = useCallback((ids: number[]) => fieldLaunch(ids,
+    (id) => data?.venues.find((v) => Number(v.id) === id)?.launch_date,
+    (id) => launches.data?.[String(id)]), [data, launches.data]);
   const cityVenueIds = useCallback((city: string) => (data?.venues ?? []).filter((v) => canonCity(v.city) === canonCity(city)).map((v) => Number(v.id)), [data]);
 
   // ── CELLS ──
@@ -188,13 +195,13 @@ export default function CostSection() {
       for (const r of fieldMonths) if (periodYms.includes(ymOfLabel(r.month)) && (r.cost != null || r.matches > 0)) names.add(canonCity(r.city));
       const out: Row[] = [...names].filter((c) => inScope(c) && inFieldScope(c)).map((c) => {
         const cur = sumOver(periodYms, (ym) => cityCell(c, ym)) ?? ZERO;
-        return { key: `c-${c}`, label: c, city: c, pinned: false, launch: launchOfIds(cityVenueIds(c)), cur,
+        return { key: `c-${c}`, label: c, city: c, pinned: false, launch: launchOfIds(cityVenueIds(c)), fieldLaunch: null, cur,
           prior: prior((ym) => cityCell(c, ym)), allUnknown: cur.cost == null };
       }).filter((r) => r.cur.revenue !== 0 || r.cur.cost != null);
       if (cityFilter === "all" && !fieldFilter) {
         const un = (ym: string): Cell => ({ revenue: (net.byMonth!.get(ym)?.unassigned?.net ?? 0) / 100, cost: null });
         const cur = sumOver(periodYms, un) ?? ZERO;
-        if (cur.revenue !== 0) out.push({ key: "unassigned", label: "Unassigned", city: null, pinned: true, launch: null, cur, prior: prior(un), allUnknown: true });
+        if (cur.revenue !== 0) out.push({ key: "unassigned", label: "Unassigned", city: null, pinned: true, launch: null, fieldLaunch: null, cur, prior: prior(un), allUnknown: true });
       }
       return out;
     }
@@ -205,7 +212,7 @@ export default function CostSection() {
       const cur = sumOver(periodYms, (ym) => fieldCell(key, ym)) ?? ZERO;
       const live = list.some((r) => periodYms.includes(ymOfLabel(r.month)) && (r.revenue !== 0 || (r.cost ?? 0) !== 0 || r.matches > 0));
       if (!live) continue;
-      out.push({ key, label: list[0].field, city: list[0].city, pinned: false, launch: launchOfIds(list[0].venueIds), cur,
+      out.push({ key, label: list[0].field, city: list[0].city, pinned: false, launch: launchOfIds(list[0].venueIds), fieldLaunch: fieldLaunchOf(list[0].venueIds), cur,
         prior: prior((ym) => fieldCell(key, ym)), allUnknown: list.filter((r) => periodYms.includes(ymOfLabel(r.month))).every((r) => r.cost == null) });
     }
     /* NO FIELD: the scope's revenue that no field carries — DPP without a field, membership no member
@@ -216,10 +223,10 @@ export default function CostSection() {
       return { revenue: Math.round((t.revenue - fields) * 100) / 100, cost: null };
     };
     const nfCur = sumOver(periodYms, nf) ?? ZERO;
-    if (!fieldFilter && Math.abs(nfCur.revenue) >= 0.005) out.push({ key: "nofield", label: "No field", city: null, pinned: true, launch: null, cur: nfCur, prior: prior(nf), allUnknown: true });
+    if (!fieldFilter && Math.abs(nfCur.revenue) >= 0.005) out.push({ key: "nofield", label: "No field", city: null, pinned: true, launch: null, fieldLaunch: null, cur: nfCur, prior: prior(nf), allUnknown: true });
     return out;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [net.byMonth, data, grain, periodYms, priorYms, fieldMonths, cityFilter, fieldFilter, inScope, inFieldScope, cityCell, fieldCell, scopeCell, launchOfIds, cityVenueIds, loadedFrom]);
+  }, [net.byMonth, data, grain, periodYms, priorYms, fieldMonths, cityFilter, fieldFilter, inScope, inFieldScope, cityCell, fieldCell, scopeCell, launchOfIds, fieldLaunchOf, cityVenueIds, loadedFrom]);
 
   const total = useMemo(() => ({
     cur: sumOver(periodYms, scopeCell) ?? ZERO,
@@ -247,15 +254,17 @@ export default function CostSection() {
   const valueOf = useCallback((r: Row, k: string): number | string | null => {
     if (k === "name") return r.label;
     if (k === "city") return r.city;
+    if (k === "launched") return r.fieldLaunch?.ymd ?? null;
+    if (k === "age") return r.fieldLaunch ? daysOld(r.fieldLaunch.ymd, nowYmd) : null;
     if (k === "rev") return r.cur.revenue;
     if (k === "cost") return r.cur.cost;
     if (k === "ratio") return ratioOf(r.cur);
     const i = Number(k.slice(1));
     const ym = priorYms[i];
     return r.launch && ym < r.launch ? null : ratioOf(r.prior[i]);
-  }, [priorYms]);
+  }, [priorYms, nowYmd]);
   const ordered = useMemo(() => [...sortBy(rows.filter((r) => !r.pinned), (r) => valueOf(r, sort.key), sort.dir), ...rows.filter((r) => r.pinned)], [rows, sort, valueOf]);
-  const onSort = (k: string) => setSort((cur) => nextSort(cur, k, k === "name" || k === "city"));
+  const onSort = (k: string) => setSort((cur) => nextSort(cur, k, k === "name" || k === "city" || k === "launched"));
 
   if (loading && !data) return <div className={s.empty}>Loading…</div>;
   if (!data) return <div className={s.empty}>No finance data for this period.</div>;
@@ -269,10 +278,13 @@ export default function CostSection() {
     const field = grain === "field";
     const pct = (c: Cell | null) => { const r = ratioOf(c); return r == null ? "" : (r * 100).toFixed(1) + "%"; };
     downloadCsv(`matchday-field-cost-${grain}-${period.key}.csv`, [
-      [field ? "Field" : "City", ...(field ? ["City"] : []), "Launched", `Revenue (${period.label}, net, the Revenue page's)`, "Field cost", "Cost ratio",
+      [field ? "Field" : "City", ...(field ? ["City", "Launched", "Days old"] : ["Launched"]), `Revenue (${period.label}, net, the Revenue page's)`, "Field cost", "Cost ratio",
         ...priorYms.map((ym) => `Cost ratio ${labelOfYm(ym)}`), ...priorYms.flatMap((ym) => [`Revenue ${labelOfYm(ym)}`, `Field cost ${labelOfYm(ym)}`])],
-      ...[...ordered, { key: "total", label: fieldLabel ?? (cityFilter === "all" ? (field ? "All fields" : "All cities") : cityFilter), city: null, pinned: true, launch: null, cur: T, prior: total.prior, allUnknown: false } as Row].map((r) => [
-        r.label, ...(field ? [r.city ?? ""] : []), r.launch ? shortYm(r.launch) : "",
+      ...[...ordered, { key: "total", label: fieldLabel ?? (cityFilter === "all" ? (field ? "All fields" : "All cities") : cityFilter), city: null, pinned: true, launch: null, fieldLaunch: null, cur: T, prior: total.prior, allUnknown: false } as Row].map((r) => [
+        r.label,
+        ...(field
+          ? [r.city ?? "", r.fieldLaunch ? launchLabel(r.fieldLaunch.ymd) : "", r.fieldLaunch ? String(daysOld(r.fieldLaunch.ymd, nowYmd) ?? "") : ""]
+          : [r.launch ? shortYm(r.launch) : ""]),
         r.cur.revenue.toFixed(2), r.cur.cost == null ? "" : r.cur.cost.toFixed(2), pct(r.cur),
         ...priorYms.map((ym, i) => (r.launch && ym < r.launch ? "" : pct(r.prior[i]))),
         ...priorYms.flatMap((_, i) => [r.prior[i] ? r.prior[i]!.revenue.toFixed(2) : "", r.prior[i]?.cost == null ? "" : r.prior[i]!.cost!.toFixed(2)]),
@@ -374,7 +386,7 @@ export default function CostSection() {
         </div>
       <EconomicsTable rows={ordered} grain={grain} total={{ cur: T, prior: total.prior }} priorYms={priorYms}
         totalLabel={fieldLabel ?? (cityFilter === "all" ? (grain === "city" ? "All cities" : "All fields") : cityFilter)}
-        periodLabel={period.label} ratioLabel={ratioLabel} sort={sort} onSort={onSort} loaded={loaded} partial={isPartial} />
+        periodLabel={period.label} ratioLabel={ratioLabel} sort={sort} onSort={onSort} loaded={loaded} partial={isPartial} todayYmd={nowYmd} />
       </div>
 
       {gaps.length > 0 && (
@@ -396,11 +408,13 @@ export default function CostSection() {
   );
 }
 
-function EconomicsTable({ rows, grain, total, priorYms, totalLabel, periodLabel, ratioLabel, sort, onSort, loaded, partial }: {
+function EconomicsTable({ rows, grain, total, priorYms, totalLabel, periodLabel, ratioLabel, sort, onSort, loaded, partial, todayYmd }: {
   rows: Row[]; grain: Grain; total: { cur: Cell; prior: (Cell | null)[] }; priorYms: string[];
   totalLabel: string; periodLabel: string; ratioLabel: string; sort: SortState; onSort: (k: string) => void; loaded: (ym: string) => boolean;
   /** The selected period is still in progress: its Cost ratio column renders lighter, with IN_PROGRESS. */
   partial: boolean;
+  /** Today, YYYY-MM-DD, for Days old. */
+  todayYmd: string;
 }) {
   if (rows.length === 0) return <div className={s.empty}>No fields match this selection.</div>;
   const field = grain === "field";
@@ -438,6 +452,8 @@ function EconomicsTable({ rows, grain, total, priorYms, totalLabel, periodLabel,
             <tr>
               {th("name", field ? "Field" : "City", "l")}
               {field && th("city", "City", "l")}
+              {field && th("launched", "Launched", "l", "The launch date on the venue record, or the field's first match played when the record has none")}
+              {field && th("age", "Days old", undefined, "Whole days from the launch date to today")}
               {th("rev", "Revenue", undefined, undefined, <InfoI pop="netSame" label="What revenue is here" />)}
               {th("cost", <span data-testid="cost-hover-th">Field cost</span>, undefined, undefined, <InfoI pop="fieldCostDef" label="What field cost is" />)}
               {th("ratio", ratioLabel, undefined, partial ? IN_PROGRESS : `Cost ratio, ${periodLabel}`)}
@@ -449,6 +465,16 @@ function EconomicsTable({ rows, grain, total, priorYms, totalLabel, periodLabel,
               <tr key={x.key} data-testid={x.pinned ? "cost-pinned-row" : "cost-row"} data-label={x.label} className={x.pinned ? s.pinRow : undefined}>
                 <td className="l" style={{ textAlign: "left" }}>{x.pinned ? <i>{x.label}</i> : <b>{x.label}</b>}</td>
                 {field && <td className="l" style={{ textAlign: "left" }}>{x.city ?? "—"}</td>}
+                {field && (
+                  <td className={x.fieldLaunch ? "l" : `l ${s.mut}`} style={{ textAlign: "left", whiteSpace: "nowrap" }} data-testid="cost-launched-cell"
+                    data-ymd={x.fieldLaunch?.ymd ?? ""} data-from={x.fieldLaunch?.from ?? ""} title={x.fieldLaunch ? launchSource(x.fieldLaunch) : undefined}>
+                    {x.fieldLaunch ? launchLabel(x.fieldLaunch.ymd) : "—"}
+                  </td>
+                )}
+                {field && (() => {
+                  const d = x.fieldLaunch ? daysOld(x.fieldLaunch.ymd, todayYmd) : null;
+                  return <td className={d == null ? s.mut : ""} style={{ whiteSpace: "nowrap" }} data-testid="cost-age-cell">{d == null ? "—" : `${fmtInt(d)} ${d === 1 ? "day" : "days"}`}</td>;
+                })()}
                 <td data-testid="cost-revenue-cell" data-cents={Math.round(x.cur.revenue * 100)}>{fmtMoney(x.cur.revenue)}</td>
                 <td className={x.cur.cost == null ? s.mut : ""} data-testid="cost-amount-cell" data-cents={x.cur.cost == null ? "" : Math.round(x.cur.cost * 100)}>{x.cur.cost == null ? "—" : fmtMoney(x.cur.cost)}</td>
                 {ratioCell(x.cur, null, null, "cost-ratio-cell", true)}
@@ -458,6 +484,8 @@ function EconomicsTable({ rows, grain, total, priorYms, totalLabel, periodLabel,
             <tr className={s.tot} data-testid="cost-total-row">
               <td className="l" style={{ textAlign: "left" }}>{totalLabel}</td>
               {field && <td className="l" style={{ textAlign: "left" }}>—</td>}
+              {field && <td className="l" style={{ textAlign: "left" }}>—</td>}
+              {field && <td>—</td>}
               <td data-cents={Math.round(total.cur.revenue * 100)}>{fmtMoney(total.cur.revenue)}</td>
               <td>{fmtMoney(total.cur.cost ?? 0)}</td>
               {ratioCell(total.cur, null, null, "cost-total-ratio")}
