@@ -9661,3 +9661,36 @@ Ryan: a switched-off field must stay off when its matches are copied.
   (max(current, target) x the highest bib held), then the team count (the old spots go back once if it does not land),
   then the chosen spots, then the fakes follow. This closes the "3-team picker" item in the bullet above. The desktop
   match panel's size Save is still not fixed.
+
+## Starting 11 is a set of Offers, not a promo code (2026-11-25)
+
+Evidence: one read-only production `GET /admin/offers/page` (200, 64 campaigns, 2026-11-25 ~17:00Z), the production
+backend at `heroku-prod/master` 0e45c51 (local ref, fetched 2026-11-19), and the mirror (`mdapi_match_players`, synced
+12:21Z the same day).
+
+- **What it is.** Each Starting 11 is an Offer campaign: `dealType FREE_MATCH`, `audienceMode PLAYERS` (an explicit
+  `playerIds` list), `appliesFieldIds` = one field, `usesPerPlayer` 15 or 20, `startsLocal` Nov 9 to 12, `endsLocal`
+  2026-11-30 23:59. Ids: 102 and 167 Bob Jones (1816), 103 and 168 Saginaw (2014), 104 Tomball / The Hattrick T. (1288),
+  105 Zipp (1618), 137 One Touch (1883), 204 STAR (1057); 100 is a one-player test. "Starting 11 ... Reminder # 1"
+  (169 to 173) are `NONE` announcements; 335 "STAR - Starting 11 Reminder" is a separate match-scoped `SET_PRICE 800`.
+- **How it prices.** Join pricing (`matches.service.ts getJoinPricing`, `pickBestOffer`) applies the offer to the
+  player's own spot; guests are charged as normal. The booking stores `amount = pricing.subtotal` and NO promo id
+  (`joinPaidMatchV2`). The use is recorded only in the backend's `offer_redemptions` (`grant_id`, `user_match_id`,
+  `list_price`, `amount_off`, `released_at`; schema.prisma `model OfferRedemption`).
+- **So the mirror sees a Starting 11 spot as** `user_type PLAYER`, `paid_status PAID`, `promocode_id` null,
+  `credit_amount` 0, and own-spot amount 0 (`amount` minus guests x price; a booking with a guest shows the guest's
+  price in `amount`). Nothing on the row names the offer. Inferring it (player on the list, at the offer's field, booked
+  after launch) found **115 of the backend's 124 uses** on 2026-11-25. **The backend is the authority; do not report
+  offer usage from the mirror except for splits the backend does not give (by week).**
+- **A cancelled booking or a cancelled match gives the use back** (`releaseForCancelledBooking`,
+  `releaseForCancelledMatch`, `releaseForDeletedBooking` set `released_at`). Every count below excludes released uses.
+- **What the backend reports per campaign** (`offer-campaigns.service.ts resultsFor`, `offer-funnel.service.ts`), all in
+  the page read: `results.used` = uses not released (SPOTS, not players); `funnel.used` = distinct players with one
+  (null for an announcement); `results.discountGiven` = sum of `amount_off`, cents (a free match's full list price,
+  pre-tax); `results.cameBackAtFullPrice` = players who used it and then booked as a PLAYER, PAID, not cancelled, no
+  promo, no offer, within 30 days. `GET /admin/offers/campaigns/{id}` carries no results or funnel.
+- **Measured 2026-11-25** (backend totals): Tomball 61 uses / 13 players / $305 / 0 came back; Bob Jones 27 / 19 /
+  $243 / 0 (17 / 11 on 102, 10 / 8 on 167, no player on both lists); Saginaw 23 / 10 / $207 / 1; Zipp 11 / 11 / $88 / 0;
+  STAR 2 / 2 / $16 / 2; One Touch 0. Total 124 / 55 / $859 / 3.
+- **Shown on Match Ops > Offers since 65b42f1**: each row "N spots used by N players" and "$X given away · N went on to
+  pay"; the results card adds Players who used it (`playersUsed`, `src/lib/offersModel.ts`).
